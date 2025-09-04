@@ -1,8 +1,8 @@
+use crate::error::Result;
+use diesel::pg::PgConnection;
 use diesel::r2d2::ConnectionManager;
 use r2d2::Pool;
-use diesel::pg::PgConnection;
 use uuid::Uuid;
-use crate::error::Result;
 
 /// Producer interface for adding messages to queues
 pub struct Producer {
@@ -28,7 +28,7 @@ impl Producer {
         &self,
         queue_name: &str,
         payload: serde_json::Value,
-        message_type: Option<String>
+        message_type: Option<String>,
     ) -> Result<Uuid> {
         todo!("Implement Producer::enqueue")
     }
@@ -44,7 +44,7 @@ impl Producer {
     pub async fn batch_enqueue(
         &self,
         queue_name: &str,
-        messages: Vec<(serde_json::Value, Option<String>)>
+        messages: Vec<(serde_json::Value, Option<String>)>,
     ) -> Result<Vec<Uuid>> {
         todo!("Implement Producer::batch_enqueue")
     }
@@ -61,7 +61,7 @@ impl Producer {
         queue_name: &str,
         payload: serde_json::Value,
         message_type: Option<String>,
-        delay_seconds: u32
+        delay_seconds: u32,
     ) -> Result<Uuid> {
         todo!("Implement Producer::enqueue_delayed")
     }

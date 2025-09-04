@@ -4,7 +4,9 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
     match conn.run_pending_migrations(MIGRATIONS) {
         Ok(_) => Ok(()),
-        Err(e) => Err(PgqrsError::Migration{message: e.to_string()}),
+        Err(e) => Err(PgqrsError::Migration {
+            message: e.to_string(),
+        }),
     }
 }
 /**
@@ -24,22 +26,21 @@ pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
  - Message archiving for retention and replayability
  - CLI tools for debugging and administration
 */
-
 pub mod admin;
-pub mod producer;
-pub mod consumer;
 pub mod config;
-pub mod types;
+pub mod consumer;
 pub mod error;
+pub mod producer;
+pub mod types;
 
 pub use admin::Admin;
-pub use producer::Producer;
-pub use consumer::Consumer;
 pub use config::Config;
-pub use types::*;
-pub use error::{PgqrsError, Result};
+pub use consumer::Consumer;
 pub use diesel::pg::PgConnection;
 pub use diesel::r2d2::{ConnectionManager, Pool};
+pub use error::{PgqrsError, Result};
+pub use producer::Producer;
+pub use types::*;
 
 /// Main client for pgqrs operations
 pub struct PgqrsClient {

@@ -1,6 +1,6 @@
+use crate::error::{PgqrsError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use crate::error::{PgqrsError, Result};
 
 /// Configuration for pgqrs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,17 +73,17 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         todo!("Implement Config::from_env")
     }
-    
+
     /// Create config from YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         todo!("Implement Config::from_file")
     }
-    
+
     /// Create config from multiple sources (env, file, defaults)
     pub fn load() -> Result<Self> {
         todo!("Implement Config::load")
     }
-    
+
     /// Get database connection URL
     pub fn database_url(&self) -> String {
         format!(
@@ -95,7 +95,7 @@ impl Config {
             self.database.database
         )
     }
-    
+
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
         todo!("Implement Config::validate")

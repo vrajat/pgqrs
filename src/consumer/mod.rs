@@ -1,9 +1,9 @@
-use diesel::r2d2::ConnectionManager;
-use r2d2::Pool;
-use diesel::pg::PgConnection;
-use uuid::Uuid;
 use crate::error::Result;
 use crate::types::{QueueMessage, ReadOptions};
+use diesel::pg::PgConnection;
+use diesel::r2d2::ConnectionManager;
+use r2d2::Pool;
+use uuid::Uuid;
 
 /// Consumer interface for reading and processing messages from queues
 pub struct Consumer {
@@ -35,7 +35,7 @@ impl Consumer {
     pub async fn read(
         &self,
         queue_name: &str,
-        options: ReadOptions
+        options: ReadOptions,
     ) -> Result<Option<QueueMessage>> {
         todo!("Implement Consumer::read")
     }
@@ -51,7 +51,7 @@ impl Consumer {
     pub async fn read_batch(
         &self,
         queue_name: &str,
-        options: ReadOptions
+        options: ReadOptions,
     ) -> Result<Vec<QueueMessage>> {
         todo!("Implement Consumer::read_batch")
     }
@@ -76,7 +76,11 @@ impl Consumer {
     ///
     /// # Returns
     /// Vector of booleans indicating success for each message (same order as input)
-    pub async fn dequeue_batch(&self, queue_name: &str, message_ids: Vec<Uuid>) -> Result<Vec<bool>> {
+    pub async fn dequeue_batch(
+        &self,
+        queue_name: &str,
+        message_ids: Vec<Uuid>,
+    ) -> Result<Vec<bool>> {
         todo!("Implement Consumer::dequeue_batch")
     }
 
@@ -94,7 +98,11 @@ impl Consumer {
     /// # Arguments
     /// * `queue_name` - Name of the queue
     /// * `message_ids` - Vector of message IDs to archive
-    pub async fn archive_batch(&self, queue_name: &str, message_ids: Vec<Uuid>) -> Result<Vec<bool>> {
+    pub async fn archive_batch(
+        &self,
+        queue_name: &str,
+        message_ids: Vec<Uuid>,
+    ) -> Result<Vec<bool>> {
         todo!("Implement Consumer::archive_batch")
     }
 
@@ -104,7 +112,12 @@ impl Consumer {
     /// * `queue_name` - Name of the queue
     /// * `message_id` - ID of the message
     /// * `additional_seconds` - Additional seconds to extend the lock
-    pub async fn extend_lock(&self, queue_name: &str, message_id: Uuid, additional_seconds: u32) -> Result<bool> {
+    pub async fn extend_lock(
+        &self,
+        queue_name: &str,
+        message_id: Uuid,
+        additional_seconds: u32,
+    ) -> Result<bool> {
         todo!("Implement Consumer::extend_lock")
     }
 }

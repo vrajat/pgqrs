@@ -1,11 +1,11 @@
-use diesel::r2d2::ConnectionManager;
-use r2d2::Pool;
-use diesel::pg::PgConnection;
-use diesel::RunQueryDsl;
-use diesel::deserialize::QueryableByName;
-use crate::error::{Result, PgqrsError};
-use crate::types::{CreateQueueOptions, QueueMetrics};
+use crate::error::{PgqrsError, Result};
 use crate::run_migrations;
+use crate::types::{CreateQueueOptions, QueueMetrics};
+use diesel::deserialize::QueryableByName;
+use diesel::pg::PgConnection;
+use diesel::r2d2::ConnectionManager;
+use diesel::RunQueryDsl;
+use r2d2::Pool;
 
 /// Admin interface for managing pgqrs infrastructure
 pub struct Admin {
@@ -65,7 +65,9 @@ impl Admin {
         if row.exists {
             Ok(())
         } else {
-            Err(PgqrsError::Internal {message: "pgqrs schema does not exist".to_string()})
+            Err(PgqrsError::Internal {
+                message: "pgqrs schema does not exist".to_string(),
+            })
         }
     }
 

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use pgqrs::{Config, PgqrsClient, CreateQueueOptions};
+use pgqrs::{Config, CreateQueueOptions, PgqrsClient};
 use std::process;
 
 #[derive(Parser)]
@@ -142,8 +142,7 @@ async fn main() {
             tracing::Level::INFO
         })
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     if let Err(e) = run_cli(cli).await {
         eprintln!("Error: {}", e);
@@ -256,9 +255,17 @@ async fn handle_queue_commands(client: PgqrsClient, action: QueueCommands) -> an
     Ok(())
 }
 
-async fn handle_message_commands(client: PgqrsClient, action: MessageCommands) -> anyhow::Result<()> {
+async fn handle_message_commands(
+    client: PgqrsClient,
+    action: MessageCommands,
+) -> anyhow::Result<()> {
     match action {
-        MessageCommands::Send { queue, message, message_type, delay } => {
+        MessageCommands::Send {
+            queue,
+            message,
+            message_type,
+            delay,
+        } => {
             println!("Sending message to queue '{}'...", queue);
 
             // Parse JSON message
@@ -266,16 +273,30 @@ async fn handle_message_commands(client: PgqrsClient, action: MessageCommands) -
 
             let msg_id = if let Some(delay_secs) = delay {
                 println!("Sending delayed message (delay: {}s)...", delay_secs);
-                client.producer().enqueue_delayed(&queue, json_msg, message_type, delay_secs).await?
+                client
+                    .producer()
+                    .enqueue_delayed(&queue, json_msg, message_type, delay_secs)
+                    .await?
             } else {
-                client.producer().enqueue(&queue, json_msg, message_type).await?
+                client
+                    .producer()
+                    .enqueue(&queue, json_msg, message_type)
+                    .await?
             };
 
             println!("Message sent successfully with ID: {}", msg_id);
         }
 
-        MessageCommands::Read { queue, count, lock_time, message_type } => {
-            println!("Reading {} messages from queue '{}' (lock_time: {}s)...", count, queue, lock_time);
+        MessageCommands::Read {
+            queue,
+            count,
+            lock_time,
+            message_type,
+        } => {
+            println!(
+                "Reading {} messages from queue '{}' (lock_time: {}s)...",
+                count, queue, lock_time
+            );
             if let Some(ref msg_type) = message_type {
                 println!("Filtering by message type: '{}'", msg_type);
             }
@@ -301,10 +322,16 @@ async fn handle_message_commands(client: PgqrsClient, action: MessageCommands) -
                     if let Some(ref msg_type) = msg.message_type {
                         println!("  Type: {}", msg_type);
                     }
-                    println!("  Enqueued: {}", msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!(
+                        "  Enqueued: {}",
+                        msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                     println!("  Read Count: {}", msg.read_count);
                     if let Some(locked_until) = msg.locked_until {
-                        println!("  Locked Until: {}", locked_until.format("%Y-%m-%d %H:%M:%S UTC"));
+                        println!(
+                            "  Locked Until: {}",
+                            locked_until.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
                     }
                     println!("  Payload:");
                     println!("{}", serde_json::to_string_pretty(&msg.payload)?);
@@ -357,10 +384,16 @@ fn print_queue_metrics(metrics: &pgqrs::QueueMetrics) {
     println!("  Archived Messages: {}", metrics.archived_messages);
 
     if let Some(oldest) = metrics.oldest_pending_message {
-        println!("  Oldest Pending: {}", oldest.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "  Oldest Pending: {}",
+            oldest.format("%Y-%m-%d %H:%M:%S UTC")
+        );
     }
 
     if let Some(newest) = metrics.newest_message {
-        println!("  Newest Message: {}", newest.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "  Newest Message: {}",
+            newest.format("%Y-%m-%d %H:%M:%S UTC")
+        );
     }
 }
