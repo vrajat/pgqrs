@@ -1,16 +1,18 @@
-use sqlx::PgPool;
+use diesel::r2d2::ConnectionManager;
+use r2d2::Pool;
+use diesel::pg::PgConnection;
 use uuid::Uuid;
 use crate::error::Result;
 use crate::types::{QueueMessage, ReadOptions};
 
 /// Consumer interface for reading and processing messages from queues
 pub struct Consumer {
-    pool: PgPool,
+    pub pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl Consumer {
     /// Create a new Consumer instance
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
         Self { pool }
     }
 

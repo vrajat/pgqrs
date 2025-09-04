@@ -12,9 +12,14 @@ categories = ["database", "concurrency", "asynchronous"]
 name = "pgqrs"
 path = "src/main.rs"
 
+[dev-dependencies]
+tokio-test = "0.4"
+
 [dependencies]
+diesel = { version = "2.1.0", features = ["postgres", "chrono", "r2d2", "uuid", "serde_json"] }
+r2d2 = "0.8.10"
+diesel_migrations = "2.1.0"
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -26,6 +31,3 @@ config = "0.13"
 dotenv = "0.15"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-
-[dev-dependencies]
-tokio-test = "0.4"

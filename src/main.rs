@@ -169,19 +169,19 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Commands::Install { dry_run } => {
             println!("Installing pgqrs schema (dry_run: {})...", dry_run);
-            client.admin().install(dry_run).await?;
+            client.admin().install(dry_run)?;
             println!("Installation completed successfully");
         }
 
         Commands::Uninstall { dry_run } => {
             println!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
-            client.admin().uninstall(dry_run).await?;
+            client.admin().uninstall(dry_run)?;
             println!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
             println!("Verifying pgqrs installation...");
-            client.admin().verify().await?;
+            client.admin().verify()?;
             println!("Verification completed successfully");
         }
 

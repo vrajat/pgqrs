@@ -1,15 +1,17 @@
-use sqlx::PgPool;
+use diesel::r2d2::ConnectionManager;
+use r2d2::Pool;
+use diesel::pg::PgConnection;
 use uuid::Uuid;
 use crate::error::Result;
 
 /// Producer interface for adding messages to queues
 pub struct Producer {
-    pool: PgPool,
+    pub pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl Producer {
     /// Create a new Producer instance
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
         Self { pool }
     }
 
