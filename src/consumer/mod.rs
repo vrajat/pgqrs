@@ -6,13 +6,13 @@ use r2d2::Pool;
 use uuid::Uuid;
 
 /// Consumer interface for reading and processing messages from queues
-pub struct Consumer {
-    pub pool: Pool<ConnectionManager<PgConnection>>,
+pub struct Consumer<'a> {
+    pub pool: &'a Pool<ConnectionManager<PgConnection>>,
 }
 
-impl Consumer {
+impl<'a> Consumer<'a> {
     /// Create a new Consumer instance
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>) -> Self {
         Self { pool }
     }
 

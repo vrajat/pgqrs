@@ -2,6 +2,30 @@ use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 /// Run embedded Diesel migrations
 pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
+    eprintln!("Current dir: {:?}", std::env::current_dir());
+    // Print applied migrations
+    match conn.applied_migrations() {
+        Ok(applied) => {
+            eprintln!("Applied migrations:");
+            for m in applied {
+                eprintln!("  {}", m.to_string());
+            }
+        }
+        Err(e) => eprintln!("Error fetching applied migrations: {}", e),
+    }
+
+    // Print pending migrations
+    match conn.pending_migrations(MIGRATIONS) {
+        Ok(pending) => {
+            eprintln!("Pending migrations:");
+            for m in &pending {
+                eprintln!("  {}", m.name());
+            }
+        }
+        Err(e) => eprintln!("Error fetching pending migrations: {}", e),
+    }
+
+    // Run migrations
     match conn.run_pending_migrations(MIGRATIONS) {
         Ok(_) => Ok(()),
         Err(e) => Err(PgqrsError::Migration {
@@ -9,6 +33,7 @@ pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
         }),
     }
 }
+
 /**
  # pgqrs
 
@@ -44,29 +69,32 @@ pub use types::*;
 
 /// Main client for pgqrs operations
 pub struct PgqrsClient {
-    admin: Admin,
-    producer: Producer,
-    consumer: Consumer,
+    pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl PgqrsClient {
     /// Create a new pgqrs client with the given configuration
     pub async fn new(config: Config) -> Result<Self> {
-        todo!("Implement PgqrsClient::new")
+        eprintln!("pgqrs config: {:?}", config);
+
+        let pool = Pool::builder()
+            .max_size(16)
+            .build(ConnectionManager::new(config.database_url()))?;
+        Ok(Self { pool })
     }
 
     /// Get admin interface
-    pub fn admin(&self) -> &Admin {
-        &self.admin
+    pub fn admin(&'_ self) -> Admin<'_> {
+        Admin::new(&self.pool)
     }
 
     /// Get producer interface
-    pub fn producer(&self) -> &Producer {
-        &self.producer
+    pub fn producer(&'_ self) -> Producer<'_> {
+        Producer::new(&self.pool)
     }
 
     /// Get consumer interface
-    pub fn consumer(&self) -> &Consumer {
-        &self.consumer
+    pub fn consumer(&'_ self) -> Consumer<'_> {
+        Consumer::new(&self.pool)
     }
 }

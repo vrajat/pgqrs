@@ -5,13 +5,13 @@ use r2d2::Pool;
 use uuid::Uuid;
 
 /// Producer interface for adding messages to queues
-pub struct Producer {
-    pub pool: Pool<ConnectionManager<PgConnection>>,
+pub struct Producer<'a> {
+    pub pool: &'a Pool<ConnectionManager<PgConnection>>,
 }
 
-impl Producer {
+impl<'a> Producer<'a> {
     /// Create a new Producer instance
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>) -> Self {
         Self { pool }
     }
 

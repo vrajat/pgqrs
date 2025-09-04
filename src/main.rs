@@ -154,6 +154,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     // Load configuration
     let config = if let Some(db_url) = cli.database_url {
         let mut config = Config::default();
+        config.dsn = db_url;
         // TODO: Parse database URL and update config
         config
     } else {

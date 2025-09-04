@@ -8,8 +8,8 @@ use diesel::RunQueryDsl;
 use r2d2::Pool;
 
 /// Admin interface for managing pgqrs infrastructure
-pub struct Admin {
-    pub pool: Pool<ConnectionManager<PgConnection>>,
+pub struct Admin<'a> {
+    pub pool: &'a Pool<ConnectionManager<PgConnection>>,
 }
 
 #[derive(QueryableByName)]
@@ -18,9 +18,9 @@ struct ExistsRow {
     exists: bool,
 }
 
-impl Admin {
+impl<'a> Admin<'a> {
     /// Create a new Admin instance
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>) -> Self {
         Self { pool }
     }
 

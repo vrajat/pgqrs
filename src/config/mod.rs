@@ -1,11 +1,12 @@
-use crate::error::{PgqrsError, Result};
+use crate::error::{Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Configuration for pgqrs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub database: DatabaseConfig,
+    pub dsn: String,
+    pub pool_size: u8,
     pub queue: QueueConfig,
     pub performance: PerformanceConfig,
 }
@@ -43,16 +44,8 @@ pub struct PerformanceConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            database: DatabaseConfig {
-                host: "localhost".to_string(),
-                port: 5432,
-                username: "postgres".to_string(),
-                password: "postgres".to_string(),
-                database: "postgres".to_string(),
-                schema: "pgqrs".to_string(),
-                max_connections: 10,
-                connection_timeout_seconds: 30,
-            },
+            dsn: "postgresql://postgres:postgres@localhost:5432/postgres".to_string(),
+            pool_size: 16,
             queue: QueueConfig {
                 default_lock_time_seconds: 5,
                 max_batch_size: 100,
@@ -85,15 +78,8 @@ impl Config {
     }
 
     /// Get database connection URL
-    pub fn database_url(&self) -> String {
-        format!(
-            "postgresql://{}:{}@{}:{}/{}",
-            self.database.username,
-            self.database.password,
-            self.database.host,
-            self.database.port,
-            self.database.database
-        )
+    pub fn database_url(&self) -> &String {
+        &self.dsn
     }
 
     /// Validate configuration
