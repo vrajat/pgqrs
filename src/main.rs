@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use pgqrs::{Config, CreateQueueOptions, PgqrsClient};
+use pgqrs::{Config, PgqrsClient};
 use std::process;
 
 #[derive(Parser)]
@@ -57,9 +57,6 @@ enum QueueCommands {
     Create {
         /// Name of the queue
         name: String,
-        /// Disable archiving for this queue
-        #[arg(long)]
-        no_archiving: bool,
     },
     /// List all queues
     List,
@@ -199,14 +196,10 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
 async fn handle_queue_commands(client: PgqrsClient, action: QueueCommands) -> anyhow::Result<()> {
     match action {
-        QueueCommands::Create { name, no_archiving } => {
-            println!("Creating queue '{}'...", name);
-            let options = CreateQueueOptions {
-                name: name.clone(),
-                enable_archiving: !no_archiving,
-            };
-            client.admin().create_queue(options).await?;
-            println!("Queue '{}' created successfully", name);
+        QueueCommands::Create { name } => {
+            println!("Creating queue '{}'...", &name);
+            client.admin().create_queue(&name).await?;
+            println!("Queue '{}' created successfully", &name);
         }
 
         QueueCommands::List => {

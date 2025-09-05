@@ -1,0 +1,1 @@
+DROP TABLE pgqrs.meta IF EXISTS CASCADE;

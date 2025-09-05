@@ -1,5 +1,11 @@
-use chrono::{DateTime, Utc};
+pub(crate) mod constants;
+
+use crate::schema::pgqrs::meta;
+
+use chrono::{DateTime, NaiveDateTime, Utc};
+use diesel::{Queryable, Selectable};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
 /// A message in the queue
@@ -45,18 +51,20 @@ impl Default for ReadOptions {
     }
 }
 
-/// Options for creating a queue
-#[derive(Debug, Clone)]
-pub struct CreateQueueOptions {
-    pub name: String,
-    pub enable_archiving: bool,
+#[derive(Queryable, Selectable, Debug)]
+#[diesel(table_name = meta)]
+pub struct MetaResult {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub queue_name: String,
+    pub created_at: NaiveDateTime,
 }
 
-impl CreateQueueOptions {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            enable_archiving: true,
-        }
+impl fmt::Display for MetaResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MetaResult {{ queue_name: {}, created_at: {} }}",
+            self.queue_name, self.created_at
+        )
     }
 }

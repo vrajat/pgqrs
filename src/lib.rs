@@ -56,6 +56,7 @@ pub mod config;
 pub mod consumer;
 pub mod error;
 pub mod producer;
+mod schema;
 pub mod types;
 
 pub use admin::Admin;
