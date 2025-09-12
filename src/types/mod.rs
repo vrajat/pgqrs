@@ -3,22 +3,33 @@ pub(crate) mod constants;
 use crate::schema::pgqrs::meta;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use diesel::{Queryable, Selectable};
+use diesel::{prelude::QueryableByName, Queryable, Selectable};
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use uuid::Uuid;
+use std::fmt::{self};
 
 /// A message in the queue
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]
 pub struct QueueMessage {
-    pub id: Uuid,
-    pub queue_name: String,
-    pub payload: serde_json::Value,
-    pub message_type: Option<String>,
-    pub enqueued_at: DateTime<Utc>,
-    pub locked_until: Option<DateTime<Utc>>,
-    pub read_count: i32,
-    pub created_at: DateTime<Utc>,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub msg_id: i64,
+    #[diesel(sql_type = diesel::sql_types::Int4)]
+    pub read_ct: i32,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    pub vt: chrono::DateTime<chrono::Utc>,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    pub message: serde_json::Value,
+}
+
+impl fmt::Display for QueueMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "QueueMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, vt: {}, message: {} }}",
+            self.msg_id, self.read_ct, self.enqueued_at, self.vt, self.message
+        )
+    }
 }
 
 /// Queue metrics

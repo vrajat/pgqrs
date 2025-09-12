@@ -84,10 +84,7 @@ enum MessageCommands {
         /// Name of the queue
         queue: String,
         /// JSON message payload
-        message: String,
-        /// Optional message type
-        #[arg(long, short = 't')]
-        message_type: Option<String>,
+        payload: String,
         /// Delay in seconds before message becomes available
         #[arg(long, short = 'd')]
         delay: Option<u32>,
@@ -256,26 +253,20 @@ async fn handle_message_commands(
     match action {
         MessageCommands::Send {
             queue,
-            message,
-            message_type,
+            payload,
             delay,
         } => {
             println!("Sending message to queue '{}'...", queue);
-
+            let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
             // Parse JSON message
-            let json_msg: serde_json::Value = serde_json::from_str(&message)?;
-
             let msg_id = if let Some(delay_secs) = delay {
                 println!("Sending delayed message (delay: {}s)...", delay_secs);
                 client
                     .producer()
-                    .enqueue_delayed(&queue, json_msg, message_type, delay_secs)
+                    .enqueue_delayed(&queue, &payload_json, delay_secs)
                     .await?
             } else {
-                client
-                    .producer()
-                    .enqueue(&queue, json_msg, message_type)
-                    .await?
+                client.producer().enqueue(&queue, &payload_json).await?
             };
 
             println!("Message sent successfully with ID: {}", msg_id);
@@ -311,24 +302,18 @@ async fn handle_message_commands(
 
                 for (i, msg) in messages.iter().enumerate() {
                     println!("Message {} of {}:", i + 1, messages.len());
-                    println!("  ID: {}", msg.id);
-                    println!("  Queue: {}", msg.queue_name);
-                    if let Some(ref msg_type) = msg.message_type {
-                        println!("  Type: {}", msg_type);
-                    }
+                    println!("  ID: {}", msg.msg_id);
                     println!(
                         "  Enqueued: {}",
                         msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
                     );
-                    println!("  Read Count: {}", msg.read_count);
-                    if let Some(locked_until) = msg.locked_until {
-                        println!(
-                            "  Locked Until: {}",
-                            locked_until.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
-                    }
+                    println!("  Read Count: {}", msg.read_ct);
+                    println!(
+                        "  Visible Until: {}",
+                        msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                     println!("  Payload:");
-                    println!("{}", serde_json::to_string_pretty(&msg.payload)?);
+                    println!("{}", serde_json::to_string_pretty(&msg.message)?);
 
                     if i < messages.len() - 1 {
                         println!("  ---");
@@ -338,7 +323,7 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Delete { queue, id } => {
-            let msg_id = uuid::Uuid::parse_str(&id)?;
+            let msg_id = id.parse::<i64>()?;
             println!("Deleting message {} from queue '{}'...", msg_id, queue);
 
             let deleted = client.consumer().dequeue(&queue, msg_id).await?;
@@ -350,7 +335,7 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Archive { queue, id } => {
-            let msg_id = uuid::Uuid::parse_str(&id)?;
+            let msg_id = id.parse::<i64>()?;
             println!("Archiving message {} from queue '{}'...", msg_id, queue);
 
             let archived = client.consumer().archive(&queue, msg_id).await?;

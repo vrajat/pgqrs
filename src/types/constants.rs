@@ -1,5 +1,6 @@
 pub const QUEUE_PREFIX: &str = r#"q"#;
 pub const PGQRS_SCHEMA: &str = "pgqrs";
+pub const VISIBILITY_TIMEOUT: i32 = 5;
 pub const CREATE_QUEUE_STATEMENT: &str = r#"
     CREATE TABLE IF NOT EXISTS {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} (
         msg_id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,

@@ -3,7 +3,6 @@ use crate::types::{QueueMessage, ReadOptions};
 use diesel::pg::PgConnection;
 use diesel::r2d2::ConnectionManager;
 use r2d2::Pool;
-use uuid::Uuid;
 
 /// Consumer interface for reading and processing messages from queues
 pub struct Consumer<'a> {
@@ -64,7 +63,7 @@ impl<'a> Consumer<'a> {
     ///
     /// # Returns
     /// True if message was deleted, false if not found
-    pub async fn dequeue(&self, queue_name: &str, message_id: Uuid) -> Result<bool> {
+    pub async fn dequeue(&self, queue_name: &str, message_id: i64) -> Result<bool> {
         todo!("Implement Consumer::dequeue")
     }
 
@@ -79,7 +78,7 @@ impl<'a> Consumer<'a> {
     pub async fn dequeue_batch(
         &self,
         queue_name: &str,
-        message_ids: Vec<Uuid>,
+        message_ids: Vec<i64>,
     ) -> Result<Vec<bool>> {
         todo!("Implement Consumer::dequeue_batch")
     }
@@ -89,7 +88,7 @@ impl<'a> Consumer<'a> {
     /// # Arguments
     /// * `queue_name` - Name of the queue
     /// * `message_id` - ID of the message to archive
-    pub async fn archive(&self, queue_name: &str, message_id: Uuid) -> Result<bool> {
+    pub async fn archive(&self, queue_name: &str, message_id: i64) -> Result<bool> {
         todo!("Implement Consumer::archive")
     }
 
@@ -101,7 +100,7 @@ impl<'a> Consumer<'a> {
     pub async fn archive_batch(
         &self,
         queue_name: &str,
-        message_ids: Vec<Uuid>,
+        message_ids: Vec<i64>,
     ) -> Result<Vec<bool>> {
         todo!("Implement Consumer::archive_batch")
     }
@@ -115,7 +114,7 @@ impl<'a> Consumer<'a> {
     pub async fn extend_lock(
         &self,
         queue_name: &str,
-        message_id: Uuid,
+        message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
         todo!("Implement Consumer::extend_lock")
