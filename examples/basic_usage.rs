@@ -1,4 +1,3 @@
-use pgqrs::types::ReadOptions;
 use pgqrs::{Config, PgqrsClient};
 use serde_json::json;
 
@@ -38,12 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let email_id = client
-        .producer()
+        .queue()
         .enqueue("email_queue", &email_payload)
         .await?;
 
     let task_id = client
-        .producer()
+        .queue()
         .enqueue("task_queue", &task_payload)
         .await?;
 
@@ -70,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     let batch_ids = client
-        .producer()
+        .queue()
         .batch_enqueue("email_queue", &batch_messages)
         .await?;
     println!("Sent batch of {} emails", batch_ids.len());
@@ -83,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let delayed_id = client
-        .producer()
+        .queue()
         .enqueue_delayed(
             "task_queue",
             &delayed_payload,
@@ -95,16 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read messages
     println!("Reading messages...");
 
-    let email_read_opts = ReadOptions {
-        lock_time_seconds: 10,
-        batch_size: Some(2),
-        message_type: Some("newsletter".to_string()), // Only read newsletter emails
-    };
-
     let email_messages = client
-        .consumer()
-        .read_batch("email_queue", email_read_opts)
-        .await?;
+        .queue()
+        .read("email_queue", 10, 2)
+        .await?.unwrap();
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -117,39 +110,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    // Read all task messages (no filter)
-    let task_read_opts = ReadOptions {
-        lock_time_seconds: 15,
-        batch_size: Some(5),
-        message_type: None, // Read all message types
-    };
-
     let task_messages = client
-        .consumer()
-        .read_batch("task_queue", task_read_opts)
-        .await?;
+        .queue()
+        .read("task_queue", 5, 5)
+        .await?.unwrap();
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
         println!("Task ID {}", msg.msg_id);
-    }
-
-    // Process and acknowledge messages
-    if let Some(email_msg) = email_messages.first() {
-        // Simulate processing
-        println!("Processing email message {}...", email_msg.msg_id);
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Archive the message (move to archive table)
-        let archived = client
-            .consumer()
-            .archive("email_queue", email_msg.msg_id)
-            .await?;
-        if archived {
-            println!("Archived email message {}", email_msg.msg_id);
-        } else {
-            println!("Failed to archive email message {}", email_msg.msg_id);
-        }
     }
 
     if let Some(task_msg) = task_messages.first() {
@@ -160,8 +128,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         let extended = client
-            .consumer()
-            .extend_lock("task_queue", task_msg.msg_id, 30)
+            .queue()
+            .extend_visibility("task_queue", task_msg.msg_id, 30)
             .await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.msg_id);
@@ -172,29 +140,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Delete the message completely
         let deleted = client
-            .consumer()
-            .dequeue("task_queue", task_msg.msg_id)
+            .queue()
+            .delete_batch("task_queue", vec![task_msg.msg_id])
             .await?;
-        if deleted {
+        if deleted.first().copied().unwrap_or(false) {
             println!("Deleted task message {}", task_msg.msg_id);
         } else {
             println!("Failed to delete task message {}", task_msg.msg_id);
         }
-    }
-
-    // Batch operations example
-    if email_messages.len() > 1 {
-        let remaining_ids: Vec<_> = email_messages.iter().skip(1).map(|m| m.msg_id).collect();
-        let batch_archived = client
-            .consumer()
-            .archive_batch("email_queue", remaining_ids.clone())
-            .await?;
-        let successful_archives = batch_archived.iter().filter(|&&success| success).count();
-        println!(
-            "Batch archived {} out of {} remaining email messages",
-            successful_archives,
-            remaining_ids.len()
-        );
     }
 
     // Show queue metrics
@@ -218,33 +171,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Demonstrate message type filtering
-    println!("\nReading only alert messages:");
-    let alert_opts = ReadOptions {
-        lock_time_seconds: 5,
-        batch_size: Some(10),
-        message_type: Some("alert".to_string()),
-    };
-
-    let alert_messages = client
-        .consumer()
-        .read_batch("email_queue", alert_opts)
-        .await?;
-    println!("Found {} alert messages", alert_messages.len());
-
-    for msg in alert_messages {
-        println!(
-            "Alert {}: {}",
-            msg.msg_id,
-            msg.message.get("subject").unwrap_or(&json!("No subject"))
-        );
-        // Clean up alert messages
-        client.consumer().dequeue("email_queue", msg.msg_id).await?;
-    }
-
     // Show pending count
-    let email_pending = client.producer().pending_count("email_queue").await?;
-    let task_pending = client.producer().pending_count("task_queue").await?;
+    let email_pending = client.queue().pending_count("email_queue").await?;
+    let task_pending = client.queue().pending_count("task_queue").await?;
     println!("\nPending messages:");
     println!("  email_queue: {}", email_pending);
     println!("  task_queue: {}", task_pending);

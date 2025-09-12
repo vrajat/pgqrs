@@ -44,24 +44,6 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-/// Configuration for reading messages
-#[derive(Debug, Clone)]
-pub struct ReadOptions {
-    pub lock_time_seconds: u32,
-    pub batch_size: Option<usize>,
-    pub message_type: Option<String>, // Filter by message type
-}
-
-impl Default for ReadOptions {
-    fn default() -> Self {
-        Self {
-            lock_time_seconds: 5,
-            batch_size: Some(1),
-            message_type: None,
-        }
-    }
-}
-
 #[derive(Queryable, Selectable, Debug)]
 #[diesel(table_name = meta)]
 pub struct MetaResult {

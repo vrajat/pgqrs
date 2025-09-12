@@ -110,13 +110,6 @@ enum MessageCommands {
         /// Message ID to delete
         id: String,
     },
-    /// Archive a message
-    Archive {
-        /// Name of the queue
-        queue: String,
-        /// Message ID to archive
-        id: String,
-    },
     /// Show pending message count
     Count {
         /// Name of the queue
@@ -262,11 +255,11 @@ async fn handle_message_commands(
             let msg_id = if let Some(delay_secs) = delay {
                 println!("Sending delayed message (delay: {}s)...", delay_secs);
                 client
-                    .producer()
+                    .queue()
                     .enqueue_delayed(&queue, &payload_json, delay_secs)
                     .await?
             } else {
-                client.producer().enqueue(&queue, &payload_json).await?
+                client.queue().enqueue(&queue, &payload_json).await?
             };
 
             println!("Message sent successfully with ID: {}", msg_id);
@@ -286,38 +279,37 @@ async fn handle_message_commands(
                 println!("Filtering by message type: '{}'", msg_type);
             }
 
-            let options = pgqrs::ReadOptions {
-                lock_time_seconds: lock_time,
-                batch_size: Some(count),
-                message_type,
-            };
+            match client.queue().read(&queue, lock_time, count).await? {
+                Some(messages) => {
+                    if messages.is_empty() {
+                        println!("No messages available");
+                    } else {
+                        println!("Found {} messages:", messages.len());
+                        println!();
 
-            let messages = client.consumer().read_batch(&queue, options).await?;
+                        for (i, msg) in messages.iter().enumerate() {
+                            println!("Message {} of {}:", i + 1, messages.len());
+                            println!("  ID: {}", msg.msg_id);
+                            println!(
+                                "  Enqueued: {}",
+                                msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
+                            );
+                            println!("  Read Count: {}", msg.read_ct);
+                            println!(
+                                "  Visible Until: {}",
+                                msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
+                            );
+                            println!("  Payload:");
+                            println!("{}", serde_json::to_string_pretty(&msg.message)?);
 
-            if messages.is_empty() {
-                println!("No messages available");
-            } else {
-                println!("Found {} messages:", messages.len());
-                println!();
-
-                for (i, msg) in messages.iter().enumerate() {
-                    println!("Message {} of {}:", i + 1, messages.len());
-                    println!("  ID: {}", msg.msg_id);
-                    println!(
-                        "  Enqueued: {}",
-                        msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                    println!("  Read Count: {}", msg.read_ct);
-                    println!(
-                        "  Visible Until: {}",
-                        msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                    println!("  Payload:");
-                    println!("{}", serde_json::to_string_pretty(&msg.message)?);
-
-                    if i < messages.len() - 1 {
-                        println!("  ---");
+                            if i < messages.len() - 1 {
+                                println!("  ---");
+                            }
+                        }
                     }
+                }
+                None => {
+                    println!("No messages in the Queue '{}'", queue);
                 }
             }
         }
@@ -326,29 +318,17 @@ async fn handle_message_commands(
             let msg_id = id.parse::<i64>()?;
             println!("Deleting message {} from queue '{}'...", msg_id, queue);
 
-            let deleted = client.consumer().dequeue(&queue, msg_id).await?;
-            if deleted {
+            let deleted = client.queue().delete_batch(&queue, vec![msg_id]).await?;
+            if deleted.first().copied().unwrap_or(false) {
                 println!("Message deleted successfully");
             } else {
                 println!("Message not found or could not be deleted");
             }
         }
 
-        MessageCommands::Archive { queue, id } => {
-            let msg_id = id.parse::<i64>()?;
-            println!("Archiving message {} from queue '{}'...", msg_id, queue);
-
-            let archived = client.consumer().archive(&queue, msg_id).await?;
-            if archived {
-                println!("Message archived successfully");
-            } else {
-                println!("Message not found or could not be archived");
-            }
-        }
-
         MessageCommands::Count { queue } => {
             println!("Getting pending message count for queue '{}'...", queue);
-            let count = client.producer().pending_count(&queue).await?;
+            let count = client.queue().pending_count(&queue).await?;
             println!("Pending messages: {}", count);
         }
     }

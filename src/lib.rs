@@ -53,19 +53,17 @@ pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
 */
 pub mod admin;
 pub mod config;
-pub mod consumer;
 pub mod error;
-pub mod producer;
+pub mod queue;
 mod schema;
 pub mod types;
 
 pub use admin::Admin;
 pub use config::Config;
-pub use consumer::Consumer;
 pub use diesel::pg::PgConnection;
 pub use diesel::r2d2::{ConnectionManager, Pool};
 pub use error::{PgqrsError, Result};
-pub use producer::Producer;
+pub use queue::Queue;
 pub use types::*;
 
 /// Main client for pgqrs operations
@@ -90,12 +88,7 @@ impl PgqrsClient {
     }
 
     /// Get producer interface
-    pub fn producer(&'_ self) -> Producer<'_> {
-        Producer::new(&self.pool)
-    }
-
-    /// Get consumer interface
-    pub fn consumer(&'_ self) -> Consumer<'_> {
-        Consumer::new(&self.pool)
+    pub fn queue(&'_ self) -> Queue<'_> {
+        Queue::new(&self.pool)
     }
 }
