@@ -12,12 +12,76 @@ use r2d2::Pool;
 /// Producer interface for adding messages to queues
 pub struct Queue<'a> {
     pub pool: &'a Pool<ConnectionManager<PgConnection>>,
+    pub queue_name: String,
+    pub table_name: String,
+    pub insert_sql: String,
+    pub select_by_id_sql: String,
+    pub read_messages_sql: String,
+    pub dequeue_sql: String,
+    pub update_vt_sql: String,
+    pub delete_batch_sql: String,
 }
 
 impl<'a> Queue<'a> {
     /// Create a new Producer instance
-    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>) -> Self {
-        Self { pool }
+    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
+        let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
+        let insert_sql = INSERT_MESSAGE
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let select_by_id_sql = SELECT_MESSAGE_BY_ID
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let read_messages_sql = crate::types::constants::READ_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let dequeue_sql = crate::types::constants::DEQUEUE_MESSAGE
+            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let update_vt_sql = crate::types::constants::UPDATE_MESSAGE_VT
+            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let delete_batch_sql = crate::types::constants::DELETE_MESSAGE_BATCH
+            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        Self {
+            pool,
+            queue_name: queue_name.to_string(),
+            table_name,
+            insert_sql,
+            select_by_id_sql,
+            read_messages_sql,
+            dequeue_sql,
+            update_vt_sql,
+            delete_batch_sql,
+        }
+    }
+
+    /// Helper to run a closure with a DB connection in a blocking task, handling errors
+    pub async fn with_conn<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut PgConnection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = pool
+                .get()
+                .map_err(|e| crate::error::PgqrsError::Connection {
+                    message: e.to_string(),
+                })?;
+            f(&mut conn)
+        })
+        .await
+        .map_err(|e| crate::error::PgqrsError::Connection {
+            message: e.to_string(),
+        })?
     }
 
     /// Retrieve a message by its ID from the queue
@@ -25,31 +89,17 @@ impl<'a> Queue<'a> {
     /// # Arguments
     /// * `queue_name` - Name of the queue
     /// * `msg_id` - ID of the message to retrieve
-    pub async fn get_message_by_id(&self, queue_name: &str, msg_id: i64) -> Result<QueueMessage> {
-        let pool = self.pool.clone();
-        let sql = SELECT_MESSAGE_BY_ID
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-
-        let row = tokio::task::spawn_blocking(move || {
-            let mut conn = pool
-                .get()
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
+    pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
+        let sql = self.select_by_id_sql.clone();
+        self.with_conn(move |conn| {
             diesel::sql_query(&sql)
                 .bind::<diesel::sql_types::BigInt, _>(msg_id)
-                .get_result::<QueueMessage>(&mut conn)
+                .get_result::<QueueMessage>(conn)
                 .map_err(|e| crate::error::PgqrsError::Connection {
                     message: e.to_string(),
                 })
         })
         .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-        Ok(row)
     }
 
     /// Add a single message to the queue
@@ -60,15 +110,11 @@ impl<'a> Queue<'a> {
     ///
     /// # Returns
     /// The UUID of the enqueued message
-    pub async fn enqueue(
-        &self,
-        queue_name: &str,
-        payload: &serde_json::Value,
-    ) -> Result<QueueMessage> {
+    pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(VISIBILITY_TIMEOUT as i64);
-        let id = self.insert_message(queue_name, payload, now, vt).await?;
-        let queue_message = self.get_message_by_id(queue_name, id).await?;
+        let id = self.insert_message(payload, now, vt).await?;
+        let queue_message = self.get_message_by_id(id).await?;
         Ok(queue_message)
     }
 
@@ -80,23 +126,16 @@ impl<'a> Queue<'a> {
     /// * `delay_seconds` - Seconds to delay before message becomes available
     pub async fn enqueue_delayed(
         &self,
-        queue_name: &str,
         payload: &serde_json::Value,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(delay_seconds as i64);
-        let id = self.insert_message(queue_name, payload, now, vt).await?;
-        self.get_message_by_id(queue_name, id).await
+        let id = self.insert_message(payload, now, vt).await?;
+        self.get_message_by_id(id).await
     }
 
-    // Helper to build the insert SQL for a queue
-    fn insert_sql_for_queue(queue_name: &str) -> String {
-        INSERT_MESSAGE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name)
-    }
+    // Helper to build the insert SQL for a queue (no longer needed)
 
     // Helper to insert a single message (sync, for use in both single and batch)
     fn insert_one_message_sync(
@@ -122,13 +161,12 @@ impl<'a> Queue<'a> {
 
     async fn insert_message(
         &self,
-        queue_name: &str,
         payload: &serde_json::Value,
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
         let pool = self.pool.clone();
-        let sql = Self::insert_sql_for_queue(queue_name);
+        let sql = self.insert_sql.clone();
         let payload_cloned = payload.clone();
         let id = tokio::task::spawn_blocking(move || {
             let mut conn = pool.get()?;
@@ -149,17 +187,13 @@ impl<'a> Queue<'a> {
     ///
     /// # Returns
     /// Vector of UUIDs for the enqueued messages (in same order as input)
-    pub async fn batch_enqueue(
-        &self,
-        queue_name: &str,
-        payloads: &Vec<serde_json::Value>,
-    ) -> Result<Vec<QueueMessage>> {
+    pub async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
         use diesel::Connection;
         let pool = self.pool.clone();
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(VISIBILITY_TIMEOUT as i64);
-        let sql = Self::insert_sql_for_queue(queue_name);
-        let payloads_cloned = payloads.clone();
+        let sql = self.insert_sql.clone();
+        let payloads_cloned = payloads.to_vec();
         let ids = tokio::task::spawn_blocking(move || {
             let mut conn = pool.get()?;
             conn.transaction::<_, crate::error::PgqrsError, _>(|txn| {
@@ -177,7 +211,6 @@ impl<'a> Queue<'a> {
         })??;
 
         // Fetch all messages in a single query using WHERE msg_id IN (...)
-        let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let ids_str = ids
             .iter()
             .map(|id| id.to_string())
@@ -185,7 +218,7 @@ impl<'a> Queue<'a> {
             .join(", ");
         let sql = format!(
             "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {} WHERE msg_id IN ({})",
-            table_name, ids_str
+            self.table_name, ids_str
         );
         let pool = self.pool.clone();
         let queue_messages = tokio::task::spawn_blocking(move || {
@@ -211,32 +244,25 @@ impl<'a> Queue<'a> {
     ///
     /// # Arguments
     /// * `queue_name` - Name of the queue
-    pub async fn pending_count(&self, queue_name: &str) -> Result<i64> {
+    pub async fn pending_count(&self) -> Result<i64> {
         use chrono::Utc;
-        let pool = self.pool.clone();
         let now = Utc::now();
-        let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let sql = format!(
             "SELECT COUNT(*) as count FROM {} WHERE vt <= $1",
-            table_name
+            self.table_name
         );
         #[derive(diesel::QueryableByName)]
         struct CountRow {
             #[diesel(sql_type = diesel::sql_types::BigInt)]
             count: i64,
         }
-        let count = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
+        self.with_conn(move |conn| {
             let row = diesel::sql_query(&sql)
                 .bind::<diesel::sql_types::Timestamptz, _>(now)
-                .get_result::<CountRow>(&mut conn)?;
-            Ok::<i64, crate::error::PgqrsError>(row.count)
+                .get_result::<CountRow>(conn)?;
+            Ok(row.count)
         })
         .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-        Ok(count)
     }
 
     /// Read a single message from the queue
@@ -247,41 +273,22 @@ impl<'a> Queue<'a> {
     ///
     /// # Returns
     /// Option containing the message if available, None if queue is empty
-    pub async fn read(
-        &self,
-        queue_name: &str,
-        vt: u32,
-        limit: usize,
-    ) -> Result<Option<Vec<QueueMessage>>> {
-        let pool = self.pool.clone();
-        let sql = crate::types::constants::READ_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name)
+    pub async fn read(&self, vt: u32, limit: usize) -> Result<Vec<QueueMessage>> {
+        let sql = self
+            .read_messages_sql
+            .clone()
             .replace("{vt}", &vt.to_string())
             .replace("{limit}", &limit.to_string());
-
-        let messages = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        let sql = sql;
+        self.with_conn(move |conn| {
             let result = diesel::sql_query(&sql)
-                .get_results::<QueueMessage>(&mut conn)
+                .get_results::<QueueMessage>(conn)
                 .map_err(|e| crate::error::PgqrsError::Connection {
                     message: e.to_string(),
                 })?;
-            Ok::<Vec<QueueMessage>, crate::error::PgqrsError>(result)
+            Ok(result)
         })
         .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-
-        if messages.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(messages))
-        }
     }
 
     /// Remove a message from the queue (delete it permanently)
@@ -291,32 +298,17 @@ impl<'a> Queue<'a> {
     ///
     /// # Returns
     /// True if message was deleted, false if not found
-    pub async fn dequeue(&self, queue_name: &str) -> Result<QueueMessage> {
-        let pool = self.pool.clone();
-        let sql = crate::types::constants::DEQUEUE_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name)
-            .replace("{PGMQ_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{name}", queue_name);
-
-        let message = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+    pub async fn dequeue(&self) -> Result<QueueMessage> {
+        let sql = self.dequeue_sql.clone();
+        self.with_conn(move |conn| {
             let result = diesel::sql_query(&sql)
-                .get_result::<QueueMessage>(&mut conn)
+                .get_result::<QueueMessage>(conn)
                 .map_err(|e| crate::error::PgqrsError::Connection {
                     message: e.to_string(),
                 })?;
-            Ok::<QueueMessage, crate::error::PgqrsError>(result)
+            Ok(result)
         })
         .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-
-        Ok(message)
     }
 
     /// Remove a batch of messages from the queue
@@ -327,16 +319,8 @@ impl<'a> Queue<'a> {
     ///
     /// # Returns
     /// Vector of booleans indicating success for each message (same order as input)
-    pub async fn delete_batch(
-        &self,
-        queue_name: &str,
-        message_ids: Vec<i64>,
-    ) -> Result<Vec<bool>> {
-        let pool = self.pool.clone();
-        let sql = crate::types::constants::DELETE_MESSAGE_BATCH
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
+    pub async fn delete_batch(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
+        let sql = self.delete_batch_sql.clone();
 
         #[derive(diesel::QueryableByName)]
         struct DeletedRow {
@@ -345,26 +329,24 @@ impl<'a> Queue<'a> {
         }
 
         let ids = message_ids.clone();
-        let deleted_ids = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-            let rows = diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::BigInt>, _>(&ids)
-                .get_results::<DeletedRow>(&mut conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            Ok::<Vec<i64>, crate::error::PgqrsError>(rows.into_iter().map(|r| r.msg_id).collect())
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
+        let deleted_ids = self
+            .with_conn(move |conn| {
+                let rows = diesel::sql_query(&sql)
+                    .bind::<diesel::sql_types::Array<diesel::sql_types::BigInt>, _>(&ids)
+                    .get_results::<DeletedRow>(conn)
+                    .map_err(|e| crate::error::PgqrsError::Connection {
+                        message: e.to_string(),
+                    })?;
+                Ok(rows.into_iter().map(|r| r.msg_id).collect::<Vec<i64>>())
+            })
+            .await?;
 
         // For each input id, true if it was deleted, false otherwise
         let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
-        let result = message_ids.into_iter().map(|id| deleted_set.contains(&id)).collect();
+        let result = message_ids
+            .into_iter()
+            .map(|id| deleted_set.contains(&id))
+            .collect();
         Ok(result)
     }
 
@@ -376,34 +358,22 @@ impl<'a> Queue<'a> {
     /// * `additional_seconds` - Additional seconds to extend the visibility
     pub async fn extend_visibility(
         &self,
-        queue_name: &str,
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
-        let pool = self.pool.clone();
-        let sql = crate::types::constants::UPDATE_MESSAGE_VT
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-
-        let updated = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-            let result = diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::Int4, _>(additional_seconds as i32)
-                .bind::<diesel::sql_types::BigInt, _>(message_id)
-                .execute(&mut conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            Ok::<usize, crate::error::PgqrsError>(result)
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-
+        let sql = self.update_vt_sql.clone();
+        let updated = self
+            .with_conn(move |conn| {
+                let result = diesel::sql_query(&sql)
+                    .bind::<diesel::sql_types::Int4, _>(additional_seconds as i32)
+                    .bind::<diesel::sql_types::BigInt, _>(message_id)
+                    .execute(conn)
+                    .map_err(|e| crate::error::PgqrsError::Connection {
+                        message: e.to_string(),
+                    })?;
+                Ok(result)
+            })
+            .await?;
         Ok(updated > 0)
     }
 }

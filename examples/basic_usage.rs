@@ -1,4 +1,4 @@
-use pgqrs::{Config, PgqrsClient};
+use pgqrs::{create_pool, Config};
 use serde_json::json;
 
 #[tokio::main]
@@ -10,16 +10,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
 
     // Create client
-    let client = PgqrsClient::new(config).await?;
+    let pool = create_pool(&config)?;
+    let admin = pgqrs::Admin::new(&pool);
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
-    client.admin().install(false)?;
+    admin.install(false)?;
 
     // Create queues
     println!("Creating queues...");
-    client.admin().create_queue(&String::from("email")).await?;
-    client.admin().create_queue(&String::from("task")).await?;
+    admin.create_queue(&String::from("email")).await?;
+    admin.create_queue(&String::from("task")).await?;
 
     // Send some messages
     println!("Sending messages...");
@@ -36,15 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "priority": 1
     });
 
-    let email_id = client
-        .queue()
-        .enqueue("email_queue", &email_payload)
-        .await?;
+    let email_queue = pgqrs::Queue::new(&pool, "email_queue");
+    let task_queue = pgqrs::Queue::new(&pool, "task_queue");
 
-    let task_id = client
-        .queue()
-        .enqueue("task_queue", &task_payload)
-        .await?;
+    let email_id = email_queue.enqueue(&email_payload).await?;
+    let task_id = task_queue.enqueue(&task_payload).await?;
 
     println!("Sent email message with ID: {}", email_id);
     println!("Sent task message with ID: {}", task_id);
@@ -68,10 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })),
     ];
 
-    let batch_ids = client
-        .queue()
-        .batch_enqueue("email_queue", &batch_messages)
-        .await?;
+    let batch_ids = email_queue.batch_enqueue(&batch_messages).await?;
     println!("Sent batch of {} emails", batch_ids.len());
 
     // Send delayed message
@@ -81,10 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "due_date": "2024-02-15"
     });
 
-    let delayed_id = client
-        .queue()
+    let delayed_id = task_queue
         .enqueue_delayed(
-            "task_queue",
             &delayed_payload,
             300, // 5 minutes delay
         )
@@ -94,10 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read messages
     println!("Reading messages...");
 
-    let email_messages = client
-        .queue()
-        .read("email_queue", 10, 2)
-        .await?.unwrap();
+    let email_messages = email_queue.read(10, 2).await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -110,10 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = client
-        .queue()
-        .read("task_queue", 5, 5)
-        .await?.unwrap();
+    let task_messages = task_queue.read(5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
@@ -127,10 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_msg.msg_id
         );
 
-        let extended = client
-            .queue()
-            .extend_visibility("task_queue", task_msg.msg_id, 30)
-            .await?;
+        let extended = task_queue.extend_visibility(task_msg.msg_id, 30).await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.msg_id);
         }
@@ -139,10 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // Delete the message completely
-        let deleted = client
-            .queue()
-            .delete_batch("task_queue", vec![task_msg.msg_id])
-            .await?;
+        let deleted = task_queue.delete_batch(vec![task_msg.msg_id]).await?;
         if deleted.first().copied().unwrap_or(false) {
             println!("Deleted task message {}", task_msg.msg_id);
         } else {
@@ -152,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show queue metrics
     println!("\nQueue metrics:");
-    let all_metrics = client.admin().all_queues_metrics().await?;
+    let all_metrics = admin.all_queues_metrics().await?;
     for metrics in all_metrics {
         println!(
             "  {}: {} total, {} pending, {} locked, {} archived",
@@ -172,8 +152,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show pending count
-    let email_pending = client.queue().pending_count("email_queue").await?;
-    let task_pending = client.queue().pending_count("task_queue").await?;
+    let email_pending = email_queue.pending_count().await?;
+    let task_pending = task_queue.pending_count().await?;
     println!("\nPending messages:");
     println!("  email_queue: {}", email_pending);
     println!("  task_queue: {}", task_pending);

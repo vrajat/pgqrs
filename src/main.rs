@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
-use pgqrs::{Config, PgqrsClient};
+use diesel::pg::PgConnection;
+use diesel::r2d2::{ConnectionManager, Pool};
+use pgqrs::{create_pool, Config, Queue};
 use std::process;
 
 #[derive(Parser)]
@@ -151,50 +153,55 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         })
     };
 
-    let client = PgqrsClient::new(config).await?;
+    let pool = create_pool(&config)?;
+    let admin = pgqrs::Admin::new(&pool);
 
     match cli.command {
         Commands::Install { dry_run } => {
             println!("Installing pgqrs schema (dry_run: {})...", dry_run);
-            client.admin().install(dry_run)?;
+            admin.install(dry_run)?;
             println!("Installation completed successfully");
         }
 
         Commands::Uninstall { dry_run } => {
             println!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
-            client.admin().uninstall(dry_run)?;
+            admin.uninstall(dry_run)?;
             println!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
             println!("Verifying pgqrs installation...");
-            client.admin().verify()?;
+            admin.verify()?;
             println!("Verification completed successfully");
         }
 
         Commands::Queue { action } => {
-            handle_queue_commands(client, action).await?;
+            handle_queue_commands(&pool, action).await?;
         }
 
         Commands::Message { action } => {
-            handle_message_commands(client, action).await?;
+            handle_message_commands(&pool, action).await?;
         }
     }
 
     Ok(())
 }
 
-async fn handle_queue_commands(client: PgqrsClient, action: QueueCommands) -> anyhow::Result<()> {
+async fn handle_queue_commands(
+    pool: &Pool<ConnectionManager<PgConnection>>,
+    action: QueueCommands,
+) -> anyhow::Result<()> {
+    let admin = pgqrs::Admin::new(pool);
     match action {
         QueueCommands::Create { name } => {
             println!("Creating queue '{}'...", &name);
-            client.admin().create_queue(&name).await?;
+            admin.create_queue(&name).await?;
             println!("Queue '{}' created successfully", &name);
         }
 
         QueueCommands::List => {
             println!("Listing all queues...");
-            let queues = client.admin().list_queues().await?;
+            let queues = admin.list_queues().await?;
             if queues.is_empty() {
                 println!("No queues found");
             } else {
@@ -207,24 +214,24 @@ async fn handle_queue_commands(client: PgqrsClient, action: QueueCommands) -> an
 
         QueueCommands::Delete { name } => {
             println!("Deleting queue '{}'...", name);
-            client.admin().delete_queue(&name).await?;
+            admin.delete_queue(&name).await?;
             println!("Queue '{}' deleted successfully", name);
         }
 
         QueueCommands::Purge { name } => {
             println!("Purging queue '{}'...", name);
-            client.admin().purge_queue(&name).await?;
+            admin.purge_queue(&name).await?;
             println!("Queue '{}' purged successfully", name);
         }
 
         QueueCommands::Metrics { name } => {
             if let Some(queue_name) = name {
                 println!("Getting metrics for queue '{}'...", queue_name);
-                let metrics = client.admin().queue_metrics(&queue_name).await?;
+                let metrics = admin.queue_metrics(&queue_name).await?;
                 print_queue_metrics(&metrics);
             } else {
                 println!("Getting metrics for all queues...");
-                let metrics = client.admin().all_queues_metrics().await?;
+                let metrics = admin.all_queues_metrics().await?;
                 if metrics.is_empty() {
                     println!("No queues found");
                 } else {
@@ -240,7 +247,7 @@ async fn handle_queue_commands(client: PgqrsClient, action: QueueCommands) -> an
 }
 
 async fn handle_message_commands(
-    client: PgqrsClient,
+    pool: &'_ Pool<ConnectionManager<PgConnection>>,
     action: MessageCommands,
 ) -> anyhow::Result<()> {
     match action {
@@ -249,17 +256,15 @@ async fn handle_message_commands(
             payload,
             delay,
         } => {
+            let queue_obj = Queue::new(&pool, &queue);
             println!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
             // Parse JSON message
             let msg_id = if let Some(delay_secs) = delay {
                 println!("Sending delayed message (delay: {}s)...", delay_secs);
-                client
-                    .queue()
-                    .enqueue_delayed(&queue, &payload_json, delay_secs)
-                    .await?
+                queue_obj.enqueue_delayed(&payload_json, delay_secs).await?
             } else {
-                client.queue().enqueue(&queue, &payload_json).await?
+                queue_obj.enqueue(&payload_json).await?
             };
 
             println!("Message sent successfully with ID: {}", msg_id);
@@ -271,6 +276,8 @@ async fn handle_message_commands(
             lock_time,
             message_type,
         } => {
+            let queue_obj = Queue::new(&pool, &queue);
+
             println!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
                 count, queue, lock_time
@@ -279,46 +286,42 @@ async fn handle_message_commands(
                 println!("Filtering by message type: '{}'", msg_type);
             }
 
-            match client.queue().read(&queue, lock_time, count).await? {
-                Some(messages) => {
-                    if messages.is_empty() {
-                        println!("No messages available");
-                    } else {
-                        println!("Found {} messages:", messages.len());
-                        println!();
+            let messages = queue_obj.read(lock_time, count).await?;
+            if messages.is_empty() {
+                println!("No messages available");
+            } else {
+                println!("Found {} messages:", messages.len());
+                println!();
 
-                        for (i, msg) in messages.iter().enumerate() {
-                            println!("Message {} of {}:", i + 1, messages.len());
-                            println!("  ID: {}", msg.msg_id);
-                            println!(
-                                "  Enqueued: {}",
-                                msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
-                            );
-                            println!("  Read Count: {}", msg.read_ct);
-                            println!(
-                                "  Visible Until: {}",
-                                msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
-                            );
-                            println!("  Payload:");
-                            println!("{}", serde_json::to_string_pretty(&msg.message)?);
+                for (i, msg) in messages.iter().enumerate() {
+                    println!("Message {} of {}:", i + 1, messages.len());
+                    println!("  ID: {}", msg.msg_id);
+                    println!(
+                        "  Enqueued: {}",
+                        msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                    println!("  Read Count: {}", msg.read_ct);
+                    println!(
+                        "  Visible Until: {}",
+                        msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                    println!("  Payload:");
+                    println!("{}", serde_json::to_string_pretty(&msg.message)?);
 
-                            if i < messages.len() - 1 {
-                                println!("  ---");
-                            }
-                        }
+                    if i < messages.len() - 1 {
+                        println!("  ---");
                     }
-                }
-                None => {
-                    println!("No messages in the Queue '{}'", queue);
                 }
             }
         }
 
         MessageCommands::Delete { queue, id } => {
+            let queue_obj = Queue::new(&pool, &queue);
+
             let msg_id = id.parse::<i64>()?;
             println!("Deleting message {} from queue '{}'...", msg_id, queue);
 
-            let deleted = client.queue().delete_batch(&queue, vec![msg_id]).await?;
+            let deleted = queue_obj.delete_batch(vec![msg_id]).await?;
             if deleted.first().copied().unwrap_or(false) {
                 println!("Message deleted successfully");
             } else {
@@ -327,8 +330,10 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Count { queue } => {
+            let queue_obj = Queue::new(&pool, &queue);
+
             println!("Getting pending message count for queue '{}'...", queue);
-            let count = client.queue().pending_count(&queue).await?;
+            let count = queue_obj.pending_count().await?;
             println!("Pending messages: {}", count);
         }
     }

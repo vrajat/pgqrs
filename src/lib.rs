@@ -67,28 +67,12 @@ pub use queue::Queue;
 pub use types::*;
 
 /// Main client for pgqrs operations
-pub struct PgqrsClient {
-    pool: Pool<ConnectionManager<PgConnection>>,
-}
 
-impl PgqrsClient {
-    /// Create a new pgqrs client with the given configuration
-    pub async fn new(config: Config) -> Result<Self> {
-        eprintln!("pgqrs config: {:?}", config);
+pub fn create_pool(config: &Config) -> Result<Pool<ConnectionManager<PgConnection>>> {
+    eprintln!("pgqrs config: {:?}", config);
 
-        let pool = Pool::builder()
-            .max_size(16)
-            .build(ConnectionManager::new(config.database_url()))?;
-        Ok(Self { pool })
-    }
-
-    /// Get admin interface
-    pub fn admin(&'_ self) -> Admin<'_> {
-        Admin::new(&self.pool)
-    }
-
-    /// Get producer interface
-    pub fn queue(&'_ self) -> Queue<'_> {
-        Queue::new(&self.pool)
-    }
+    Pool::builder()
+        .max_size(16)
+        .build(ConnectionManager::new(config.database_url()))
+        .map_err(|e| PgqrsError::from(e))
 }

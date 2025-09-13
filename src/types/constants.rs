@@ -71,7 +71,7 @@ pub const DEQUEUE_MESSAGE: &str = r#"
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        DELETE from {PGMQ_SCHEMA}.{QUEUE_PREFIX}_{name}
+        DELETE from {PGMQ_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
         WHERE msg_id = (select msg_id from cte)
         RETURNING *;
 "#;
