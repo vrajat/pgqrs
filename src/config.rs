@@ -68,7 +68,7 @@ impl Config {
     }
 
     /// Create config from YAML file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(_path: P) -> Result<Self> {
         todo!("Implement Config::from_file")
     }
 

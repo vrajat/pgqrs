@@ -139,7 +139,7 @@ impl<'a> Admin<'a> {
     ///
     /// # Arguments
     /// * `name` - Name of the queue
-    pub async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
+    pub async fn queue_metrics(&self, _name: &str) -> Result<QueueMetrics> {
         todo!("Implement Admin::queue_metrics")
     }
 
