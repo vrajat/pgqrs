@@ -1,7 +1,7 @@
 use crate::error::{PgqrsError, Result};
 use crate::run_migrations;
 use crate::schema::pgqrs::meta;
-use crate::types::constants::{
+use crate::constants::{
     CREATE_QUEUE_STATEMENT, DELETE_QUEUE_METADATA, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
     PGQRS_SCHEMA, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
 };

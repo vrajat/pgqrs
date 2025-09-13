@@ -1,7 +1,7 @@
-use crate::constants::{INSERT_MESSAGE, SELECT_MESSAGE_BY_ID};
+use crate::constants::PGQRS_SCHEMA;
+use crate::constants::QUEUE_PREFIX;
 use crate::error::Result;
-use crate::types::constants::{PGQRS_SCHEMA, QUEUE_PREFIX, VISIBILITY_TIMEOUT};
-use crate::QueueMessage;
+use crate::types::QueueMessage;
 use chrono::Utc;
 use diesel::pg::PgConnection;
 use diesel::r2d2::ConnectionManager;
@@ -26,29 +26,29 @@ impl<'a> Queue<'a> {
     /// Create a new Producer instance
     pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
         let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
-        let insert_sql = INSERT_MESSAGE
+        let insert_sql = crate::constants::INSERT_MESSAGE
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let select_by_id_sql = SELECT_MESSAGE_BY_ID
+        let select_by_id_sql = crate::constants::SELECT_MESSAGE_BY_ID
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let read_messages_sql = crate::types::constants::READ_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+        let read_messages_sql = crate::constants::READ_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let dequeue_sql = crate::types::constants::DEQUEUE_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+        let dequeue_sql = crate::constants::DEQUEUE_MESSAGE
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let update_vt_sql = crate::types::constants::UPDATE_MESSAGE_VT
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+        let update_vt_sql = crate::constants::UPDATE_MESSAGE_VT
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let delete_batch_sql = crate::types::constants::DELETE_MESSAGE_BATCH
-            .replace("{PGQRS_SCHEMA}", crate::types::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::types::constants::QUEUE_PREFIX)
+        let delete_batch_sql = crate::constants::DELETE_MESSAGE_BATCH
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         Self {
             pool,
@@ -112,7 +112,7 @@ impl<'a> Queue<'a> {
     /// The UUID of the enqueued message
     pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
         let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(VISIBILITY_TIMEOUT as i64);
+        let vt = now + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
         let id = self.insert_message(payload, now, vt).await?;
         let queue_message = self.get_message_by_id(id).await?;
         Ok(queue_message)
@@ -191,7 +191,7 @@ impl<'a> Queue<'a> {
         use diesel::Connection;
         let pool = self.pool.clone();
         let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(VISIBILITY_TIMEOUT as i64);
+        let vt = now + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
         let sql = self.insert_sql.clone();
         let payloads_cloned = payloads.to_vec();
         let ids = tokio::task::spawn_blocking(move || {

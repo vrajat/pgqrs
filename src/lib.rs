@@ -57,16 +57,13 @@ pub mod error;
 pub mod queue;
 mod schema;
 pub mod types;
+mod constants;
 
-pub use admin::Admin;
 pub use config::Config;
 pub use diesel::pg::PgConnection;
 pub use diesel::r2d2::{ConnectionManager, Pool};
 pub use error::{PgqrsError, Result};
-pub use queue::Queue;
-pub use types::*;
 
-/// Main client for pgqrs operations
 
 pub fn create_pool(config: &Config) -> Result<Pool<ConnectionManager<PgConnection>>> {
     eprintln!("pgqrs config: {:?}", config);

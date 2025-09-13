@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 use diesel::pg::PgConnection;
 use diesel::r2d2::{ConnectionManager, Pool};
-use pgqrs::{create_pool, Config, Queue};
+use pgqrs::types::QueueMetrics;
+use pgqrs::{create_pool, Config};
+use pgqrs::queue::Queue;
+use pgqrs::admin::Admin;
 use std::process;
 
 #[derive(Parser)]
@@ -154,7 +157,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     };
 
     let pool = create_pool(&config)?;
-    let admin = pgqrs::Admin::new(&pool);
+    let admin = Admin::new(&pool);
 
     match cli.command {
         Commands::Install { dry_run } => {
@@ -191,7 +194,7 @@ async fn handle_queue_commands(
     pool: &Pool<ConnectionManager<PgConnection>>,
     action: QueueCommands,
 ) -> anyhow::Result<()> {
-    let admin = pgqrs::Admin::new(pool);
+    let admin = Admin::new(pool);
     match action {
         QueueCommands::Create { name } => {
             println!("Creating queue '{}'...", &name);
@@ -340,7 +343,7 @@ async fn handle_message_commands(
     Ok(())
 }
 
-fn print_queue_metrics(metrics: &pgqrs::QueueMetrics) {
+fn print_queue_metrics(metrics: &QueueMetrics) {
     println!("Queue: {}", metrics.name);
     println!("  Total Messages: {}", metrics.total_messages);
     println!("  Pending Messages: {}", metrics.pending_messages);
