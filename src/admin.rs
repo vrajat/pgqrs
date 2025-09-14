@@ -1,11 +1,11 @@
-use crate::error::{PgqrsError, Result};
-use crate::queue::Queue;
-use crate::run_migrations;
-use crate::schema::pgqrs::meta;
 use crate::constants::{
     CREATE_QUEUE_STATEMENT, DELETE_QUEUE_METADATA, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
     PGQRS_SCHEMA, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
 };
+use crate::error::{PgqrsError, Result};
+use crate::queue::Queue;
+use crate::run_migrations;
+use crate::schema::pgqrs::meta;
 use crate::types::MetaResult;
 use crate::types::QueueMetrics;
 use crate::Config;
@@ -18,7 +18,7 @@ use r2d2::Pool;
 
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
-pub struct Admin {
+pub struct PgqrsAdmin {
     pub pool: Pool<ConnectionManager<PgConnection>>,
 }
 
@@ -28,7 +28,7 @@ struct ExistsRow {
     exists: bool,
 }
 
-impl Admin {
+impl PgqrsAdmin {
     /// Create a new Admin instance
     pub fn new(config: &Config) -> Self {
         let pool = Pool::builder()

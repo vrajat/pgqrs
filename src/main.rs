@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
+use pgqrs::admin::PgqrsAdmin;
 use pgqrs::types::QueueMetrics;
-use pgqrs::{Config};
-use pgqrs::admin::Admin;
+use pgqrs::Config;
 use std::process;
 
 #[derive(Parser)]
@@ -153,7 +153,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         })
     };
 
-    let admin = Admin::new(&config);
+    let admin = PgqrsAdmin::new(&config);
 
     match cli.command {
         Commands::Install { dry_run } => {
@@ -186,10 +186,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_queue_commands(
-    admin: &Admin,
-    action: QueueCommands,
-) -> anyhow::Result<()> {
+async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> anyhow::Result<()> {
     match action {
         QueueCommands::Create { name } => {
             println!("Creating queue '{}'...", &name);
@@ -245,7 +242,7 @@ async fn handle_queue_commands(
 }
 
 async fn handle_message_commands(
-    admin: &Admin,
+    admin: &PgqrsAdmin,
     action: MessageCommands,
 ) -> anyhow::Result<()> {
     match action {

@@ -53,11 +53,11 @@ pub fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
 */
 pub mod admin;
 pub mod config;
+mod constants;
 pub mod error;
 pub mod queue;
 mod schema;
 pub mod types;
-mod constants;
 
 pub use config::Config;
 pub use diesel::pg::PgConnection;

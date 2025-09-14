@@ -1,6 +1,6 @@
+use pgqrs::admin::PgqrsAdmin;
 use pgqrs::Config;
 use serde_json::json;
-use pgqrs::admin::Admin;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
 
     // Create client
-    let admin = Admin::new(&config);
+    let admin = PgqrsAdmin::new(&config);
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");

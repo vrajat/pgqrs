@@ -24,7 +24,7 @@ pub struct Queue {
 
 impl Queue {
     /// Create a new Producer instance
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
+    pub(crate) fn new(pool: Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
         let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let insert_sql = crate::constants::INSERT_MESSAGE
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
