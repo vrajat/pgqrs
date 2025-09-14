@@ -1,7 +1,6 @@
-use pgqrs::{create_pool, Config};
+use pgqrs::Config;
 use serde_json::json;
 use pgqrs::admin::Admin;
-use pgqrs::queue::Queue;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,8 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
 
     // Create client
-    let pool = create_pool(&config)?;
-    let admin = Admin::new(&pool);
+    let admin = Admin::new(&config);
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
@@ -39,8 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "priority": 1
     });
 
-    let email_queue = Queue::new(&pool, "email_queue");
-    let task_queue = Queue::new(&pool, "task_queue");
+    let email_queue = admin.get_queue("email_queue").await?;
+    let task_queue = admin.get_queue("task_queue").await?;
 
     let email_id = email_queue.enqueue(&email_payload).await?;
     let task_id = task_queue.enqueue(&task_payload).await?;

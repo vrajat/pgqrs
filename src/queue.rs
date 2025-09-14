@@ -10,8 +10,8 @@ use diesel::RunQueryDsl;
 use r2d2::Pool;
 
 /// Producer interface for adding messages to queues
-pub struct Queue<'a> {
-    pub pool: &'a Pool<ConnectionManager<PgConnection>>,
+pub struct Queue {
+    pub pool: Pool<ConnectionManager<PgConnection>>,
     pub queue_name: String,
     pub table_name: String,
     pub insert_sql: String,
@@ -22,9 +22,9 @@ pub struct Queue<'a> {
     pub delete_batch_sql: String,
 }
 
-impl<'a> Queue<'a> {
+impl Queue {
     /// Create a new Producer instance
-    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
+    pub fn new(pool: Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
         let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let insert_sql = crate::constants::INSERT_MESSAGE
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)

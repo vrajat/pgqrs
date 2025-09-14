@@ -1,4 +1,5 @@
 use crate::error::{PgqrsError, Result};
+use crate::queue::Queue;
 use crate::run_migrations;
 use crate::schema::pgqrs::meta;
 use crate::constants::{
@@ -7,6 +8,7 @@ use crate::constants::{
 };
 use crate::types::MetaResult;
 use crate::types::QueueMetrics;
+use crate::Config;
 use diesel::deserialize::QueryableByName;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -14,9 +16,10 @@ use diesel::r2d2::ConnectionManager;
 use diesel::{Connection, RunQueryDsl};
 use r2d2::Pool;
 
+#[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
-pub struct Admin<'a> {
-    pub pool: &'a Pool<ConnectionManager<PgConnection>>,
+pub struct Admin {
+    pub pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 #[derive(QueryableByName)]
@@ -25,9 +28,13 @@ struct ExistsRow {
     exists: bool,
 }
 
-impl<'a> Admin<'a> {
+impl Admin {
     /// Create a new Admin instance
-    pub fn new(pool: &'a Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(config: &Config) -> Self {
+        let pool = Pool::builder()
+            .max_size(config.max_connections)
+            .build(ConnectionManager::<PgConnection>::new(&config.dsn))
+            .expect("Failed to create connection pool");
         Self { pool }
     }
 
@@ -146,6 +153,10 @@ impl<'a> Admin<'a> {
     /// Get metrics for all queues
     pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         todo!("Implement Admin::all_queues_metrics")
+    }
+
+    pub async fn get_queue(&self, name: &str) -> Result<Queue> {
+        Ok(Queue::new(self.pool.clone(), name))
     }
 
     fn run_statements_in_transaction(&self, statements: Vec<String>) -> Result<()> {

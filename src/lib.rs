@@ -63,13 +63,3 @@ pub use config::Config;
 pub use diesel::pg::PgConnection;
 pub use diesel::r2d2::{ConnectionManager, Pool};
 pub use error::{PgqrsError, Result};
-
-
-pub fn create_pool(config: &Config) -> Result<Pool<ConnectionManager<PgConnection>>> {
-    eprintln!("pgqrs config: {:?}", config);
-
-    Pool::builder()
-        .max_size(16)
-        .build(ConnectionManager::new(config.database_url()))
-        .map_err(|e| PgqrsError::from(e))
-}

@@ -1,9 +1,6 @@
 use clap::{Parser, Subcommand};
-use diesel::pg::PgConnection;
-use diesel::r2d2::{ConnectionManager, Pool};
 use pgqrs::types::QueueMetrics;
-use pgqrs::{create_pool, Config};
-use pgqrs::queue::Queue;
+use pgqrs::{Config};
 use pgqrs::admin::Admin;
 use std::process;
 
@@ -156,8 +153,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         })
     };
 
-    let pool = create_pool(&config)?;
-    let admin = Admin::new(&pool);
+    let admin = Admin::new(&config);
 
     match cli.command {
         Commands::Install { dry_run } => {
@@ -179,11 +175,11 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         }
 
         Commands::Queue { action } => {
-            handle_queue_commands(&pool, action).await?;
+            handle_queue_commands(&admin, action).await?;
         }
 
         Commands::Message { action } => {
-            handle_message_commands(&pool, action).await?;
+            handle_message_commands(&admin, action).await?;
         }
     }
 
@@ -191,10 +187,9 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 }
 
 async fn handle_queue_commands(
-    pool: &Pool<ConnectionManager<PgConnection>>,
+    admin: &Admin,
     action: QueueCommands,
 ) -> anyhow::Result<()> {
-    let admin = Admin::new(pool);
     match action {
         QueueCommands::Create { name } => {
             println!("Creating queue '{}'...", &name);
@@ -250,7 +245,7 @@ async fn handle_queue_commands(
 }
 
 async fn handle_message_commands(
-    pool: &'_ Pool<ConnectionManager<PgConnection>>,
+    admin: &Admin,
     action: MessageCommands,
 ) -> anyhow::Result<()> {
     match action {
@@ -259,7 +254,7 @@ async fn handle_message_commands(
             payload,
             delay,
         } => {
-            let queue_obj = Queue::new(&pool, &queue);
+            let queue_obj = admin.get_queue(&queue).await?;
             println!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
             // Parse JSON message
@@ -279,7 +274,7 @@ async fn handle_message_commands(
             lock_time,
             message_type,
         } => {
-            let queue_obj = Queue::new(&pool, &queue);
+            let queue_obj = admin.get_queue(&queue).await?;
 
             println!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
@@ -319,7 +314,7 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Delete { queue, id } => {
-            let queue_obj = Queue::new(&pool, &queue);
+            let queue_obj = admin.get_queue(&queue).await?;
 
             let msg_id = id.parse::<i64>()?;
             println!("Deleting message {} from queue '{}'...", msg_id, queue);
@@ -333,7 +328,7 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Count { queue } => {
-            let queue_obj = Queue::new(&pool, &queue);
+            let queue_obj = admin.get_queue(&queue).await?;
 
             println!("Getting pending message count for queue '{}'...", queue);
             let count = queue_obj.pending_count().await?;

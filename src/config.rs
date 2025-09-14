@@ -6,22 +6,10 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub dsn: String,
-    pub pool_size: u8,
-    pub queue: QueueConfig,
-    pub performance: PerformanceConfig,
-}
-
-/// Database connection configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DatabaseConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database: String,
-    pub schema: String,
     pub max_connections: u32,
     pub connection_timeout_seconds: u64,
+    pub queue: QueueConfig,
+    pub performance: PerformanceConfig,
 }
 
 /// Queue-specific configuration
@@ -45,7 +33,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             dsn: "postgresql://postgres:postgres@localhost:5432/postgres".to_string(),
-            pool_size: 16,
+            max_connections: 16,
+            connection_timeout_seconds: 30,
             queue: QueueConfig {
                 default_lock_time_seconds: 5,
                 max_batch_size: 100,
