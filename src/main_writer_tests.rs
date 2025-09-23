@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::MessageWriter;
-    use crate::{CsvMessageWriter, JsonMessageWriter, YamlMessageWriter};
+    use crate::{OutputFormatWriter, JsonOutputWriter, YamlOutputWriter, CsvOutputWriter};
     use chrono::Utc;
     use pgqrs::types::QueueMessage;
     use serde_json::json;
@@ -18,10 +17,10 @@ mod tests {
 
     #[test]
     fn test_json_writer() {
-        let writer = JsonMessageWriter;
+        let writer = OutputFormatWriter::Json(JsonOutputWriter);
         let mut cursor = std::io::Cursor::new(Vec::new());
         let messages = vec![sample_message()];
-        writer.write_messages(&messages, &mut cursor).unwrap();
+        writer.write(&messages, &mut cursor).unwrap();
         let output = String::from_utf8(cursor.into_inner()).unwrap();
         assert!(output.contains("foo"));
         assert!(output.contains("msg_id"));
@@ -29,10 +28,10 @@ mod tests {
 
     #[test]
     fn test_csv_writer() {
-        let writer = CsvMessageWriter;
+        let writer = CsvOutputWriter;
         let mut cursor = std::io::Cursor::new(Vec::new());
         let messages = vec![sample_message()];
-        writer.write_messages(&messages, &mut cursor).unwrap();
+        writer.write_queue_messages(&messages, &mut cursor).unwrap();
         let output = String::from_utf8(cursor.into_inner()).unwrap();
         assert!(output.contains("msg_id,enqueued_at,read_ct,vt,message"));
         assert!(output.contains("bar"));
@@ -40,10 +39,10 @@ mod tests {
 
     #[test]
     fn test_yaml_writer() {
-        let writer = YamlMessageWriter;
+        let writer = OutputFormatWriter::Yaml(YamlOutputWriter);
         let mut cursor = std::io::Cursor::new(Vec::new());
         let messages = vec![sample_message()];
-        writer.write_messages(&messages, &mut cursor).unwrap();
+        writer.write(&messages, &mut cursor).unwrap();
         let output = String::from_utf8(cursor.into_inner()).unwrap();
         assert!(output.contains("foo: bar"));
         assert!(output.contains("msg_id:"));

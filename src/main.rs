@@ -1,40 +1,40 @@
 use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::types::QueueMetrics;
 use pgqrs::Config;
 use std::fs::File;
 use std::io::{self, Write};
 use std::process;
-// Writer trait for message output
-trait MessageWriter {
-    fn write_messages(
-        &self,
-        messages: &[pgqrs::types::QueueMessage],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()>;
+
+enum OutputFormatWriter {
+    Json(JsonOutputWriter),
+    Yaml(YamlOutputWriter),
 }
 
-struct JsonMessageWriter;
-impl MessageWriter for JsonMessageWriter {
-    fn write_messages(
-        &self,
-        messages: &[pgqrs::types::QueueMessage],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
-        let json = serde_json::to_string_pretty(messages)?;
+impl OutputFormatWriter {
+    pub fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
+        match self {
+            OutputFormatWriter::Json(w) => w.write(value, out),
+            OutputFormatWriter::Yaml(w) => w.write(value, out),
+        }
+    }
+}
+// Writer trait for message output
+trait OutputWriter {
+    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()>;
+}
+
+struct JsonOutputWriter;
+impl OutputWriter for JsonOutputWriter {
+    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(value)?;
         writeln!(out, "{}", json)?;
         Ok(())
     }
 }
 
-struct CsvMessageWriter;
-impl MessageWriter for CsvMessageWriter {
-    fn write_messages(
-        &self,
-        messages: &[pgqrs::types::QueueMessage],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
-        // Write header
+struct CsvOutputWriter;
+impl CsvOutputWriter {
+    fn write_queue_messages(&self, messages: &[pgqrs::types::QueueMessage], out: &mut dyn Write) -> anyhow::Result<()> {
         writeln!(out, "msg_id,enqueued_at,read_ct,vt,message")?;
         for msg in messages {
             let payload = serde_json::to_string(&msg.message)?;
@@ -50,16 +50,19 @@ impl MessageWriter for CsvMessageWriter {
         }
         Ok(())
     }
+    fn write_queue_names(&self, queues: &[String], out: &mut dyn Write) -> anyhow::Result<()> {
+        writeln!(out, "queue_name")?;
+        for queue in queues {
+            writeln!(out, "{}", queue)?;
+        }
+        Ok(())
+    }
 }
 
-struct YamlMessageWriter;
-impl MessageWriter for YamlMessageWriter {
-    fn write_messages(
-        &self,
-        messages: &[pgqrs::types::QueueMessage],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
-        let yaml = serde_yaml::to_string(messages)?;
+struct YamlOutputWriter;
+impl OutputWriter for YamlOutputWriter {
+    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()> {
+        let yaml = serde_yaml::to_string(value)?;
         writeln!(out, "{}", yaml)?;
         Ok(())
     }
@@ -177,6 +180,11 @@ enum MessageCommands {
         #[arg(long, short = 't')]
         message_type: Option<String>,
     },
+    /// Dequeue a message from a queue (reads and returns one message)
+    Dequeue {
+        /// Name of the queue
+        queue: String,
+    },
     /// Delete a message from the queue
     Delete {
         /// Name of the queue
@@ -285,13 +293,33 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let queues = admin.list_queues().await?;
-            if queues.is_empty() {
-                tracing::info!("No queues found");
+            let meta_results = admin.list_queues().await?;
+            let queues: Vec<String> = meta_results.iter().map(|m| m.queue_name.clone()).collect();
+            let output_format = "json"; // Default, can be extended to CLI arg
+            let output_dest = "stdout"; // Default, can be extended to CLI arg
+            if output_format == "csv" {
+                let writer = CsvOutputWriter;
+                if output_dest == "stdout" {
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write_queue_names(&queues, &mut handle)?;
+                } else {
+                    let mut file = std::fs::File::create(output_dest)?;
+                    writer.write_queue_names(&queues, &mut file)?;
+                }
             } else {
-                tracing::info!("Queues:");
-                for queue in queues {
-                    tracing::info!("  {}", queue);
+                let writer = match output_format {
+                    "json" => OutputFormatWriter::Json(JsonOutputWriter),
+                    "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
+                    _ => OutputFormatWriter::Json(JsonOutputWriter),
+                };
+                if output_dest == "stdout" {
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write(&queues, &mut handle)?;
+                } else {
+                    let mut file = std::fs::File::create(output_dest)?;
+                    writer.write(&queues, &mut file)?;
                 }
             }
         }
@@ -312,7 +340,17 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
             if let Some(queue_name) = name {
                 tracing::info!("Getting metrics for queue '{}'...", queue_name);
                 let metrics = admin.queue_metrics(&queue_name).await?;
-                print_queue_metrics(&metrics);
+                tracing::info!("Queue: {}", metrics.name);
+                tracing::info!("  Total Messages: {}", metrics.total_messages);
+                tracing::info!("  Pending Messages: {}", metrics.pending_messages);
+                tracing::info!("  Locked Messages: {}", metrics.locked_messages);
+                tracing::info!("  Archived Messages: {}", metrics.archived_messages);
+                if let Some(oldest) = metrics.oldest_pending_message {
+                    tracing::info!("  Oldest Pending: {}", oldest.format("%Y-%m-%d %H:%M:%S UTC"));
+                }
+                if let Some(newest) = metrics.newest_message {
+                    tracing::info!("  Newest Message: {}", newest.format("%Y-%m-%d %H:%M:%S UTC"));
+                }
             } else {
                 tracing::info!("Getting metrics for all queues...");
                 let metrics = admin.all_queues_metrics().await?;
@@ -320,7 +358,17 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
                     tracing::info!("No queues found");
                 } else {
                     for metric in metrics {
-                        print_queue_metrics(&metric);
+                        tracing::info!("Queue: {}", metric.name);
+                        tracing::info!("  Total Messages: {}", metric.total_messages);
+                        tracing::info!("  Pending Messages: {}", metric.pending_messages);
+                        tracing::info!("  Locked Messages: {}", metric.locked_messages);
+                        tracing::info!("  Archived Messages: {}", metric.archived_messages);
+                        if let Some(oldest) = metric.oldest_pending_message {
+                            tracing::info!("  Oldest Pending: {}", oldest.format("%Y-%m-%d %H:%M:%S UTC"));
+                        }
+                        if let Some(newest) = metric.newest_message {
+                            tracing::info!("  Newest Message: {}", newest.format("%Y-%m-%d %H:%M:%S UTC"));
+                        }
                         println!();
                     }
                 }
@@ -337,33 +385,21 @@ async fn handle_message_commands(
     output_dest: &str,
 ) -> anyhow::Result<()> {
     match action {
-        MessageCommands::Send {
-            queue,
-            payload,
-            delay,
-        } => {
+        MessageCommands::Send { queue, payload, delay } => {
             let queue_obj = admin.get_queue(&queue).await?;
             tracing::info!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
-            // Parse JSON message
             let msg_id = if let Some(delay_secs) = delay {
                 tracing::info!("Sending delayed message (delay: {}s)...", delay_secs);
                 queue_obj.enqueue_delayed(&payload_json, delay_secs).await?
             } else {
                 queue_obj.enqueue(&payload_json).await?
             };
-
             tracing::info!("Message sent successfully with ID: {}", msg_id);
+            Ok(())
         }
-
-        MessageCommands::Read {
-            queue,
-            count,
-            lock_time,
-            message_type,
-        } => {
+        MessageCommands::Read { queue, count, lock_time, message_type } => {
             let queue_obj = admin.get_queue(&queue).await?;
-
             tracing::info!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
                 count,
@@ -373,79 +409,83 @@ async fn handle_message_commands(
             if let Some(ref msg_type) = message_type {
                 tracing::info!("Filtering by message type: '{}'", msg_type);
             }
-
             let messages = queue_obj.read(count).await?;
             if messages.is_empty() {
                 tracing::info!("No messages available");
                 return Ok(());
             }
-
-            // Writer selection
-            let writer: &dyn MessageWriter = match output_format.to_lowercase().as_str() {
-                "json" => &JsonMessageWriter,
-                "csv" => &CsvMessageWriter,
-                "yaml" => &YamlMessageWriter,
+            if output_format.to_lowercase() == "csv" {
+                let writer = CsvOutputWriter;
+                if output_dest == "stdout" {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write_queue_messages(&messages, &mut handle)?;
+                } else {
+                    let mut file = File::create(output_dest)?;
+                    writer.write_queue_messages(&messages, &mut file)?;
+                }
+            } else {
+                let writer = match output_format.to_lowercase().as_str() {
+                    "json" => OutputFormatWriter::Json(JsonOutputWriter),
+                    "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
+                    _ => OutputFormatWriter::Json(JsonOutputWriter),
+                };
+                if output_dest == "stdout" {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write(&messages, &mut handle)?;
+                } else {
+                    let mut file = File::create(output_dest)?;
+                    writer.write(&messages, &mut file)?;
+                }
+            }
+            Ok(())
+        }
+        MessageCommands::Dequeue { queue } => {
+            let queue_obj = admin.get_queue(&queue).await?;
+            tracing::info!("Dequeuing one message from queue '{}'...", queue);
+            let messages = queue_obj.read(1).await?;
+            if messages.is_empty() {
+                tracing::info!("No messages available");
+                return Ok(());
+            }
+            let writer = match output_format.to_lowercase().as_str() {
+                "json" => OutputFormatWriter::Json(JsonOutputWriter),
+                "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
                 other => {
                     tracing::warn!("Unknown output format '{}', defaulting to JSON", other);
-                    &JsonMessageWriter
+                    OutputFormatWriter::Json(JsonOutputWriter)
                 }
             };
-
-            // Output destination
             if output_dest == "stdout" {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                writer.write_messages(&messages, &mut handle)?;
+                writer.write(&messages, &mut handle)?;
             } else {
                 let mut file = File::create(output_dest)?;
-                writer.write_messages(&messages, &mut file)?;
+                writer.write(&messages, &mut file)?;
             }
+            Ok(())
         }
-
         MessageCommands::Delete { queue, id } => {
             let queue_obj = admin.get_queue(&queue).await?;
-
             let msg_id = id.parse::<i64>()?;
             tracing::info!("Deleting message {} from queue '{}'...", msg_id, queue);
-
             let deleted = queue_obj.delete_batch(vec![msg_id]).await?;
             if deleted.first().copied().unwrap_or(false) {
                 tracing::info!("Message deleted successfully");
             } else {
                 tracing::info!("Message not found or could not be deleted");
             }
+            Ok(())
         }
-
         MessageCommands::Count { queue } => {
             let queue_obj = admin.get_queue(&queue).await?;
-
             tracing::info!("Getting pending message count for queue '{}'...", queue);
             let count = queue_obj.pending_count().await?;
             tracing::info!("Pending messages: {}", count);
+            Ok(())
         }
-    }
-    Ok(())
-}
-
-fn print_queue_metrics(metrics: &QueueMetrics) {
-    tracing::info!("Queue: {}", metrics.name);
-    tracing::info!("  Total Messages: {}", metrics.total_messages);
-    tracing::info!("  Pending Messages: {}", metrics.pending_messages);
-    tracing::info!("  Locked Messages: {}", metrics.locked_messages);
-    tracing::info!("  Archived Messages: {}", metrics.archived_messages);
-
-    if let Some(oldest) = metrics.oldest_pending_message {
-        tracing::info!(
-            "  Oldest Pending: {}",
-            oldest.format("%Y-%m-%d %H:%M:%S UTC")
-        );
-    }
-
-    if let Some(newest) = metrics.newest_message {
-        tracing::info!(
-            "  Newest Message: {}",
-            newest.format("%Y-%m-%d %H:%M:%S UTC")
-        );
     }
 }
 

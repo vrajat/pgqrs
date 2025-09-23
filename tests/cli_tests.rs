@@ -8,131 +8,89 @@ fn get_test_db_url() -> String {
 
 mod common;
 
-use std::fs;
 use std::process::Command;
 use tokio::runtime::Runtime;
 
-fn setup_writer_tests_queue() {
-    let rt = Runtime::new().unwrap();
-    rt.block_on(async {
-        let admin = crate::common::get_pgqrs_client().await;
-        // Create queue
-        let _ = admin.create_queue(&"writer_tests".to_string()).await;
-        // Purge queue to start clean
-        let _ = admin.purge_queue(&"writer_tests".to_string()).await;
-        // Add a message
-        let queue = admin.get_queue(&"writer_tests".to_string()).await.unwrap();
-        let payload = serde_json::json!({"test": "message"});
-        let enqueue_result = queue.enqueue(&payload).await;
-        assert!(
-            enqueue_result.is_ok(),
-            "Failed to enqueue message: {:?}",
-            enqueue_result
-        );
-        // Assert that the queue has a message
-        let count = queue
-            .pending_count()
-            .await
-            .expect("Failed to get pending count");
-        assert!(
-            count > 0,
-            "Queue should have at least one message after setup"
-        );
-    });
-}
-
-fn teardown_writer_tests_queue() {
-    let rt = Runtime::new().unwrap();
-    rt.block_on(async {
-        let admin = crate::common::get_pgqrs_client().await;
-        let _ = admin.purge_queue(&"writer_tests".to_string()).await;
-        let _ = admin.delete_queue(&"writer_tests".to_string()).await;
-    });
-}
-
-// #[test]
-fn cli_json_output_to_stdout() {
-    setup_writer_tests_queue();
+#[test]
+fn test_cli_create_list_delete_queue() {
+    // Bring up test DB and get DSN
     let db_url = get_test_db_url();
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "message",
-            "read",
-            "--queue",
-            "writer_tests",
-            "--output-format",
-            "json",
-            "--output-dest",
-            "stdout",
-            "--database-url",
-            &db_url,
-        ])
+    let queue_name = "test_queue_cli";
+
+    // Create queue
+    let create_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "create", queue_name])
         .output()
-        .expect("failed to execute process");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("msg_id") || stdout.contains("No messages available"));
-    teardown_writer_tests_queue();
+        .expect("Failed to run CLI create queue");
+    assert!(create_output.status.success(), "Create queue failed: {}", String::from_utf8_lossy(&create_output.stderr));
+
+    // List queues
+    let list_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "list"])
+        .output()
+        .expect("Failed to run CLI list queues");
+    assert!(list_output.status.success(), "List queues failed: {}", String::from_utf8_lossy(&list_output.stderr));
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(stdout.contains(queue_name), "Queue not found in list output: {}", stdout);
+
+    // Delete queue
+    let delete_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "delete", queue_name])
+        .output()
+        .expect("Failed to run CLI delete queue");
+    assert!(delete_output.status.success(), "Delete queue failed: {}", String::from_utf8_lossy(&delete_output.stderr));
+
+    // List queues again to verify deletion
+    let list_output2 = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "list"])
+        .output()
+        .expect("Failed to run CLI list queues after delete");
+    assert!(list_output2.status.success(), "List queues after delete failed: {}", String::from_utf8_lossy(&list_output2.stderr));
+    let stdout2 = String::from_utf8_lossy(&list_output2.stdout);
+    assert!(!stdout2.contains(queue_name), "Queue still found after deletion: {}", stdout2);
 }
 
-// #[test]
-fn cli_csv_output_to_file() {
-    setup_writer_tests_queue();
-    let file_path = "test_output.csv";
-    let _ = fs::remove_file(file_path);
+#[test]
+fn test_cli_create_send_dequeue_delete_queue() {
     let db_url = get_test_db_url();
-    let _ = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "message",
-            "read",
-            "--queue",
-            "writer_tests",
-            "--output-format",
-            "csv",
-            "--output-dest",
-            file_path,
-            "--database-url",
-            &db_url,
-        ])
-        .output()
-        .expect("failed to execute process");
-    let contents = fs::read_to_string(file_path).expect("file not found");
-    assert!(
-        contents.contains("msg_id,enqueued_at,read_ct,vt,message")
-            || contents.contains("No messages available")
-    );
-    let _ = fs::remove_file(file_path);
-    teardown_writer_tests_queue();
-}
+    let queue_name = "test_queue_msg_cli";
+    let payload = r#"{"hello":"world"}"#;
 
-// #[test]
-fn cli_yaml_output_to_file() {
-    setup_writer_tests_queue();
-    let file_path = "test_output.yaml";
-    let _ = fs::remove_file(file_path);
-    let db_url = get_test_db_url();
-    let _ = Command::new("cargo")
-        .args([
-            "run",
-            "--",
-            "message",
-            "read",
-            "--queue",
-            "writer_tests",
-            "--output-format",
-            "yaml",
-            "--output-dest",
-            file_path,
-            "--database-url",
-            &db_url,
-        ])
+    // Create queue
+    let create_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "create", queue_name])
         .output()
-        .expect("failed to execute process");
-    let contents = fs::read_to_string(file_path).expect("file not found");
-    assert!(contents.contains("msg_id:") || contents.contains("No messages available"));
-    let _ = fs::remove_file(file_path);
-    teardown_writer_tests_queue();
+        .expect("Failed to run CLI create queue");
+    assert!(create_output.status.success(), "Create queue failed: {}", String::from_utf8_lossy(&create_output.stderr));
+
+    // Send message
+    let send_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "message", "send", queue_name, payload])
+        .output()
+        .expect("Failed to run CLI send message");
+    assert!(send_output.status.success(), "Send message failed: {}", String::from_utf8_lossy(&send_output.stderr));
+
+    // Dequeue message
+    let dequeue_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "message", "dequeue", queue_name])
+        .output()
+        .expect("Failed to run CLI dequeue message");
+    assert!(dequeue_output.status.success(), "Dequeue message failed: {}", String::from_utf8_lossy(&dequeue_output.stderr));
+    let stdout = String::from_utf8_lossy(&dequeue_output.stdout);
+    assert!(stdout.contains("hello"), "Dequeued message not found in output: {}", stdout);
+
+    // Delete queue
+    let delete_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--database-url", &db_url, "queue", "delete", queue_name])
+        .output()
+        .expect("Failed to run CLI delete queue");
+    assert!(delete_output.status.success(), "Delete queue failed: {}", String::from_utf8_lossy(&delete_output.stderr));
 }
