@@ -1,6 +1,6 @@
 use crate::constants::{
     CREATE_QUEUE_STATEMENT, DELETE_QUEUE_METADATA, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
-    PGQRS_SCHEMA, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
+    PGQRS_SCHEMA, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY, UNINSTALL_STATEMENT,
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
@@ -57,12 +57,15 @@ impl PgqrsAdmin {
     /// # Arguments
     /// * `dry_run` - If true, only validate what would be done without executing
     pub fn uninstall(&self, dry_run: bool) -> Result<()> {
+        let mut conn = self.pool.get().map_err(PgqrsError::from)?;
+        let uninstall_statement = UNINSTALL_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
         if dry_run {
+            tracing::info!("Uninstall statement (dry run): {}", uninstall_statement);
             // Just validate: check if schema exists
             return Ok(());
         }
-        let mut conn = self.pool.get().map_err(PgqrsError::from)?;
-        diesel::sql_query("DROP SCHEMA IF EXISTS pgqrs CASCADE;")
+        tracing::debug!("Executing uninstall statement: {}", uninstall_statement);
+        diesel::sql_query(&uninstall_statement)
             .execute(&mut conn)
             .map_err(|e| PgqrsError::from(e))?;
         Ok(())
@@ -71,11 +74,14 @@ impl PgqrsAdmin {
     /// Verify that pgqrs installation is valid and healthy
     pub fn verify(&self) -> Result<()> {
         let mut conn = self.pool.get().map_err(PgqrsError::from)?;
-        let row = diesel::sql_query(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'pgqrs') AS exists;"
-        )
-        .get_result::<ExistsRow>(&mut conn)
-        .map_err(|e| PgqrsError::from(e))?;
+        let schema_exists_statement = SCHEMA_EXISTS_QUERY.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        tracing::debug!(
+            "Executing schema exists statement: {}",
+            schema_exists_statement
+        );
+        let row = diesel::sql_query(&schema_exists_statement)
+            .get_result::<ExistsRow>(&mut conn)
+            .map_err(|e| PgqrsError::from(e))?;
         if row.exists {
             Ok(())
         } else {
@@ -99,8 +105,8 @@ impl PgqrsAdmin {
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{name}", &name);
 
-        eprintln!("{}", create_statement);
-        eprintln!("{}", insert_meta);
+        tracing::debug!("{}", create_statement);
+        tracing::debug!("{}", insert_meta);
         // Execute both statements in a transaction
         self.run_statements_in_transaction(vec![create_statement, insert_meta])
     }
@@ -127,6 +133,8 @@ impl PgqrsAdmin {
         let delete_meta = DELETE_QUEUE_METADATA
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{name}", name);
+        tracing::debug!("Executing delete metadata statement: {}", delete_meta);
+        tracing::debug!("Executing drop queue statement: {}", drop_statement);
         self.run_statements_in_transaction(vec![drop_statement, delete_meta])
     }
 
@@ -139,6 +147,7 @@ impl PgqrsAdmin {
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", name);
+        tracing::debug!("Executing purge queue statement: {}", purge_statement);
         self.run_statements_in_transaction(vec![purge_statement])
     }
 

@@ -20,9 +20,13 @@ struct Cli {
     #[arg(long, short = 'c', default_value = "pgqrs.yaml")]
     config: String,
 
-    /// Enable verbose output
-    #[arg(long, short = 'v')]
-    verbose: bool,
+    /// Log destination: stderr or file path
+    #[arg(long, default_value = "stderr")]
+    log_dest: String,
+
+    /// Log level: error, warn, info, debug, trace
+    #[arg(long, default_value = "info")]
+    log_level: String,
 }
 
 #[derive(Subcommand)]
@@ -124,17 +128,35 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize tracing
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(if cli.verbose {
-            tracing::Level::DEBUG
-        } else {
+    let level = match cli.log_level.to_lowercase().as_str() {
+        "error" => tracing::Level::ERROR,
+        "warn" => tracing::Level::WARN,
+        "info" => tracing::Level::INFO,
+        "debug" => tracing::Level::DEBUG,
+        "trace" => tracing::Level::TRACE,
+        other => {
+            eprintln!("Unknown log level '{}', defaulting to INFO", other);
             tracing::Level::INFO
-        })
+        }
+    };
+
+    let writer: Box<dyn Fn() -> Box<dyn std::io::Write + Send> + Send + Sync> =
+        if cli.log_dest == "stderr" {
+            Box::new(|| Box::new(std::io::stderr()))
+        } else {
+            let file = std::fs::File::create(&cli.log_dest).expect("Failed to create log file");
+            Box::new(move || Box::new(file.try_clone().expect("Failed to clone log file")))
+        };
+
+    let subscriber = tracing_subscriber::FmtSubscriber::builder()
+        .with_max_level(level)
+        .with_writer(writer)
         .finish();
+
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     if let Err(e) = run_cli(cli).await {
-        eprintln!("Error: {}", e);
+        tracing::error!("Error: {}", e);
         process::exit(1);
     }
 }
@@ -144,7 +166,6 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     let config = if let Some(db_url) = cli.database_url {
         let mut config = Config::default();
         config.dsn = db_url;
-        // TODO: Parse database URL and update config
         config
     } else {
         Config::from_file(&cli.config).unwrap_or_else(|_| {
@@ -157,21 +178,21 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Install { dry_run } => {
-            println!("Installing pgqrs schema (dry_run: {})...", dry_run);
+            tracing::info!("Installing pgqrs schema (dry_run: {})...", dry_run);
             admin.install(dry_run)?;
-            println!("Installation completed successfully");
+            tracing::info!("Installation completed successfully");
         }
 
         Commands::Uninstall { dry_run } => {
-            println!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
+            tracing::info!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
             admin.uninstall(dry_run)?;
-            println!("Uninstall completed successfully");
+            tracing::info!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
-            println!("Verifying pgqrs installation...");
+            tracing::info!("Verifying pgqrs installation...");
             admin.verify()?;
-            println!("Verification completed successfully");
+            tracing::info!("Verification completed successfully");
         }
 
         Commands::Queue { action } => {
@@ -189,46 +210,46 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> anyhow::Result<()> {
     match action {
         QueueCommands::Create { name } => {
-            println!("Creating queue '{}'...", &name);
+            tracing::info!("Creating queue '{}'...", &name);
             admin.create_queue(&name).await?;
-            println!("Queue '{}' created successfully", &name);
+            tracing::info!("Queue '{}' created successfully", &name);
         }
 
         QueueCommands::List => {
-            println!("Listing all queues...");
+            tracing::info!("Listing all queues...");
             let queues = admin.list_queues().await?;
             if queues.is_empty() {
-                println!("No queues found");
+                tracing::info!("No queues found");
             } else {
-                println!("Queues:");
+                tracing::info!("Queues:");
                 for queue in queues {
-                    println!("  {}", queue);
+                    tracing::info!("  {}", queue);
                 }
             }
         }
 
         QueueCommands::Delete { name } => {
-            println!("Deleting queue '{}'...", name);
+            tracing::info!("Deleting queue '{}'...", name);
             admin.delete_queue(&name).await?;
-            println!("Queue '{}' deleted successfully", name);
+            tracing::info!("Queue '{}' deleted successfully", name);
         }
 
         QueueCommands::Purge { name } => {
-            println!("Purging queue '{}'...", name);
+            tracing::info!("Purging queue '{}'...", name);
             admin.purge_queue(&name).await?;
-            println!("Queue '{}' purged successfully", name);
+            tracing::info!("Queue '{}' purged successfully", name);
         }
 
         QueueCommands::Metrics { name } => {
             if let Some(queue_name) = name {
-                println!("Getting metrics for queue '{}'...", queue_name);
+                tracing::info!("Getting metrics for queue '{}'...", queue_name);
                 let metrics = admin.queue_metrics(&queue_name).await?;
                 print_queue_metrics(&metrics);
             } else {
-                println!("Getting metrics for all queues...");
+                tracing::info!("Getting metrics for all queues...");
                 let metrics = admin.all_queues_metrics().await?;
                 if metrics.is_empty() {
-                    println!("No queues found");
+                    tracing::info!("No queues found");
                 } else {
                     for metric in metrics {
                         print_queue_metrics(&metric);
@@ -252,17 +273,17 @@ async fn handle_message_commands(
             delay,
         } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            println!("Sending message to queue '{}'...", queue);
+            tracing::info!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
             // Parse JSON message
             let msg_id = if let Some(delay_secs) = delay {
-                println!("Sending delayed message (delay: {}s)...", delay_secs);
+                tracing::info!("Sending delayed message (delay: {}s)...", delay_secs);
                 queue_obj.enqueue_delayed(&payload_json, delay_secs).await?
             } else {
                 queue_obj.enqueue(&payload_json).await?
             };
 
-            println!("Message sent successfully with ID: {}", msg_id);
+            tracing::info!("Message sent successfully with ID: {}", msg_id);
         }
 
         MessageCommands::Read {
@@ -273,34 +294,36 @@ async fn handle_message_commands(
         } => {
             let queue_obj = admin.get_queue(&queue).await?;
 
-            println!(
+            tracing::info!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
-                count, queue, lock_time
+                count,
+                queue,
+                lock_time
             );
             if let Some(ref msg_type) = message_type {
-                println!("Filtering by message type: '{}'", msg_type);
+                tracing::info!("Filtering by message type: '{}'", msg_type);
             }
 
             let messages = queue_obj.read(lock_time, count).await?;
             if messages.is_empty() {
-                println!("No messages available");
+                tracing::info!("No messages available");
             } else {
-                println!("Found {} messages:", messages.len());
-                println!();
+                tracing::info!("Found {} messages:", messages.len());
+                tracing::info!("");
 
                 for (i, msg) in messages.iter().enumerate() {
-                    println!("Message {} of {}:", i + 1, messages.len());
-                    println!("  ID: {}", msg.msg_id);
-                    println!(
+                    tracing::info!("Message {} of {}:", i + 1, messages.len());
+                    tracing::info!("  ID: {}", msg.msg_id);
+                    tracing::info!(
                         "  Enqueued: {}",
                         msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
                     );
-                    println!("  Read Count: {}", msg.read_ct);
-                    println!(
+                    tracing::info!("  Read Count: {}", msg.read_ct);
+                    tracing::info!(
                         "  Visible Until: {}",
                         msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
                     );
-                    println!("  Payload:");
+                    tracing::info!("  Payload:");
                     println!("{}", serde_json::to_string_pretty(&msg.message)?);
 
                     if i < messages.len() - 1 {
@@ -314,43 +337,43 @@ async fn handle_message_commands(
             let queue_obj = admin.get_queue(&queue).await?;
 
             let msg_id = id.parse::<i64>()?;
-            println!("Deleting message {} from queue '{}'...", msg_id, queue);
+            tracing::info!("Deleting message {} from queue '{}'...", msg_id, queue);
 
             let deleted = queue_obj.delete_batch(vec![msg_id]).await?;
             if deleted.first().copied().unwrap_or(false) {
-                println!("Message deleted successfully");
+                tracing::info!("Message deleted successfully");
             } else {
-                println!("Message not found or could not be deleted");
+                tracing::info!("Message not found or could not be deleted");
             }
         }
 
         MessageCommands::Count { queue } => {
             let queue_obj = admin.get_queue(&queue).await?;
 
-            println!("Getting pending message count for queue '{}'...", queue);
+            tracing::info!("Getting pending message count for queue '{}'...", queue);
             let count = queue_obj.pending_count().await?;
-            println!("Pending messages: {}", count);
+            tracing::info!("Pending messages: {}", count);
         }
     }
     Ok(())
 }
 
 fn print_queue_metrics(metrics: &QueueMetrics) {
-    println!("Queue: {}", metrics.name);
-    println!("  Total Messages: {}", metrics.total_messages);
-    println!("  Pending Messages: {}", metrics.pending_messages);
-    println!("  Locked Messages: {}", metrics.locked_messages);
-    println!("  Archived Messages: {}", metrics.archived_messages);
+    tracing::info!("Queue: {}", metrics.name);
+    tracing::info!("  Total Messages: {}", metrics.total_messages);
+    tracing::info!("  Pending Messages: {}", metrics.pending_messages);
+    tracing::info!("  Locked Messages: {}", metrics.locked_messages);
+    tracing::info!("  Archived Messages: {}", metrics.archived_messages);
 
     if let Some(oldest) = metrics.oldest_pending_message {
-        println!(
+        tracing::info!(
             "  Oldest Pending: {}",
             oldest.format("%Y-%m-%d %H:%M:%S UTC")
         );
     }
 
     if let Some(newest) = metrics.newest_message {
-        println!(
+        tracing::info!(
             "  Newest Message: {}",
             newest.format("%Y-%m-%d %H:%M:%S UTC")
         );

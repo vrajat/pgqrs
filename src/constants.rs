@@ -88,3 +88,11 @@ pub const DELETE_MESSAGE_BATCH: &str = r#"
     WHERE msg_id = ANY($1)
     RETURNING *;
 "#;
+
+pub const SCHEMA_EXISTS_QUERY: &str = r#"
+    SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = '{PGQRS_SCHEMA}') AS exists;
+"#;
+
+pub const UNINSTALL_STATEMENT: &str = r#"
+    DROP SCHEMA IF EXISTS {PGQRS_SCHEMA} CASCADE;
+"#;
