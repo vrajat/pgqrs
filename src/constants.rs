@@ -61,19 +61,16 @@ pub const READ_MESSAGES: &str = r#"
     RETURNING *;
 "#;
 
+pub const PENDING_COUNT: &str = r#"
+    SELECT COUNT(*) AS count
+    FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+    WHERE vt <= $1;
+"#;
+
 pub const DEQUEUE_MESSAGE: &str = r#"
-    WITH cte AS
-        (
-            SELECT msg_id
-            FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-            WHERE vt <= clock_timestamp()
-            ORDER BY msg_id ASC
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-        )
-        DELETE from {PGMQ_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-        WHERE msg_id = (select msg_id from cte)
-        RETURNING *;
+    DELETE from {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+    WHERE msg_id = $1
+    RETURNING *;
 "#;
 
 pub const UPDATE_MESSAGE_VT: &str = r#"

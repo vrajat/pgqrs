@@ -2,7 +2,68 @@ use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::types::QueueMetrics;
 use pgqrs::Config;
+use std::fs::File;
+use std::io::{self, Write};
 use std::process;
+// Writer trait for message output
+trait MessageWriter {
+    fn write_messages(
+        &self,
+        messages: &[pgqrs::types::QueueMessage],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()>;
+}
+
+struct JsonMessageWriter;
+impl MessageWriter for JsonMessageWriter {
+    fn write_messages(
+        &self,
+        messages: &[pgqrs::types::QueueMessage],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(messages)?;
+        writeln!(out, "{}", json)?;
+        Ok(())
+    }
+}
+
+struct CsvMessageWriter;
+impl MessageWriter for CsvMessageWriter {
+    fn write_messages(
+        &self,
+        messages: &[pgqrs::types::QueueMessage],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        // Write header
+        writeln!(out, "msg_id,enqueued_at,read_ct,vt,message")?;
+        for msg in messages {
+            let payload = serde_json::to_string(&msg.message)?;
+            writeln!(
+                out,
+                "{},{},{},{},{}",
+                msg.msg_id,
+                msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                msg.read_ct,
+                msg.vt.format("%Y-%m-%d %H:%M:%S UTC"),
+                payload
+            )?;
+        }
+        Ok(())
+    }
+}
+
+struct YamlMessageWriter;
+impl MessageWriter for YamlMessageWriter {
+    fn write_messages(
+        &self,
+        messages: &[pgqrs::types::QueueMessage],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        let yaml = serde_yaml::to_string(messages)?;
+        writeln!(out, "{}", yaml)?;
+        Ok(())
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "pgqrs")]
@@ -27,6 +88,13 @@ struct Cli {
     /// Log level: error, warn, info, debug, trace
     #[arg(long, default_value = "info")]
     log_level: String,
+    /// Output format: json, csv, yaml
+    #[arg(long, default_value = "json")]
+    output_format: String,
+
+    /// Output destination: stdout or file path
+    #[arg(long, default_value = "stdout")]
+    output_dest: String,
 }
 
 #[derive(Subcommand)]
@@ -200,7 +268,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         }
 
         Commands::Message { action } => {
-            handle_message_commands(&admin, action).await?;
+            handle_message_commands(&admin, action, &cli.output_format, &cli.output_dest).await?;
         }
     }
 
@@ -265,6 +333,8 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
 async fn handle_message_commands(
     admin: &PgqrsAdmin,
     action: MessageCommands,
+    output_format: &str,
+    output_dest: &str,
 ) -> anyhow::Result<()> {
     match action {
         MessageCommands::Send {
@@ -304,32 +374,31 @@ async fn handle_message_commands(
                 tracing::info!("Filtering by message type: '{}'", msg_type);
             }
 
-            let messages = queue_obj.read(lock_time, count).await?;
+            let messages = queue_obj.read(count).await?;
             if messages.is_empty() {
                 tracing::info!("No messages available");
-            } else {
-                tracing::info!("Found {} messages:", messages.len());
-                tracing::info!("");
+                return Ok(());
+            }
 
-                for (i, msg) in messages.iter().enumerate() {
-                    tracing::info!("Message {} of {}:", i + 1, messages.len());
-                    tracing::info!("  ID: {}", msg.msg_id);
-                    tracing::info!(
-                        "  Enqueued: {}",
-                        msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                    tracing::info!("  Read Count: {}", msg.read_ct);
-                    tracing::info!(
-                        "  Visible Until: {}",
-                        msg.vt.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                    tracing::info!("  Payload:");
-                    println!("{}", serde_json::to_string_pretty(&msg.message)?);
-
-                    if i < messages.len() - 1 {
-                        println!("  ---");
-                    }
+            // Writer selection
+            let writer: &dyn MessageWriter = match output_format.to_lowercase().as_str() {
+                "json" => &JsonMessageWriter,
+                "csv" => &CsvMessageWriter,
+                "yaml" => &YamlMessageWriter,
+                other => {
+                    tracing::warn!("Unknown output format '{}', defaulting to JSON", other);
+                    &JsonMessageWriter
                 }
+            };
+
+            // Output destination
+            if output_dest == "stdout" {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                writer.write_messages(&messages, &mut handle)?;
+            } else {
+                let mut file = File::create(output_dest)?;
+                writer.write_messages(&messages, &mut file)?;
             }
         }
 
@@ -379,3 +448,5 @@ fn print_queue_metrics(metrics: &QueueMetrics) {
         );
     }
 }
+
+mod main_writer_tests;

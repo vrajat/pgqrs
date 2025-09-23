@@ -20,6 +20,7 @@ use r2d2::Pool;
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
     pub pool: Pool<ConnectionManager<PgConnection>>,
+    config: Config,
 }
 
 #[derive(QueryableByName)]
@@ -35,7 +36,14 @@ impl PgqrsAdmin {
             .max_size(config.max_connections)
             .build(ConnectionManager::<PgConnection>::new(&config.dsn))
             .expect("Failed to create connection pool");
-        Self { pool }
+        Self {
+            pool,
+            config: config.clone(),
+        }
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Install pgqrs schema and infrastructure
@@ -95,7 +103,7 @@ impl PgqrsAdmin {
     ///
     /// # Arguments
     /// * `options` - Queue creation options
-    pub async fn create_queue(&self, name: &String) -> Result<()> {
+    pub async fn create_queue(&self, name: &String) -> Result<Queue> {
         let create_statement = CREATE_QUEUE_STATEMENT
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
@@ -108,7 +116,8 @@ impl PgqrsAdmin {
         tracing::debug!("{}", create_statement);
         tracing::debug!("{}", insert_meta);
         // Execute both statements in a transaction
-        self.run_statements_in_transaction(vec![create_statement, insert_meta])
+        self.run_statements_in_transaction(vec![create_statement, insert_meta])?;
+        Ok(Queue::new(self.pool.clone(), name))
     }
 
     /// List all queues

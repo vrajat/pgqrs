@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read messages
     println!("Reading messages...");
 
-    let email_messages = email_queue.read(10, 2).await?;
+    let email_messages = email_queue.read_delay(10, 2).await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_queue.read(5, 5).await?;
+    let task_messages = task_queue.read_delay(5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {

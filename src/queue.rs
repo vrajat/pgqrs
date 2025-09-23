@@ -1,3 +1,4 @@
+use crate::constants::PENDING_COUNT;
 use crate::constants::PGQRS_SCHEMA;
 use crate::constants::QUEUE_PREFIX;
 use crate::error::Result;
@@ -111,11 +112,7 @@ impl Queue {
     /// # Returns
     /// The UUID of the enqueued message
     pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
-        let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
-        let id = self.insert_message(payload, now, vt).await?;
-        let queue_message = self.get_message_by_id(id).await?;
-        Ok(queue_message)
+        self.enqueue_delayed(payload, 0).await
     }
 
     /// Schedule a message to be available for consumption at a specific time
@@ -191,7 +188,7 @@ impl Queue {
         use diesel::Connection;
         let pool = self.pool.clone();
         let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
+        let vt = now + chrono::Duration::seconds(0);
         let sql = self.insert_sql.clone();
         let payloads_cloned = payloads.to_vec();
         let ids = tokio::task::spawn_blocking(move || {
@@ -247,10 +244,11 @@ impl Queue {
     pub async fn pending_count(&self) -> Result<i64> {
         use chrono::Utc;
         let now = Utc::now();
-        let sql = format!(
-            "SELECT COUNT(*) as count FROM {} WHERE vt <= $1",
-            self.table_name
-        );
+        let sql = PENDING_COUNT
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", &self.queue_name);
+
         #[derive(diesel::QueryableByName)]
         struct CountRow {
             #[diesel(sql_type = diesel::sql_types::BigInt)]
@@ -265,6 +263,11 @@ impl Queue {
         .await
     }
 
+    pub async fn read(&self, limit: usize) -> Result<Vec<QueueMessage>> {
+        self.read_delay(crate::constants::VISIBILITY_TIMEOUT as u32, limit)
+            .await
+    }
+
     /// Read a single message from the queue
     ///
     /// # Arguments
@@ -273,7 +276,7 @@ impl Queue {
     ///
     /// # Returns
     /// Option containing the message if available, None if queue is empty
-    pub async fn read(&self, vt: u32, limit: usize) -> Result<Vec<QueueMessage>> {
+    pub async fn read_delay(&self, vt: u32, limit: usize) -> Result<Vec<QueueMessage>> {
         let sql = self
             .read_messages_sql
             .clone()
@@ -298,10 +301,17 @@ impl Queue {
     ///
     /// # Returns
     /// True if message was deleted, false if not found
-    pub async fn dequeue(&self) -> Result<QueueMessage> {
-        let sql = self.dequeue_sql.clone();
+    pub async fn dequeue(&self, message_id: i64) -> Result<QueueMessage> {
+        let sql = self
+            .dequeue_sql
+            .clone()
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", &self.queue_name);
+
         self.with_conn(move |conn| {
             let result = diesel::sql_query(&sql)
+                .bind::<diesel::sql_types::BigInt, _>(message_id)
                 .get_result::<QueueMessage>(conn)
                 .map_err(|e| crate::error::PgqrsError::Connection {
                     message: e.to_string(),

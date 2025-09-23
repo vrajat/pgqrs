@@ -42,7 +42,7 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Queryable, Selectable, Debug)]
+#[derive(Queryable, Selectable, PartialEq, Debug)]
 #[diesel(table_name = meta)]
 pub struct MetaResult {
     #[diesel(sql_type = diesel::sql_types::Text)]
