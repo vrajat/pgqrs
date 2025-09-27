@@ -1,274 +1,147 @@
+
 # pgqrs
 
-A high-performance PostgreSQL-backed job queue for Rust applications.
+A PostgreSQL-backed job queue for Rust applications, with a CLI for administration and a type-safe async library API.
 
 ## Features
 
-- **High Performance**: Uses PostgreSQL's `SKIP LOCKED` for efficient job fetching
-- **Low Latency**: Typically under 3ms from task schedule to execution using `LISTEN/NOTIFY`
-- **Type-Safe**: Uses Rust's type system to ensure job payloads match their handlers
-- **Exactly-Once Delivery**: Guaranteed within a visibility timeout
-- **Message Archiving**: Archive messages instead of deleting for retention and replayability
-- **CLI Tools**: Administration and debugging via command-line interface
+- **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
+- **Type-Safe**: Rust types for message payloads
+- **Visibility Timeout**: Exactly-once delivery within a lock period
+- **CLI Tools**: Administer and debug queues from the command line
 
 ## Installation
 
-Add this to your `Cargo.toml`:
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 pgqrs = "0.1.0"
 ```
 
-## Quick Start
+## Library Usage
 
-### Basic Usage
+See `examples/basic_usage.rs` for a full example. Typical usage:
 
 ```rust
-use pgqrs::{Config, PgqrsClient, Message, CreateQueueOptions, ReadOptions};
-use serde::{Deserialize, Serialize};
-
-// Define your message type
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EmailMessage {
-    to: String,
-    subject: String,
-    body: String,
-}
-
-// Implement the Message trait
-impl Message for EmailMessage {
-    fn message_type(&self) -> &'static str {
-        "email"
-    }
-}
+use pgqrs::admin::PgqrsAdmin;
+use pgqrs::Config;
+use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create client
-    let config = Config::default();
-    let client = PgqrsClient::new(config).await?;
-    
-    // Install schema and create queue
-    client.admin().install(false).await?;
-    let queue_opts = CreateQueueOptions::new("email_queue");
-    client.admin().create_queue(queue_opts).await?;
-    
-    // Send a message
-    let email = EmailMessage {
-        to: "user@example.com".to_string(),
-        subject: "Welcome!".to_string(),
-        body: "Welcome to our service!".to_string(),
-    };
-    
-    let message_id = client.producer().enqueue("email_queue", email).await?;
-    println!("Sent message with ID: {}", message_id);
-    
-    // Read and process messages
-    let read_opts = ReadOptions::default();
-    let messages = client.consumer().read_batch::<EmailMessage>("email_queue", read_opts).await?;
-    
-    for msg in messages {
-        println!("Processing email: {}", msg.payload.subject);
-        // Process the message...
-        
-        // Archive or delete the message
-        client.consumer().archive("email_queue", msg.id).await?;
-    }
-    
-    Ok(())
+        // Initialize tracing
+        tracing_subscriber::fmt::init();
+
+        // Load configuration
+        let config = Config::default();
+        let admin = PgqrsAdmin::new(&config);
+
+        // Install schema
+        admin.install(false)?;
+
+        // Create queues
+        admin.create_queue(&"email_queue".to_string()).await?;
+        admin.create_queue(&"task_queue".to_string()).await?;
+
+        // Send messages
+        let email_payload = json!({ "to": "user@example.com", "subject": "Welcome!", "body": "Welcome to our service!" });
+        let email_queue = admin.get_queue("email_queue").await?;
+        let email_id = email_queue.enqueue(&email_payload).await?;
+        println!("Sent email message with ID: {}", email_id);
+
+        // Read messages
+        let messages = email_queue.read_delay(10, 2).await?;
+        println!("Read {} messages", messages.len());
+
+        // Delete a message
+        if let Some(msg) = messages.first() {
+                let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
+                if deleted.first().copied().unwrap_or(false) {
+                        println!("Deleted message {}");
+                }
+        }
+
+        Ok(())
 }
 ```
 
-### Configuration
+## Configuration
 
-pgqrs supports multiple configuration methods:
+You can configure pgqrs via:
 
-#### Environment Variables
-
-```bash
-export DATABASE_URL="postgresql://user:password@localhost:5432/dbname"
-export PGQRS_SCHEMA="pgqrs"
-export PGQRS_MAX_CONNECTIONS="10"
-```
-
-#### Config File (YAML)
-
-```yaml
-# pgqrs.yaml
-database:
-  host: localhost
-  port: 5432
-  username: postgres
-  password: postgres
-  database: myapp
-  schema: pgqrs
-  max_connections: 10
-  connection_timeout_seconds: 30
-
-queue:
-  default_lock_time_seconds: 5
-  max_batch_size: 100
-  enable_listen_notify: true
-  cleanup_interval_seconds: 300
-
-performance:
-  prefetch_count: 10
-  connection_pool_size: 10
-  query_timeout_seconds: 30
-```
-
-#### Programmatic Configuration
-
-```rust
-use pgqrs::{Config, DatabaseConfig, QueueConfig, PerformanceConfig};
-
-let config = Config {
-    database: DatabaseConfig {
-        host: "localhost".to_string(),
-        port: 5432,
-        username: "postgres".to_string(),
-        password: "postgres".to_string(),
-        database: "myapp".to_string(),
-        schema: "pgqrs".to_string(),
-        max_connections: 10,
-        connection_timeout_seconds: 30,
-    },
-    queue: QueueConfig::default(),
-    performance: PerformanceConfig::default(),
-};
-```
+- **Environment variables**:
+    - `DATABASE_URL`, `PGQRS_SCHEMA`, etc.
+- **YAML config file** (default: `pgqrs.yaml`):
+    - See example in this repo for all options.
+- **Programmatic**:
+    - `Config::default()` or build your own config struct.
 
 ## CLI Usage
 
-pgqrs includes a CLI for administration and debugging:
+The CLI is defined in `src/main.rs` and supports the following commands:
 
-### Install Schema
+### Top-level commands
 
-```bash
-pgqrs install
-```
+- `install [--dry-run]` — Install pgqrs schema
+- `uninstall [--dry-run]` — Uninstall pgqrs schema
+- `verify` — Verify installation
+- `queue <subcommand>` — Queue management
+- `message <subcommand>` — Message management
 
-### Create and Manage Queues
+### Queue commands
 
-```bash
-# Create a queue
-pgqrs queue create my_queue
+- `queue create <name>` — Create a new queue
+- `queue list` — List all queues
+- `queue delete <name>` — Delete a queue
+- `queue purge <name>` — Purge all messages from a queue
+- `queue metrics [<name>]` — Show metrics for a queue or all queues
 
-# List all queues
-pgqrs queue list
+### Message commands
 
-# Get queue metrics
-pgqrs queue metrics my_queue
+- `message send <queue> <payload> [--delay <seconds>]` — Send a message (payload is JSON)
+- `message read <queue> [--count <n>] [--lock-time <seconds>] [--message-type <type>]` — Read messages
+- `message dequeue <queue>` — Read and return one message
+- `message delete <queue> <id>` — Delete a message by ID
+- `message count <queue>` — Show pending message count
 
-# Purge all messages from a queue
-pgqrs queue purge my_queue
+### Output and Logging Options
 
-# Delete a queue
-pgqrs queue delete my_queue
-```
+All commands support global flags:
 
-### Send and Read Messages
-
-```bash
-# Send a message
-pgqrs message send my_queue '{"task": "process_data", "id": 123}'
-
-# Read messages
-pgqrs message read my_queue --count 5 --lock-time 30
-```
+- `--database-url <url>` — Override database URL
+- `--config <path>` — Config file path (default: pgqrs.yaml)
+- `--log-dest <stderr|file>` — Log destination
+- `--log-level <error|warn|info|debug|trace>` — Log level
+- `--output-format <json|csv|yaml>` — Output format
+- `--output-dest <stdout|file>` — Output destination
 
 ## API Reference
 
-### Admin Operations
+See `src/main.rs` and `examples/basic_usage.rs` for the current API. Key types and methods:
 
-```rust
-// Install/uninstall schema
-client.admin().install(false).await?;
-client.admin().uninstall(false).await?;
-
-// Queue management
-client.admin().create_queue(CreateQueueOptions::new("my_queue")).await?;
-client.admin().list_queues().await?;
-client.admin().delete_queue("my_queue").await?;
-client.admin().purge_queue("my_queue").await?;
-
-// Metrics
-let metrics = client.admin().queue_metrics("my_queue").await?;
-let all_metrics = client.admin().all_queues_metrics().await?;
-```
-
-### Producer Operations
-
-```rust
-// Send single message
-let id = client.producer().enqueue("my_queue", message).await?;
-
-// Send batch of messages
-let ids = client.producer().batch_enqueue("my_queue", messages).await?;
-
-// Send delayed message
-let id = client.producer().enqueue_delayed("my_queue", message, 60).await?;
-```
-
-### Consumer Operations
-
-```rust
-// Read single message
-let msg = client.consumer().read::<MyMessage>("my_queue", read_opts).await?;
-
-// Read batch of messages
-let messages = client.consumer().read_batch::<MyMessage>("my_queue", read_opts).await?;
-
-// Delete messages
-client.consumer().dequeue("my_queue", message_id).await?;
-client.consumer().dequeue_batch("my_queue", message_ids).await?;
-
-// Archive messages  
-client.consumer().archive("my_queue", message_id).await?;
-client.consumer().archive_batch("my_queue", message_ids).await?;
-
-// Extend message lock
-client.consumer().extend_lock("my_queue", message_id, 30).await?;
-```
-
-## Architecture
-
-pgqrs uses PostgreSQL as the backend with the following key features:
-
-- **SKIP LOCKED**: For efficient, concurrent message consumption without blocking
-- **LISTEN/NOTIFY**: For low-latency notification of new messages
-- **Visibility Timeout**: Messages become invisible to other consumers for a configurable period
-- **Archiving**: Move processed messages to archive tables instead of deleting
-- **Type Safety**: Rust's type system ensures message payloads match handlers
-
-## Database Schema
-
-pgqrs creates the following tables in the configured schema:
-
-- `queues`: Metadata about each queue
-- `q_<queue_name>`: Message storage for each queue  
-- `a_<queue_name>`: Archive storage for each queue (if archiving enabled)
+- `PgqrsAdmin::install(dry_run)` — Install schema
+- `PgqrsAdmin::create_queue(name)` — Create queue
+- `PgqrsAdmin::list_queues()` — List queues
+- `PgqrsAdmin::get_queue(name)` — Get queue handle
+- `QueueHandle::enqueue(payload)` — Send message
+- `QueueHandle::batch_enqueue(payloads)` — Send batch
+- `QueueHandle::enqueue_delayed(payload, delay_secs)` — Send delayed message
+- `QueueHandle::read(count)` — Read messages
+- `QueueHandle::read_delay(count, delay_secs)` — Read messages with delay
+- `QueueHandle::delete_batch(ids)` — Delete messages
+- `QueueHandle::extend_visibility(id, seconds)` — Extend lock
+- `QueueHandle::pending_count()` — Pending message count
+- `PgqrsAdmin::queue_metrics(name)` — Queue metrics
+- `PgqrsAdmin::all_queues_metrics()` — Metrics for all queues
 
 ## Development Status
 
-⚠️ **This is the initial API design phase**. All functions are currently `todo!()` placeholders.
-
-Next steps:
-1. Implement database schema and migrations
-2. Implement core queue operations
-3. Add LISTEN/NOTIFY support
-4. Add CLI functionality
-5. Add comprehensive tests
-6. Performance optimization
-
-## Contributing
-
-This project is in early development. Contributions welcome!
+**Note:** Many functions are currently `todo!()` placeholders. See `src/main.rs` and `examples/basic_usage.rs` for the evolving API.
 
 ## License
 
-Licensed under either of
+Licensed under either of:
 
 - Apache License, Version 2.0
 - MIT license
