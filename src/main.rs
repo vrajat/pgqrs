@@ -11,7 +11,11 @@ enum OutputFormatWriter {
 }
 
 impl OutputFormatWriter {
-    pub fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
+    pub fn write<T: serde::Serialize>(
+        &self,
+        value: &T,
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
         match self {
             OutputFormatWriter::Json(w) => w.write(value, out),
             OutputFormatWriter::Yaml(w) => w.write(value, out),
@@ -34,7 +38,11 @@ impl OutputWriter for JsonOutputWriter {
 
 struct CsvOutputWriter;
 impl CsvOutputWriter {
-    fn write_queue_messages(&self, messages: &[pgqrs::types::QueueMessage], out: &mut dyn Write) -> anyhow::Result<()> {
+    fn write_queue_messages(
+        &self,
+        messages: &[pgqrs::types::QueueMessage],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
         writeln!(out, "msg_id,enqueued_at,read_ct,vt,message")?;
         for msg in messages {
             let payload = serde_json::to_string(&msg.message)?;
@@ -346,10 +354,16 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
                 tracing::info!("  Locked Messages: {}", metrics.locked_messages);
                 tracing::info!("  Archived Messages: {}", metrics.archived_messages);
                 if let Some(oldest) = metrics.oldest_pending_message {
-                    tracing::info!("  Oldest Pending: {}", oldest.format("%Y-%m-%d %H:%M:%S UTC"));
+                    tracing::info!(
+                        "  Oldest Pending: {}",
+                        oldest.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                 }
                 if let Some(newest) = metrics.newest_message {
-                    tracing::info!("  Newest Message: {}", newest.format("%Y-%m-%d %H:%M:%S UTC"));
+                    tracing::info!(
+                        "  Newest Message: {}",
+                        newest.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                 }
             } else {
                 tracing::info!("Getting metrics for all queues...");
@@ -364,10 +378,16 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
                         tracing::info!("  Locked Messages: {}", metric.locked_messages);
                         tracing::info!("  Archived Messages: {}", metric.archived_messages);
                         if let Some(oldest) = metric.oldest_pending_message {
-                            tracing::info!("  Oldest Pending: {}", oldest.format("%Y-%m-%d %H:%M:%S UTC"));
+                            tracing::info!(
+                                "  Oldest Pending: {}",
+                                oldest.format("%Y-%m-%d %H:%M:%S UTC")
+                            );
                         }
                         if let Some(newest) = metric.newest_message {
-                            tracing::info!("  Newest Message: {}", newest.format("%Y-%m-%d %H:%M:%S UTC"));
+                            tracing::info!(
+                                "  Newest Message: {}",
+                                newest.format("%Y-%m-%d %H:%M:%S UTC")
+                            );
                         }
                         println!();
                     }
@@ -385,7 +405,11 @@ async fn handle_message_commands(
     output_dest: &str,
 ) -> anyhow::Result<()> {
     match action {
-        MessageCommands::Send { queue, payload, delay } => {
+        MessageCommands::Send {
+            queue,
+            payload,
+            delay,
+        } => {
             let queue_obj = admin.get_queue(&queue).await?;
             tracing::info!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
@@ -398,7 +422,12 @@ async fn handle_message_commands(
             tracing::info!("Message sent successfully with ID: {}", msg_id);
             Ok(())
         }
-        MessageCommands::Read { queue, count, lock_time, message_type } => {
+        MessageCommands::Read {
+            queue,
+            count,
+            lock_time,
+            message_type,
+        } => {
             let queue_obj = admin.get_queue(&queue).await?;
             tracing::info!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",

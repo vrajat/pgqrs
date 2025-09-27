@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{OutputFormatWriter, JsonOutputWriter, YamlOutputWriter, CsvOutputWriter};
+    use crate::{CsvOutputWriter, JsonOutputWriter, OutputFormatWriter, YamlOutputWriter};
     use chrono::Utc;
     use pgqrs::types::QueueMessage;
     use serde_json::json;
