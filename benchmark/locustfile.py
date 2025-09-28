@@ -24,7 +24,7 @@ def connect():
 import time
 from locust import events
 
-def consume_skiplocked(conn, batch_size):
+def consume_skiplocked_delete(conn, batch_size):
     start = time.time()
     try:
         with conn.cursor() as cur:
@@ -41,6 +41,57 @@ def consume_skiplocked(conn, batch_size):
             WHERE t.msg_id = cte.msg_id
             RETURNING t.msg_id;
             """, (batch_size,))
+            rows = cur.fetchall()
+            conn.commit()
+            elapsed_ms = int((time.time() - start) * 1000)
+            events.request.fire(
+                request_type="db",
+                name="consume_skiplocked",
+                response_time=elapsed_ms,
+                response_length=len(rows),
+                response=None,
+                context={},
+                exception=None,
+                start_time=None
+            )
+            return len(rows)
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        elapsed_ms = int((time.time() - start) * 1000)
+        events.request.fire(
+            request_type="db",
+            name="consume_skiplocked",
+            response_time=elapsed_ms,
+            response_length=0,
+            response=None,
+            context={},
+            exception=e,
+            start_time=None
+        )
+        return 0
+
+def consume_skiplocked_update(conn, batch_size):
+    start = time.time()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"""WITH cte AS (
+                SELECT msg_id
+                FROM {SCENARIO}
+                WHERE vt <= clock_timestamp()
+                ORDER BY msg_id ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE {SCENARIO} t
+            SET vt = clock_timestamp() + interval '%s seconds',
+                read_ct = read_ct + 1
+            FROM cte
+            WHERE t.msg_id = cte.msg_id
+            RETURNING t.msg_id;
+            """, (batch_size, VISIBILITY_SECONDS))
             rows = cur.fetchall()
             conn.commit()
             elapsed_ms = int((time.time() - start) * 1000)
@@ -176,7 +227,7 @@ class Consumer(User):
         if "naive" in SCENARIO:
             claimed = consume_naive(self.conn, BATCH_SIZE)
         else:
-            claimed = consume_skiplocked(self.conn, BATCH_SIZE)
+            claimed = consume_skiplocked_update(self.conn, BATCH_SIZE)
         if claimed == 0:
             time.sleep(POLL_SLEEP)
 

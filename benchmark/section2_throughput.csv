@@ -1,0 +1,5 @@
+scenario,batch,messages,median_ms
+naive,10,148290,5.0
+skiplocked,10,190390,3.0
+naive,1,33260,1.0
+skiplocked,1,36741,1.0
