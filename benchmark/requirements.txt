@@ -1,0 +1,4 @@
+locust==2.19.0
+psycopg2-binary==2.9.6
+attrs==23.1.0
+psycogreen==2.4.7
