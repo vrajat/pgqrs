@@ -5,8 +5,17 @@ edition = "2021"
 description = "A high-performance PostgreSQL-backed job queue for Rust applications"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vrajat/pgqrs"
-keywords = ["queue", "postgresql", "async", "jobs", "background"]
-categories = ["database", "concurrency", "asynchronous"]
+keywords = ["queue", "postgresql", "async", "workflows", "cli"]
+categories = ["command-line-interface"]
+
+readme = "README.md"
+
+include = [
+    "src/**",
+    "migrations/**",
+    "Cargo.toml",
+    "README.md",
+]
 
 [[bin]]
 name = "pgqrs"
