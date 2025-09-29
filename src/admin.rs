@@ -103,15 +103,21 @@ impl PgqrsAdmin {
     ///
     /// # Arguments
     /// * `options` - Queue creation options
-    pub async fn create_queue(&self, name: &String) -> Result<Queue> {
-        let create_statement = CREATE_QUEUE_STATEMENT
+    pub async fn create_queue(&self, name: &String, unlogged: bool) -> Result<Queue> {
+        let create_statement = if unlogged {
+            CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "UNLOGGED")
+        } else {
+            CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "")
+        };
+        let create_statement = create_statement
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", &name);
 
         let insert_meta = INSERT_QUEUE_METADATA
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{name}", &name);
+            .replace("{name}", &name)
+            .replace("{unlogged}", if unlogged { "TRUE" } else { "FALSE" });
 
         tracing::debug!("{}", create_statement);
         tracing::debug!("{}", insert_meta);

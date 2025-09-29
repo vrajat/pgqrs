@@ -42,20 +42,21 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Queryable, Selectable, PartialEq, Debug)]
+#[derive(Queryable, Selectable, PartialEq, Debug, Serialize, Deserialize)]
 #[diesel(table_name = meta)]
 pub struct MetaResult {
     #[diesel(sql_type = diesel::sql_types::Text)]
     pub queue_name: String,
     pub created_at: NaiveDateTime,
+    pub unlogged: bool,
 }
 
 impl fmt::Display for MetaResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MetaResult {{ queue_name: {}, created_at: {} }}",
-            self.queue_name, self.created_at
+            "MetaResult {{ queue_name: {}, created_at: {}, unlogged: {} }}",
+            self.queue_name, self.created_at, self.unlogged
         )
     }
 }

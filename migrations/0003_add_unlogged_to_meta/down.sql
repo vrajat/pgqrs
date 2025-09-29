@@ -1,0 +1,1 @@
+ALTER TABLE pgqrs.meta DROP COLUMN unlogged;

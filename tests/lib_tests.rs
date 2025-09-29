@@ -1,4 +1,11 @@
+use diesel::deserialize::QueryableByName;
+use diesel::RunQueryDsl;
 use serde_json::json;
+#[derive(QueryableByName)]
+struct RelPersistence {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    relpersistence: String,
+}
 
 mod common;
 
@@ -10,15 +17,70 @@ async fn verify() {
 }
 
 #[tokio::test]
-async fn test_create_queue() {
+async fn test_create_logged_queue() {
     let admin = common::get_pgqrs_client().await;
-    let queue = admin.create_queue(&"test_create_queue".to_string()).await;
+    let queue_name = "test_create_logged_queue".to_string();
+    let queue = admin.create_queue(&queue_name, false).await;
     let queue_list = admin.list_queues().await;
     assert!(queue.is_ok());
     assert!(queue_list.is_ok());
     let queue = queue.unwrap();
     let queue_list = queue_list.unwrap();
-    assert!(queue_list.iter().any(|q| q.queue_name == queue.queue_name));
+    let meta = queue_list
+        .iter()
+        .find(|q| q.queue_name == queue.queue_name)
+        .unwrap();
+    assert_eq!(
+        meta.unlogged, false,
+        "MetaResult.unlogged should be false for logged queue"
+    );
+
+    // Check system tables for logged table
+    // removed unused variable table_name
+    let sql = format!("SELECT relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    let pool = admin.pool.clone();
+    let mut conn = pool.get().unwrap();
+    let result = diesel::sql_query(sql)
+        .load::<RelPersistence>(&mut conn)
+        .unwrap();
+    assert_eq!(
+        result[0].relpersistence, "p",
+        "Table should be logged (relpersistence = 'p')"
+    );
+
+    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_create_unlogged_queue() {
+    let admin = common::get_pgqrs_client().await;
+    let queue_name = "test_create_unlogged_queue".to_string();
+    let queue = admin.create_queue(&queue_name, true).await;
+    let queue_list = admin.list_queues().await;
+    assert!(queue.is_ok());
+    assert!(queue_list.is_ok());
+    let queue = queue.unwrap();
+    let queue_list = queue_list.unwrap();
+    let meta = queue_list
+        .iter()
+        .find(|q| q.queue_name == queue.queue_name)
+        .unwrap();
+    assert_eq!(
+        meta.unlogged, true,
+        "MetaResult.unlogged should be true for unlogged queue"
+    );
+
+    // Check system tables for unlogged table
+    let sql = format!("SELECT relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    let pool = admin.pool.clone();
+    let mut conn = pool.get().unwrap();
+    let result = diesel::sql_query(sql)
+        .load::<RelPersistence>(&mut conn)
+        .unwrap();
+    assert_eq!(
+        result[0].relpersistence, "u",
+        "Table should be unlogged (relpersistence = 'u')"
+    );
 
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }
@@ -26,7 +88,9 @@ async fn test_create_queue() {
 #[tokio::test]
 async fn test_send_message() {
     let admin = common::get_pgqrs_client().await;
-    let queue = admin.create_queue(&"test_send_message".to_string()).await;
+    let queue = admin
+        .create_queue(&"test_send_message".to_string(), false)
+        .await;
     assert!(queue.is_ok());
     let queue = queue.unwrap();
     let payload = json!({

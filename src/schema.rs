@@ -5,6 +5,7 @@ pub mod pgqrs {
         pgqrs.meta (queue_name) {
             queue_name -> Varchar,
             created_at -> Timestamptz,
+            unlogged -> Bool,
         }
     }
 }

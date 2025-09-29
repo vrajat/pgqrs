@@ -58,10 +58,14 @@ impl CsvOutputWriter {
         }
         Ok(())
     }
-    fn write_queue_names(&self, queues: &[String], out: &mut dyn Write) -> anyhow::Result<()> {
-        writeln!(out, "queue_name")?;
+    fn write_queue_names(
+        &self,
+        queues: &[pgqrs::types::MetaResult],
+        out: &mut dyn Write,
+    ) -> anyhow::Result<()> {
+        writeln!(out, "queue_name,unlogged")?;
         for queue in queues {
-            writeln!(out, "{}", queue)?;
+            writeln!(out, "{},{}", queue.queue_name, queue.unlogged)?;
         }
         Ok(())
     }
@@ -142,6 +146,9 @@ enum QueueCommands {
     Create {
         /// Name of the queue
         name: String,
+        /// Create as UNLOGGED table
+        #[arg(long, default_value = "false")]
+        unlogged: bool,
     },
     /// List all queues
     List,
@@ -293,16 +300,15 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
 async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> anyhow::Result<()> {
     match action {
-        QueueCommands::Create { name } => {
-            tracing::info!("Creating queue '{}'...", &name);
-            admin.create_queue(&name).await?;
+        QueueCommands::Create { name, unlogged } => {
+            tracing::info!("Creating queue '{}' (unlogged: {})...", &name, unlogged);
+            admin.create_queue(&name, unlogged).await?;
             tracing::info!("Queue '{}' created successfully", &name);
         }
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
             let meta_results = admin.list_queues().await?;
-            let queues: Vec<String> = meta_results.iter().map(|m| m.queue_name.clone()).collect();
             let output_format = "json"; // Default, can be extended to CLI arg
             let output_dest = "stdout"; // Default, can be extended to CLI arg
             if output_format == "csv" {
@@ -310,10 +316,10 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
                 if output_dest == "stdout" {
                     let stdout = std::io::stdout();
                     let mut handle = stdout.lock();
-                    writer.write_queue_names(&queues, &mut handle)?;
+                    writer.write_queue_names(&meta_results, &mut handle)?;
                 } else {
                     let mut file = std::fs::File::create(output_dest)?;
-                    writer.write_queue_names(&queues, &mut file)?;
+                    writer.write_queue_names(&meta_results, &mut file)?;
                 }
             } else {
                 let writer = match output_format {
@@ -324,10 +330,10 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
                 if output_dest == "stdout" {
                     let stdout = std::io::stdout();
                     let mut handle = stdout.lock();
-                    writer.write(&queues, &mut handle)?;
+                    writer.write(&meta_results, &mut handle)?;
                 } else {
                     let mut file = std::fs::File::create(output_dest)?;
-                    writer.write(&queues, &mut file)?;
+                    writer.write(&meta_results, &mut file)?;
                 }
             }
         }

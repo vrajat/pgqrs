@@ -19,8 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create queues
     println!("Creating queues...");
-    admin.create_queue(&String::from("email")).await?;
-    admin.create_queue(&String::from("task")).await?;
+    admin.create_queue(&String::from("email"), false).await?;
+    admin.create_queue(&String::from("task"), false).await?;
 
     // Send some messages
     println!("Sending messages...");
