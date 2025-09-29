@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-CSV = "results/section3_wal_data.csv"
+CSV = "section3_wal_data.csv"
 OUT_DIR = Path(".")
 df = pd.read_csv(CSV)
 

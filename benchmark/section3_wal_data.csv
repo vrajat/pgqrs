@@ -1,5 +1,5 @@
 zip,scenario,batch,messages,wal_bytes,wal_per_million,reqs_per_s,median_ms
-queue_logged_skiplocked_delete-b1-v3,delete-on-claim,1,41670,92563504,2221346000,348.150504,0.0
-queue_logged_skiplocked_delete-b10-v3,delete-on-claim,10,344150,117056432,340132000,288.54172,0.0
+queue_logged_skiplocked_delete-b1-v3,logged,1,41670,92563504,2221346000,348.150504,0.0
+queue_logged_skiplocked_delete-b10-v3,logged,10,344150,117056432,340132000,288.54172,0.0
 queue_unlogged_skiplocked-b1-v3,unlogged,1,41068,4114952,100198500,342.934724,0.0
 queue_unlogged_skiplocked-b10-v3,unlogged,10,364510,3842688,10542065,304.130683,0.0
