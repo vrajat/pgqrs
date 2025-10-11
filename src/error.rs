@@ -1,3 +1,26 @@
+//! Error types and result handling for pgqrs.
+//!
+//! This module defines the core error type [`PgqrsError`] used throughout the crate, as well as the [`Result`] alias for fallible operations.
+//!
+//! ## What
+//!
+//! - [`PgqrsError`] enumerates all error cases that can occur in pgqrs, including database, pool, serialization, configuration, and queue-specific errors.
+//! - [`Result<T>`] is a convenient alias for `Result<T, PgqrsError>`.
+//!
+//! ## How
+//!
+//! Use [`PgqrsError`] for error handling in your application code and when matching on error cases. Most crate APIs return [`Result<T>`].
+//!
+//! ### Example
+//!
+//! ```rust
+//! use pgqrs::error::{PgqrsError, Result};
+//!
+//! fn do_something() -> Result<()> {
+//!     // ...
+//!     Err(PgqrsError::QueueNotFound { name: "jobs".to_string() })
+//! }
+//! ```
 use thiserror::Error;
 
 /// Result type for pgqrs operations

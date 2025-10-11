@@ -1,3 +1,23 @@
+//! Command-line interface for pgqrs: manage queues and messages.
+//!
+//! This file implements the CLI entry point for pgqrs, allowing users to install, uninstall, verify, and manage queues and messages via command-line commands.
+//!
+//! ## What
+//!
+//! - Provides commands for schema management, queue operations, and message operations.
+//! - Supports output in JSON, CSV, and YAML formats.
+//!
+//! ## How
+//!
+//! Run the CLI with various subcommands to interact with pgqrs. See `--help` for usage details.
+//!
+//! ### Example
+//!
+//! ```sh
+//! pgqrs install
+//! pgqrs queue create jobs
+//! pgqrs message send --queue jobs --payload '{"foo": "bar"}'
+//! ```
 use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;

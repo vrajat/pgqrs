@@ -1,16 +1,48 @@
-/**
- # pgqrs
-
-A PostgreSQL-backed job queue for Rust applications, with a CLI for administration and a type-safe async library API.
-
-## Features
-
-- **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
-- **Type-Safe**: Rust types for message payloads
-- **Visibility Timeout**: Exactly-once delivery within a lock period
-- **CLI Tools**: Administer and debug queues from the command line
-*/
-
+//! # pgqrs
+//!
+//! **pgqrs** is a PostgreSQL-backed job queue for Rust applications, providing both a type-safe async library API and a CLI for queue administration.
+//!
+//! ## What is pgqrs?
+//!
+//! pgqrs enables you to reliably enqueue, dequeue, and manage jobs using PostgreSQL as the backend. It leverages advanced database features like `SKIP LOCKED` for efficient concurrent job processing, and provides exactly-once delivery semantics within a visibility timeout window.
+//!
+//! ## How to use pgqrs
+//!
+//! - **Library API**: Integrate with your Rust application to enqueue and process jobs. See [`Queue`] and [`QueueMessage`](crate::types::QueueMessage).
+//! - **CLI Tools**: Use the CLI to administer, debug, and inspect queues. See the README for CLI usage.
+//!
+//! ## Features
+//!
+//! - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
+//! - **Type-Safe**: Rust types for message payloads
+//! - **Visibility Timeout**: Exactly-once delivery within a lock period
+//! - **CLI Tools**: Administer and debug queues from the command line
+//!
+//! ## Example
+//!
+//! ```rust
+//! use pgqrs::admin::PgqrsAdmin;
+//! use pgqrs::Config;
+//! use serde_json::json;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Initialize tracing
+//!     tracing_subscriber::fmt::init();
+//!
+//!     // Load configuration
+//!     let config = Config::default();
+//!     let admin = PgqrsAdmin::new(&config);
+//!
+//!     // Install schema
+//!     admin.install_schema()?;
+//!     // Create a queue
+//!     admin.create_queue("jobs", false)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! For more details and advanced usage, see the [README](https://github.com/vrajat/pgqrs/blob/main/README.md) and [examples](https://github.com/vrajat/pgqrs/tree/main/examples).
 
 pub mod admin;
 pub mod config;
