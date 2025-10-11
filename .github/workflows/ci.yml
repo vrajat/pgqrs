@@ -82,8 +82,6 @@ jobs:
 
       # Package, verify, then publish using the short-lived token
       - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           cargo package --list
           cargo publish --dry-run --locked

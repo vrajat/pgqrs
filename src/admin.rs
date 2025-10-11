@@ -4,17 +4,19 @@ use crate::constants::{
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
-use crate::run_migrations;
 use crate::schema::pgqrs::meta;
 use crate::types::MetaResult;
 use crate::types::QueueMetrics;
-use crate::Config;
+use crate::config::Config;
 use diesel::deserialize::QueryableByName;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
 use diesel::r2d2::ConnectionManager;
 use diesel::{Connection, RunQueryDsl};
 use r2d2::Pool;
+
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
@@ -56,7 +58,7 @@ impl PgqrsAdmin {
             return Ok(());
         }
         let mut conn = self.pool.get().map_err(PgqrsError::from)?;
-        run_migrations(&mut conn).map_err(PgqrsError::from)?;
+        Self::run_migrations(&mut conn).map_err(PgqrsError::from)?;
         Ok(())
     }
 
@@ -194,4 +196,39 @@ impl PgqrsAdmin {
             Ok(())
         })
     }
+
+    /// Run embedded Diesel migrations
+fn run_migrations(conn: &mut diesel::PgConnection) -> Result<()> {
+    eprintln!("Current dir: {:?}", std::env::current_dir());
+    // Print applied migrations
+    match conn.applied_migrations() {
+        Ok(applied) => {
+            eprintln!("Applied migrations:");
+            for m in applied {
+                eprintln!("  {}", m.to_string());
+            }
+        }
+        Err(e) => eprintln!("Error fetching applied migrations: {}", e),
+    }
+
+    // Print pending migrations
+    match conn.pending_migrations(MIGRATIONS) {
+        Ok(pending) => {
+            eprintln!("Pending migrations:");
+            for m in &pending {
+                eprintln!("  {}", m.name());
+            }
+        }
+        Err(e) => eprintln!("Error fetching pending migrations: {}", e),
+    }
+
+    // Run migrations
+    match conn.run_pending_migrations(MIGRATIONS) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(PgqrsError::Migration {
+            message: e.to_string(),
+        }),
+    }
+}
+
 }

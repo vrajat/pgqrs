@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::Config;
+use pgqrs::config::Config;
 use std::fs::File;
 use std::io::{self, Write};
 use std::process;

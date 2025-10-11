@@ -1,5 +1,5 @@
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::Config;
+use pgqrs::config::Config;
 use serde_json::json;
 
 #[tokio::main]

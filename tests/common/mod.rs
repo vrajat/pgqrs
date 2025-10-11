@@ -68,7 +68,7 @@ pub async fn get_pgqrs_client() -> &'static PgqrsAdmin {
                     println!("Database connection verified");
                 }
                 // Create Admin and install schema
-                let mut config = pgqrs::Config::default();
+                let mut config = pgqrs::config::Config::default();
                 config.dsn = database_url.clone();
                 let admin = PgqrsAdmin::new(&config);
                 admin.install(false).expect("Failed to install schema");
@@ -115,7 +115,7 @@ pub async fn get_pgqrs_client() -> &'static PgqrsAdmin {
                     println!("Database connection verified");
                 }
                 // Create Admin and install schema
-                let mut config = pgqrs::Config::default();
+                let mut config = pgqrs::config::Config::default();
                 config.dsn = database_url.clone();
                 let admin = PgqrsAdmin::new(&config);
                 admin.install(false).expect("Failed to install schema");
