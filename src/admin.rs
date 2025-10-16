@@ -13,14 +13,18 @@
 //!
 //! ### Example
 //!
-//! ```rust
+//! ```no_run
 //! use pgqrs::admin::PgqrsAdmin;
-//! use pgqrs::Config;
+//! use pgqrs::config::Config;
 //!
-//! let config = Config::default();
-//! let admin = PgqrsAdmin::new(&config);
-//! admin.install(false)?;
-//! admin.create_queue(&"jobs".to_string(), false).await?;
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let config = Config::default();
+//!     let admin = PgqrsAdmin::new(&config);
+//!     admin.install(false)?;
+//!     admin.create_queue(&"jobs".to_string(), false).await?;
+//!     Ok(())
+//! }
 //! ```
 use crate::config::Config;
 use crate::constants::{

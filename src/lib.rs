@@ -20,24 +20,16 @@
 //!
 //! ## Example
 //!
-//! ```rust
+//! ```no_run
 //! use pgqrs::admin::PgqrsAdmin;
-//! use pgqrs::Config;
-//! use serde_json::json;
+//! use pgqrs::config::Config;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Initialize tracing
-//!     tracing_subscriber::fmt::init();
-//!
-//!     // Load configuration
 //!     let config = Config::default();
 //!     let admin = PgqrsAdmin::new(&config);
-//!
-//!     // Install schema
-//!     admin.install_schema()?;
-//!     // Create a queue
-//!     admin.create_queue("jobs", false)?;
+//!     admin.install(false)?;
+//!     admin.create_queue(&"jobs".to_string(), false).await?;
 //!     Ok(())
 //! }
 //! ```

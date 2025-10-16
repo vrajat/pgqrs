@@ -16,8 +16,9 @@
 //!
 //! ```rust
 //! use pgqrs::types::QueueMessage;
-//! let msg: QueueMessage = /* ... */;
-//! println!("{}", msg);
+//! fn print_message(msg: QueueMessage) {
+//!     println!("{}", msg);
+//! }
 //! ```
 use crate::schema::pgqrs::meta;
 
