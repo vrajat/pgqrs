@@ -1,0 +1,74 @@
+
+syntax = "proto3";
+package pgq.v1;
+option go_package = "pgq/v1";
+
+// Queue metadata, matches Rust Queue struct
+message Queue {
+  string name = 1; // queue_name
+  int64 created_at_unix = 2; // created_at as unix timestamp
+  bool unlogged = 3; // durability flag
+}
+
+// Message metadata, matches Rust QueueMessage struct
+message Message {
+  string id = 1;
+  string queue_name = 2;
+  bytes payload = 3;
+  int64 enqueued_at_unix = 4; // enqueued_at as unix timestamp
+  int64 vt_unix = 5; // visibility timeout as unix timestamp
+  int32 read_ct = 6; // number of times read
+}
+
+
+message CreateQueueRequest { string name = 1; bool unlogged = 2; }
+message DeleteQueueRequest { string name = 1; }
+message GetQueueRequest    { string name = 1; }
+message ListQueuesRequest  {}
+message ListQueuesResponse { repeated Queue queues = 1; }
+
+message EnqueueRequest { string queue_name = 1; bytes payload = 2; int64 delay_seconds = 3; }
+message EnqueueResponse { string message_id = 1; }
+
+message DequeueRequest { string queue_name = 1; int32 max_messages = 2; int64 lease_seconds = 3; }
+message DequeueResponse { repeated Message messages = 1; }
+
+message AckRequest { string message_id = 1; }
+message NackRequest { string message_id = 1; string reason = 2; bool dead_letter = 3; }
+message RequeueRequest { string message_id = 1; int64 delay_seconds = 2; }
+message ExtendLeaseRequest { string message_id = 1; int64 additional_seconds = 2; }
+
+message PeekRequest { string queue_name = 1; int32 limit = 2; }
+message PeekResponse { repeated Message messages = 1; }
+
+message StatsRequest { string queue_name = 1; }
+message StatsResponse { uint64 ready = 1; uint64 in_flight = 2; uint64 dead_lettered = 3; }
+
+message ListInFlightRequest { string queue_name = 1; int32 limit = 2; }
+message ListDeadLettersRequest { string queue_name = 1; int32 limit = 2; }
+message PurgeDeadLettersRequest { string queue_name = 1; }
+
+message HealthCheckRequest {}
+message HealthCheckResponse { string status = 1; }
+
+service QueueService {
+  rpc CreateQueue(CreateQueueRequest) returns (Queue);
+  rpc DeleteQueue(DeleteQueueRequest) returns (.google.protobuf.Empty);
+  rpc GetQueue(GetQueueRequest) returns (Queue);
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+  rpc Ack(AckRequest) returns (.google.protobuf.Empty);
+  rpc Nack(NackRequest) returns (.google.protobuf.Empty);
+  rpc Requeue(RequeueRequest) returns (.google.protobuf.Empty);
+  rpc ExtendLease(ExtendLeaseRequest) returns (.google.protobuf.Empty);
+
+  rpc Peek(PeekRequest) returns (PeekResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+  rpc ListInFlight(ListInFlightRequest) returns (PeekResponse);
+  rpc ListDeadLetters(ListDeadLettersRequest) returns (PeekResponse);
+  rpc PurgeDeadLetters(PurgeDeadLettersRequest) returns (.google.protobuf.Empty);
+
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
