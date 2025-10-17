@@ -2,4 +2,5 @@ pub mod config;
 pub mod error;
 pub mod pool;
 pub mod traits;
-pub mod pg_impl;
+pub mod pgqrs_impl;
+pub use pgqrs_impl::{PgQueueRepo, PgMessageRepo};
