@@ -14,14 +14,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed={}", queue_proto.display());
     println!("cargo:rerun-if-changed={}", proto_dir.display());
 
-        // TEMP: prove OUT_DIR & stop
+    // TEMP: prove OUT_DIR & stop
     let out_dir = env::var("OUT_DIR")?;
     println!("cargo:warning=OUT_DIR = {out_dir}");
 
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
-        . compile_protos(&[queue_proto], &[proto_dir])?;
+        .compile_protos(&[queue_proto], &[proto_dir])?;
 
     println!("cargo:warning=pgqrs-server build.rs finished");
     Ok(())

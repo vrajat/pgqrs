@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use pgqrs_core::config::Config;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {

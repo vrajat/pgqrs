@@ -1,5 +1,5 @@
-use tokio::time::Duration;
 use std::net::SocketAddr;
+use tokio::time::Duration;
 
 /// Common test timeouts and constants
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,12 +20,12 @@ where
 {
     let start = std::time::Instant::now();
     let mut results = Vec::with_capacity(iterations);
-    
+
     for _ in 0..iterations {
         let result = operation().await;
         results.push(result);
     }
-    
+
     let duration = start.elapsed();
     (duration, results)
 }

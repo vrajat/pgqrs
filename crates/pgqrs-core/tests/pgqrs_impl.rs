@@ -1,7 +1,10 @@
-use pgqrs_core::{PgQueueRepo, PgMessageRepo, traits::{QueueRepo, MessageRepo}};
-use sqlx::postgres::PgPoolOptions;
-use serde_json::json;
 use chrono::Utc;
+use pgqrs_core::{
+    traits::{MessageRepo, QueueRepo},
+    PgMessageRepo, PgQueueRepo,
+};
+use serde_json::json;
+use sqlx::postgres::PgPoolOptions;
 
 async fn setup_pool() -> sqlx::PgPool {
     let database_url = std::env::var("PGQRS_TEST_DSN")
@@ -31,7 +34,10 @@ async fn test_enqueue_and_peek() {
     let qrepo = PgQueueRepo { pool: pool.clone() };
     let mrepo = PgMessageRepo { pool: pool.clone() };
     let queue_name = format!("testq_{}", Utc::now().timestamp());
-    qrepo.create_queue(&queue_name, false).await.expect("create");
+    qrepo
+        .create_queue(&queue_name, false)
+        .await
+        .expect("create");
     let payload = json!({"foo": "bar"});
     let msg = mrepo.enqueue(&queue_name, &payload).await.expect("enqueue");
     let peeked = mrepo.peek(&queue_name, 10).await.expect("peek");
@@ -45,7 +51,10 @@ async fn test_enqueue_dequeue() {
     let qrepo = PgQueueRepo { pool: pool.clone() };
     let mrepo = PgMessageRepo { pool: pool.clone() };
     let queue_name = format!("testq_{}", Utc::now().timestamp());
-    qrepo.create_queue(&queue_name, false).await.expect("create");
+    qrepo
+        .create_queue(&queue_name, false)
+        .await
+        .expect("create");
     let payload = json!({"foo": "bar"});
     let msg = mrepo.enqueue(&queue_name, &payload).await.expect("enqueue");
     let dequeued = mrepo.dequeue(&queue_name, msg.id).await.expect("dequeue");

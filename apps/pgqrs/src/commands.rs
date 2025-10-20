@@ -84,9 +84,7 @@ fn read_payload(payload_arg: &str) -> Result<String, CliError> {
 fn payload_to_bytes(payload: &str) -> Result<Vec<u8>, CliError> {
     // Try to parse as JSON first, if that fails, treat as plain text
     match serde_json::from_str::<serde_json::Value>(payload) {
-        Ok(json_value) => {
-            serde_json::to_vec(&json_value).map_err(CliError::Json)
-        }
+        Ok(json_value) => serde_json::to_vec(&json_value).map_err(CliError::Json),
         Err(_) => {
             // Not JSON, treat as plain text and wrap in JSON string
             serde_json::to_vec(payload).map_err(CliError::Json)
@@ -96,11 +94,8 @@ fn payload_to_bytes(payload: &str) -> Result<Vec<u8>, CliError> {
 
 fn bytes_to_string(bytes: &[u8]) -> String {
     match serde_json::from_slice::<serde_json::Value>(bytes) {
-        Ok(json_value) => {
-            serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| {
-                String::from_utf8_lossy(bytes).to_string()
-            })
-        }
+        Ok(json_value) => serde_json::to_string_pretty(&json_value)
+            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).to_string()),
         Err(_) => String::from_utf8_lossy(bytes).to_string(),
     }
 }
@@ -177,19 +172,26 @@ pub async fn handle_message_command(
     let output = OutputManager::new(cli.output.clone(), cli.quiet);
 
     match command {
-        MessageCommands::Enqueue { queue, payload, delay } => {
+        MessageCommands::Enqueue {
+            queue,
+            payload,
+            delay,
+        } => {
             let payload_content = read_payload(payload)?;
             let payload_bytes = payload_to_bytes(&payload_content)?;
 
             let message_id = client.enqueue(queue, payload_bytes, *delay as i64).await?;
-            output.print_success_message(&format!(
-                "Message enqueued with ID: {}",
-                message_id
-            ));
+            output.print_success_message(&format!("Message enqueued with ID: {}", message_id));
         }
 
-        MessageCommands::Dequeue { queue, max_messages, lease_seconds } => {
-            let messages = client.dequeue(queue, *max_messages as i32, *lease_seconds as i64).await?;
+        MessageCommands::Dequeue {
+            queue,
+            max_messages,
+            lease_seconds,
+        } => {
+            let messages = client
+                .dequeue(queue, *max_messages as i32, *lease_seconds as i64)
+                .await?;
             let message_infos: Vec<MessageInfo> = messages
                 .into_iter()
                 .map(|m| MessageInfo {
@@ -209,9 +211,19 @@ pub async fn handle_message_command(
             output.print_success_message(&format!("Message {} acknowledged", message_id));
         }
 
-        MessageCommands::Nack { message_id, reason, dead_letter } => {
-            client.nack(message_id, reason.clone(), *dead_letter).await?;
-            let action = if *dead_letter { "rejected and dead lettered" } else { "rejected" };
+        MessageCommands::Nack {
+            message_id,
+            reason,
+            dead_letter,
+        } => {
+            client
+                .nack(message_id, reason.clone(), *dead_letter)
+                .await?;
+            let action = if *dead_letter {
+                "rejected and dead lettered"
+            } else {
+                "rejected"
+            };
             output.print_success_message(&format!("Message {} {}", message_id, action));
         }
 
@@ -220,8 +232,13 @@ pub async fn handle_message_command(
             output.print_success_message(&format!("Message {} requeued", message_id));
         }
 
-        MessageCommands::ExtendLease { message_id, additional_seconds } => {
-            client.extend_lease(message_id, *additional_seconds as i64).await?;
+        MessageCommands::ExtendLease {
+            message_id,
+            additional_seconds,
+        } => {
+            client
+                .extend_lease(message_id, *additional_seconds as i64)
+                .await?;
             output.print_success_message(&format!(
                 "Lease extended for message {} by {} seconds",
                 message_id, additional_seconds

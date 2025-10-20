@@ -80,10 +80,16 @@ fn test_completions_generation() {
 fn test_invalid_endpoint_fails() {
     let output = Command::new("cargo")
         .args([
-            "run", "-p", "pgqrs-cli", "--",
-            "--endpoint", "http://invalid:9999",
-            "--connect-timeout", "1",
-            "health", "liveness"
+            "run",
+            "-p",
+            "pgqrs-cli",
+            "--",
+            "--endpoint",
+            "http://invalid:9999",
+            "--connect-timeout",
+            "1",
+            "health",
+            "liveness",
         ])
         .output()
         .expect("Failed to run CLI");

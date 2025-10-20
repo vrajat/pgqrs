@@ -1,12 +1,12 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Generator, Shell};
 use std::io;
 use std::time::Duration;
 
 mod commands;
-mod output;
 mod error;
+mod output;
 
 use commands::*;
 use output::OutputFormat;
@@ -205,13 +205,9 @@ async fn main() -> Result<()> {
 
     // Initialize logging
     if cli.verbose {
-        tracing_subscriber::fmt()
-            .with_env_filter("debug")
-            .init();
+        tracing_subscriber::fmt().with_env_filter("debug").init();
     } else if !cli.quiet {
-        tracing_subscriber::fmt()
-            .with_env_filter("warn")
-            .init();
+        tracing_subscriber::fmt().with_env_filter("warn").init();
     }
 
     // Handle shell completion generation
@@ -243,5 +239,8 @@ async fn create_client(cli: &Cli) -> Result<pgqrs_client::PgqrsClient> {
         builder = builder.api_key(api_key);
     }
 
-    builder.build().await.map_err(|e| anyhow::anyhow!("Failed to create client: {}", e))
+    builder
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create client: {}", e))
 }

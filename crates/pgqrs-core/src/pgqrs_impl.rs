@@ -1,9 +1,9 @@
-use crate::traits::{Queue, QueueMessage, QueueRepo, MessageRepo, QueueStats};
 use crate::error::PgqrsError;
+use crate::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
 use async_trait::async_trait;
-use sqlx::{PgPool, Row};
-use sqlx::types::JsonValue;
 use chrono::{DateTime, Utc};
+use sqlx::types::JsonValue;
+use sqlx::{PgPool, Row};
 
 pub struct PgQueueRepo {
     pub pool: PgPool,
@@ -52,9 +52,7 @@ impl QueueRepo for PgQueueRepo {
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
-        sqlx::query(&drop_table_sql)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(&drop_table_sql).execute(&mut *tx).await?;
         // 2. Remove from meta table
         let delete_meta_sql = crate::constants::DELETE_QUEUE_METADATA
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
@@ -69,14 +67,15 @@ impl QueueRepo for PgQueueRepo {
     async fn list_queues(&self) -> Result<Vec<Queue>, PgqrsError> {
         let sql = crate::constants::LIST_QUEUES_META
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-        let rows = sqlx::query(&sql)
-            .fetch_all(&self.pool)
-            .await?;
-        let queues = rows.into_iter().map(|row| Queue {
-            queue_name: row.get("queue_name"),
-            created_at: row.get::<DateTime<Utc>, _>("created_at"),
-            unlogged: row.get("unlogged"),
-        }).collect();
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        let queues = rows
+            .into_iter()
+            .map(|row| Queue {
+                queue_name: row.get("queue_name"),
+                created_at: row.get::<DateTime<Utc>, _>("created_at"),
+                unlogged: row.get("unlogged"),
+            })
+            .collect();
         Ok(queues)
     }
 
@@ -85,19 +84,14 @@ impl QueueRepo for PgQueueRepo {
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
-        sqlx::query(&sql)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(&sql).execute(&self.pool).await?;
         Ok(())
     }
 
     async fn get_queue(&self, name: &str) -> Result<Queue, PgqrsError> {
         let sql = crate::constants::SELECT_QUEUE_META
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-        let row = sqlx::query(&sql)
-            .bind(name)
-            .fetch_one(&self.pool)
-            .await?;
+        let row = sqlx::query(&sql).bind(name).fetch_one(&self.pool).await?;
         Ok(Queue {
             queue_name: row.get("queue_name"),
             created_at: row.get::<DateTime<Utc>, _>("created_at"),
@@ -131,7 +125,12 @@ impl MessageRepo for PgMessageRepo {
         })
     }
 
-    async fn enqueue_delayed(&self, queue: &str, payload: &JsonValue, delay_seconds: u32) -> Result<QueueMessage, PgqrsError> {
+    async fn enqueue_delayed(
+        &self,
+        queue: &str,
+        payload: &JsonValue,
+        delay_seconds: u32,
+    ) -> Result<QueueMessage, PgqrsError> {
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(delay_seconds as i64);
         let sql = crate::constants::INSERT_MESSAGE
@@ -154,7 +153,11 @@ impl MessageRepo for PgMessageRepo {
         })
     }
 
-    async fn batch_enqueue(&self, queue: &str, payloads: &[JsonValue]) -> Result<Vec<QueueMessage>, PgqrsError> {
+    async fn batch_enqueue(
+        &self,
+        queue: &str,
+        payloads: &[JsonValue],
+    ) -> Result<Vec<QueueMessage>, PgqrsError> {
         let now = Utc::now();
         let vt = now;
         let sql = crate::constants::INSERT_MESSAGE
@@ -222,13 +225,16 @@ impl MessageRepo for PgMessageRepo {
             .bind(limit as i64)
             .fetch_all(&self.pool)
             .await?;
-        let messages = rows.into_iter().map(|row| QueueMessage {
-            id: row.get("msg_id"),
-            payload: row.get("message"),
-            enqueued_at: row.get("enqueued_at"),
-            vt: row.get("vt"),
-            read_ct: row.get("read_ct"),
-        }).collect();
+        let messages = rows
+            .into_iter()
+            .map(|row| QueueMessage {
+                id: row.get("msg_id"),
+                payload: row.get("message"),
+                enqueued_at: row.get("enqueued_at"),
+                vt: row.get("vt"),
+                read_ct: row.get("read_ct"),
+            })
+            .collect();
         Ok(messages)
     }
 
@@ -239,10 +245,7 @@ impl MessageRepo for PgMessageRepo {
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
-        let row = sqlx::query(&sql)
-            .bind(now)
-            .fetch_one(&self.pool)
-            .await?;
+        let row = sqlx::query(&sql).bind(now).fetch_one(&self.pool).await?;
         Ok(QueueStats {
             pending: row.get("count"),
             in_flight: 0,
@@ -250,7 +253,11 @@ impl MessageRepo for PgMessageRepo {
         })
     }
 
-    async fn get_message_by_id(&self, queue: &str, message_id: i64) -> Result<QueueMessage, PgqrsError> {
+    async fn get_message_by_id(
+        &self,
+        queue: &str,
+        message_id: i64,
+    ) -> Result<QueueMessage, PgqrsError> {
         let sql = crate::constants::SELECT_MESSAGE_BY_ID
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
@@ -268,7 +275,12 @@ impl MessageRepo for PgMessageRepo {
         })
     }
 
-    async fn heartbeat(&self, queue: &str, message_id: i64, additional_seconds: u32) -> Result<(), PgqrsError> {
+    async fn heartbeat(
+        &self,
+        queue: &str,
+        message_id: i64,
+        additional_seconds: u32,
+    ) -> Result<(), PgqrsError> {
         let sql = crate::constants::UPDATE_MESSAGE_VT
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)

@@ -1,8 +1,8 @@
 use clap::ValueEnum;
+use colored::*;
 use serde::Serialize;
 use std::fmt;
 use tabled::{Table, Tabled};
-use colored::*;
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {

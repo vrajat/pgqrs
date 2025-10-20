@@ -1,6 +1,6 @@
 pub mod api;
-pub mod error;
 pub mod codec;
+pub mod error;
 
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
@@ -8,7 +8,7 @@ use tonic::transport::{Channel, Endpoint};
 use crate::api::queue_service_client::QueueServiceClient;
 use crate::error::{PgqrsClientError, Result};
 
-pub use crate::codec::{PgqrsPayloadCodec, JsonCodec, json};
+pub use crate::codec::{json, JsonCodec, PgqrsPayloadCodec};
 
 /// Client configuration builder
 #[derive(Debug, Clone)]
@@ -62,9 +62,9 @@ impl PgqrsClientBuilder {
 
     /// Build the client
     pub async fn build(self) -> Result<PgqrsClient> {
-        let endpoint = self.endpoint.ok_or_else(|| {
-            PgqrsClientError::InvalidConfig("endpoint is required".to_string())
-        })?;
+        let endpoint = self
+            .endpoint
+            .ok_or_else(|| PgqrsClientError::InvalidConfig("endpoint is required".to_string()))?;
 
         let endpoint = Endpoint::from_shared(endpoint)
             .map_err(|e| PgqrsClientError::InvalidConfig(format!("Invalid endpoint: {}", e)))?
@@ -128,7 +128,11 @@ impl PgqrsClient {
     // Queue management methods - stubs
 
     /// Create a new queue
-    pub async fn create_queue(&mut self, _name: &str, _unlogged: bool) -> Result<crate::api::Queue> {
+    pub async fn create_queue(
+        &mut self,
+        _name: &str,
+        _unlogged: bool,
+    ) -> Result<crate::api::Queue> {
         unimplemented!("create_queue not yet implemented")
     }
 
@@ -150,17 +154,32 @@ impl PgqrsClient {
     // Message operations - stubs
 
     /// Enqueue a message
-    pub async fn enqueue(&mut self, _queue_name: &str, _payload: Vec<u8>, _delay_seconds: i64) -> Result<String> {
+    pub async fn enqueue(
+        &mut self,
+        _queue_name: &str,
+        _payload: Vec<u8>,
+        _delay_seconds: i64,
+    ) -> Result<String> {
         unimplemented!("enqueue not yet implemented")
     }
 
     /// Enqueue a JSON message
-    pub async fn enqueue_json<T: serde::Serialize>(&mut self, _queue_name: &str, _payload: &T, _delay_seconds: i64) -> Result<String> {
+    pub async fn enqueue_json<T: serde::Serialize>(
+        &mut self,
+        _queue_name: &str,
+        _payload: &T,
+        _delay_seconds: i64,
+    ) -> Result<String> {
         unimplemented!("enqueue_json not yet implemented")
     }
 
     /// Dequeue messages
-    pub async fn dequeue(&mut self, _queue_name: &str, _max_messages: i32, _lease_seconds: i64) -> Result<Vec<crate::api::Message>> {
+    pub async fn dequeue(
+        &mut self,
+        _queue_name: &str,
+        _max_messages: i32,
+        _lease_seconds: i64,
+    ) -> Result<Vec<crate::api::Message>> {
         unimplemented!("dequeue not yet implemented")
     }
 
@@ -170,7 +189,12 @@ impl PgqrsClient {
     }
 
     /// Negative acknowledge a message
-    pub async fn nack(&mut self, _message_id: &str, _reason: Option<String>, _dead_letter: bool) -> Result<()> {
+    pub async fn nack(
+        &mut self,
+        _message_id: &str,
+        _reason: Option<String>,
+        _dead_letter: bool,
+    ) -> Result<()> {
         unimplemented!("nack not yet implemented")
     }
 
@@ -180,14 +204,22 @@ impl PgqrsClient {
     }
 
     /// Extend message lease
-    pub async fn extend_lease(&mut self, _message_id: &str, _additional_seconds: i64) -> Result<()> {
+    pub async fn extend_lease(
+        &mut self,
+        _message_id: &str,
+        _additional_seconds: i64,
+    ) -> Result<()> {
         unimplemented!("extend_lease not yet implemented")
     }
 
     // Queue inspection methods - stubs
 
     /// Peek at messages without dequeuing
-    pub async fn peek(&mut self, _queue_name: &str, _limit: i32) -> Result<Vec<crate::api::Message>> {
+    pub async fn peek(
+        &mut self,
+        _queue_name: &str,
+        _limit: i32,
+    ) -> Result<Vec<crate::api::Message>> {
         unimplemented!("peek not yet implemented")
     }
 
@@ -197,12 +229,20 @@ impl PgqrsClient {
     }
 
     /// List in-flight messages
-    pub async fn list_in_flight(&mut self, _queue_name: &str, _limit: i32) -> Result<Vec<crate::api::Message>> {
+    pub async fn list_in_flight(
+        &mut self,
+        _queue_name: &str,
+        _limit: i32,
+    ) -> Result<Vec<crate::api::Message>> {
         unimplemented!("list_in_flight not yet implemented")
     }
 
     /// List dead letter messages
-    pub async fn list_dead_letters(&mut self, _queue_name: &str, _limit: i32) -> Result<Vec<crate::api::Message>> {
+    pub async fn list_dead_letters(
+        &mut self,
+        _queue_name: &str,
+        _limit: i32,
+    ) -> Result<Vec<crate::api::Message>> {
         unimplemented!("list_dead_letters not yet implemented")
     }
 
@@ -219,11 +259,10 @@ impl PgqrsClient {
 
 // Re-export commonly used types
 pub use crate::api::{
-    Queue, Message, HealthCheckResponse, LivenessResponse, ReadinessResponse, StatsResponse,
-    CreateQueueRequest, DeleteQueueRequest, GetQueueRequest, ListQueuesRequest, ListQueuesResponse,
-    EnqueueRequest, EnqueueResponse, DequeueRequest, DequeueResponse,
-    AckRequest, NackRequest, RequeueRequest, ExtendLeaseRequest,
-    PeekRequest, PeekResponse, StatsRequest,
-    ListInFlightRequest, ListDeadLettersRequest, PurgeDeadLettersRequest,
-    HealthCheckRequest, LivenessRequest, ReadinessRequest,
+    AckRequest, CreateQueueRequest, DeleteQueueRequest, DequeueRequest, DequeueResponse,
+    EnqueueRequest, EnqueueResponse, ExtendLeaseRequest, GetQueueRequest, HealthCheckRequest,
+    HealthCheckResponse, ListDeadLettersRequest, ListInFlightRequest, ListQueuesRequest,
+    ListQueuesResponse, LivenessRequest, LivenessResponse, Message, NackRequest, PeekRequest,
+    PeekResponse, PurgeDeadLettersRequest, Queue, ReadinessRequest, ReadinessResponse,
+    RequeueRequest, StatsRequest, StatsResponse,
 };

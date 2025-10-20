@@ -1,9 +1,7 @@
-
-use async_trait::async_trait;
 use crate::error::PgqrsError;
-use sqlx::types::JsonValue;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-
+use sqlx::types::JsonValue;
 
 /// Metadata for a queue, as stored in the meta table.
 #[derive(Debug, Clone)]
@@ -63,9 +61,18 @@ pub trait MessageRepo {
     /// Enqueue a new message into a queue.
     async fn enqueue(&self, queue: &str, payload: &JsonValue) -> Result<QueueMessage, PgqrsError>;
     /// Enqueue a message with a delay before it becomes visible.
-    async fn enqueue_delayed(&self, queue: &str, payload: &JsonValue, delay_seconds: u32) -> Result<QueueMessage, PgqrsError>;
+    async fn enqueue_delayed(
+        &self,
+        queue: &str,
+        payload: &JsonValue,
+        delay_seconds: u32,
+    ) -> Result<QueueMessage, PgqrsError>;
     /// Enqueue multiple messages in a batch.
-    async fn batch_enqueue(&self, queue: &str, payloads: &[JsonValue]) -> Result<Vec<QueueMessage>, PgqrsError>;
+    async fn batch_enqueue(
+        &self,
+        queue: &str,
+        payloads: &[JsonValue],
+    ) -> Result<Vec<QueueMessage>, PgqrsError>;
     /// Dequeue (remove) a message from a queue.
     async fn dequeue(&self, queue: &str, message_id: i64) -> Result<QueueMessage, PgqrsError>;
     /// Acknowledge a message (mark as processed).
@@ -77,8 +84,17 @@ pub trait MessageRepo {
     /// Get statistics for a queue.
     async fn stats(&self, queue: &str) -> Result<QueueStats, PgqrsError>;
     /// Get a message by its ID.
-    async fn get_message_by_id(&self, queue: &str, message_id: i64) -> Result<QueueMessage, PgqrsError>;
+    async fn get_message_by_id(
+        &self,
+        queue: &str,
+        message_id: i64,
+    ) -> Result<QueueMessage, PgqrsError>;
 
     /// Extend the visibility timeout for a message (heartbeat).
-    async fn heartbeat(&self, queue: &str, message_id: i64, additional_seconds: u32) -> Result<(), PgqrsError>;
+    async fn heartbeat(
+        &self,
+        queue: &str,
+        message_id: i64,
+        additional_seconds: u32,
+    ) -> Result<(), PgqrsError>;
 }

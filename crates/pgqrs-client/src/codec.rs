@@ -1,13 +1,13 @@
-use serde::{Deserialize, Serialize};
-use async_trait::async_trait;
 use crate::error::{PgqrsClientError, Result};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 /// Trait for encoding and decoding message payloads
 #[async_trait]
 pub trait PgqrsPayloadCodec<T> {
     /// Encode a payload to bytes
     async fn encode(&self, payload: &T) -> Result<Vec<u8>>;
-    
+
     /// Decode bytes to a payload
     async fn decode(&self, bytes: &[u8]) -> Result<T>;
 }
@@ -36,13 +36,13 @@ where
 /// Convenience functions for JSON serialization/deserialization
 pub mod json {
     use super::*;
-    
+
     /// Serialize a value to JSON bytes
     pub fn to_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
         let json_string = serde_json::to_string(value)?;
         Ok(json_string.into_bytes())
     }
-    
+
     /// Deserialize JSON bytes to a value
     pub fn from_bytes<T>(bytes: &[u8]) -> Result<T>
     where

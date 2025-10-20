@@ -1,6 +1,6 @@
-use pgqrs_core::traits::{QueueRepo, MessageRepo, Queue, QueueMessage, QueueStats};
-use pgqrs_core::error::PgqrsError;
 use async_trait::async_trait;
+use pgqrs_core::error::PgqrsError;
+use pgqrs_core::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
 use sqlx::types::JsonValue;
 
 /// Mock queue repository for testing
@@ -14,7 +14,7 @@ impl MockQueueRepo {
     pub fn healthy() -> Self {
         Self { should_fail: false }
     }
-    
+
     /// Create a new mock queue repository that will fail
     pub fn failing() -> Self {
         Self { should_fail: true }
@@ -30,19 +30,19 @@ impl QueueRepo for MockQueueRepo {
             Ok(vec![])
         }
     }
-    
+
     async fn create_queue(&self, _name: &str, _unlogged: bool) -> Result<Queue, PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn get_queue(&self, _name: &str) -> Result<Queue, PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn delete_queue(&self, _name: &str) -> Result<(), PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn purge_queue(&self, _name: &str) -> Result<(), PgqrsError> {
         unimplemented!()
     }
@@ -67,43 +67,65 @@ impl Default for MockMessageRepo {
 
 #[async_trait]
 impl MessageRepo for MockMessageRepo {
-    async fn enqueue(&self, _queue: &str, _payload: &JsonValue) -> Result<QueueMessage, PgqrsError> {
+    async fn enqueue(
+        &self,
+        _queue: &str,
+        _payload: &JsonValue,
+    ) -> Result<QueueMessage, PgqrsError> {
         unimplemented!()
     }
-    
-    async fn enqueue_delayed(&self, _queue: &str, _payload: &JsonValue, _delay_seconds: u32) -> Result<QueueMessage, PgqrsError> {
+
+    async fn enqueue_delayed(
+        &self,
+        _queue: &str,
+        _payload: &JsonValue,
+        _delay_seconds: u32,
+    ) -> Result<QueueMessage, PgqrsError> {
         unimplemented!()
     }
-    
-    async fn batch_enqueue(&self, _queue: &str, _payloads: &[JsonValue]) -> Result<Vec<QueueMessage>, PgqrsError> {
+
+    async fn batch_enqueue(
+        &self,
+        _queue: &str,
+        _payloads: &[JsonValue],
+    ) -> Result<Vec<QueueMessage>, PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn dequeue(&self, _queue: &str, _message_id: i64) -> Result<QueueMessage, PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn ack(&self, _queue: &str, _message_id: i64) -> Result<(), PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn nack(&self, _queue: &str, _message_id: i64) -> Result<(), PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn peek(&self, _queue: &str, _limit: usize) -> Result<Vec<QueueMessage>, PgqrsError> {
         unimplemented!()
     }
-    
+
     async fn stats(&self, _queue: &str) -> Result<QueueStats, PgqrsError> {
         unimplemented!()
     }
-    
-    async fn get_message_by_id(&self, _queue: &str, _message_id: i64) -> Result<QueueMessage, PgqrsError> {
+
+    async fn get_message_by_id(
+        &self,
+        _queue: &str,
+        _message_id: i64,
+    ) -> Result<QueueMessage, PgqrsError> {
         unimplemented!()
     }
-    
-    async fn heartbeat(&self, _queue: &str, _message_id: i64, _additional_seconds: u32) -> Result<(), PgqrsError> {
+
+    async fn heartbeat(
+        &self,
+        _queue: &str,
+        _message_id: i64,
+        _additional_seconds: u32,
+    ) -> Result<(), PgqrsError> {
         unimplemented!()
     }
 }
