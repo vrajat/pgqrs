@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "crates/pgqrs-core",
-    "crates/pgqrs-server"
+    "crates/pgqrs-server",
+    "crates/pgqrs-client",
+    "crates/pgqrs-test-utils"
 ]
 [package]
 name = "pgqrs"

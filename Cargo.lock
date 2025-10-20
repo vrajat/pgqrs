@@ -1836,6 +1836,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgqrs-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "pgqrs-test-utils",
+ "prost 0.14.1",
+ "prost-types 0.14.1",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic 0.14.2",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "pgqrs-core"
 version = "0.1.0"
 dependencies = [
@@ -1856,6 +1873,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "pgqrs-core",
+ "pgqrs-test-utils",
  "prost 0.14.1",
  "prost-types 0.14.1",
  "serde",
@@ -1868,6 +1886,21 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "pgqrs-test-utils"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "pgqrs-core",
+ "pgqrs-server",
+ "sqlx",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.14.2",
+ "tonic-prost",
+ "tonic-prost-build",
 ]
 
 [[package]]

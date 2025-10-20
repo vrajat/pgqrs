@@ -1,8 +1,8 @@
 fn main() {
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(false)
         .build_client(true)
         .out_dir(std::env::var("OUT_DIR").unwrap())
-        .compile(&["../../proto/queue.proto"], &["../../proto"])
+        .compile_protos(&["../proto/queue.proto"], &["../proto"])
         .unwrap();
 }
