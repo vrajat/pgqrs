@@ -3,7 +3,8 @@ members = [
     "crates/pgqrs-core",
     "crates/pgqrs-server",
     "crates/pgqrs-client",
-    "crates/pgqrs-test-utils"
+    "crates/pgqrs-test-utils",
+    "apps/pgqrs"
 ]
 [package]
 name = "pgqrs"

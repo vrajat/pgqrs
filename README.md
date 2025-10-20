@@ -139,6 +139,27 @@ See `src/main.rs` and `examples/basic_usage.rs` for the current API. Key types a
 
 **Note:** Many functions are currently `todo!()` placeholders. See `src/main.rs` and `examples/basic_usage.rs` for the evolving API.
 
+## Known Issues
+
+### CLI Subprocess Timing Issue
+There is a known issue where CLI health check commands (`health liveness` and `health readiness`) fail with gRPC timeout errors when run as subprocesses during integration testing, while the exact same `pgqrs_client::PgqrsClient` code works perfectly when called directly from test code.
+
+**Symptoms:**
+- CLI subprocess: `Error: gRPC status error: status: 'The operation was cancelled', self: "Timeout expired"`
+- Direct client library: Works perfectly with same endpoint and timeouts
+- Both cargo run and direct binary execution show the same timeout behavior
+
+**Investigation completed:**
+- ✅ Server starts successfully and accepts connections
+- ✅ CLI argument parsing works correctly
+- ✅ CLI client creation succeeds
+- ❌ CLI gRPC calls timeout in subprocess context
+- ✅ Same gRPC calls work from test process context
+
+**Current workaround:** Integration tests use a hybrid approach testing CLI interface validation plus direct client library calls (which use the identical code path as the CLI).
+
+**TODO:** Investigate async runtime or network context differences between CLI subprocess and test process environments.
+
 ## License
 
 Licensed under either of:
