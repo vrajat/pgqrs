@@ -1,3 +1,8 @@
+[workspace]
+members = [
+    "crates/pgqrs-core",
+    "crates/pgqrs-server"
+]
 [package]
 name = "pgqrs"
 version = "0.2.0"

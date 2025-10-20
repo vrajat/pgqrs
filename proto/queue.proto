@@ -1,7 +1,8 @@
 
 syntax = "proto3";
-package pgq.v1;
-option go_package = "pgq/v1";
+import "google/protobuf/empty.proto";
+package pgqrs.v1;
+option go_package = "pgqrs/v1";
 
 // Queue metadata, matches Rust Queue struct
 message Queue {
@@ -51,18 +52,29 @@ message PurgeDeadLettersRequest { string queue_name = 1; }
 message HealthCheckRequest {}
 message HealthCheckResponse { string status = 1; }
 
+// Liveness probe - lightweight check that server is running
+message LivenessRequest {}
+message LivenessResponse { string status = 1; }
+
+// Readiness probe - checks all dependencies are healthy 
+message ReadinessRequest {}
+message ReadinessResponse { 
+  string status = 1; 
+  repeated string failing_services = 2; 
+}
+
 service QueueService {
   rpc CreateQueue(CreateQueueRequest) returns (Queue);
-  rpc DeleteQueue(DeleteQueueRequest) returns (.google.protobuf.Empty);
+  rpc DeleteQueue(DeleteQueueRequest) returns (google.protobuf.Empty);
   rpc GetQueue(GetQueueRequest) returns (Queue);
   rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
 
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
   rpc Dequeue(DequeueRequest) returns (DequeueResponse);
-  rpc Ack(AckRequest) returns (.google.protobuf.Empty);
-  rpc Nack(NackRequest) returns (.google.protobuf.Empty);
-  rpc Requeue(RequeueRequest) returns (.google.protobuf.Empty);
-  rpc ExtendLease(ExtendLeaseRequest) returns (.google.protobuf.Empty);
+  rpc Ack(AckRequest) returns (google.protobuf.Empty);
+  rpc Nack(NackRequest) returns (google.protobuf.Empty);
+  rpc Requeue(RequeueRequest) returns (google.protobuf.Empty);
+  rpc ExtendLease(ExtendLeaseRequest) returns (google.protobuf.Empty);
 
   rpc Peek(PeekRequest) returns (PeekResponse);
   rpc Stats(StatsRequest) returns (StatsResponse);
@@ -71,4 +83,8 @@ service QueueService {
   rpc PurgeDeadLetters(PurgeDeadLettersRequest) returns (.google.protobuf.Empty);
 
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Kubernetes-style health probes
+  rpc Liveness(LivenessRequest) returns (LivenessResponse);
+  rpc Readiness(ReadinessRequest) returns (ReadinessResponse);
 }

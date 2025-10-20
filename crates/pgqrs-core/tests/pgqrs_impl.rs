@@ -1,6 +1,5 @@
 use pgqrs_core::{PgQueueRepo, PgMessageRepo, traits::{QueueRepo, MessageRepo}};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::types::JsonValue;
 use serde_json::json;
 use chrono::Utc;
 
@@ -20,6 +19,7 @@ async fn test_create_and_list_queue() {
     let repo = PgQueueRepo { pool: pool.clone() };
     let queue_name = format!("testq_{}", Utc::now().timestamp());
     let queue = repo.create_queue(&queue_name, false).await.expect("create");
+    assert!(queue.queue_name == queue_name);
     let queues = repo.list_queues().await.expect("list");
     assert!(queues.iter().any(|q| q.queue_name == queue_name));
     repo.delete_queue(&queue_name).await.expect("delete");

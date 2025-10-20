@@ -1,2 +1,2 @@
 // Re-export generated proto
-include!(concat!(env!("OUT_DIR"), "/pgq.v1.rs"));
+tonic::include_proto!("pgqrs.v1");

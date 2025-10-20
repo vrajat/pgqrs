@@ -1,5 +1,9 @@
 pub const PGQRS_SCHEMA: &str = "pgqrs";
 pub const QUEUE_PREFIX: &str = "q";
+pub const PENDING_COUNT: &str = r#"
+    SELECT COUNT(*) as count FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+    WHERE vt <= $1;
+"#;
 
 pub const CREATE_QUEUE_STATEMENT: &str = r#"
     CREATE {UNLOGGED} TABLE IF NOT EXISTS {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} (
