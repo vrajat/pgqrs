@@ -34,6 +34,7 @@ This file provides context and directives for AI assistants working on this code
 - `crates/pgqrs-server/`: gRPC server implementation
 - `crates/pgqrs-test-utils/`: Shared test utilities and mocks
 - `crates/pgqrs-core/`: Core domain types and logic
+- `benchmark/`: Performance testing infrastructure (ignore unless working specifically on benchmarks)
 
 #### Dependencies
 - **gRPC**: tonic 0.14.2 (keep versions consistent across crates)
