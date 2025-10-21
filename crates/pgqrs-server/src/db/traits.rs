@@ -1,4 +1,4 @@
-use crate::error::PgqrsError;
+use super::error::PgqrsError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::types::JsonValue;

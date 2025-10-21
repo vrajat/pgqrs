@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use pgqrs_core::error::PgqrsError;
-use pgqrs_core::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
+use pgqrs_server::db::error::PgqrsError;
+use pgqrs_server::db::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
 use sqlx::types::JsonValue;
 
 /// Mock queue repository for testing

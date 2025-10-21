@@ -1,9 +1,11 @@
-use pgqrs_core::pool::create_pool;
 use std::net::SocketAddr;
 use tonic::transport::Server;
 mod api;
 mod config;
+mod db;
 mod service;
+use db::pool::create_pool;
+use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
 use config::AppConfig;
 use std::sync::Arc;
 use tokio::signal;
@@ -17,10 +19,10 @@ async fn main() -> anyhow::Result<()> {
     let pool = create_pool(db_cfg).await?;
     let pool = Arc::new(pool);
     // Create repos
-    let queue_repo = std::sync::Arc::new(pgqrs_core::pgqrs_impl::PgQueueRepo {
+    let queue_repo = std::sync::Arc::new(PgQueueRepo {
         pool: pool.clone().as_ref().clone(),
     });
-    let message_repo = std::sync::Arc::new(pgqrs_core::pgqrs_impl::PgMessageRepo {
+    let message_repo = std::sync::Arc::new(PgMessageRepo {
         pool: pool.clone().as_ref().clone(),
     });
     // Create gRPC service

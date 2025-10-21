@@ -1,7 +1,8 @@
 use crate::mocks::{MockMessageRepo, MockQueueRepo};
 use crate::postgres::start_postgres_container;
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs_core::{config::Config, pool::create_pool, PgMessageRepo, PgQueueRepo};
+use pgqrs_server::db::{db_config::Config, pool::create_pool};
+use pgqrs_server::{PgMessageRepo, PgQueueRepo};
 use pgqrs_server::api::queue_service_server::QueueServiceServer;
 use pgqrs_server::service::QueueServiceImpl;
 use std::net::SocketAddr;

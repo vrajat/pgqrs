@@ -1,5 +1,5 @@
-use crate::config::Config;
-use crate::error::PgqrsError;
+use super::db_config::Config;
+use super::error::PgqrsError;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 

@@ -1,9 +1,9 @@
-use pgqrs_core::config::Config;
+use super::db::db_config::Config as DbConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
-    pub database: Config,
+    pub database: DbConfig,
 }
 
 impl AppConfig {

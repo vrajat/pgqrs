@@ -6,7 +6,6 @@ description = "Shared test utilities for PGQRS"
 
 [dependencies]
 pgqrs-server = { path = "../pgqrs-server" }
-pgqrs-core = { path = "../pgqrs-core" }
 pgqrs = { path = "../.." }
 tonic = "0.14.2"
 tonic-prost = "0.14.2"

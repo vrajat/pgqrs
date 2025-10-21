@@ -1,6 +1,6 @@
 use super::api::queue_service_server::QueueService;
 use super::api::*;
-use pgqrs_core::traits::{MessageRepo, QueueRepo};
+use super::db::traits::{MessageRepo, QueueRepo};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 

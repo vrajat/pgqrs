@@ -1921,32 +1921,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "pgqrs-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "pgqrs-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "pgqrs-core",
  "pgqrs-test-utils",
  "prost 0.14.1",
  "prost-types 0.14.1",
  "serde",
+ "serde_json",
  "serde_yaml",
  "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tonic 0.14.2",
@@ -1963,7 +1953,6 @@ dependencies = [
  "async-trait",
  "diesel",
  "pgqrs",
- "pgqrs-core",
  "pgqrs-server",
  "sqlx",
  "testcontainers",

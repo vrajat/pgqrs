@@ -1,5 +1,5 @@
-use crate::error::PgqrsError;
-use crate::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
+use super::error::PgqrsError;
+use super::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::types::JsonValue;
@@ -19,23 +19,23 @@ impl QueueRepo for PgQueueRepo {
         let mut tx = self.pool.begin().await?;
         // 1. Create the queue table
         let unlogged_str = if unlogged { "UNLOGGED" } else { "" };
-        let create_table_sql = crate::constants::CREATE_QUEUE_STATEMENT
+        let create_table_sql = super::constants::CREATE_QUEUE_STATEMENT
             .replace("{UNLOGGED}", unlogged_str)
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
         sqlx::query(&create_table_sql).execute(&mut *tx).await?;
 
         // 2. Create the index
-        let create_index_sql = crate::constants::CREATE_INDEX_STATEMENT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let create_index_sql = super::constants::CREATE_INDEX_STATEMENT
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
         sqlx::query(&create_index_sql).execute(&mut *tx).await?;
 
         // 3. Insert into meta table
-        let insert_meta_sql = crate::constants::INSERT_QUEUE_METADATA
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let insert_meta_sql = super::constants::INSERT_QUEUE_METADATA
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA);
         sqlx::query(&insert_meta_sql)
             .bind(name)
             .bind(unlogged)
@@ -48,14 +48,14 @@ impl QueueRepo for PgQueueRepo {
     async fn delete_queue(&self, name: &str) -> Result<(), PgqrsError> {
         let mut tx = self.pool.begin().await?;
         // 1. Drop the queue table
-        let drop_table_sql = crate::constants::DROP_QUEUE_STATEMENT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let drop_table_sql = super::constants::DROP_QUEUE_STATEMENT
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
         sqlx::query(&drop_table_sql).execute(&mut *tx).await?;
         // 2. Remove from meta table
-        let delete_meta_sql = crate::constants::DELETE_QUEUE_METADATA
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let delete_meta_sql = super::constants::DELETE_QUEUE_METADATA
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA);
         sqlx::query(&delete_meta_sql)
             .bind(name)
             .execute(&mut *tx)
@@ -65,8 +65,8 @@ impl QueueRepo for PgQueueRepo {
     }
 
     async fn list_queues(&self) -> Result<Vec<Queue>, PgqrsError> {
-        let sql = crate::constants::LIST_QUEUES_META
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let sql = super::constants::LIST_QUEUES_META
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA);
         let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
         let queues = rows
             .into_iter()
@@ -80,17 +80,17 @@ impl QueueRepo for PgQueueRepo {
     }
 
     async fn purge_queue(&self, name: &str) -> Result<(), PgqrsError> {
-        let sql = crate::constants::PURGE_QUEUE_STATEMENT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::PURGE_QUEUE_STATEMENT
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", name);
         sqlx::query(&sql).execute(&self.pool).await?;
         Ok(())
     }
 
     async fn get_queue(&self, name: &str) -> Result<Queue, PgqrsError> {
-        let sql = crate::constants::SELECT_QUEUE_META
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let sql = super::constants::SELECT_QUEUE_META
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA);
         let row = sqlx::query(&sql).bind(name).fetch_one(&self.pool).await?;
         Ok(Queue {
             queue_name: row.get("queue_name"),
@@ -105,9 +105,9 @@ impl MessageRepo for PgMessageRepo {
     async fn enqueue(&self, queue: &str, payload: &JsonValue) -> Result<QueueMessage, PgqrsError> {
         let now = Utc::now();
         let vt = now;
-        let sql = crate::constants::INSERT_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::INSERT_MESSAGE
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let row = sqlx::query(&sql)
             .bind(0i32) // read_ct
@@ -133,9 +133,9 @@ impl MessageRepo for PgMessageRepo {
     ) -> Result<QueueMessage, PgqrsError> {
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(delay_seconds as i64);
-        let sql = crate::constants::INSERT_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::INSERT_MESSAGE
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let row = sqlx::query(&sql)
             .bind(0i32)
@@ -160,9 +160,9 @@ impl MessageRepo for PgMessageRepo {
     ) -> Result<Vec<QueueMessage>, PgqrsError> {
         let now = Utc::now();
         let vt = now;
-        let sql = crate::constants::INSERT_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::INSERT_MESSAGE
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let mut messages = Vec::with_capacity(payloads.len());
         let mut tx = self.pool.begin().await?;
@@ -187,9 +187,9 @@ impl MessageRepo for PgMessageRepo {
     }
 
     async fn dequeue(&self, queue: &str, message_id: i64) -> Result<QueueMessage, PgqrsError> {
-        let sql = crate::constants::DELETE_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::DELETE_MESSAGE
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let row = sqlx::query(&sql)
             .bind(message_id)
@@ -216,9 +216,9 @@ impl MessageRepo for PgMessageRepo {
 
     async fn peek(&self, queue: &str, limit: usize) -> Result<Vec<QueueMessage>, PgqrsError> {
         let now = Utc::now();
-        let sql = crate::constants::READ_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::READ_MESSAGES
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let rows = sqlx::query(&sql)
             .bind(now)
@@ -241,9 +241,9 @@ impl MessageRepo for PgMessageRepo {
     async fn stats(&self, queue: &str) -> Result<QueueStats, PgqrsError> {
         // Only pending count for now
         let now = Utc::now();
-        let sql = crate::constants::PENDING_COUNT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::PENDING_COUNT
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let row = sqlx::query(&sql).bind(now).fetch_one(&self.pool).await?;
         Ok(QueueStats {
@@ -258,9 +258,9 @@ impl MessageRepo for PgMessageRepo {
         queue: &str,
         message_id: i64,
     ) -> Result<QueueMessage, PgqrsError> {
-        let sql = crate::constants::SELECT_MESSAGE_BY_ID
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::SELECT_MESSAGE_BY_ID
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let row = sqlx::query(&sql)
             .bind(message_id)
@@ -281,9 +281,9 @@ impl MessageRepo for PgMessageRepo {
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<(), PgqrsError> {
-        let sql = crate::constants::UPDATE_MESSAGE_VT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+        let sql = super::constants::UPDATE_MESSAGE_VT
+            .replace("{PGQRS_SCHEMA}", super::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", super::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue);
         let vt = chrono::Utc::now() + chrono::Duration::seconds(additional_seconds as i64);
         let _ = sqlx::query(&sql)
