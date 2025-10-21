@@ -1961,14 +1961,19 @@ name = "pgqrs-test-utils"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "diesel",
+ "pgqrs",
  "pgqrs-core",
  "pgqrs-server",
  "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
  "tokio-stream",
  "tonic 0.14.2",
  "tonic-prost",
  "tonic-prost-build",
+ "tracing",
 ]
 
 [[package]]

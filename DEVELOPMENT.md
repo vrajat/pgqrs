@@ -59,6 +59,12 @@ This file provides context and directives for AI assistants working on this code
 - **Be Explicit**: State assumptions and when they're proven wrong
 - **Track Attempts**: Use todo lists to track what's been tried and failed
 
+#### Code Formatting
+- **Always Format**: All generated code MUST follow cargo fmt default rules
+- **Before Committing**: Run `cargo fmt` before any git operations
+- **Configuration**: Project uses default rustfmt settings (see rustfmt.toml)
+- **Consistency**: Maintain consistent formatting across all crates and modules
+
 #### Suggest More Directives
 - **Continuous Improvement**: When encountering new patterns, blockers, or inefficiencies, suggest adding new directives to this file
 - **Update Context**: Propose updates to this file when discovering new architectural patterns or constraints

@@ -5,6 +5,7 @@
 
 pub mod helpers;
 pub mod mocks;
+pub mod postgres;
 pub mod server;
 
 // Re-export commonly used items
@@ -13,7 +14,8 @@ pub use helpers::{
     DEFAULT_RPC_TIMEOUT, PERFORMANCE_TEST_ITERATIONS, PERFORMANCE_TEST_TIMEOUT,
 };
 pub use mocks::{MockMessageRepo, MockQueueRepo};
-pub use server::{start_test_server, wait_for_server_ready};
+pub use postgres::{get_pgqrs_client, start_postgres_container};
+pub use server::{start_test_server, start_test_server_with_postgres, wait_for_server_ready};
 
 // Re-export for convenience
 pub use std::net::SocketAddr;
