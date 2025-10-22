@@ -1,13 +1,13 @@
+use crate::client::PgqrsClient;
 use anyhow::Result;
 use chrono::DateTime;
-use pgqrs_client::PgqrsClient;
 use serde::Serialize;
 use std::fs;
 use tabled::Tabled;
 
+use crate::cli::args::{Cli, HealthCommands, MessageCommands, QueueCommands};
+use crate::cli::output::OutputManager;
 use crate::error::CliError;
-use crate::output::OutputManager;
-use crate::{Cli, HealthCommands, MessageCommands, QueueCommands};
 
 // Data structures for output formatting
 #[derive(Debug, Serialize, Tabled)]
@@ -51,53 +51,49 @@ fn display_failing_services(failing_services: &[String]) -> String {
 }
 
 impl HealthStatus {
-    pub fn from_readiness(response: pgqrs_client::ReadinessResponse) -> Self {
+    pub fn from_readiness(response: crate::ReadinessResponse) -> Self {
         Self {
             status: response.status,
             failing_services: response.failing_services,
         }
     }
 
-    pub fn from_liveness(response: pgqrs_client::LivenessResponse) -> Self {
+    pub fn from_liveness(response: crate::LivenessResponse) -> Self {
         Self {
             status: response.status,
-            failing_services: vec![],
+            failing_services: vec![], // LivenessResponse doesn't have failing_services
         }
     }
 }
 
 // Helper functions
 fn format_timestamp(unix_timestamp: i64) -> String {
-    DateTime::from_timestamp(unix_timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("Invalid timestamp: {}", unix_timestamp))
+    if let Some(datetime) = DateTime::from_timestamp(unix_timestamp, 0) {
+        datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+    } else {
+        "Invalid timestamp".to_string()
+    }
 }
 
 fn read_payload(payload_arg: &str) -> Result<String, CliError> {
-    if let Some(filename) = payload_arg.strip_prefix('@') {
-        fs::read_to_string(filename).map_err(CliError::File)
+    if payload_arg.starts_with('@') {
+        let file_path = &payload_arg[1..];
+        fs::read_to_string(file_path).map_err(CliError::File)
     } else {
         Ok(payload_arg.to_string())
     }
 }
 
 fn payload_to_bytes(payload: &str) -> Result<Vec<u8>, CliError> {
-    // Try to parse as JSON first, if that fails, treat as plain text
-    match serde_json::from_str::<serde_json::Value>(payload) {
-        Ok(json_value) => serde_json::to_vec(&json_value).map_err(CliError::Json),
-        Err(_) => {
-            // Not JSON, treat as plain text and wrap in JSON string
-            serde_json::to_vec(payload).map_err(CliError::Json)
-        }
+    // Validate JSON if it looks like JSON
+    if payload.trim_start().starts_with('{') || payload.trim_start().starts_with('[') {
+        serde_json::from_str::<serde_json::Value>(payload)?;
     }
+    Ok(payload.as_bytes().to_vec())
 }
 
 fn bytes_to_string(bytes: &[u8]) -> String {
-    match serde_json::from_slice::<serde_json::Value>(bytes) {
-        Ok(json_value) => serde_json::to_string_pretty(&json_value)
-            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).to_string()),
-        Err(_) => String::from_utf8_lossy(bytes).to_string(),
-    }
+    String::from_utf8_lossy(bytes).to_string()
 }
 
 // Queue command handlers
@@ -220,9 +216,9 @@ pub async fn handle_message_command(
                 .nack(message_id, reason.clone(), *dead_letter)
                 .await?;
             let action = if *dead_letter {
-                "rejected and dead lettered"
+                "negative acknowledged and sent to dead letter queue"
             } else {
-                "rejected"
+                "negative acknowledged"
             };
             output.print_success_message(&format!("Message {} {}", message_id, action));
         }
@@ -240,7 +236,7 @@ pub async fn handle_message_command(
                 .extend_lease(message_id, *additional_seconds as i64)
                 .await?;
             output.print_success_message(&format!(
-                "Lease extended for message {} by {} seconds",
+                "Message {} lease extended by {} seconds",
                 message_id, additional_seconds
             ));
         }
@@ -327,7 +323,7 @@ pub async fn handle_health_command(
         }
 
         HealthCommands::Check => {
-            // For general health check, we'll use readiness as it's more comprehensive
+            // For now, use readiness as the general health check
             let response = client.readiness().await?;
             let health_status = HealthStatus::from_readiness(response);
             output.print_success(&health_status)?;

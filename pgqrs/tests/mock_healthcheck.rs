@@ -1,4 +1,4 @@
-use pgqrs_client::{LivenessRequest, PgqrsClient, ReadinessRequest};
+use pgqrs::{LivenessRequest, PgqrsClient, ReadinessRequest};
 use pgqrs_test_utils::{
     assert_performance, start_test_server, test_endpoint, Duration, SocketAddr,
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_RPC_TIMEOUT, PERFORMANCE_TEST_ITERATIONS,

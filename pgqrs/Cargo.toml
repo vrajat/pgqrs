@@ -1,33 +1,24 @@
 [package]
-name = "pgqrs-cli"
+name = "pgqrs"
 version = "0.1.0"
 edition = "2021"
-description = "Command line interface for pgqrs queue service"
+description = "PostgreSQL-based queue service client and CLI"
 authors = ["pgqrs contributors"]
 
 [[bin]]
 name = "pgqrs"
-path = "src/main.rs"
+path = "src/bin/main.rs"
 
 [dependencies]
 # CLI framework
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 
-# Async runtime
-tokio = { version = "1.40", features = ["full"] }
-
-# JSON handling
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
 # Table formatting
 tabled = "0.16"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
-tonic = "0.14.2"
 
 # Logging
 tracing = "0.1"
@@ -38,11 +29,21 @@ colored = "2.1"
 
 # Time handling for timestamps
 chrono = { version = "0.4", features = ["serde"] }
+# Core gRPC and proto dependencies
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
+prost = "0.14.1"
+prost-types = "0.14.1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
 
-# Local dependencies
-pgqrs-client = { path = "../../crates/pgqrs-client" }
+[build-dependencies]
+tonic-prost-build = "0.14.2"
 
 [dev-dependencies]
+pgqrs-test-utils = { path = "../crates/pgqrs-test-utils" }
 tempfile = "3.13"
-pgqrs-test-utils = { path = "../../crates/pgqrs-test-utils" }
 tokio-test = "0.4"

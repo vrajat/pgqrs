@@ -77,3 +77,7 @@ pub const UPDATE_MESSAGE_VT: &str = r#"
     WHERE msg_id = $2
     RETURNING msg_id, read_ct, enqueued_at, vt, message;
 "#;
+
+pub const UNINSTALL_STATEMENT: &str = r#"
+    DROP SCHEMA IF EXISTS {PGQRS_SCHEMA} CASCADE;
+"#;

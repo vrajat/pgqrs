@@ -1,14 +1,8 @@
-pub mod api;
-pub mod codec;
-pub mod error;
-
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::api::queue_service_client::QueueServiceClient;
 use crate::error::{PgqrsClientError, Result};
-
-pub use crate::codec::{json, JsonCodec, PgqrsPayloadCodec};
 
 /// Client configuration builder
 #[derive(Debug, Clone)]
@@ -256,13 +250,3 @@ impl PgqrsClient {
         unimplemented!("health_check not yet implemented")
     }
 }
-
-// Re-export commonly used types
-pub use crate::api::{
-    AckRequest, CreateQueueRequest, DeleteQueueRequest, DequeueRequest, DequeueResponse,
-    EnqueueRequest, EnqueueResponse, ExtendLeaseRequest, GetQueueRequest, HealthCheckRequest,
-    HealthCheckResponse, ListDeadLettersRequest, ListInFlightRequest, ListQueuesRequest,
-    ListQueuesResponse, LivenessRequest, LivenessResponse, Message, NackRequest, PeekRequest,
-    PeekResponse, PurgeDeadLettersRequest, Queue, ReadinessRequest, ReadinessResponse,
-    RequeueRequest, StatsRequest, StatsResponse,
-};

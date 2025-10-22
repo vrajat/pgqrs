@@ -1,4 +1,4 @@
-use super::db_config::Config;
+use super::config::Config;
 use super::error::PgqrsError;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;

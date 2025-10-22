@@ -1,5 +1,7 @@
+use crate::db::constants::{PGQRS_SCHEMA, UNINSTALL_STATEMENT};
+
 use super::error::PgqrsError;
-use sqlx::{PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 /// Initialize the pgqrs database schema
 ///
@@ -66,4 +68,27 @@ pub async fn ensure_db_initialized(pool: &PgPool) -> Result<(), PgqrsError> {
         init_db(pool).await?;
     }
     Ok(())
+}
+
+/// Uninstall pgqrs schema and remove all state from the database.
+///
+/// # Returns
+/// Ok if uninstall (or validation) succeeds, error otherwise.
+pub fn uninstall(dsn: &String) -> Result<(), PgqrsError> {
+    let uninstall_statement = UNINSTALL_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1) // Small pool per test
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(dsn)
+            .await
+            .expect("Failed to connect to Postgres");
+
+        sqlx::query(&uninstall_statement)
+            .execute(&pool)
+            .await
+            .map_err(PgqrsError::from)?;
+        Ok::<(), PgqrsError>(())
+    })
 }

@@ -1,10 +1,10 @@
 use crate::mocks::{MockMessageRepo, MockQueueRepo};
 use crate::postgres::start_postgres_container;
-use pgqrs::admin::PgqrsAdmin;
-use pgqrs_server::db::{db_config::Config, pool::create_pool};
-use pgqrs_server::{PgMessageRepo, PgQueueRepo};
 use pgqrs_server::api::queue_service_server::QueueServiceServer;
+use pgqrs_server::db::init_db;
+use pgqrs_server::db::{config::Config, pool::create_pool};
 use pgqrs_server::service::QueueServiceImpl;
+use pgqrs_server::{PgMessageRepo, PgQueueRepo};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use testcontainers::ContainerAsync;
@@ -90,7 +90,7 @@ pub async fn wait_for_server_ready(addr: SocketAddr) {
 /// and starts a server with real repository implementations.
 ///
 /// # Returns
-/// * `SocketAddr` - The address the server is listening on  
+/// * `SocketAddr` - The address the server is listening on
 /// * `JoinHandle` - Handle to the server task
 /// * `ContainerAsync<Postgres>` - The PostgreSQL container (kept alive until dropped)
 pub async fn start_test_server_with_postgres() -> (
@@ -100,12 +100,6 @@ pub async fn start_test_server_with_postgres() -> (
 ) {
     // Start PostgreSQL container
     let (database_url, container) = start_postgres_container().await;
-
-    // Install schema
-    let mut pgqrs_config = pgqrs::config::Config::default();
-    pgqrs_config.dsn = database_url.clone();
-    let admin = PgqrsAdmin::new(&pgqrs_config);
-    admin.install(false).expect("Failed to install schema");
 
     // Create pool config for repositories
     let core_config = Config {
@@ -119,6 +113,9 @@ pub async fn start_test_server_with_postgres() -> (
     let pool = create_pool(&core_config)
         .await
         .expect("Failed to create pool");
+
+    // Install schema
+    init_db(&pool).await.expect("Failed to install schema");
 
     // Create real repositories
     let queue_repo = Arc::new(PgQueueRepo { pool: pool.clone() });

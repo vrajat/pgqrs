@@ -1,5 +1,5 @@
+pub mod config;
 pub mod constants;
-pub mod db_config;
 pub mod error;
 pub mod init;
 pub mod pgqrs_impl;

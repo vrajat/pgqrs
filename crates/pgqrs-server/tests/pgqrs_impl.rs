@@ -1,14 +1,13 @@
-use pgqrs_server::db::traits::{MessageRepo, QueueRepo};
 use pgqrs_server::db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
+use pgqrs_server::db::traits::{MessageRepo, QueueRepo};
 use pgqrs_test_utils::postgres::get_pgqrs_client;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 async fn setup_test_pool() -> sqlx::PgPool {
     // Use the pgqrs_test_utils helper that properly manages container lifecycle
-    let admin = get_pgqrs_client().await;
-    let database_url = admin.config().dsn.clone();
-    
+    let database_url = get_pgqrs_client().await;
+
     PgPoolOptions::new()
         .max_connections(2) // Small pool per test
         .acquire_timeout(std::time::Duration::from_secs(5))

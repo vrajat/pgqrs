@@ -4,7 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:warning=pgqrs-client build.rs starting");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    let proto_dir = manifest_dir.join("../../proto");
+    let proto_dir = manifest_dir.join("../proto");
     let queue_proto = proto_dir.join("queue.proto");
 
     println!("cargo:warning=proto_dir = {}", proto_dir.display());

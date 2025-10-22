@@ -1,4 +1,4 @@
-use super::db::db_config::Config as DbConfig;
+use super::db::config::Config as DbConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]

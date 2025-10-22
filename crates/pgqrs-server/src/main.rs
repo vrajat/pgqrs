@@ -4,9 +4,9 @@ mod api;
 mod config;
 mod db;
 mod service;
-use db::pool::create_pool;
-use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
 use config::AppConfig;
+use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
+use db::pool::create_pool;
 use std::sync::Arc;
 use tokio::signal;
 
