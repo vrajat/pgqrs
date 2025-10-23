@@ -1,5 +1,5 @@
 use crate::mocks::{MockMessageRepo, MockQueueRepo};
-use crate::postgres::start_postgres_container;
+use crate::postgres::get_pgqrs_client;
 use pgqrs_server::api::queue_service_server::QueueServiceServer;
 use pgqrs_server::db::init_db;
 use pgqrs_server::db::{config::Config, pool::create_pool};
@@ -7,8 +7,6 @@ use pgqrs_server::service::QueueServiceImpl;
 use pgqrs_server::{PgMessageRepo, PgQueueRepo};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use testcontainers::ContainerAsync;
-use testcontainers_modules::postgres::Postgres;
 use tokio::time::{sleep, Duration};
 use tonic::transport::Server;
 
@@ -96,14 +94,13 @@ pub async fn wait_for_server_ready(addr: SocketAddr) {
 pub async fn start_test_server_with_postgres() -> (
     SocketAddr,
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
-    ContainerAsync<Postgres>,
 ) {
     // Start PostgreSQL container
-    let (database_url, container) = start_postgres_container().await;
+    let database_url = get_pgqrs_client().await;
 
     // Create pool config for repositories
     let core_config = Config {
-        database_url,
+        database_url: database_url.to_string(),
         max_connections: 10,
         visibility_timeout: 30,
         dead_letter_after: 3,
@@ -143,5 +140,5 @@ pub async fn start_test_server_with_postgres() -> (
     // Wait for server to be ready
     wait_for_server_ready(actual_addr).await;
 
-    (actual_addr, server_handle, container)
+    (actual_addr, server_handle)
 }

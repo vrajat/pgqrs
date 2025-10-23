@@ -18,7 +18,7 @@ async fn create_test_client(addr: SocketAddr) -> PgqrsClient {
 /// Integration test: Liveness probe with real PostgreSQL backend
 #[tokio::test]
 async fn test_liveness_probe_with_postgres() {
-    let (addr, _server_handle, _container) = start_test_server_with_postgres().await;
+    let (addr, _server_handle) = start_test_server_with_postgres().await;
 
     // Connect using our client
     let mut client = create_test_client(addr).await;
@@ -35,7 +35,7 @@ async fn test_liveness_probe_with_postgres() {
 /// Integration test: Readiness probe with real PostgreSQL backend
 #[tokio::test]
 async fn test_readiness_probe_with_postgres() {
-    let (addr, _server_handle, _container) = start_test_server_with_postgres().await;
+    let (addr, _server_handle) = start_test_server_with_postgres().await;
 
     let mut client = create_test_client(addr).await;
 
@@ -52,7 +52,7 @@ async fn test_readiness_probe_with_postgres() {
 /// Integration test: Multiple clients against real PostgreSQL
 #[tokio::test]
 async fn test_multiple_clients_with_postgres() {
-    let (addr, _server_handle, _container) = start_test_server_with_postgres().await;
+    let (addr, _server_handle) = start_test_server_with_postgres().await;
 
     // Create multiple clients
     let mut client1 = create_test_client(addr).await;
@@ -73,7 +73,7 @@ async fn test_multiple_clients_with_postgres() {
 /// Test proto message creation with PostgreSQL context (smoke test)
 #[tokio::test]
 async fn test_health_check_proto_messages_with_postgres() {
-    let (_addr, _server_handle, _container) = start_test_server_with_postgres().await;
+    let (_addr, _server_handle) = start_test_server_with_postgres().await;
 
     let _liveness_req = LivenessRequest {};
     let _readiness_req = ReadinessRequest {};
@@ -83,7 +83,7 @@ async fn test_health_check_proto_messages_with_postgres() {
 /// Performance test: Ensure PostgreSQL backend doesn't significantly slow down health checks
 #[tokio::test]
 async fn test_postgres_performance() {
-    let (addr, _server_handle, _container) = start_test_server_with_postgres().await;
+    let (addr, _server_handle) = start_test_server_with_postgres().await;
 
     let mut client = create_test_client(addr).await;
 

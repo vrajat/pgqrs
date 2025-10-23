@@ -63,31 +63,14 @@ pub async fn get_pgqrs_client() -> &'static String {
             CLEANUP_GUARD.set(guard).unwrap();
             dsn
         } else {
-            println!("Starting test database container...");
-            let postgres_image = Postgres::default()
-                .with_db_name("test_db")
-                .with_user("test_user")
-                .with_password("test_password");
-            let container = Arc::new(
-                postgres_image
-                    .start()
-                    .await
-                    .expect("Failed to start postgres"),
-            );
-            let database_url = format!(
-                "postgresql://test_user:test_password@127.0.0.1:{}/test_db",
-                container
-                    .get_host_port_ipv4(5432)
-                    .await
-                    .expect("Failed to get port")
-            );
+            let (database_url, container) = start_postgres_container().await;
             println!("Database URL: {}", database_url);
             // Wait for postgres to be ready
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
             // Store the cleanup guard for the container
             let guard = CleanupGuard {
-                resource: DbResource::Owned(container),
+                resource: DbResource::Owned(Arc::new(container)),
             };
             CLEANUP_GUARD.set(guard).unwrap();
             database_url
@@ -101,7 +84,7 @@ pub async fn get_pgqrs_client() -> &'static String {
             .expect("Failed to connect to Postgres");
         // Test the connection
         {
-            let val: i32 = sqlx::query_scalar("SELECT 1")
+            let _val: i32 = sqlx::query_scalar("SELECT 1")
                 .fetch_one(&pool)
                 .await
                 .expect("SELECT 1 failed");
@@ -121,7 +104,7 @@ pub async fn get_pgqrs_client() -> &'static String {
 ///
 /// # Returns
 /// A tuple of (database_url, container_handle) for manual management
-pub async fn start_postgres_container() -> (String, ContainerAsync<Postgres>) {
+async fn start_postgres_container() -> (String, ContainerAsync<Postgres>) {
     println!("Starting PostgreSQL testcontainer...");
 
     let postgres_image = Postgres::default()
