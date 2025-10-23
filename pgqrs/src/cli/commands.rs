@@ -12,6 +12,7 @@ use crate::error::CliError;
 // Data structures for output formatting
 #[derive(Debug, Serialize, Tabled)]
 pub struct QueueInfo {
+    pub id: i64,
     pub name: String,
     pub created_at: String,
     pub unlogged: bool,
@@ -19,7 +20,7 @@ pub struct QueueInfo {
 
 #[derive(Debug, Serialize, Tabled)]
 pub struct MessageInfo {
-    pub id: String,
+    pub id: i64,
     pub queue_name: String,
     pub payload: String,
     pub enqueued_at: String,
@@ -108,6 +109,7 @@ pub async fn handle_queue_command(
         QueueCommands::Create { name, unlogged } => {
             let queue = client.create_queue(name, *unlogged).await?;
             let queue_info = QueueInfo {
+                id: queue.id,
                 name: queue.name,
                 created_at: format_timestamp(queue.created_at_unix),
                 unlogged: queue.unlogged,
@@ -121,6 +123,7 @@ pub async fn handle_queue_command(
             let queue_infos: Vec<QueueInfo> = queues
                 .into_iter()
                 .map(|q| QueueInfo {
+                    id: q.id,
                     name: q.name,
                     created_at: format_timestamp(q.created_at_unix),
                     unlogged: q.unlogged,
@@ -132,6 +135,7 @@ pub async fn handle_queue_command(
         QueueCommands::Get { name } => {
             let queue = client.get_queue(name).await?;
             let queue_info = QueueInfo {
+                id: queue.id,
                 name: queue.name,
                 created_at: format_timestamp(queue.created_at_unix),
                 unlogged: queue.unlogged,

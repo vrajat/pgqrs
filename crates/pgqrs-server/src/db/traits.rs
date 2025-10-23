@@ -6,6 +6,8 @@ use sqlx::types::JsonValue;
 /// Metadata for a queue, as stored in the meta table.
 #[derive(Debug, Clone)]
 pub struct Queue {
+    /// Unique ID of the queue
+    pub id: i64,
     /// Name of the queue
     pub queue_name: String,
     /// Timestamp when the queue was created
@@ -16,7 +18,7 @@ pub struct Queue {
 
 /// A message in a queue.
 #[derive(Debug, Clone)]
-pub struct QueueMessage {
+pub struct Message {
     /// Message ID
     pub id: i64,
     /// JSON payload
@@ -59,36 +61,32 @@ pub trait QueueRepo {
 #[async_trait]
 pub trait MessageRepo {
     /// Enqueue a new message into a queue.
-    async fn enqueue(&self, queue: &str, payload: &JsonValue) -> Result<QueueMessage, PgqrsError>;
+    async fn enqueue(&self, queue: &str, payload: &JsonValue) -> Result<Message, PgqrsError>;
     /// Enqueue a message with a delay before it becomes visible.
     async fn enqueue_delayed(
         &self,
         queue: &str,
         payload: &JsonValue,
         delay_seconds: u32,
-    ) -> Result<QueueMessage, PgqrsError>;
+    ) -> Result<Message, PgqrsError>;
     /// Enqueue multiple messages in a batch.
     async fn batch_enqueue(
         &self,
         queue: &str,
         payloads: &[JsonValue],
-    ) -> Result<Vec<QueueMessage>, PgqrsError>;
+    ) -> Result<Vec<Message>, PgqrsError>;
     /// Dequeue (remove) a message from a queue.
-    async fn dequeue(&self, queue: &str, message_id: i64) -> Result<QueueMessage, PgqrsError>;
+    async fn dequeue(&self, queue: &str, message_id: i64) -> Result<Message, PgqrsError>;
     /// Acknowledge a message (mark as processed).
     async fn ack(&self, queue: &str, message_id: i64) -> Result<(), PgqrsError>;
     /// Negative-acknowledge a message (mark as failed).
     async fn nack(&self, queue: &str, message_id: i64) -> Result<(), PgqrsError>;
     /// Peek at messages in a queue without removing them.
-    async fn peek(&self, queue: &str, limit: usize) -> Result<Vec<QueueMessage>, PgqrsError>;
+    async fn peek(&self, queue: &str, limit: usize) -> Result<Vec<Message>, PgqrsError>;
     /// Get statistics for a queue.
     async fn stats(&self, queue: &str) -> Result<QueueStats, PgqrsError>;
     /// Get a message by its ID.
-    async fn get_message_by_id(
-        &self,
-        queue: &str,
-        message_id: i64,
-    ) -> Result<QueueMessage, PgqrsError>;
+    async fn get_message_by_id(&self, queue: &str, message_id: i64) -> Result<Message, PgqrsError>;
 
     /// Extend the visibility timeout for a message (heartbeat).
     async fn heartbeat(

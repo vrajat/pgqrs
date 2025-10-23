@@ -7,8 +7,8 @@ pub const PENDING_COUNT: &str = r#"
 
 pub const CREATE_QUEUE_STATEMENT: &str = r#"
     CREATE {UNLOGGED} TABLE IF NOT EXISTS {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} (
-        msg_id BIGSERIAL PRIMARY KEY,
-        read_ct INTEGER NOT NULL DEFAULT 0,
+        msg_id INT8 PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+        read_ct INT NOT NULL DEFAULT 0,
         enqueued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         vt TIMESTAMPTZ NOT NULL,
         message JSONB NOT NULL
@@ -18,7 +18,7 @@ pub const CREATE_QUEUE_STATEMENT: &str = r#"
 pub const INSERT_QUEUE_METADATA: &str = r#"
     INSERT INTO {PGQRS_SCHEMA}.meta (queue_name, unlogged)
     VALUES ($1, $2)
-    ON CONFLICT (queue_name) DO UPDATE SET unlogged = EXCLUDED.unlogged;
+    RETURNING id, queue_name, created_at, unlogged;
 "#;
 
 pub const DROP_QUEUE_STATEMENT: &str = r#"
@@ -34,11 +34,11 @@ pub const PURGE_QUEUE_STATEMENT: &str = r#"
 "#;
 
 pub const SELECT_QUEUE_META: &str = r#"
-    SELECT queue_name, created_at, unlogged FROM {PGQRS_SCHEMA}.meta WHERE queue_name = $1;
+    SELECT id, queue_name, created_at, unlogged FROM {PGQRS_SCHEMA}.meta WHERE queue_name = $1;
 "#;
 
 pub const LIST_QUEUES_META: &str = r#"
-    SELECT queue_name, created_at, unlogged FROM {PGQRS_SCHEMA}.meta ORDER BY created_at ASC;
+    SELECT id, queue_name, created_at, unlogged FROM {PGQRS_SCHEMA}.meta ORDER BY created_at ASC;
 "#;
 
 pub const CREATE_INDEX_STATEMENT: &str = r#"

@@ -1,4 +1,4 @@
-use pgqrs_server::db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
+use pgqrs_server::db::repo::{PgMessageRepo, PgQueueRepo};
 use pgqrs_server::db::traits::{MessageRepo, QueueRepo};
 use pgqrs_test_utils::postgres::get_pgqrs_client;
 use serde_json::json;
@@ -33,6 +33,9 @@ async fn test_create_and_list_queue() {
     let queue_name = "testq_create_and_list_queue";
     let queue = repo.create_queue(&queue_name, false).await.expect("create");
     assert!(queue.queue_name == queue_name);
+    assert!(!queue.unlogged);
+    assert!(queue.id > 0);
+    assert!(queue.created_at <= chrono::Utc::now());
     let queues = repo.list_queues().await.expect("list");
     assert!(queues.iter().any(|q| q.queue_name == queue_name));
     repo.delete_queue(&queue_name).await.expect("delete");

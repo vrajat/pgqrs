@@ -1,5 +1,5 @@
-use pgqrs_server::{get_config_path, Cli, Commands};
 use clap::Parser;
+use pgqrs_server::{get_config_path, Cli, Commands};
 
 /// Integration tests for CLI argument parsing
 #[test]
@@ -11,7 +11,13 @@ fn test_cli_integration_install_command() {
 
 #[test]
 fn test_cli_integration_install_with_config() {
-    let cli = Cli::try_parse_from(&["pgqrs-server", "--config-path", "/test/config.yaml", "install"]).unwrap();
+    let cli = Cli::try_parse_from(&[
+        "pgqrs-server",
+        "--config-path",
+        "/test/config.yaml",
+        "install",
+    ])
+    .unwrap();
     assert_eq!(cli.command, Commands::Install);
     assert_eq!(cli.config_path, Some("/test/config.yaml".to_string()));
 }
@@ -32,10 +38,6 @@ fn test_cli_integration_all_subcommands() {
     // Test uninstall
     let cli = Cli::try_parse_from(&["pgqrs-server", "uninstall"]).unwrap();
     assert_eq!(cli.command, Commands::Uninstall);
-
-    // Test is-initialized
-    let cli = Cli::try_parse_from(&["pgqrs-server", "is-initialized"]).unwrap();
-    assert_eq!(cli.command, Commands::IsInitialized);
 
     // Test start
     let cli = Cli::try_parse_from(&["pgqrs-server", "start"]).unwrap();

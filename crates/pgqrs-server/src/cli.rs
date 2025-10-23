@@ -24,8 +24,6 @@ pub enum Commands {
     Install,
     /// Uninstall the database schema
     Uninstall,
-    /// Check if the database is initialized
-    IsInitialized,
     /// Start the gRPC server
     Start,
 }
@@ -64,22 +62,23 @@ mod tests {
 
     #[test]
     fn test_cli_parsing_with_config_path() {
-        let cli = Cli::try_parse_from(&["pgqrs-server", "-c", "/test/config.yaml", "start"]).unwrap();
+        let cli =
+            Cli::try_parse_from(&["pgqrs-server", "-c", "/test/config.yaml", "start"]).unwrap();
         assert_eq!(cli.command, Commands::Start);
         assert_eq!(cli.config_path, Some("/test/config.yaml".to_string()));
     }
 
     #[test]
     fn test_cli_parsing_with_long_config_path() {
-        let cli = Cli::try_parse_from(&["pgqrs-server", "--config-path", "/test/config.yaml", "uninstall"]).unwrap();
+        let cli = Cli::try_parse_from(&[
+            "pgqrs-server",
+            "--config-path",
+            "/test/config.yaml",
+            "uninstall",
+        ])
+        .unwrap();
         assert_eq!(cli.command, Commands::Uninstall);
         assert_eq!(cli.config_path, Some("/test/config.yaml".to_string()));
-    }
-
-    #[test]
-    fn test_cli_parsing_is_initialized() {
-        let cli = Cli::try_parse_from(&["pgqrs-server", "is-initialized"]).unwrap();
-        assert_eq!(cli.command, Commands::IsInitialized);
     }
 
     #[test]

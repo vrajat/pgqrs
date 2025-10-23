@@ -21,29 +21,77 @@ where
         &self,
         _req: Request<CreateQueueRequest>,
     ) -> Result<Response<Queue>, Status> {
-        unimplemented!()
+        self.queue_repo
+            .create_queue(&_req.get_ref().name, _req.get_ref().unlogged)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to create queue: {}", e)))
+            .map(|db_queue: crate::db::traits::Queue| {
+                let api_queue: Queue = Queue {
+                    id: db_queue.id,
+                    name: db_queue.queue_name,
+                    unlogged: db_queue.unlogged,
+                    created_at_unix: db_queue.created_at.timestamp(),
+                };
+                Response::new(api_queue)
+            })
     }
+
     async fn delete_queue(
         &self,
         _req: Request<DeleteQueueRequest>,
     ) -> Result<Response<()>, Status> {
-        unimplemented!()
+        self.queue_repo
+            .delete_queue(&_req.get_ref().name)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to delete queue: {}", e)))
+            .map(|_| Response::new(()))
     }
+
     async fn get_queue(&self, _req: Request<GetQueueRequest>) -> Result<Response<Queue>, Status> {
-        unimplemented!()
+        self.queue_repo
+            .get_queue(&_req.get_ref().name)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to get queue: {}", e)))
+            .map(|db_queue: crate::db::traits::Queue| {
+                let api_queue: Queue = Queue {
+                    id: db_queue.id,
+                    name: db_queue.queue_name,
+                    unlogged: db_queue.unlogged,
+                    created_at_unix: db_queue.created_at.timestamp(),
+                };
+                Response::new(api_queue)
+            })
     }
+
     async fn list_queues(
         &self,
         _req: Request<ListQueuesRequest>,
     ) -> Result<Response<ListQueuesResponse>, Status> {
-        unimplemented!()
+        self.queue_repo
+            .list_queues()
+            .await
+            .map_err(|e| Status::internal(format!("Failed to list queues: {}", e)))
+            .map(|db_queues: Vec<crate::db::traits::Queue>| {
+                let api_queues: Vec<Queue> = db_queues
+                    .into_iter()
+                    .map(|db_queue| Queue {
+                        id: db_queue.id,
+                        name: db_queue.queue_name,
+                        unlogged: db_queue.unlogged,
+                        created_at_unix: db_queue.created_at.timestamp(),
+                    })
+                    .collect();
+                Response::new(ListQueuesResponse { queues: api_queues })
+            })
     }
+
     async fn enqueue(
         &self,
         _req: Request<EnqueueRequest>,
     ) -> Result<Response<EnqueueResponse>, Status> {
         unimplemented!()
     }
+
     async fn dequeue(
         &self,
         _req: Request<DequeueRequest>,

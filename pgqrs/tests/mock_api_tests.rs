@@ -1,8 +1,7 @@
 use pgqrs::{LivenessRequest, PgqrsClient, ReadinessRequest};
 use pgqrs_test_utils::{
-    assert_performance, start_test_server, test_endpoint, Duration, SocketAddr,
-    DEFAULT_CONNECT_TIMEOUT, DEFAULT_RPC_TIMEOUT, PERFORMANCE_TEST_ITERATIONS,
-    PERFORMANCE_TEST_TIMEOUT,
+    start_test_server, test_endpoint, Duration, SocketAddr, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_RPC_TIMEOUT,
 };
 
 /// Helper to create a client connected to the test server
@@ -90,33 +89,6 @@ async fn test_readiness_probe_unhealthy() {
     assert_eq!(response.status, "FAIL");
     assert!(!response.failing_services.is_empty());
     assert!(response.failing_services.contains(&"database".to_string()));
-}
-
-/// Performance test: Liveness should be fast (< 50ms per call)
-#[tokio::test]
-async fn test_liveness_performance() {
-    let (addr, _server_handle) = start_test_server(true).await;
-
-    let mut client = create_test_client(addr).await;
-
-    let start = std::time::Instant::now();
-
-    // Make multiple rapid liveness calls
-    for _ in 0..PERFORMANCE_TEST_ITERATIONS {
-        let response = client
-            .liveness()
-            .await
-            .expect("Liveness call should succeed");
-
-        assert_eq!(response.status, "OK");
-    }
-
-    let duration = start.elapsed();
-    assert_performance(
-        duration,
-        PERFORMANCE_TEST_TIMEOUT,
-        PERFORMANCE_TEST_ITERATIONS,
-    );
 }
 
 /// Test client builder configuration

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use pgqrs_server::db::error::PgqrsError;
-use pgqrs_server::db::traits::{MessageRepo, Queue, QueueMessage, QueueRepo, QueueStats};
+use pgqrs_server::db::traits::{Message, MessageRepo, Queue, QueueRepo, QueueStats};
 use sqlx::types::JsonValue;
 
 /// Mock queue repository for testing
@@ -67,11 +67,7 @@ impl Default for MockMessageRepo {
 
 #[async_trait]
 impl MessageRepo for MockMessageRepo {
-    async fn enqueue(
-        &self,
-        _queue: &str,
-        _payload: &JsonValue,
-    ) -> Result<QueueMessage, PgqrsError> {
+    async fn enqueue(&self, _queue: &str, _payload: &JsonValue) -> Result<Message, PgqrsError> {
         unimplemented!()
     }
 
@@ -80,7 +76,7 @@ impl MessageRepo for MockMessageRepo {
         _queue: &str,
         _payload: &JsonValue,
         _delay_seconds: u32,
-    ) -> Result<QueueMessage, PgqrsError> {
+    ) -> Result<Message, PgqrsError> {
         unimplemented!()
     }
 
@@ -88,11 +84,11 @@ impl MessageRepo for MockMessageRepo {
         &self,
         _queue: &str,
         _payloads: &[JsonValue],
-    ) -> Result<Vec<QueueMessage>, PgqrsError> {
+    ) -> Result<Vec<Message>, PgqrsError> {
         unimplemented!()
     }
 
-    async fn dequeue(&self, _queue: &str, _message_id: i64) -> Result<QueueMessage, PgqrsError> {
+    async fn dequeue(&self, _queue: &str, _message_id: i64) -> Result<Message, PgqrsError> {
         unimplemented!()
     }
 
@@ -104,7 +100,7 @@ impl MessageRepo for MockMessageRepo {
         unimplemented!()
     }
 
-    async fn peek(&self, _queue: &str, _limit: usize) -> Result<Vec<QueueMessage>, PgqrsError> {
+    async fn peek(&self, _queue: &str, _limit: usize) -> Result<Vec<Message>, PgqrsError> {
         unimplemented!()
     }
 
@@ -116,7 +112,7 @@ impl MessageRepo for MockMessageRepo {
         &self,
         _queue: &str,
         _message_id: i64,
-    ) -> Result<QueueMessage, PgqrsError> {
+    ) -> Result<Message, PgqrsError> {
         unimplemented!()
     }
 

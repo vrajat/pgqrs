@@ -27,12 +27,16 @@ async fn test_heartbeat() {
                 .args(["readiness"])
                 .env("PGQRS_ENDPOINT", format!("http://127.0.0.1:{}", port))
                 .output()
-                .await.expect("Failed to run CLI readiness command");
+                .await
+                .expect("Failed to run CLI readiness command");
             // Clean up by stopping the server
             let _ = common::stop_server(child);
         }
         Err(e) => {
-            println!("Server failed to start (expected in test environment): {}", e);
+            println!(
+                "Server failed to start (expected in test environment): {}",
+                e
+            );
             // This is expected to fail in CI/test environments without a running database
             // The test validates that the function works correctly when dependencies are available
         }

@@ -3,6 +3,7 @@ use tonic::transport::{Channel, Endpoint};
 
 use crate::api::queue_service_client::QueueServiceClient;
 use crate::error::{PgqrsClientError, Result};
+use crate::DeleteQueueRequest;
 
 /// Client configuration builder
 #[derive(Debug, Clone)]
@@ -122,27 +123,38 @@ impl PgqrsClient {
     // Queue management methods - stubs
 
     /// Create a new queue
-    pub async fn create_queue(
-        &mut self,
-        _name: &str,
-        _unlogged: bool,
-    ) -> Result<crate::api::Queue> {
-        unimplemented!("create_queue not yet implemented")
+    pub async fn create_queue(&mut self, name: &str, unlogged: bool) -> Result<crate::api::Queue> {
+        let request = self.with_auth(crate::api::CreateQueueRequest {
+            name: name.to_string(),
+            unlogged: unlogged,
+        });
+        let response = self.client.create_queue(request).await?;
+        Ok(response.into_inner())
     }
 
     /// Delete a queue
-    pub async fn delete_queue(&mut self, _name: &str) -> Result<()> {
-        unimplemented!("delete_queue not yet implemented")
+    pub async fn delete_queue(&mut self, name: &str) -> Result<()> {
+        let request = self.with_auth(DeleteQueueRequest {
+            name: name.to_string(),
+        });
+        let _response = self.client.delete_queue(request).await?;
+        Ok(())
     }
 
     /// Get queue information
-    pub async fn get_queue(&mut self, _name: &str) -> Result<crate::api::Queue> {
-        unimplemented!("get_queue not yet implemented")
+    pub async fn get_queue(&mut self, name: &str) -> Result<crate::api::Queue> {
+        let request = self.with_auth(crate::GetQueueRequest {
+            name: name.to_string(),
+        });
+        let response = self.client.get_queue(request).await?;
+        Ok(response.into_inner())
     }
 
     /// List all queues
     pub async fn list_queues(&mut self) -> Result<Vec<crate::api::Queue>> {
-        unimplemented!("list_queues not yet implemented")
+        let request = self.with_auth(crate::api::ListQueuesRequest {});
+        let response = self.client.list_queues(request).await?;
+        Ok(response.into_inner().queues)
     }
 
     // Message operations - stubs

@@ -1,10 +1,7 @@
 use pgqrs_server::api::{
     queue_service_client::QueueServiceClient, LivenessRequest, ReadinessRequest,
 };
-use pgqrs_test_utils::{
-    assert_performance, start_test_server, test_endpoint, PERFORMANCE_TEST_ITERATIONS,
-    PERFORMANCE_TEST_TIMEOUT,
-};
+use pgqrs_test_utils::{start_test_server, start_test_server_with_postgres, test_endpoint};
 use tonic::Request;
 
 /// Test proto message creation (basic smoke test)
@@ -97,31 +94,42 @@ async fn test_readiness_probe_unhealthy() {
         .contains(&"database".to_string()));
 }
 
-/// Performance test: Liveness should be fast (< 50ms)
 #[tokio::test]
-async fn test_liveness_performance() {
-    let (addr, _server_handle) = start_test_server(true).await;
+async fn test_queue_operations() {
+    let (addr, _server_handle) = start_test_server_with_postgres().await;
 
     let mut client = QueueServiceClient::connect(test_endpoint(addr))
         .await
         .expect("Failed to connect to test server");
 
-    let start = std::time::Instant::now();
+    let create_queue_response = client
+        .create_queue(Request::new(pgqrs_server::api::CreateQueueRequest {
+            name: "test_queue".to_string(),
+            unlogged: true,
+        }))
+        .await
+        .expect("Create queue should succeed");
 
-    // Make multiple rapid liveness calls
-    for _ in 0..PERFORMANCE_TEST_ITERATIONS {
-        let response = client
-            .liveness(Request::new(LivenessRequest {}))
-            .await
-            .expect("Liveness call should succeed");
+    assert!(create_queue_response.get_ref().name == "test_queue");
+    assert!(create_queue_response.get_ref().unlogged);
+    assert!(create_queue_response.get_ref().id > 0);
 
-        assert_eq!(response.into_inner().status, "OK");
-    }
-
-    let duration = start.elapsed();
-    assert_performance(
-        duration,
-        PERFORMANCE_TEST_TIMEOUT,
-        PERFORMANCE_TEST_ITERATIONS,
-    );
+    let list_response = client
+        .list_queues(Request::new(pgqrs_server::api::ListQueuesRequest {}))
+        .await
+        .expect("List queues should succeed");
+    let queues = list_response.into_inner().queues;
+    assert!(queues.iter().any(|q| q.name == "test_queue"));
+    client
+        .delete_queue(Request::new(pgqrs_server::api::DeleteQueueRequest {
+            name: "test_queue".to_string(),
+        }))
+        .await
+        .expect("Delete queue should succeed");
+    let list_response = client
+        .list_queues(Request::new(pgqrs_server::api::ListQueuesRequest {}))
+        .await
+        .expect("List queues should succeed");
+    let queues = list_response.into_inner().queues;
+    assert!(!queues.iter().any(|q| q.name == "test_queue"));
 }

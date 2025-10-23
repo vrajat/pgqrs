@@ -6,7 +6,7 @@ use pgqrs_server::api::queue_service_client::QueueServiceClient;
 use pgqrs_test_utils::{start_test_server, test_endpoint};
 use std::fs;
 use std::net::TcpListener;
-use std::process::{Command, Child};
+use std::process::{Child, Command};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -19,7 +19,9 @@ pub async fn get_test_client() -> QueueServiceClient<tonic::transport::Channel> 
 }
 
 /// Connect to a pgqrs-server running on a specific port
-pub async fn get_client_for_port(port: u16) -> Result<QueueServiceClient<tonic::transport::Channel>, Box<dyn std::error::Error>> {
+pub async fn get_client_for_port(
+    port: u16,
+) -> Result<QueueServiceClient<tonic::transport::Channel>, Box<dyn std::error::Error>> {
     let endpoint = format!("http://127.0.0.1:{}", port);
 
     // Wait a bit for the server to be ready and try to connect
@@ -101,7 +103,7 @@ pub async fn start_server(dsn: &str) -> Result<(Child, u16), Box<dyn std::error:
             "--",
             "--config-path",
             config_path,
-            "start"
+            "start",
         ])
         .env("PGQRS_ADDR", &server_addr)
         .spawn()?;

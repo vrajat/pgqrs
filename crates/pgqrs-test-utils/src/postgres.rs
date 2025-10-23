@@ -1,11 +1,10 @@
-use pgqrs_server::db::{init::uninstall, init_db};
+use pgqrs_server::db::{admin::uninstall, init_db};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::OnceCell;
 
-static DSN: OnceCell<String> = OnceCell::const_new();
 static CLEANUP_GUARD: OnceCell<CleanupGuard> = OnceCell::const_new();
 
 #[derive(Debug)]
@@ -16,6 +15,7 @@ enum DbResource {
 
 #[derive(Debug)]
 struct CleanupGuard {
+    dsn: String,
     resource: DbResource,
 }
 
@@ -23,7 +23,7 @@ impl Drop for CleanupGuard {
     fn drop(&mut self) {
         match &self.resource {
             DbResource::Owned(container) => {
-                uninstall(DSN.get().unwrap()).expect("Uninstall schema failed");
+                uninstall(&self.dsn).expect("Uninstall schema failed");
 
                 // Explicitly stop the container to ensure it is killed
                 // Note: ContainerAsync::stop is async, but Drop cannot be async.
@@ -53,48 +53,43 @@ impl Drop for CleanupGuard {
 /// # Returns
 /// A static reference to the PgqrsAdmin client that can be used for tests
 pub async fn get_pgqrs_client() -> &'static String {
-    DSN.get_or_init(|| async {
-        // Check for external DSN or start container
-        let database_url = if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
-            println!("Using external database: {}", dsn);
-            let guard = CleanupGuard {
-                resource: DbResource::External,
+    let guard_ref = CLEANUP_GUARD
+        .get_or_init(|| async {
+            // Check for external DSN or start container
+            let (database_url, resource) = if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+                println!("Using external database: {}", dsn);
+                (dsn, DbResource::External)
+            } else {
+                let (database_url, container) = start_postgres_container().await;
+                println!("Database URL: {}", database_url);
+                // Wait for postgres to be ready
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                (database_url, DbResource::Owned(Arc::new(container)))
             };
-            CLEANUP_GUARD.set(guard).unwrap();
-            dsn
-        } else {
-            let (database_url, container) = start_postgres_container().await;
-            println!("Database URL: {}", database_url);
-            // Wait for postgres to be ready
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-            // Store the cleanup guard for the container
-            let guard = CleanupGuard {
-                resource: DbResource::Owned(Arc::new(container)),
-            };
-            CLEANUP_GUARD.set(guard).unwrap();
-            database_url
-        };
-        // Create connection pool
-        let pool = PgPoolOptions::new()
-            .max_connections(1) // Small pool per test
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(&database_url)
-            .await
-            .expect("Failed to connect to Postgres");
-        // Test the connection
-        {
-            let _val: i32 = sqlx::query_scalar("SELECT 1")
-                .fetch_one(&pool)
+            // Create connection pool
+            let pool = PgPoolOptions::new()
+                .max_connections(1) // Small pool per test
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(&database_url)
                 .await
-                .expect("SELECT 1 failed");
-            println!("Database connection verified");
-        }
+                .expect("Failed to connect to Postgres");
+            // Test the connection
+            {
+                let _val: i32 = sqlx::query_scalar("SELECT 1")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("SELECT 1 failed");
+                println!("Database connection verified");
+            }
 
-        init_db(&pool).await.expect("Failed to install schema");
-        database_url
-    })
-    .await
+            init_db(&pool).await.expect("Failed to install schema");
+            CleanupGuard {
+                dsn: database_url.clone(),
+                resource,
+            }
+        })
+        .await;
+    &guard_ref.dsn
 }
 
 /// Create a PostgreSQL testcontainer and return the database URL

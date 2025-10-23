@@ -1,6 +1,6 @@
+use clap::Parser;
 use std::net::SocketAddr;
 use tonic::transport::Server;
-use clap::Parser;
 mod api;
 mod cli;
 mod config;
@@ -8,11 +8,13 @@ mod db;
 mod service;
 use cli::{get_config_path, Cli, Commands};
 use config::AppConfig;
-use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
 use db::pool::create_pool;
-use db::init;
+use db::repo::{PgMessageRepo, PgQueueRepo};
 use std::sync::Arc;
 use tokio::signal;
+
+use crate::db::admin::uninstall;
+use crate::db::init_db;
 
 async fn start_server(config_path: &str) -> anyhow::Result<()> {
     // Load config from YAML file
@@ -71,27 +73,15 @@ async fn main() -> anyhow::Result<()> {
             let db_cfg = &app_config.database;
             let pool = create_pool(db_cfg).await?;
 
-            init::init_db(&pool).await.map_err(anyhow::Error::from)?;
+            init_db(&pool).await.map_err(anyhow::Error::from)?;
             println!("Database initialized successfully");
         }
         Commands::Uninstall => {
             let app_config = AppConfig::from_yaml_file(&config_path)?;
             let db_cfg = &app_config.database;
 
-            init::uninstall(&db_cfg.database_url).map_err(anyhow::Error::from)?;
+            uninstall(&db_cfg.database_url).map_err(anyhow::Error::from)?;
             println!("Database uninstalled successfully");
-        }
-        Commands::IsInitialized => {
-            let app_config = AppConfig::from_yaml_file(&config_path)?;
-            let db_cfg = &app_config.database;
-            let pool = create_pool(db_cfg).await?;
-
-            let initialized = init::is_db_initialized(&pool).await.map_err(anyhow::Error::from)?;
-            if initialized {
-                println!("Database is initialized");
-            } else {
-                println!("Database is not initialized");
-            }
         }
         Commands::Start => {
             start_server(&config_path).await?;

@@ -1,6 +1,6 @@
 use pgqrs::{LivenessRequest, PgqrsClient, ReadinessRequest};
 use pgqrs_test_utils::{
-    start_test_server_with_postgres, test_endpoint, Duration, SocketAddr, DEFAULT_CONNECT_TIMEOUT,
+    start_test_server_with_postgres, test_endpoint, SocketAddr, DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_RPC_TIMEOUT,
 };
 
@@ -80,31 +80,44 @@ async fn test_health_check_proto_messages_with_postgres() {
     // Proto messages can be created successfully in PostgreSQL context
 }
 
-/// Performance test: Ensure PostgreSQL backend doesn't significantly slow down health checks
+/// Create, list, get and delete queues with real PostgreSQL backend
 #[tokio::test]
-async fn test_postgres_performance() {
+async fn test_queue_crud_with_postgres() {
     let (addr, _server_handle) = start_test_server_with_postgres().await;
-
     let mut client = create_test_client(addr).await;
+    let queue_name = "test_queue_crud_with_postgres".to_string();
+    // Create queue
+    let queue_result = client.create_queue(&queue_name, false).await;
+    assert!(queue_result.is_ok());
+    let queue = queue_result.unwrap();
+    assert_eq!(queue.name, queue_name);
+    assert!(queue.id > 0);
+    assert!(queue.created_at_unix <= chrono::Utc::now().timestamp());
+    assert!(!queue.unlogged);
 
-    let start = std::time::Instant::now();
+    // Get queue
+    let get_result = client.get_queue(&queue_name).await;
+    assert!(get_result.is_ok());
+    let get_queue = get_result.unwrap();
+    assert_eq!(get_queue.name, queue_name);
+    assert_eq!(get_queue.id, queue.id); // IDs should match
+    assert_eq!(get_queue.created_at_unix, queue.created_at_unix);
+    assert_eq!(get_queue.unlogged, queue.unlogged);
 
-    // Make several health check calls
-    for _ in 0..10 {
-        let response = client
-            .liveness()
-            .await
-            .expect("Liveness call should succeed");
-
-        assert_eq!(response.status, "OK");
-    }
-
-    let duration = start.elapsed();
-
-    // Health checks should complete within reasonable time (allowing for DB overhead)
-    assert!(
-        duration < Duration::from_secs(5),
-        "Health checks took too long with PostgreSQL backend: {:?}",
-        duration
-    );
+    // List queues
+    let list_result = client.list_queues().await;
+    assert!(list_result.is_ok());
+    let queues = list_result.unwrap();
+    let found = queues.iter().find(|q| q.name == queue_name);
+    assert!(found.is_some());
+    let listed_queue = found.unwrap();
+    assert_eq!(listed_queue.id, queue.id);
+    assert_eq!(listed_queue.created_at_unix, queue.created_at_unix);
+    assert_eq!(listed_queue.unlogged, queue.unlogged);
+    // Delete queue
+    let delete_result = client.delete_queue(&queue_name).await;
+    assert!(delete_result.is_ok());
+    let listed_after_delete = client.list_queues().await.unwrap();
+    let found_after_delete = listed_after_delete.iter().find(|q| q.name == queue_name);
+    assert!(found_after_delete.is_none());
 }

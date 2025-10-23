@@ -27,9 +27,7 @@ async fn test_heartbeat() {
             match common::get_client_for_port(port).await {
                 Ok(mut client) => {
                     // Test that we can actually call the server
-                    let response = client
-                        .liveness(Request::new(LivenessRequest {}))
-                        .await;
+                    let response = client.liveness(Request::new(LivenessRequest {})).await;
 
                     match response {
                         Ok(resp) => {
@@ -50,13 +48,15 @@ async fn test_heartbeat() {
             let _ = common::stop_server(child);
         }
         Err(e) => {
-            println!("Server failed to start (expected in test environment): {}", e);
+            println!(
+                "Server failed to start (expected in test environment): {}",
+                e
+            );
             // This is expected to fail in CI/test environments without a running database
             // The test validates that the function works correctly when dependencies are available
         }
     }
 }
-
 
 /*
 // TODO: Re-enable these tests once library functionality is implemented in pgqrs-server

@@ -12,4 +12,4 @@ pub use cli::{get_config_path, Cli, Commands};
 
 // Re-export db types for convenience
 pub use db::config::Config;
-pub use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
+pub use db::repo::{PgMessageRepo, PgQueueRepo};

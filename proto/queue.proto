@@ -6,14 +6,15 @@ option go_package = "pgqrs/v1";
 
 // Queue metadata, matches Rust Queue struct
 message Queue {
-  string name = 1; // queue_name
-  int64 created_at_unix = 2; // created_at as unix timestamp
-  bool unlogged = 3; // durability flag
+  int64 id = 1; // queue_id
+  string name = 2; // queue_name
+  int64 created_at_unix = 3; // created_at as unix timestamp
+  bool unlogged = 4; // durability flag
 }
 
 // Message metadata, matches Rust QueueMessage struct
 message Message {
-  string id = 1;
+  int64 id = 1;
   string queue_name = 2;
   bytes payload = 3;
   int64 enqueued_at_unix = 4; // enqueued_at as unix timestamp
@@ -56,11 +57,11 @@ message HealthCheckResponse { string status = 1; }
 message LivenessRequest {}
 message LivenessResponse { string status = 1; }
 
-// Readiness probe - checks all dependencies are healthy 
+// Readiness probe - checks all dependencies are healthy
 message ReadinessRequest {}
-message ReadinessResponse { 
-  string status = 1; 
-  repeated string failing_services = 2; 
+message ReadinessResponse {
+  string status = 1;
+  repeated string failing_services = 2;
 }
 
 service QueueService {
@@ -83,7 +84,7 @@ service QueueService {
   rpc PurgeDeadLetters(PurgeDeadLettersRequest) returns (.google.protobuf.Empty);
 
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
-  
+
   // Kubernetes-style health probes
   rpc Liveness(LivenessRequest) returns (LivenessResponse);
   rpc Readiness(ReadinessRequest) returns (ReadinessResponse);
