@@ -2,5 +2,6 @@
 members = [
     "crates/pgqrs-server",
     "crates/pgqrs-test-utils",
-    "pgqrs"
+    "pgqrs",
+    "tests"
 ]

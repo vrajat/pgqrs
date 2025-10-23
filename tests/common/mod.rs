@@ -1,131 +1,139 @@
-use diesel::pg::PgConnection;
-use diesel::r2d2::{ConnectionManager, Pool};
-use diesel::RunQueryDsl;
-use pgqrs::admin::PgqrsAdmin;
-use std::sync::Arc;
-use testcontainers::{runners::AsyncRunner, ContainerAsync};
-use testcontainers_modules::postgres::Postgres;
-use tokio::sync::OnceCell;
+// Common utilities for tests
+// Note: Functionality not yet implemented in pgqrs-server
+// This is a placeholder for future implementation
 
-static CLEANUP_GUARD: OnceCell<CleanupGuard> = OnceCell::const_new();
-static ADMIN: OnceCell<PgqrsAdmin> = OnceCell::const_new();
+use pgqrs_server::api::queue_service_client::QueueServiceClient;
+use pgqrs_test_utils::{start_test_server, test_endpoint};
+use std::fs;
+use std::net::TcpListener;
+use std::process::{Command, Child};
+use std::time::Duration;
+use tokio::time::sleep;
 
-#[derive(Debug)]
-enum DbResource {
-    Owned(Arc<ContainerAsync<Postgres>>),
-    External,
+pub async fn get_test_client() -> QueueServiceClient<tonic::transport::Channel> {
+    let (addr, _server_handle) = start_test_server(true).await;
+
+    QueueServiceClient::connect(test_endpoint(addr))
+        .await
+        .expect("Failed to connect to test server")
 }
 
-#[derive(Debug)]
-struct CleanupGuard {
-    resource: DbResource,
-}
+/// Connect to a pgqrs-server running on a specific port
+pub async fn get_client_for_port(port: u16) -> Result<QueueServiceClient<tonic::transport::Channel>, Box<dyn std::error::Error>> {
+    let endpoint = format!("http://127.0.0.1:{}", port);
 
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        let admin = ADMIN.get().expect("Admin not initialized");
-        admin.uninstall(false).expect("Failed to uninstall schema");
-        match &self.resource {
-            DbResource::Owned(container) => {
-                // Explicitly stop the container to ensure it is killed
-                // Note: ContainerAsync::stop is async, but Drop cannot be async.
-                // So we spawn a blocking task to stop the container.
-                let container = Arc::clone(container);
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                    rt.block_on(async {
-                        let _ = container.stop().await;
-                    });
-                });
-                tracing::info!("Testcontainer stopped");
-            }
-            DbResource::External => {
-                tracing::info!("External DB used, not stopping container");
+    // Wait a bit for the server to be ready and try to connect
+    for _attempt in 0..10 {
+        match QueueServiceClient::connect(endpoint.clone()).await {
+            Ok(client) => return Ok(client),
+            Err(_) => {
+                sleep(Duration::from_millis(500)).await;
             }
         }
     }
+
+    Err("Failed to connect to server after multiple attempts".into())
 }
 
-pub async fn get_pgqrs_client() -> &'static PgqrsAdmin {
-    ADMIN
-        .get_or_init(|| async {
-            // Check for external DSN
-            let dsn = std::env::var("PGQRS_TEST_DSN").ok();
-            if let Some(database_url) = dsn {
-                println!("Using external database: {}", database_url);
-                // Create connection pool
-                let manager = ConnectionManager::<PgConnection>::new(&database_url);
-                let pool = Pool::builder()
-                    .max_size(10)
-                    .build(manager)
-                    .expect("Failed to create connection pool");
-                // Test the connection
-                {
-                    let mut conn = pool.get().expect("Failed to get connection from pool");
-                    diesel::sql_query("SELECT 1")
-                        .execute(&mut conn)
-                        .expect("Failed to execute test query");
-                    println!("Database connection verified");
-                }
-                // Create Admin and install schema
-                let mut config = pgqrs::config::Config::default();
-                config.dsn = database_url.clone();
-                let admin = PgqrsAdmin::new(&config);
-                admin.install(false).expect("Failed to install schema");
-                // Store the cleanup guard (external)
-                let guard = CleanupGuard {
-                    resource: DbResource::External,
-                };
-                CLEANUP_GUARD.set(guard).unwrap();
-                admin
-            } else {
-                println!("Starting test database container...");
-                let postgres_image = Postgres::default()
-                    .with_db_name("test_db")
-                    .with_user("test_user")
-                    .with_password("test_password");
-                let container = Arc::new(
-                    postgres_image
-                        .start()
-                        .await
-                        .expect("Failed to start postgres"),
-                );
-                let database_url = format!(
-                    "postgresql://test_user:test_password@127.0.0.1:{}/test_db",
-                    container
-                        .get_host_port_ipv4(5432)
-                        .await
-                        .expect("Failed to get port")
-                );
-                println!("Database URL: {}", database_url);
-                // Wait for postgres to be ready
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                // Create connection pool
-                let manager = ConnectionManager::<PgConnection>::new(&database_url);
-                let pool = Pool::builder()
-                    .max_size(10)
-                    .build(manager)
-                    .expect("Failed to create connection pool");
-                // Test the connection
-                {
-                    let mut conn = pool.get().expect("Failed to get connection from pool");
-                    diesel::sql_query("SELECT 1")
-                        .execute(&mut conn)
-                        .expect("Failed to execute test query");
-                    println!("Database connection verified");
-                }
-                // Create Admin and install schema
-                let mut config = pgqrs::config::Config::default();
-                config.dsn = database_url.clone();
-                let admin = PgqrsAdmin::new(&config);
-                admin.install(false).expect("Failed to install schema");
-                // Store the cleanup guard (owned)
-                let guard = CleanupGuard {
-                    resource: DbResource::Owned(container),
-                };
-                CLEANUP_GUARD.set(guard).unwrap();
-                admin
-            }
-        })
-        .await
+/// Find an available port by binding to port 0 and letting the OS choose
+fn find_available_port() -> Result<u16, std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    Ok(port)
+}
+
+/// Helper function to start the pgqrs-server with a custom database URL
+///
+/// This function:
+/// 1. Finds an available port
+/// 2. Writes a temporary config file with the provided DSN
+/// 3. Starts the server using `cargo run` with the chosen port
+/// 4. Waits for the server to be ready
+/// 5. Returns the process handle and port number for cleanup
+///
+/// # Example
+/// ```rust
+/// use tests::common;
+///
+/// #[tokio::test]
+/// async fn example_usage() {
+///     let dsn = "postgresql://user:pass@localhost/testdb";
+///
+///     // Start server and get both process and port
+///     let (server_process, port) = common::start_server(dsn).await.unwrap();
+///     println!("Server started on port: {}", port);
+///
+///     // Connect to the server using the port
+///     let mut client = common::get_client_for_port(port).await.unwrap();
+///
+///     // Use the client...
+///
+///     // Clean up
+///     common::stop_server(server_process).unwrap();
+/// }
+/// ```
+pub async fn start_server(dsn: &str) -> Result<(Child, u16), Box<dyn std::error::Error>> {
+    // Find an available port
+    let port = find_available_port()?;
+    // Create a temporary config file
+    let config_content = format!(
+        r#"database:
+  database_url: "{}"
+  max_connections: 10
+  visibility_timeout: 30
+  dead_letter_after: 5
+"#,
+        dsn
+    );
+
+    let config_path = "/tmp/pgqrs_test_config.yaml";
+    fs::write(config_path, config_content)?;
+
+    // Start the server process with the chosen port
+    let server_addr = format!("127.0.0.1:{}", port);
+    let mut child = Command::new("cargo")
+        .args([
+            "run",
+            "--package",
+            "pgqrs-server",
+            "--bin",
+            "pgqrs-server",
+            "--",
+            "--config-path",
+            config_path,
+            "start"
+        ])
+        .env("PGQRS_ADDR", &server_addr)
+        .spawn()?;
+
+    // Give the server a moment to start up
+    // Note: In a real implementation, you might want to poll the health endpoint
+    sleep(Duration::from_secs(2)).await;
+
+    // Check if process is still running (didn't exit immediately with error)
+    match child.try_wait()? {
+        Some(exit_status) => {
+            return Err(format!("Server exited immediately with status: {}", exit_status).into());
+        }
+        None => {
+            // Process is still running, which is good
+        }
+    }
+
+    Ok((child, port))
+}
+
+/// Helper function to stop the server and clean up resources
+pub fn stop_server(mut child: Child) -> Result<(), Box<dyn std::error::Error>> {
+    // Terminate the server process
+    child.kill()?;
+    child.wait()?;
+
+    // Clean up the temporary config file
+    let config_path = "/tmp/pgqrs_test_config.yaml";
+    if std::path::Path::new(config_path).exists() {
+        fs::remove_file(config_path)?;
+    }
+
+    Ok(())
 }
