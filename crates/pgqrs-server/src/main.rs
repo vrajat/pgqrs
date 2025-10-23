@@ -1,20 +1,22 @@
 use std::net::SocketAddr;
 use tonic::transport::Server;
+use clap::Parser;
 mod api;
+mod cli;
 mod config;
 mod db;
 mod service;
+use cli::{get_config_path, Cli, Commands};
 use config::AppConfig;
 use db::pgqrs_impl::{PgMessageRepo, PgQueueRepo};
 use db::pool::create_pool;
+use db::init;
 use std::sync::Arc;
 use tokio::signal;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn start_server(config_path: &str) -> anyhow::Result<()> {
     // Load config from YAML file
-    let config_path = std::env::var("PGQRS_CONFIG").unwrap_or_else(|_| "config.yaml".to_string());
-    let app_config = AppConfig::from_yaml_file(&config_path)?;
+    let app_config = AppConfig::from_yaml_file(config_path)?;
     let db_cfg = &app_config.database;
     let pool = create_pool(db_cfg).await?;
     let pool = Arc::new(pool);
@@ -54,6 +56,47 @@ async fn main() -> anyhow::Result<()> {
         .add_service(svc)
         .serve_with_shutdown(addr, shutdown)
         .await?;
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let config_path = get_config_path(cli.config_path);
+
+    match cli.command {
+        Commands::Install => {
+            let app_config = AppConfig::from_yaml_file(&config_path)?;
+            let db_cfg = &app_config.database;
+            let pool = create_pool(db_cfg).await?;
+
+            init::init_db(&pool).await.map_err(anyhow::Error::from)?;
+            println!("Database initialized successfully");
+        }
+        Commands::Uninstall => {
+            let app_config = AppConfig::from_yaml_file(&config_path)?;
+            let db_cfg = &app_config.database;
+
+            init::uninstall(&db_cfg.database_url).map_err(anyhow::Error::from)?;
+            println!("Database uninstalled successfully");
+        }
+        Commands::IsInitialized => {
+            let app_config = AppConfig::from_yaml_file(&config_path)?;
+            let db_cfg = &app_config.database;
+            let pool = create_pool(db_cfg).await?;
+
+            let initialized = init::is_db_initialized(&pool).await.map_err(anyhow::Error::from)?;
+            if initialized {
+                println!("Database is initialized");
+            } else {
+                println!("Database is not initialized");
+            }
+        }
+        Commands::Start => {
+            start_server(&config_path).await?;
+        }
+    }
 
     Ok(())
 }
