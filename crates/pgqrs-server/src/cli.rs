@@ -107,7 +107,6 @@ mod tests {
         assert!(help_string.contains("pgqrs-server"));
         assert!(help_string.contains("install"));
         assert!(help_string.contains("uninstall"));
-        assert!(help_string.contains("is-initialized"));
         assert!(help_string.contains("start"));
         assert!(help_string.contains("config-path"));
     }

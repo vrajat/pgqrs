@@ -1,12 +1,12 @@
 use pgqrs_server::db::repo::{PgMessageRepo, PgQueueRepo};
 use pgqrs_server::db::traits::{MessageRepo, QueueRepo};
-use pgqrs_test_utils::postgres::get_pgqrs_client;
+use pgqrs_test_utils::postgres::get_postgres_dsn;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 async fn setup_test_pool() -> sqlx::PgPool {
     // Use the pgqrs_test_utils helper that properly manages container lifecycle
-    let database_url = get_pgqrs_client().await;
+    let database_url = get_postgres_dsn().await;
 
     PgPoolOptions::new()
         .max_connections(2) // Small pool per test
@@ -45,7 +45,11 @@ async fn test_create_and_list_queue() {
 async fn test_enqueue_and_peek() {
     let pool = setup_test_pool().await;
     let qrepo = PgQueueRepo { pool: pool.clone() };
-    let mrepo = PgMessageRepo { pool: pool.clone() };
+    let mrepo = PgMessageRepo {
+        pool: pool.clone(),
+        visibility_timeout_seconds: 300,
+        default_dequeue_count: 1,
+    };
     let queue_name = "testq_enqueue_and_peek";
     qrepo
         .create_queue(&queue_name, false)
@@ -62,7 +66,11 @@ async fn test_enqueue_and_peek() {
 async fn test_enqueue_dequeue() {
     let pool = setup_test_pool().await;
     let qrepo = PgQueueRepo { pool: pool.clone() };
-    let mrepo = PgMessageRepo { pool: pool.clone() };
+    let mrepo = PgMessageRepo {
+        pool: pool.clone(),
+        visibility_timeout_seconds: 300,
+        default_dequeue_count: 1,
+    };
     let queue_name = "testq_enqueue_dequeue";
     qrepo
         .create_queue(&queue_name, false)
@@ -70,7 +78,7 @@ async fn test_enqueue_dequeue() {
         .expect("create");
     let payload = json!({"foo": "bar"});
     let msg = mrepo.enqueue(&queue_name, &payload).await.expect("enqueue");
-    let dequeued = mrepo.dequeue(&queue_name, msg.id).await.expect("dequeue");
-    assert_eq!(dequeued.id, msg.id);
+    let dequeued = mrepo.dequeue(&queue_name).await.expect("dequeue");
+    assert_eq!(dequeued.unwrap().id, msg.id);
     qrepo.delete_queue(&queue_name).await.expect("delete");
 }

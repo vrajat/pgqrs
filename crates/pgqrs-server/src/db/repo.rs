@@ -1,5 +1,5 @@
 use crate::db::constants::{
-    CREATE_INDEX_STATEMENT, CREATE_QUEUE_STATEMENT, DELETE_MESSAGE, DELETE_QUEUE_METADATA,
+    CREATE_INDEX_STATEMENT, CREATE_QUEUE_STATEMENT, DELETE_QUEUE_METADATA, DEQUEUE_MESSAGES,
     DROP_QUEUE_STATEMENT, INSERT_MESSAGE, INSERT_QUEUE_METADATA, LIST_QUEUES_META, PENDING_COUNT,
     PGQRS_SCHEMA, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, READ_MESSAGES, SELECT_MESSAGE_BY_ID,
     SELECT_QUEUE_META, UPDATE_MESSAGE_VT,
@@ -18,6 +18,8 @@ pub struct PgQueueRepo {
 
 pub struct PgMessageRepo {
     pub pool: PgPool,
+    pub visibility_timeout_seconds: i32,
+    pub default_dequeue_count: i32,
 }
 
 #[async_trait]
@@ -196,22 +198,41 @@ impl MessageRepo for PgMessageRepo {
         Ok(messages)
     }
 
-    async fn dequeue(&self, queue: &str, message_id: i64) -> Result<Message, PgqrsError> {
-        let sql = DELETE_MESSAGE
+    async fn dequeue(&self, queue: &str) -> Result<Option<Message>, PgqrsError> {
+        let messages = self
+            .dequeue_many(
+                queue,
+                self.default_dequeue_count,
+                self.visibility_timeout_seconds,
+            )
+            .await?;
+
+        Ok(messages.into_iter().next())
+    }
+
+    async fn dequeue_many(
+        &self,
+        queue: &str,
+        max_messages: i32,
+        lease_seconds: i32,
+    ) -> Result<Vec<Message>, PgqrsError> {
+        let sql = DEQUEUE_MESSAGES
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue);
-        let row = sqlx::query(&sql)
-            .bind(message_id)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(Message {
-            id: row.get("msg_id"),
-            payload: row.get("message"),
-            enqueued_at: row.get("enqueued_at"),
-            vt: row.get("vt"),
-            read_ct: row.get("read_ct"),
-        })
+            .replace("{queue_name}", queue)
+            .replace("{limit}", &max_messages.to_string())
+            .replace("{vt}", &lease_seconds.to_string());
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Message {
+                id: row.get("msg_id"),
+                payload: row.get("message"),
+                enqueued_at: row.get("enqueued_at"),
+                vt: row.get("vt"),
+                read_ct: row.get("read_ct"),
+            })
+            .collect())
     }
 
     async fn ack(&self, _queue: &str, _message_id: i64) -> Result<(), PgqrsError> {
@@ -225,16 +246,12 @@ impl MessageRepo for PgMessageRepo {
     }
 
     async fn peek(&self, queue: &str, limit: usize) -> Result<Vec<Message>, PgqrsError> {
-        let now = Utc::now();
         let sql = READ_MESSAGES
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue);
-        let rows = sqlx::query(&sql)
-            .bind(now)
-            .bind(limit as i64)
-            .fetch_all(&self.pool)
-            .await?;
+            .replace("{queue_name}", queue)
+            .replace("{limit}", &limit.to_string());
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
         let messages = rows
             .into_iter()
             .map(|row| Message {

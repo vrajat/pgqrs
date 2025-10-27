@@ -1,12 +1,13 @@
+use crate::cli::output::{JsonOutputWriter, OutputWriter, TableOutputWriter};
 use crate::client::PgqrsClient;
 use anyhow::Result;
 use chrono::DateTime;
 use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use tabled::Tabled;
 
 use crate::cli::args::{Cli, HealthCommands, MessageCommands, QueueCommands};
-use crate::cli::output::OutputManager;
 use crate::error::CliError;
 
 // Data structures for output formatting
@@ -103,7 +104,7 @@ pub async fn handle_queue_command(
     command: &QueueCommands,
     cli: &Cli,
 ) -> Result<()> {
-    let output = OutputManager::new(cli.output.clone(), cli.quiet);
+    let (writer, mut out) = get_writer_and_output(cli)?;
 
     match command {
         QueueCommands::Create { name, unlogged } => {
@@ -114,8 +115,7 @@ pub async fn handle_queue_command(
                 created_at: format_timestamp(queue.created_at_unix),
                 unlogged: queue.unlogged,
             };
-            output.print_success(&queue_info)?;
-            output.print_success_message(&format!("Queue '{}' created successfully", name));
+            writer.write(&queue_info, &mut out)?;
         }
 
         QueueCommands::List => {
@@ -129,7 +129,7 @@ pub async fn handle_queue_command(
                     unlogged: q.unlogged,
                 })
                 .collect();
-            output.print_list(&queue_infos)?;
+            writer.write_list(&queue_infos, &mut out)?;
         }
 
         QueueCommands::Get { name } => {
@@ -140,12 +140,12 @@ pub async fn handle_queue_command(
                 created_at: format_timestamp(queue.created_at_unix),
                 unlogged: queue.unlogged,
             };
-            output.print_success(&queue_info)?;
+            writer.write(&queue_info, &mut out)?;
         }
 
         QueueCommands::Delete { name } => {
             client.delete_queue(name).await?;
-            output.print_success_message(&format!("Queue '{}' deleted successfully", name));
+            writer.write(&format!("Queue '{}' deleted successfully", name), &mut out)?;
         }
 
         QueueCommands::Stats { name } => {
@@ -156,7 +156,7 @@ pub async fn handle_queue_command(
                 in_flight: stats.in_flight,
                 dead_lettered: stats.dead_lettered,
             };
-            output.print_success(&queue_stats)?;
+            writer.write(&queue_stats, &mut out)?;
         }
     }
 
@@ -169,7 +169,7 @@ pub async fn handle_message_command(
     command: &MessageCommands,
     cli: &Cli,
 ) -> Result<()> {
-    let output = OutputManager::new(cli.output.clone(), cli.quiet);
+    let (writer, mut out) = get_writer_and_output(cli)?;
 
     match command {
         MessageCommands::Enqueue {
@@ -181,7 +181,7 @@ pub async fn handle_message_command(
             let payload_bytes = payload_to_bytes(&payload_content)?;
 
             let message_id = client.enqueue(queue, payload_bytes, *delay as i64).await?;
-            output.print_success_message(&format!("Message enqueued with ID: {}", message_id));
+            writer.write(&format!("Message enqueued with ID: {}", message_id), &mut out)?;
         }
 
         MessageCommands::Dequeue {
@@ -203,12 +203,12 @@ pub async fn handle_message_command(
                     read_count: m.read_ct,
                 })
                 .collect();
-            output.print_list(&message_infos)?;
+            writer.write_list(&message_infos, &mut out)?;
         }
 
         MessageCommands::Ack { message_id } => {
             client.ack(message_id).await?;
-            output.print_success_message(&format!("Message {} acknowledged", message_id));
+            writer.write(&format!("Message {} acknowledged", message_id), &mut out)?;
         }
 
         MessageCommands::Nack {
@@ -224,12 +224,12 @@ pub async fn handle_message_command(
             } else {
                 "negative acknowledged"
             };
-            output.print_success_message(&format!("Message {} {}", message_id, action));
+            writer.write(&format!("Message {} {}", message_id, action), &mut out)?;
         }
 
         MessageCommands::Requeue { message_id, delay } => {
             client.requeue(message_id, *delay as i64).await?;
-            output.print_success_message(&format!("Message {} requeued", message_id));
+            writer.write(&format!("Message {} requeued", message_id), &mut out)?;
         }
 
         MessageCommands::ExtendLease {
@@ -239,10 +239,10 @@ pub async fn handle_message_command(
             client
                 .extend_lease(message_id, *additional_seconds as i64)
                 .await?;
-            output.print_success_message(&format!(
+            writer.write(&format!(
                 "Message {} lease extended by {} seconds",
                 message_id, additional_seconds
-            ));
+            ), &mut out)?;
         }
 
         MessageCommands::Peek { queue, limit } => {
@@ -258,7 +258,7 @@ pub async fn handle_message_command(
                     read_count: m.read_ct,
                 })
                 .collect();
-            output.print_list(&message_infos)?;
+            writer.write_list(&message_infos, &mut out)?;
         }
 
         MessageCommands::ListInFlight { queue, limit } => {
@@ -274,7 +274,7 @@ pub async fn handle_message_command(
                     read_count: m.read_ct,
                 })
                 .collect();
-            output.print_list(&message_infos)?;
+            writer.write_list(&message_infos, &mut out)?;
         }
 
         MessageCommands::ListDeadLetters { queue, limit } => {
@@ -290,19 +290,32 @@ pub async fn handle_message_command(
                     read_count: m.read_ct,
                 })
                 .collect();
-            output.print_list(&message_infos)?;
+            writer.write_list(&message_infos, &mut out)?;
         }
 
         MessageCommands::PurgeDeadLetters { queue } => {
             client.purge_dead_letters(queue).await?;
-            output.print_success_message(&format!(
+            writer.write(&format!(
                 "Dead letter messages purged from queue '{}'",
                 queue
-            ));
+            ), &mut out)?;
         }
     }
 
     Ok(())
+}
+
+fn get_writer_and_output(cli: &Cli) -> Result<(OutputWriter, Box<dyn Write>), anyhow::Error> {
+    let writer = match cli.format.as_str() {
+        "json" => OutputWriter::Json(JsonOutputWriter),
+        "table" => OutputWriter::Table(TableOutputWriter),
+        _ => OutputWriter::Table(TableOutputWriter),
+    };
+    let out = match cli.out.as_str() {
+        "stdout" => Box::new(std::io::stdout()) as Box<dyn std::io::Write>,
+        file_path => Box::new(fs::File::create(file_path)?) as Box<dyn std::io::Write>,
+    };
+    Ok((writer, out))
 }
 
 // Health command handlers
@@ -311,26 +324,26 @@ pub async fn handle_health_command(
     command: &HealthCommands,
     cli: &Cli,
 ) -> Result<()> {
-    let output = OutputManager::new(cli.output.clone(), cli.quiet);
+    let (writer, mut out) = get_writer_and_output(cli)?;
 
     match command {
         HealthCommands::Liveness => {
             let response = client.liveness().await?;
             let health_status = HealthStatus::from_liveness(response);
-            output.print_success(&health_status)?;
+            writer.write(&health_status, &mut out)?;
         }
 
         HealthCommands::Readiness => {
             let response = client.readiness().await?;
             let health_status = HealthStatus::from_readiness(response);
-            output.print_success(&health_status)?;
+            writer.write(&health_status, &mut out)?;
         }
 
         HealthCommands::Check => {
             // For now, use readiness as the general health check
             let response = client.readiness().await?;
             let health_status = HealthStatus::from_readiness(response);
-            output.print_success(&health_status)?;
+            writer.write(&health_status, &mut out)?;
         }
     }
 

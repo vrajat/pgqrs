@@ -10,10 +10,6 @@ pub struct Cli {
     #[arg(long, env = "PGQRS_ENDPOINT", default_value = "http://127.0.0.1:50051")]
     pub endpoint: String,
 
-    /// API key for authentication (can also be set via PGQRS_API_KEY)
-    #[arg(long, env = "PGQRS_API_KEY")]
-    pub api_key: Option<String>,
-
     /// Connection timeout in seconds
     #[arg(long, default_value = "10")]
     pub connect_timeout: u64,
@@ -23,12 +19,11 @@ pub struct Cli {
     pub rpc_timeout: u64,
 
     /// Output format
-    #[arg(long, short = 'o', default_value = "table")]
-    pub output: OutputFormat,
+    #[arg(long, short = 'f', default_value = "table")]
+    pub format: String,
 
-    /// Suppress output except for errors
-    #[arg(long, short = 'q')]
-    pub quiet: bool,
+    #[arg(long, default_value = "stdout")]
+    pub out: String,
 
     /// Enable verbose logging
     #[arg(long, short = 'v')]
@@ -184,6 +179,3 @@ pub enum HealthCommands {
     /// General health check
     Check,
 }
-
-// Import the output format from the output module
-use crate::cli::output::OutputFormat;

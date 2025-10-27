@@ -5,12 +5,12 @@
 mod common;
 
 use pgqrs_server::api::LivenessRequest;
-use pgqrs_test_utils::get_pgqrs_client;
+use pgqrs_test_utils::get_postgres_dsn;
 use tonic::Request;
 
 #[tokio::test]
 async fn test_heartbeat() {
-    let dsn = get_pgqrs_client().await;
+    let dsn = get_postgres_dsn().await;
 
     // Start the server with a custom DSN - now returns (process, port)
     let server_result = common::start_server(&dsn).await;
@@ -61,21 +61,13 @@ async fn test_heartbeat() {
 /*
 // TODO: Re-enable these tests once library functionality is implemented in pgqrs-server
 
-use diesel::deserialize::QueryableByName;
-use diesel::RunQueryDsl;
-use serde_json::json;
-#[derive(QueryableByName)]
-struct RelPersistence {
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    relpersistence: String,
-}
-
 #[tokio::test]
 async fn verify() {
-    let admin = common::get_pgqrs_client().await;
+    let dsn = get_postgres_dsn().await;
     // Verify should succeed
     assert!(admin.verify().is_ok());
 }
+
 
 #[tokio::test]
 async fn test_create_logged_queue() {

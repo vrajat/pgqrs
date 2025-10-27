@@ -60,9 +60,28 @@ pub const SELECT_MESSAGE_BY_ID: &str = r#"
 pub const READ_MESSAGES: &str = r#"
     SELECT msg_id, read_ct, enqueued_at, vt, message
     FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-    WHERE vt <= $1
+    WHERE vt <= clock_timestamp()
     ORDER BY msg_id ASC
-    LIMIT $2;
+    LIMIT {limit};
+"#;
+
+pub const DEQUEUE_MESSAGES: &str = r#"
+    WITH cte AS
+        (
+            SELECT msg_id
+            FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+            WHERE vt <= clock_timestamp()
+            ORDER BY msg_id ASC
+            LIMIT {limit}
+            FOR UPDATE SKIP LOCKED
+        )
+    UPDATE {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} t
+    SET
+        vt = clock_timestamp() + interval '{vt} seconds',
+        read_ct = read_ct + 1
+    FROM cte
+    WHERE t.msg_id=cte.msg_id
+    RETURNING *;
 "#;
 
 pub const DELETE_MESSAGE: &str = r#"

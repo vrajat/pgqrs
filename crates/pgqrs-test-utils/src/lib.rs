@@ -14,7 +14,7 @@ pub use helpers::{
     DEFAULT_RPC_TIMEOUT, PERFORMANCE_TEST_ITERATIONS, PERFORMANCE_TEST_TIMEOUT,
 };
 pub use mocks::{MockMessageRepo, MockQueueRepo};
-pub use postgres::get_pgqrs_client;
+pub use postgres::get_postgres_dsn;
 pub use server::{start_test_server, start_test_server_with_postgres, wait_for_server_ready};
 
 // Re-export for convenience

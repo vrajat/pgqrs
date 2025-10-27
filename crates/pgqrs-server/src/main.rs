@@ -28,6 +28,8 @@ async fn start_server(config_path: &str) -> anyhow::Result<()> {
     });
     let message_repo = std::sync::Arc::new(PgMessageRepo {
         pool: pool.clone().as_ref().clone(),
+        visibility_timeout_seconds: 300, // 5 minutes default
+        default_dequeue_count: 1,        // Default to 1 message
     });
     // Create gRPC service
     let svc = api::queue_service_server::QueueServiceServer::new(service::QueueServiceImpl {

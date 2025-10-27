@@ -87,16 +87,48 @@ where
 
     async fn enqueue(
         &self,
-        _req: Request<EnqueueRequest>,
+        req: Request<EnqueueRequest>,
     ) -> Result<Response<EnqueueResponse>, Status> {
-        unimplemented!()
+        // Parse payload bytes into JSON value expected by the repository
+        let payload_bytes = &req.get_ref().payload;
+        let payload_json: serde_json::Value = serde_json::from_slice(payload_bytes)
+            .map_err(|e| Status::invalid_argument(format!("Invalid JSON payload: {}", e)))?;
+
+        self.message_repo
+            .enqueue(&req.get_ref().queue_name, &payload_json)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to enqueue message: {}", e)))
+            .map(|message: crate::db::traits::Message| {
+                Response::new(EnqueueResponse {
+                    message_id: message.id,
+                })
+            })
     }
 
     async fn dequeue(
         &self,
-        _req: Request<DequeueRequest>,
+        req: Request<DequeueRequest>,
     ) -> Result<Response<DequeueResponse>, Status> {
-        unimplemented!()
+        self.message_repo
+            .dequeue(&req.get_ref().queue_name)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to dequeue messages: {}", e)))
+            .map(|message_opt: Option<crate::db::traits::Message>| {
+                let api_messages: Vec<Message> = message_opt
+                    .into_iter()
+                    .map(|msg| Message {
+                        id: msg.id,
+                        queue_name: req.get_ref().queue_name.clone(),
+                        payload: serde_json::to_vec(&msg.payload).unwrap_or_default(),
+                        enqueued_at_unix: msg.enqueued_at.timestamp(),
+                        vt_unix: msg.vt.timestamp(),
+                        read_ct: msg.read_ct,
+                    })
+                    .collect();
+                Response::new(DequeueResponse {
+                    messages: api_messages,
+                })
+            })
     }
     async fn ack(&self, _req: Request<AckRequest>) -> Result<Response<()>, Status> {
         unimplemented!()

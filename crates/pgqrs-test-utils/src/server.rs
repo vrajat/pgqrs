@@ -1,5 +1,5 @@
 use crate::mocks::{MockMessageRepo, MockQueueRepo};
-use crate::postgres::get_pgqrs_client;
+use crate::postgres::get_postgres_dsn;
 use pgqrs_server::api::queue_service_server::QueueServiceServer;
 use pgqrs_server::db::init_db;
 use pgqrs_server::db::{config::Config, pool::create_pool};
@@ -96,7 +96,7 @@ pub async fn start_test_server_with_postgres() -> (
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
 ) {
     // Start PostgreSQL container
-    let database_url = get_pgqrs_client().await;
+    let database_url = get_postgres_dsn().await;
 
     // Create pool config for repositories
     let core_config = Config {
@@ -116,7 +116,11 @@ pub async fn start_test_server_with_postgres() -> (
 
     // Create real repositories
     let queue_repo = Arc::new(PgQueueRepo { pool: pool.clone() });
-    let message_repo = Arc::new(PgMessageRepo { pool });
+    let message_repo = Arc::new(PgMessageRepo {
+        pool,
+        visibility_timeout_seconds: 300, // 5 minutes default
+        default_dequeue_count: 1,        // Default to 1 message
+    });
 
     let service = QueueServiceImpl {
         queue_repo,

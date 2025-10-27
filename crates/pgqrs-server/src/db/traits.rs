@@ -76,7 +76,14 @@ pub trait MessageRepo {
         payloads: &[JsonValue],
     ) -> Result<Vec<Message>, PgqrsError>;
     /// Dequeue (remove) a message from a queue.
-    async fn dequeue(&self, queue: &str, message_id: i64) -> Result<Message, PgqrsError>;
+    async fn dequeue(&self, queue: &str) -> Result<Option<Message>, PgqrsError>;
+
+    async fn dequeue_many(
+        &self,
+        queue: &str,
+        max_messages: i32,
+        lease_seconds: i32,
+    ) -> Result<Vec<Message>, PgqrsError>;
     /// Acknowledge a message (mark as processed).
     async fn ack(&self, queue: &str, message_id: i64) -> Result<(), PgqrsError>;
     /// Negative-acknowledge a message (mark as failed).

@@ -4,12 +4,12 @@
 
 mod common;
 
-use pgqrs_test_utils::get_pgqrs_client;
+use pgqrs_test_utils::get_postgres_dsn;
 use tokio::process::Command;
 
 #[tokio::test]
 async fn test_heartbeat() {
-    let dsn = get_pgqrs_client().await;
+    let dsn = get_postgres_dsn().await;
 
     // Start the server with a custom DSN - now returns (process, port)
     let server_result = common::start_server(&dsn).await;

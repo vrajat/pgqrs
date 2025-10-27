@@ -30,15 +30,15 @@ message ListQueuesRequest  {}
 message ListQueuesResponse { repeated Queue queues = 1; }
 
 message EnqueueRequest { string queue_name = 1; bytes payload = 2; int64 delay_seconds = 3; }
-message EnqueueResponse { string message_id = 1; }
+message EnqueueResponse { int64 message_id = 1; }
 
 message DequeueRequest { string queue_name = 1; int32 max_messages = 2; int64 lease_seconds = 3; }
 message DequeueResponse { repeated Message messages = 1; }
 
-message AckRequest { string message_id = 1; }
-message NackRequest { string message_id = 1; string reason = 2; bool dead_letter = 3; }
-message RequeueRequest { string message_id = 1; int64 delay_seconds = 2; }
-message ExtendLeaseRequest { string message_id = 1; int64 additional_seconds = 2; }
+message AckRequest { int64 message_id = 1; }
+message NackRequest { int64 message_id = 1; string reason = 2; bool dead_letter = 3; }
+message RequeueRequest { int64 message_id = 1; int64 delay_seconds = 2; }
+message ExtendLeaseRequest { int64 message_id = 1; int64 additional_seconds = 2; }
 
 message PeekRequest { string queue_name = 1; int32 limit = 2; }
 message PeekResponse { repeated Message messages = 1; }

@@ -52,7 +52,7 @@ impl Drop for CleanupGuard {
 ///
 /// # Returns
 /// A static reference to the PgqrsAdmin client that can be used for tests
-pub async fn get_pgqrs_client() -> &'static String {
+pub async fn get_postgres_dsn() -> &'static String {
     let guard_ref = CLEANUP_GUARD
         .get_or_init(|| async {
             // Check for external DSN or start container

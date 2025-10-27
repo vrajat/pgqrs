@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
     // Initialize logging
     if cli.verbose {
         tracing_subscriber::fmt().with_env_filter("debug").init();
-    } else if !cli.quiet {
+    } else {
         tracing_subscriber::fmt().with_env_filter("warn").init();
     }
 
@@ -43,14 +43,10 @@ async fn main() -> Result<()> {
 }
 
 async fn create_client(cli: &Cli) -> Result<pgqrs::PgqrsClient> {
-    let mut builder = pgqrs::PgqrsClient::builder()
+    let builder = pgqrs::PgqrsClient::builder()
         .endpoint(cli.endpoint.clone())
         .connect_timeout(Duration::from_secs(cli.connect_timeout))
         .rpc_timeout(Duration::from_secs(cli.rpc_timeout));
-
-    if let Some(api_key) = &cli.api_key {
-        builder = builder.api_key(api_key);
-    }
 
     builder
         .build()
