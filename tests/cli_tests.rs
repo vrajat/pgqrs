@@ -1,8 +1,7 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        let admin = common::get_pgqrs_client().await;
-        admin.config().dsn.clone()
+        common::get_postgres_dsn().await.clone()
     })
 }
 
