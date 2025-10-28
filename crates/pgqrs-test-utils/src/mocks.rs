@@ -92,7 +92,12 @@ impl MessageRepo for MockMessageRepo {
         unimplemented!()
     }
 
-    async fn dequeue_many(&self, _queue: &str, _max_messages: i32, _lease_seconds: i32) -> Result<Vec<Message>, PgqrsError> {
+    async fn dequeue_many(
+        &self,
+        _queue: &str,
+        _max_messages: i32,
+        _lease_seconds: i32,
+    ) -> Result<Vec<Message>, PgqrsError> {
         unimplemented!()
     }
 

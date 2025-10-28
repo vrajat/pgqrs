@@ -9,16 +9,22 @@ pub enum OutputWriter {
 }
 
 impl OutputWriter {
-    pub fn write_list<T: Serialize + Tabled>(&self, items: &[T],
-        out: &mut dyn std::io::Write
-) -> anyhow::Result<()> {
+    pub fn write_list<T: Serialize + Tabled>(
+        &self,
+        items: &[T],
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
         match self {
             OutputWriter::Table(writer) => writer.write_list(items, out),
             OutputWriter::Json(writer) => writer.write_list(items, out),
         }
     }
 
-    pub fn write<T: Serialize + Tabled>(&self, item: &T, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
+    pub fn write<T: Serialize + Tabled>(
+        &self,
+        item: &T,
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
         match self {
             OutputWriter::Table(writer) => writer.write(item, out),
             OutputWriter::Json(writer) => writer.write(item, out),
@@ -74,9 +80,12 @@ impl JsonOutputWriter {
 
 #[cfg(test)]
 mod tests {
+    use crate::cli::{
+        commands::MessageInfo,
+        output::{JsonOutputWriter, OutputWriter, TableOutputWriter},
+    };
     use chrono::Utc;
     use serde_json::json;
-    use crate::cli::{commands::MessageInfo, output::{JsonOutputWriter, OutputWriter, TableOutputWriter}};
 
     fn sample_message() -> MessageInfo {
         MessageInfo {

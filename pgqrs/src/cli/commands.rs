@@ -181,7 +181,10 @@ pub async fn handle_message_command(
             let payload_bytes = payload_to_bytes(&payload_content)?;
 
             let message_id = client.enqueue(queue, payload_bytes, *delay as i64).await?;
-            writer.write(&format!("Message enqueued with ID: {}", message_id), &mut out)?;
+            writer.write(
+                &format!("Message enqueued with ID: {}", message_id),
+                &mut out,
+            )?;
         }
 
         MessageCommands::Dequeue {
@@ -239,10 +242,13 @@ pub async fn handle_message_command(
             client
                 .extend_lease(message_id, *additional_seconds as i64)
                 .await?;
-            writer.write(&format!(
-                "Message {} lease extended by {} seconds",
-                message_id, additional_seconds
-            ), &mut out)?;
+            writer.write(
+                &format!(
+                    "Message {} lease extended by {} seconds",
+                    message_id, additional_seconds
+                ),
+                &mut out,
+            )?;
         }
 
         MessageCommands::Peek { queue, limit } => {
@@ -295,10 +301,10 @@ pub async fn handle_message_command(
 
         MessageCommands::PurgeDeadLetters { queue } => {
             client.purge_dead_letters(queue).await?;
-            writer.write(&format!(
-                "Dead letter messages purged from queue '{}'",
-                queue
-            ), &mut out)?;
+            writer.write(
+                &format!("Dead letter messages purged from queue '{}'", queue),
+                &mut out,
+            )?;
         }
     }
 

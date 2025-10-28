@@ -89,33 +89,16 @@ impl PgqrsClient {
         PgqrsClientBuilder::new()
     }
 
-    /// Helper method to create a request with API key if configured
-    fn with_auth<T>(&self, request: T) -> tonic::Request<T> {
-        let mut req = tonic::Request::new(request);
-        req.set_timeout(self.rpc_timeout);
-
-        if let Some(api_key) = &self.api_key {
-            req.metadata_mut().insert(
-                "authorization",
-                format!("Bearer {}", api_key).parse().unwrap(),
-            );
-        }
-
-        req
-    }
-
-    // Health check methods - these are implemented
-
     /// Check service liveness
     pub async fn liveness(&mut self) -> Result<crate::api::LivenessResponse> {
-        let request = self.with_auth(crate::api::LivenessRequest {});
+        let request = crate::api::LivenessRequest {};
         let response = self.client.liveness(request).await?;
         Ok(response.into_inner())
     }
 
     /// Check service readiness
     pub async fn readiness(&mut self) -> Result<crate::api::ReadinessResponse> {
-        let request = self.with_auth(crate::api::ReadinessRequest {});
+        let request = crate::api::ReadinessRequest {};
         let response = self.client.readiness(request).await?;
         Ok(response.into_inner())
     }
@@ -124,35 +107,35 @@ impl PgqrsClient {
 
     /// Create a new queue
     pub async fn create_queue(&mut self, name: &str, unlogged: bool) -> Result<crate::api::Queue> {
-        let request = self.with_auth(crate::api::CreateQueueRequest {
+        let request = crate::api::CreateQueueRequest {
             name: name.to_string(),
-            unlogged: unlogged,
-        });
+            unlogged,
+        };
         let response = self.client.create_queue(request).await?;
         Ok(response.into_inner())
     }
 
     /// Delete a queue
     pub async fn delete_queue(&mut self, name: &str) -> Result<()> {
-        let request = self.with_auth(DeleteQueueRequest {
+        let request = DeleteQueueRequest {
             name: name.to_string(),
-        });
+        };
         let _response = self.client.delete_queue(request).await?;
         Ok(())
     }
 
     /// Get queue information
     pub async fn get_queue(&mut self, name: &str) -> Result<crate::api::Queue> {
-        let request = self.with_auth(crate::GetQueueRequest {
+        let request = crate::GetQueueRequest {
             name: name.to_string(),
-        });
+        };
         let response = self.client.get_queue(request).await?;
         Ok(response.into_inner())
     }
 
     /// List all queues
     pub async fn list_queues(&mut self) -> Result<Vec<crate::api::Queue>> {
-        let request = self.with_auth(crate::api::ListQueuesRequest {});
+        let request = crate::api::ListQueuesRequest {};
         let response = self.client.list_queues(request).await?;
         Ok(response.into_inner().queues)
     }

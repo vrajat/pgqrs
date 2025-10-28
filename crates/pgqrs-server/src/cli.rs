@@ -11,7 +11,7 @@ pub fn get_config_path(cli_path: Option<String>) -> String {
 #[command(about = "A PostgreSQL queue management server")]
 pub struct Cli {
     /// Path to the configuration file
-    #[arg(short = 'c', long = "config-path")]
+    #[arg(short, long)]
     pub config_path: Option<String>,
 
     #[command(subcommand)]
