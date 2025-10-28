@@ -36,6 +36,7 @@ use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
 use crate::types::MetaResult;
 use crate::types::QueueMetrics;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
 #[derive(Debug)]
@@ -54,7 +55,9 @@ impl PgqrsAdmin {
     /// # Returns
     /// A new `PgqrsAdmin` instance.
     pub async fn new(config: &Config) -> Result<Self> {
-        let pool = PgPool::connect(&config.dsn)
+        let pool = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .connect(&config.dsn)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),

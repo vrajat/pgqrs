@@ -21,26 +21,37 @@ struct CleanupGuard {
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         let admin = ADMIN.get().expect("Admin not initialized");
-        // Use a simple blocking approach since this is a test cleanup
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-        rt.block_on(async {
-            admin
-                .uninstall(false)
-                .await
-                .expect("Failed to uninstall schema");
-        });
+
+        // Try to use current runtime handle first, fallback to creating new runtime
+        let uninstall_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(admin.uninstall(false))
+        } else {
+            // Only create a new runtime if we're not in a tokio context
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            rt.block_on(admin.uninstall(false))
+        };
+
+        if let Err(e) = uninstall_result {
+            eprintln!("Failed to uninstall schema during cleanup: {}", e);
+        }
 
         match &self.resource {
             DbResource::Owned(container) => {
                 // Explicitly stop the container to ensure it is killed
                 // Note: ContainerAsync::stop is async, but Drop cannot be async.
-                // So we spawn a blocking task to stop the container.
                 let container = Arc::clone(container);
                 std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                    rt.block_on(async {
-                        let _ = container.stop().await;
-                    });
+                    // Try to use current runtime handle first, fallback to creating new runtime
+                    let stop_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.block_on(container.stop())
+                    } else {
+                        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+                        rt.block_on(container.stop())
+                    };
+
+                    if let Err(e) = stop_result {
+                        eprintln!("Failed to stop container during cleanup: {}", e);
+                    }
                 });
                 tracing::info!("Testcontainer stopped");
             }
