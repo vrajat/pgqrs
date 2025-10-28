@@ -23,16 +23,12 @@ use crate::constants::QUEUE_PREFIX;
 use crate::error::Result;
 use crate::types::QueueMessage;
 use chrono::Utc;
-use diesel::pg::PgConnection;
-use diesel::r2d2::ConnectionManager;
-use diesel::sql_query;
-use diesel::RunQueryDsl;
-use r2d2::Pool;
+use sqlx::PgPool;
 
 /// Producer interface for adding messages to queues
 pub struct Queue {
     /// Connection pool for PostgreSQL
-    pub pool: Pool<ConnectionManager<PgConnection>>,
+    pub pool: PgPool,
     /// Logical name of the queue
     pub queue_name: String,
     /// Table name in the database for this queue
@@ -53,7 +49,7 @@ pub struct Queue {
 
 impl Queue {
     /// Create a new Producer instance
-    pub(crate) fn new(pool: Pool<ConnectionManager<PgConnection>>, queue_name: &str) -> Self {
+    pub(crate) fn new(pool: PgPool, queue_name: &str) -> Self {
         let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let insert_sql = crate::constants::INSERT_MESSAGE
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
@@ -92,36 +88,6 @@ impl Queue {
         }
     }
 
-    /// Run a closure with a database connection in a blocking task.
-    ///
-    /// This is a low-level helper for executing synchronous Diesel operations in an async context.
-    /// Most users should use higher-level queue methods instead.
-    ///
-    /// # Arguments
-    /// * `f` - Closure that receives a mutable database connection and returns a result.
-    ///
-    /// # Returns
-    /// The result of the closure, or a connection error.
-    async fn with_conn<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&mut PgConnection) -> Result<T> + Send + 'static,
-        T: Send + 'static,
-    {
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool
-                .get()
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            f(&mut conn)
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })?
-    }
-
     /// Retrieve a message by its ID from the queue.
     ///
     /// # Arguments
@@ -130,16 +96,14 @@ impl Queue {
     /// # Returns
     /// The message if found, or an error if not found.
     pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        let sql = self.select_by_id_sql.clone();
-        self.with_conn(move |conn| {
-            diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::BigInt, _>(msg_id)
-                .get_result::<QueueMessage>(conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })
-        })
-        .await
+        let result = sqlx::query_as::<_, QueueMessage>(&self.select_by_id_sql)
+            .bind(msg_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(result)
     }
 
     /// Add a single message to the queue.
@@ -172,58 +136,25 @@ impl Queue {
         self.get_message_by_id(id).await
     }
 
-    // Helper to build the insert SQL for a queue (no longer needed)
-
-    // Helper to insert a single message (sync, for use in both single and batch)
-    fn insert_one_message_sync(
-        conn: &mut PgConnection,
-        sql: &str,
-        payload_json: &serde_json::Value,
-        now: chrono::DateTime<chrono::Utc>,
-        vt: chrono::DateTime<chrono::Utc>,
-    ) -> std::result::Result<i64, crate::error::PgqrsError> {
-        #[derive(diesel::QueryableByName)]
-        struct MsgId {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            msg_id: i64,
-        }
-        let result = sql_query(sql)
-            .bind::<diesel::sql_types::Int4, _>(0)
-            .bind::<diesel::sql_types::Timestamptz, _>(now)
-            .bind::<diesel::sql_types::Timestamptz, _>(vt)
-            .bind::<diesel::sql_types::Jsonb, _>(payload_json)
-            .get_result::<MsgId>(conn)?;
-        Ok(result.msg_id)
-    }
-
     async fn insert_message(
         &self,
         payload: &serde_json::Value,
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        let pool = self.pool.clone();
-        let sql = self.insert_sql.clone();
-        let payload_cloned = payload.clone();
-        let id = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            Self::insert_one_message_sync(&mut conn, &sql, &payload_cloned, now, vt)
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
-        Ok(id)
+        let result = sqlx::query_scalar::<_, i64>(&self.insert_sql)
+            .bind(0_i32) // read_ct
+            .bind(now)
+            .bind(vt)
+            .bind(payload)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(result)
     }
 
-    /// Add a batch of messages to the queue
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue to add messages to
-    /// * `messages` - Vector of (payload, message_type) tuples
-    ///
-    /// # Returns
-    /// Vector of UUIDs for the enqueued messages (in same order as input)
     /// Add multiple messages to the queue in a single batch operation.
     ///
     /// # Arguments
@@ -232,55 +163,52 @@ impl Queue {
     /// # Returns
     /// Vector of enqueued messages.
     pub async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
-        use diesel::Connection;
-        let pool = self.pool.clone();
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(0);
-        let sql = self.insert_sql.clone();
-        let payloads_cloned = payloads.to_vec();
-        let ids = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            conn.transaction::<_, crate::error::PgqrsError, _>(|txn| {
-                let mut ids = Vec::with_capacity(payloads_cloned.len());
-                for payload_json in &payloads_cloned {
-                    let id = Self::insert_one_message_sync(txn, &sql, payload_json, now, vt)?;
-                    ids.push(id);
-                }
-                Ok(ids)
-            })
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
 
-        // Fetch all messages in a single query using WHERE msg_id IN (...)
-        let ids_str = ids
-            .iter()
-            .map(|id| id.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {} WHERE msg_id IN ({})",
-            self.table_name, ids_str
-        );
-        let pool = self.pool.clone();
-        let queue_messages = tokio::task::spawn_blocking(move || {
-            let mut conn = pool
-                .get()
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        let mut ids = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            let id = sqlx::query_scalar::<_, i64>(&self.insert_sql)
+                .bind(0_i32) // read_ct
+                .bind(now)
+                .bind(vt)
+                .bind(payload)
+                .fetch_one(&mut *tx)
+                .await
                 .map_err(|e| crate::error::PgqrsError::Connection {
                     message: e.to_string(),
                 })?;
-            diesel::sql_query(&sql)
-                .get_results::<QueueMessage>(&mut conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })
-        })
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })??;
+            ids.push(id);
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        // Fetch all messages in a single query using WHERE msg_id = ANY($1)
+        let sql = format!(
+            "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {} WHERE msg_id = ANY($1)",
+            self.table_name
+        );
+
+        let queue_messages = sqlx::query_as::<_, QueueMessage>(&sql)
+            .bind(&ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
         Ok(queue_messages)
     }
 
@@ -296,18 +224,14 @@ impl Queue {
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", &self.queue_name);
 
-        #[derive(diesel::QueryableByName)]
-        struct CountRow {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            count: i64,
-        }
-        self.with_conn(move |conn| {
-            let row = diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::Timestamptz, _>(now)
-                .get_result::<CountRow>(conn)?;
-            Ok(row.count)
-        })
-        .await
+        let count = sqlx::query_scalar::<_, i64>(&sql)
+            .bind(now)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(count)
     }
 
     /// Read up to `limit` messages from the queue, using the default visibility timeout.
@@ -336,16 +260,14 @@ impl Queue {
             .clone()
             .replace("{vt}", &vt.to_string())
             .replace("{limit}", &limit.to_string());
-        let sql = sql;
-        self.with_conn(move |conn| {
-            let result = diesel::sql_query(&sql)
-                .get_results::<QueueMessage>(conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            Ok(result)
-        })
-        .await
+
+        let result = sqlx::query_as::<_, QueueMessage>(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(result)
     }
 
     /// Remove a message from the queue (delete it permanently).
@@ -363,16 +285,14 @@ impl Queue {
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", &self.queue_name);
 
-        self.with_conn(move |conn| {
-            let result = diesel::sql_query(&sql)
-                .bind::<diesel::sql_types::BigInt, _>(message_id)
-                .get_result::<QueueMessage>(conn)
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            Ok(result)
-        })
-        .await
+        let result = sqlx::query_as::<_, QueueMessage>(&sql)
+            .bind(message_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(result)
     }
 
     /// Remove a batch of messages from the queue.
@@ -385,24 +305,13 @@ impl Queue {
     pub async fn delete_batch(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let sql = self.delete_batch_sql.clone();
 
-        #[derive(diesel::QueryableByName)]
-        struct DeletedRow {
-            #[diesel(sql_type = diesel::sql_types::BigInt)]
-            msg_id: i64,
-        }
-
-        let ids = message_ids.clone();
-        let deleted_ids = self
-            .with_conn(move |conn| {
-                let rows = diesel::sql_query(&sql)
-                    .bind::<diesel::sql_types::Array<diesel::sql_types::BigInt>, _>(&ids)
-                    .get_results::<DeletedRow>(conn)
-                    .map_err(|e| crate::error::PgqrsError::Connection {
-                        message: e.to_string(),
-                    })?;
-                Ok(rows.into_iter().map(|r| r.msg_id).collect::<Vec<i64>>())
-            })
-            .await?;
+        let deleted_ids: Vec<i64> = sqlx::query_scalar(&sql)
+            .bind(&message_ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
 
         // For each input id, true if it was deleted, false otherwise
         let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
@@ -427,18 +336,14 @@ impl Queue {
         additional_seconds: u32,
     ) -> Result<bool> {
         let sql = self.update_vt_sql.clone();
-        let updated = self
-            .with_conn(move |conn| {
-                let result = diesel::sql_query(&sql)
-                    .bind::<diesel::sql_types::Int4, _>(additional_seconds as i32)
-                    .bind::<diesel::sql_types::BigInt, _>(message_id)
-                    .execute(conn)
-                    .map_err(|e| crate::error::PgqrsError::Connection {
-                        message: e.to_string(),
-                    })?;
-                Ok(result)
-            })
-            .await?;
-        Ok(updated > 0)
+        let updated = sqlx::query(&sql)
+            .bind(additional_seconds as i32)
+            .bind(message_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+        Ok(updated.rows_affected() > 0)
     }
 }

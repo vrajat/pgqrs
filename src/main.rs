@@ -285,24 +285,24 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         })
     };
 
-    let admin = PgqrsAdmin::new(&config);
+    let admin = PgqrsAdmin::new(&config).await?;
 
     match cli.command {
         Commands::Install { dry_run } => {
             tracing::info!("Installing pgqrs schema (dry_run: {})...", dry_run);
-            admin.install(dry_run)?;
+            admin.install(dry_run).await?;
             tracing::info!("Installation completed successfully");
         }
 
         Commands::Uninstall { dry_run } => {
             tracing::info!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
-            admin.uninstall(dry_run)?;
+            admin.uninstall(dry_run).await?;
             tracing::info!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
             tracing::info!("Verifying pgqrs installation...");
-            admin.verify()?;
+            admin.verify().await?;
             tracing::info!("Verification completed successfully");
         }
 

@@ -20,30 +20,23 @@
 //!     println!("{}", msg);
 //! }
 //! ```
-use crate::schema::pgqrs::meta;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
-use diesel::{prelude::QueryableByName, Queryable, Selectable};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self};
 
 /// A message in the queue
-#[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct QueueMessage {
     /// Unique message ID
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub msg_id: i64,
     /// Number of times this message has been read
-    #[diesel(sql_type = diesel::sql_types::Int4)]
     pub read_ct: i32,
     /// Timestamp when the message was enqueued
-    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
     /// Visibility timeout (when the message becomes available again)
-    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
     pub vt: chrono::DateTime<chrono::Utc>,
     /// The actual message payload (JSON)
-    #[diesel(sql_type = diesel::sql_types::Jsonb)]
     pub message: serde_json::Value,
 }
 
@@ -76,14 +69,12 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Queryable, Selectable, PartialEq, Debug, Serialize, Deserialize)]
-#[diesel(table_name = meta)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MetaResult {
     /// Name of the queue
-    #[diesel(sql_type = diesel::sql_types::Text)]
     pub queue_name: String,
     /// Timestamp when the queue was created
-    pub created_at: NaiveDateTime,
+    pub created_at: DateTime<Utc>,
     /// Whether the queue is unlogged (PostgreSQL optimization)
     pub unlogged: bool,
 }

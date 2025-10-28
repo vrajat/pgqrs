@@ -29,11 +29,8 @@ pub type Result<T> = std::result::Result<T, PgqrsError>;
 /// Error types for pgqrs operations
 #[derive(Error, Debug)]
 pub enum PgqrsError {
-    #[error("Connection pool error: {0}")]
-    Pool(#[from] r2d2::Error),
-
     #[error("Database error: {0}")]
-    Database(#[from] diesel::result::Error),
+    Database(#[from] sqlx::Error),
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -64,7 +61,4 @@ pub enum PgqrsError {
 
     #[error("Internal error: {message}")]
     Internal { message: String },
-
-    #[error("Migration error: {message}")]
-    Migration { message: String },
 }

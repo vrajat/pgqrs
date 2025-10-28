@@ -27,8 +27,8 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = Config::default();
-//!     let admin = PgqrsAdmin::new(&config);
-//!     admin.install(false)?;
+//!     let admin = PgqrsAdmin::new(&config).await?;
+//!     admin.install(false).await?;
 //!     admin.create_queue(&"jobs".to_string(), false).await?;
 //!     Ok(())
 //! }
@@ -43,7 +43,6 @@ pub mod queue;
 pub mod types;
 
 mod constants;
-mod schema;
 
 pub use crate::admin::PgqrsAdmin;
 pub use crate::error::{PgqrsError, Result};

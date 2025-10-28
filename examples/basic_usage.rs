@@ -11,11 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
 
     // Create client
-    let admin = PgqrsAdmin::new(&config);
+    let admin = PgqrsAdmin::new(&config).await?;
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
-    admin.install(false)?;
+    admin.install(false).await?;
 
     // Create queues
     println!("Creating queues...");
