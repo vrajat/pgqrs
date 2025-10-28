@@ -32,7 +32,7 @@ impl Drop for CleanupGuard {
                     .await
                     .expect("Failed to create PgqrsAdmin for uninstall");
                     admin
-                        .uninstall(false)
+                        .uninstall()
                         .await
                         .expect("Uninstall schema failed");
                     // Explicitly stop the container to ensure it is killed
@@ -101,7 +101,7 @@ pub async fn get_postgres_dsn() -> &'static String {
             .await
             .expect("Failed to create PgqrsAdmin");
             admin
-                .install(false)
+                .install()
                 .await
                 .expect("Failed to install schema");
             CleanupGuard {
