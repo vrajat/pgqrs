@@ -61,9 +61,7 @@ impl PgqrsAdmin {
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
-        Ok(Self {
-            pool,
-         })
+        Ok(Self { pool })
     }
 
     /// Install pgqrs schema and infrastructure in the database.

@@ -51,8 +51,8 @@ impl JsonOutputWriter {
 mod tests {
     use super::{JsonOutputWriter, OutputWriter, TableOutputWriter};
     use chrono::Utc;
-    use serde_json::{json, Value};
     use serde::Serialize;
+    use serde_json::{json, Value};
     use tabled::Tabled;
 
     #[derive(Serialize, Tabled)]

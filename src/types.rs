@@ -23,8 +23,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tabled::Tabled;
 use std::fmt::{self};
+use tabled::Tabled;
 
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]

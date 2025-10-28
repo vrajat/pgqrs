@@ -26,9 +26,7 @@ use std::process;
 
 mod output;
 
-use crate::output::{
-    TableOutputWriter, JsonOutputWriter, OutputWriter
-};
+use crate::output::{JsonOutputWriter, OutputWriter, TableOutputWriter};
 
 #[derive(Parser)]
 #[command(name = "pgqrs")]
@@ -250,7 +248,12 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands, writer: OutputWriter, out: &mut dyn std::io::Write) -> anyhow::Result<()> {
+async fn handle_queue_commands(
+    admin: &PgqrsAdmin,
+    action: QueueCommands,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
     match action {
         QueueCommands::Create { name, unlogged } => {
             tracing::info!("Creating queue '{}' (unlogged: {})...", &name, unlogged);
