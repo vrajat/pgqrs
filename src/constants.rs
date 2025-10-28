@@ -1,6 +1,16 @@
 pub const QUEUE_PREFIX: &str = r#"q"#;
 pub const PGQRS_SCHEMA: &str = "pgqrs";
 pub const VISIBILITY_TIMEOUT: i32 = 5;
+
+pub const CREATE_SCHEMA_STATEMENT: &str = r#"CREATE SCHEMA IF NOT EXISTS pgqrs;"#;
+
+pub const CREATE_META_TABLE_STATEMENT: &str = r#"
+    CREATE TABLE IF NOT EXISTS pgqrs.meta (
+        queue_name VARCHAR UNIQUE NOT NULL PRIMARY KEY,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+        unlogged BOOLEAN DEFAULT FALSE
+    );
+"#;
 pub const CREATE_QUEUE_STATEMENT: &str = r#"
     CREATE {UNLOGGED} TABLE IF NOT EXISTS {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} (
         msg_id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,

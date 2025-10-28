@@ -1,9 +1,7 @@
-use diesel::deserialize::QueryableByName;
-use diesel::RunQueryDsl;
 use serde_json::json;
-#[derive(QueryableByName)]
+
+#[derive(sqlx::FromRow)]
 struct RelPersistence {
-    #[diesel(sql_type = diesel::sql_types::Text)]
     relpersistence: String,
 }
 
@@ -13,7 +11,7 @@ mod common;
 async fn verify() {
     let admin = common::get_pgqrs_client().await;
     // Verify should succeed
-    assert!(admin.verify().is_ok());
+    assert!(admin.verify().await.is_ok());
 }
 
 #[tokio::test]
@@ -37,11 +35,11 @@ async fn test_create_logged_queue() {
 
     // Check system tables for logged table
     // removed unused variable table_name
-    let sql = format!("SELECT relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
-    let pool = admin.pool.clone();
-    let mut conn = pool.get().unwrap();
-    let result = diesel::sql_query(sql)
-        .load::<RelPersistence>(&mut conn)
+    let sql = format!("SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    let pool = &admin.pool;
+    let result = sqlx::query_as::<_, RelPersistence>(&sql)
+        .fetch_all(pool)
+        .await
         .unwrap();
     assert_eq!(
         result[0].relpersistence, "p",
@@ -71,11 +69,11 @@ async fn test_create_unlogged_queue() {
     );
 
     // Check system tables for unlogged table
-    let sql = format!("SELECT relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
-    let pool = admin.pool.clone();
-    let mut conn = pool.get().unwrap();
-    let result = diesel::sql_query(sql)
-        .load::<RelPersistence>(&mut conn)
+    let sql = format!("SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    let pool = &admin.pool;
+    let result = sqlx::query_as::<_, RelPersistence>(&sql)
+        .fetch_all(pool)
+        .await
         .unwrap();
     assert_eq!(
         result[0].relpersistence, "u",

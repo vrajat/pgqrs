@@ -43,7 +43,6 @@ pub mod queue;
 pub mod types;
 
 mod constants;
-mod schema;
 
 pub use crate::admin::PgqrsAdmin;
 pub use crate::error::{PgqrsError, Result};

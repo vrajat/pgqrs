@@ -1,6 +1,3 @@
-use diesel::pg::PgConnection;
-use diesel::r2d2::{ConnectionManager, Pool};
-use diesel::RunQueryDsl;
 use pgqrs::admin::PgqrsAdmin;
 use std::sync::Arc;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
@@ -24,7 +21,15 @@ struct CleanupGuard {
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         let admin = ADMIN.get().expect("Admin not initialized");
-        admin.uninstall(false).expect("Failed to uninstall schema");
+        // Use a simple blocking approach since this is a test cleanup
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        rt.block_on(async {
+            admin
+                .uninstall(false)
+                .await
+                .expect("Failed to uninstall schema");
+        });
+
         match &self.resource {
             DbResource::Owned(container) => {
                 // Explicitly stop the container to ensure it is killed
@@ -53,25 +58,24 @@ pub async fn get_pgqrs_client() -> &'static PgqrsAdmin {
             let dsn = std::env::var("PGQRS_TEST_DSN").ok();
             if let Some(database_url) = dsn {
                 println!("Using external database: {}", database_url);
-                // Create connection pool
-                let manager = ConnectionManager::<PgConnection>::new(&database_url);
-                let pool = Pool::builder()
-                    .max_size(10)
-                    .build(manager)
-                    .expect("Failed to create connection pool");
-                // Test the connection
-                {
-                    let mut conn = pool.get().expect("Failed to get connection from pool");
-                    diesel::sql_query("SELECT 1")
-                        .execute(&mut conn)
-                        .expect("Failed to execute test query");
-                    println!("Database connection verified");
-                }
                 // Create Admin and install schema
                 let mut config = pgqrs::config::Config::default();
                 config.dsn = database_url.clone();
-                let admin = PgqrsAdmin::new(&config);
-                admin.install(false).expect("Failed to install schema");
+                let admin = PgqrsAdmin::new(&config)
+                    .await
+                    .expect("Failed to create admin");
+
+                // Test the connection
+                sqlx::query("SELECT 1")
+                    .execute(&admin.pool)
+                    .await
+                    .expect("Failed to execute test query");
+                println!("Database connection verified");
+
+                admin
+                    .install(false)
+                    .await
+                    .expect("Failed to install schema");
                 // Store the cleanup guard (external)
                 let guard = CleanupGuard {
                     resource: DbResource::External,
@@ -100,25 +104,25 @@ pub async fn get_pgqrs_client() -> &'static PgqrsAdmin {
                 println!("Database URL: {}", database_url);
                 // Wait for postgres to be ready
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                // Create connection pool
-                let manager = ConnectionManager::<PgConnection>::new(&database_url);
-                let pool = Pool::builder()
-                    .max_size(10)
-                    .build(manager)
-                    .expect("Failed to create connection pool");
-                // Test the connection
-                {
-                    let mut conn = pool.get().expect("Failed to get connection from pool");
-                    diesel::sql_query("SELECT 1")
-                        .execute(&mut conn)
-                        .expect("Failed to execute test query");
-                    println!("Database connection verified");
-                }
+
                 // Create Admin and install schema
                 let mut config = pgqrs::config::Config::default();
                 config.dsn = database_url.clone();
-                let admin = PgqrsAdmin::new(&config);
-                admin.install(false).expect("Failed to install schema");
+                let admin = PgqrsAdmin::new(&config)
+                    .await
+                    .expect("Failed to create admin");
+
+                // Test the connection
+                sqlx::query("SELECT 1")
+                    .execute(&admin.pool)
+                    .await
+                    .expect("Failed to execute test query");
+                println!("Database connection verified");
+
+                admin
+                    .install(false)
+                    .await
+                    .expect("Failed to install schema");
                 // Store the cleanup guard (owned)
                 let guard = CleanupGuard {
                     resource: DbResource::Owned(container),
