@@ -92,7 +92,16 @@ mod tests {
         let messages = vec![sample_message()];
         writer.write_list(&messages, &mut cursor).unwrap();
         let output = String::from_utf8(cursor.into_inner()).unwrap();
-        assert!(output.contains("foo: bar"));
-        assert!(output.contains("msg_id:"));
+
+        // Verify table format and content
+        assert!(output.contains("msg_id"), "Should contain msg_id column header");
+        assert!(output.contains("message"), "Should contain message column header");
+        assert!(output.contains("foo"), "Should contain the foo key from JSON");
+        assert!(output.contains("bar"), "Should contain the bar value from JSON");
+
+        // Verify table structure (borders and separators)
+        assert!(output.contains("+"), "Should contain table corner characters");
+        assert!(output.contains("|"), "Should contain table border characters");
+        assert!(output.contains("-"), "Should contain table horizontal lines");
     }
 }
