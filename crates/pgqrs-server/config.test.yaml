@@ -1,0 +1,5 @@
+database:
+  database_url: "postgres://postgres:postgres@localhost:5432/pgqrs_test"
+  max_connections: 1
+  visibility_timeout: 1
+  dead_letter_after: 1

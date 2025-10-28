@@ -1,0 +1,18 @@
+[package]
+name = "workspace-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+pgqrs-server = { path = "../crates/pgqrs-server" }
+pgqrs-test-utils = { path = "../crates/pgqrs-test-utils" }
+tokio = { version = "1", features = ["full"] }
+tonic = "0.14.2"
+
+[[test]]
+name = "cli_tests"
+path = "cli_tests.rs"
+
+[[test]]
+name = "lib_tests"
+path = "lib_tests.rs"

@@ -1,0 +1,5 @@
+database:
+  dsn: "postgres://postgres:postgres@localhost:5432/pgqrs_test"
+  max_connections: 10
+  visibility_timeout: 30
+  dead_letter_after: 5
