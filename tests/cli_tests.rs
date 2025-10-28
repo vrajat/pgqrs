@@ -1,8 +1,6 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
-    rt.block_on(async {
-        common::get_postgres_dsn().await.clone()
-    })
+    rt.block_on(async { common::get_postgres_dsn().await.clone() })
 }
 
 mod common;
