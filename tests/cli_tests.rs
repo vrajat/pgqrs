@@ -103,7 +103,14 @@ fn test_cli_create_list_delete_unlogged_queue() {
     // List queues and check unlogged field
     let list_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "list"])
+        .args([
+            "--database-url",
+            &db_url,
+            "--format",
+            "json",
+            "queue",
+            "list",
+        ])
         .output()
         .expect("Failed to run CLI list queues");
     assert!(
