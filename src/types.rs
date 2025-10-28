@@ -24,9 +24,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self};
+use tabled::Tabled;
 
 /// A message in the queue
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueMessage {
     /// Unique message ID
     pub msg_id: i64,
@@ -69,7 +70,7 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct MetaResult {
     /// Name of the queue
     pub queue_name: String,

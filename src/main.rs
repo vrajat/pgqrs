@@ -22,83 +22,11 @@ use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
 use std::fs::File;
-use std::io::{self, Write};
 use std::process;
 
-enum OutputFormatWriter {
-    Json(JsonOutputWriter),
-    Yaml(YamlOutputWriter),
-}
+mod output;
 
-impl OutputFormatWriter {
-    pub fn write<T: serde::Serialize>(
-        &self,
-        value: &T,
-        out: &mut dyn std::io::Write,
-    ) -> anyhow::Result<()> {
-        match self {
-            OutputFormatWriter::Json(w) => w.write(value, out),
-            OutputFormatWriter::Yaml(w) => w.write(value, out),
-        }
-    }
-}
-// Writer trait for message output
-trait OutputWriter {
-    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()>;
-}
-
-struct JsonOutputWriter;
-impl OutputWriter for JsonOutputWriter {
-    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()> {
-        let json = serde_json::to_string_pretty(value)?;
-        writeln!(out, "{}", json)?;
-        Ok(())
-    }
-}
-
-struct CsvOutputWriter;
-impl CsvOutputWriter {
-    fn write_queue_messages(
-        &self,
-        messages: &[pgqrs::types::QueueMessage],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
-        writeln!(out, "msg_id,enqueued_at,read_ct,vt,message")?;
-        for msg in messages {
-            let payload = serde_json::to_string(&msg.message)?;
-            writeln!(
-                out,
-                "{},{},{},{},{}",
-                msg.msg_id,
-                msg.enqueued_at.format("%Y-%m-%d %H:%M:%S UTC"),
-                msg.read_ct,
-                msg.vt.format("%Y-%m-%d %H:%M:%S UTC"),
-                payload
-            )?;
-        }
-        Ok(())
-    }
-    fn write_queue_names(
-        &self,
-        queues: &[pgqrs::types::MetaResult],
-        out: &mut dyn Write,
-    ) -> anyhow::Result<()> {
-        writeln!(out, "queue_name,unlogged")?;
-        for queue in queues {
-            writeln!(out, "{},{}", queue.queue_name, queue.unlogged)?;
-        }
-        Ok(())
-    }
-}
-
-struct YamlOutputWriter;
-impl OutputWriter for YamlOutputWriter {
-    fn write<T: serde::Serialize>(&self, value: &T, out: &mut dyn Write) -> anyhow::Result<()> {
-        let yaml = serde_yaml::to_string(value)?;
-        writeln!(out, "{}", yaml)?;
-        Ok(())
-    }
-}
+use crate::output::{JsonOutputWriter, OutputWriter, TableOutputWriter};
 
 #[derive(Parser)]
 #[command(name = "pgqrs")]
@@ -123,29 +51,21 @@ struct Cli {
     /// Log level: error, warn, info, debug, trace
     #[arg(long, default_value = "info")]
     log_level: String,
-    /// Output format: json, csv, yaml
-    #[arg(long, default_value = "json")]
-    output_format: String,
+    /// Output format: json, table
+    #[arg(long, default_value = "table")]
+    format: String,
 
     /// Output destination: stdout or file path
     #[arg(long, default_value = "stdout")]
-    output_dest: String,
+    out: String,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Install pgqrs schema
-    Install {
-        /// Perform a dry run without making changes
-        #[arg(long)]
-        dry_run: bool,
-    },
+    Install,
     /// Uninstall pgqrs schema
-    Uninstall {
-        /// Perform a dry run without making changes
-        #[arg(long)]
-        dry_run: bool,
-    },
+    Uninstall,
     /// Verify pgqrs installation
     Verify,
     /// Queue management commands
@@ -286,17 +206,27 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     };
 
     let admin = PgqrsAdmin::new(&config).await?;
+    let writer = match cli.format.to_lowercase().as_str() {
+        "json" => OutputWriter::Json(JsonOutputWriter),
+        _ => OutputWriter::Table(TableOutputWriter),
+    };
+    // Use an owned boxed writer so the underlying writer lives long enough for borrows
+    let mut out_writer: Box<dyn std::io::Write> = match cli.out.as_str() {
+        "stdout" => Box::new(std::io::stdout()),
+        _ => Box::new(File::create(&cli.out)?),
+    };
+    let out: &mut dyn std::io::Write = out_writer.as_mut();
 
     match cli.command {
-        Commands::Install { dry_run } => {
-            tracing::info!("Installing pgqrs schema (dry_run: {})...", dry_run);
-            admin.install(dry_run).await?;
+        Commands::Install => {
+            tracing::info!("Installing pgqrs schema ...");
+            admin.install().await?;
             tracing::info!("Installation completed successfully");
         }
 
-        Commands::Uninstall { dry_run } => {
-            tracing::info!("Uninstalling pgqrs schema (dry_run: {})...", dry_run);
-            admin.uninstall(dry_run).await?;
+        Commands::Uninstall => {
+            tracing::info!("Uninstalling pgqrs schema ...");
+            admin.uninstall().await?;
             tracing::info!("Uninstall completed successfully");
         }
 
@@ -307,18 +237,23 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         }
 
         Commands::Queue { action } => {
-            handle_queue_commands(&admin, action).await?;
+            handle_queue_commands(&admin, action, writer, out).await?;
         }
 
         Commands::Message { action } => {
-            handle_message_commands(&admin, action, &cli.output_format, &cli.output_dest).await?;
+            handle_message_commands(&admin, action, writer, out).await?;
         }
     }
 
     Ok(())
 }
 
-async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> anyhow::Result<()> {
+async fn handle_queue_commands(
+    admin: &PgqrsAdmin,
+    action: QueueCommands,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
     match action {
         QueueCommands::Create { name, unlogged } => {
             tracing::info!("Creating queue '{}' (unlogged: {})...", &name, unlogged);
@@ -329,33 +264,7 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
             let meta_results = admin.list_queues().await?;
-            let output_format = "json"; // Default, can be extended to CLI arg
-            let output_dest = "stdout"; // Default, can be extended to CLI arg
-            if output_format == "csv" {
-                let writer = CsvOutputWriter;
-                if output_dest == "stdout" {
-                    let stdout = std::io::stdout();
-                    let mut handle = stdout.lock();
-                    writer.write_queue_names(&meta_results, &mut handle)?;
-                } else {
-                    let mut file = std::fs::File::create(output_dest)?;
-                    writer.write_queue_names(&meta_results, &mut file)?;
-                }
-            } else {
-                let writer = match output_format {
-                    "json" => OutputFormatWriter::Json(JsonOutputWriter),
-                    "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
-                    _ => OutputFormatWriter::Json(JsonOutputWriter),
-                };
-                if output_dest == "stdout" {
-                    let stdout = std::io::stdout();
-                    let mut handle = stdout.lock();
-                    writer.write(&meta_results, &mut handle)?;
-                } else {
-                    let mut file = std::fs::File::create(output_dest)?;
-                    writer.write(&meta_results, &mut file)?;
-                }
-            }
+            writer.write_list(&meta_results, out)?;
         }
 
         QueueCommands::Delete { name } => {
@@ -427,8 +336,8 @@ async fn handle_queue_commands(admin: &PgqrsAdmin, action: QueueCommands) -> any
 async fn handle_message_commands(
     admin: &PgqrsAdmin,
     action: MessageCommands,
-    output_format: &str,
-    output_dest: &str,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match action {
         MessageCommands::Send {
@@ -469,31 +378,7 @@ async fn handle_message_commands(
                 tracing::info!("No messages available");
                 return Ok(());
             }
-            if output_format.to_lowercase() == "csv" {
-                let writer = CsvOutputWriter;
-                if output_dest == "stdout" {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-                    writer.write_queue_messages(&messages, &mut handle)?;
-                } else {
-                    let mut file = File::create(output_dest)?;
-                    writer.write_queue_messages(&messages, &mut file)?;
-                }
-            } else {
-                let writer = match output_format.to_lowercase().as_str() {
-                    "json" => OutputFormatWriter::Json(JsonOutputWriter),
-                    "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
-                    _ => OutputFormatWriter::Json(JsonOutputWriter),
-                };
-                if output_dest == "stdout" {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-                    writer.write(&messages, &mut handle)?;
-                } else {
-                    let mut file = File::create(output_dest)?;
-                    writer.write(&messages, &mut file)?;
-                }
-            }
+            writer.write_list(&messages, out)?;
             Ok(())
         }
         MessageCommands::Dequeue { queue } => {
@@ -504,22 +389,7 @@ async fn handle_message_commands(
                 tracing::info!("No messages available");
                 return Ok(());
             }
-            let writer = match output_format.to_lowercase().as_str() {
-                "json" => OutputFormatWriter::Json(JsonOutputWriter),
-                "yaml" => OutputFormatWriter::Yaml(YamlOutputWriter),
-                other => {
-                    tracing::warn!("Unknown output format '{}', defaulting to JSON", other);
-                    OutputFormatWriter::Json(JsonOutputWriter)
-                }
-            };
-            if output_dest == "stdout" {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                writer.write(&messages, &mut handle)?;
-            } else {
-                let mut file = File::create(output_dest)?;
-                writer.write(&messages, &mut file)?;
-            }
+            writer.write_list(&messages, out)?;
             Ok(())
         }
         MessageCommands::Delete { queue, id } => {
@@ -543,5 +413,3 @@ async fn handle_message_commands(
         }
     }
 }
-
-mod main_writer_tests;

@@ -31,10 +31,7 @@ impl Drop for CleanupGuard {
                     })
                     .await
                     .expect("Failed to create PgqrsAdmin for uninstall");
-                    admin
-                        .uninstall(false)
-                        .await
-                        .expect("Uninstall schema failed");
+                    admin.uninstall().await.expect("Uninstall schema failed");
                     // Explicitly stop the container to ensure it is killed
                     let container = Arc::clone(container);
                     let _ = container.stop().await;
@@ -100,10 +97,7 @@ pub async fn get_postgres_dsn() -> &'static String {
             })
             .await
             .expect("Failed to create PgqrsAdmin");
-            admin
-                .install(false)
-                .await
-                .expect("Failed to install schema");
+            admin.install().await.expect("Failed to install schema");
             CleanupGuard {
                 dsn: database_url.clone(),
                 resource,

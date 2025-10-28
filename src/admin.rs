@@ -21,7 +21,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = Config::default();
 //!     let admin = PgqrsAdmin::new(&config).await?;
-//!     admin.install(false).await?;
+//!     admin.install().await?;
 //!     admin.create_queue(&"jobs".to_string(), false).await?;
 //!     Ok(())
 //! }
@@ -43,7 +43,6 @@ use sqlx::PgPool;
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
     pub pool: PgPool,
-    config: Config,
 }
 
 impl PgqrsAdmin {
@@ -62,33 +61,14 @@ impl PgqrsAdmin {
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
-        Ok(Self {
-            pool,
-            config: config.clone(),
-        })
-    }
-
-    /// Get the configuration used by this admin instance.
-    ///
-    /// # Returns
-    /// Reference to the [`Config`] struct.
-    pub fn config(&self) -> &Config {
-        &self.config
+        Ok(Self { pool })
     }
 
     /// Install pgqrs schema and infrastructure in the database.
     ///
-    /// # Arguments
-    /// * `dry_run` - If true, only validate what would be done without executing
-    ///
     /// # Returns
     /// Ok if installation (or validation) succeeds, error otherwise.
-    pub async fn install(&self, dry_run: bool) -> Result<()> {
-        if dry_run {
-            // Just validate: check if schemas would run
-            return Ok(());
-        }
-
+    pub async fn install(&self) -> Result<()> {
         // Create schema
         sqlx::query(CREATE_SCHEMA_STATEMENT)
             .execute(&self.pool)
@@ -110,18 +90,10 @@ impl PgqrsAdmin {
 
     /// Uninstall pgqrs schema and remove all state from the database.
     ///
-    /// # Arguments
-    /// * `dry_run` - If true, only validate what would be done without executing
-    ///
     /// # Returns
     /// Ok if uninstall (or validation) succeeds, error otherwise.
-    pub async fn uninstall(&self, dry_run: bool) -> Result<()> {
+    pub async fn uninstall(&self) -> Result<()> {
         let uninstall_statement = UNINSTALL_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        if dry_run {
-            tracing::info!("Uninstall statement (dry run): {}", uninstall_statement);
-            // Just validate: check if schema exists
-            return Ok(());
-        }
         tracing::debug!("Executing uninstall statement: {}", uninstall_statement);
         sqlx::query(&uninstall_statement)
             .execute(&self.pool)

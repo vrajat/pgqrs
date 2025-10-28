@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
-    admin.install(false).await?;
+    admin.install().await?;
 
     // Create queues
     println!("Creating queues...");
