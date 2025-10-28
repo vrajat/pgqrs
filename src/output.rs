@@ -94,14 +94,35 @@ mod tests {
         let output = String::from_utf8(cursor.into_inner()).unwrap();
 
         // Verify table format and content
-        assert!(output.contains("msg_id"), "Should contain msg_id column header");
-        assert!(output.contains("message"), "Should contain message column header");
-        assert!(output.contains("foo"), "Should contain the foo key from JSON");
-        assert!(output.contains("bar"), "Should contain the bar value from JSON");
+        assert!(
+            output.contains("msg_id"),
+            "Should contain msg_id column header"
+        );
+        assert!(
+            output.contains("message"),
+            "Should contain message column header"
+        );
+        assert!(
+            output.contains("foo"),
+            "Should contain the foo key from JSON"
+        );
+        assert!(
+            output.contains("bar"),
+            "Should contain the bar value from JSON"
+        );
 
         // Verify table structure (borders and separators)
-        assert!(output.contains("+"), "Should contain table corner characters");
-        assert!(output.contains("|"), "Should contain table border characters");
-        assert!(output.contains("-"), "Should contain table horizontal lines");
+        assert!(
+            output.contains("+"),
+            "Should contain table corner characters"
+        );
+        assert!(
+            output.contains("|"),
+            "Should contain table border characters"
+        );
+        assert!(
+            output.contains("-"),
+            "Should contain table horizontal lines"
+        );
     }
 }
