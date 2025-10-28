@@ -1,120 +1,137 @@
+use ctor::dtor;
+use once_cell::sync::Lazy;
 use pgqrs::admin::PgqrsAdmin;
 use sqlx::postgres::PgPoolOptions;
-use std::sync::Arc;
+use std::sync::RwLock;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
-use tokio::sync::OnceCell;
 
-static CLEANUP_GUARD: OnceCell<CleanupGuard> = OnceCell::const_new();
+static POSTGRES_CONTAINER: Lazy<RwLock<Option<ContainerAsync<Postgres>>>> = Lazy::new(|| {
+    RwLock::new(None) // Initialize with None
+});
 
-#[derive(Debug)]
-enum DbResource {
-    Owned(Arc<ContainerAsync<Postgres>>),
-    External,
+static DSN: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+
+/// Setup database connection, verify it works, and install schema
+async fn setup_database(dsn: &str) {
+    // Test the connection and setup schema
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(dsn)
+        .await
+        .expect("Failed to connect to Postgres");
+
+    let _val: i32 = sqlx::query_scalar("SELECT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("SELECT 1 failed");
+    println!("Database connection verified");
+
+    let admin = PgqrsAdmin::new(&pgqrs::config::Config {
+        dsn: dsn.to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("Failed to create PgqrsAdmin");
+    admin.install().await.expect("Failed to install schema");
 }
 
-#[derive(Debug)]
-struct CleanupGuard {
-    dsn: String,
-    resource: DbResource,
-}
+async fn init_postgres() {
+    let mut instance = POSTGRES_CONTAINER.write().unwrap();
 
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        match &self.resource {
-            DbResource::Owned(container) => {
-                // Extract the async cleanup logic to avoid duplication
-                let cleanup_future = async {
-                    let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-                        dsn: self.dsn.clone(),
-                        ..Default::default()
-                    })
-                    .await
-                    .expect("Failed to create PgqrsAdmin for uninstall");
-                    admin.uninstall().await.expect("Uninstall schema failed");
-                    // Explicitly stop the container to ensure it is killed
-                    let container = Arc::clone(container);
-                    let _ = container.stop().await;
-                };
-
-                // Use try_current() with fallback to new runtime
-                let _cleanup_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.block_on(cleanup_future)
-                } else {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                    rt.block_on(cleanup_future)
-                };
-                tracing::info!("Testcontainer stopped");
-            }
-            DbResource::External => {
-                tracing::info!("External DB used, not stopping container");
-            }
+    if instance.is_none() {
+        // Check for external DSN first
+        if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+            println!("Using external database: {}", dsn);
+            setup_database(&dsn).await;
+            *DSN.write().unwrap() = Some(dsn);
+        } else {
+            // Start container and get DSN
+            let (container, database_url) = start_postgres_container().await;
+            setup_database(&database_url).await;
+            *DSN.write().unwrap() = Some(database_url);
+            *instance = Some(container);
         }
     }
 }
 
-/// Get a PgqrsAdmin client connected to a PostgreSQL test database.
+#[dtor]
+fn drop_postgres() {
+    // Always cleanup schema first if we have a DSN
+    if let Some(dsn) = DSN.read().unwrap().as_ref() {
+        // Create a simple runtime for cleanup
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        rt.block_on(async {
+            if let Ok(admin) = PgqrsAdmin::new(&pgqrs::config::Config {
+                dsn: dsn.clone(),
+                ..Default::default()
+            })
+            .await
+            {
+                let _ = admin.uninstall().await;
+                println!("Schema uninstalled");
+            }
+        });
+    }
+
+    let container = POSTGRES_CONTAINER.read().unwrap();
+
+    if let Some(container_ref) = container.as_ref() {
+        let id = container_ref.id();
+        println!("Stopping container with ID: {}", id);
+
+        // Try to stop the container gracefully first
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+        let stop_result = rt.block_on(async { container_ref.stop().await });
+
+        if stop_result.is_ok() {
+            println!("Container stopped gracefully");
+        } else {
+            println!("Graceful stop failed, using docker commands");
+
+            std::process::Command::new("docker")
+                .arg("kill")
+                .arg(id)
+                .output()
+                .expect("failed to kill container");
+
+            std::process::Command::new("docker")
+                .arg("rm")
+                .arg(id)
+                .output()
+                .expect("failed to remove container");
+
+            println!("Container stopped and removed via docker commands");
+        }
+    } else {
+        println!("External DB used, not stopping container");
+    }
+}
+
+/// Get a PostgreSQL DSN for testing.
 ///
 /// This function handles both external database connections (via PGQRS_TEST_DSN env var)
 /// and automatically managed testcontainer databases. The database schema is automatically
 /// installed and cleaned up when tests complete.
 ///
 /// # Returns
-/// A static reference to the PgqrsAdmin client that can be used for tests
-pub async fn get_postgres_dsn() -> &'static String {
-    let guard_ref = CLEANUP_GUARD
-        .get_or_init(|| async {
-            // Check for external DSN or start container
-            let (database_url, resource) = if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
-                println!("Using external database: {}", dsn);
-                (dsn, DbResource::External)
-            } else {
-                let (database_url, container) = start_postgres_container().await;
-                println!("Database URL: {}", database_url);
-                // Wait for postgres to be ready
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                (database_url, DbResource::Owned(Arc::new(container)))
-            };
-            // Create connection pool
-            let pool = PgPoolOptions::new()
-                .max_connections(1) // Small pool per test
-                .acquire_timeout(std::time::Duration::from_secs(5))
-                .connect(&database_url)
-                .await
-                .expect("Failed to connect to Postgres");
-            // Test the connection
-            {
-                let _val: i32 = sqlx::query_scalar("SELECT 1")
-                    .fetch_one(&pool)
-                    .await
-                    .expect("SELECT 1 failed");
-                println!("Database connection verified");
-            }
+/// A string reference to the database DSN that can be used for tests
+pub async fn get_postgres_dsn() -> &'static str {
+    init_postgres().await;
 
-            let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-                dsn: database_url.clone(),
-                ..Default::default()
-            })
-            .await
-            .expect("Failed to create PgqrsAdmin");
-            admin.install().await.expect("Failed to install schema");
-            CleanupGuard {
-                dsn: database_url.clone(),
-                resource,
-            }
-        })
-        .await;
-    &guard_ref.dsn
+    let dsn = DSN.read().unwrap();
+    let dsn_ref = dsn.as_ref().unwrap();
+
+    // We need to leak the string to get a static reference
+    Box::leak(dsn_ref.clone().into_boxed_str())
 }
 
-/// Create a PostgreSQL testcontainer and return the database URL
-///
-/// This is a simpler alternative to get_pgqrs_client() when you just need
-/// a database URL without the pgqrs schema installation.
+/// Create a PostgreSQL testcontainer and return the container handle and DSN
 ///
 /// # Returns
-/// A tuple of (database_url, container_handle) for manual management
-async fn start_postgres_container() -> (String, ContainerAsync<Postgres>) {
+/// A tuple of (container_handle, database_url) for the PostgreSQL container
+async fn start_postgres_container() -> (ContainerAsync<Postgres>, String) {
     println!("Starting PostgreSQL testcontainer...");
 
     let postgres_image = Postgres::default()
@@ -135,10 +152,11 @@ async fn start_postgres_container() -> (String, ContainerAsync<Postgres>) {
             .expect("Failed to get port")
     );
 
-    println!("PostgreSQL container started: {}", database_url);
+    println!("PostgreSQL container started");
+    println!("Database URL: {}", database_url);
 
     // Wait for postgres to be ready
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-    (database_url, container)
+    (container, database_url)
 }
