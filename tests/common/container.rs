@@ -68,28 +68,53 @@ static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| 
 
 /// Initialize the global container manager with the appropriate database type
 pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>> {
-    // NOTE: Holding a write lock across async operations is generally not good practice
-    // as it can block other threads. However, for test infrastructure where we need
-    // to ensure only one container setup happens globally, this is acceptable.
+    // First, check if we already have an initialized manager (read lock only)
+    {
+        let manager_guard = CONTAINER_MANAGER.read().unwrap();
+        if let Some(manager) = manager_guard.as_ref() {
+            return Ok(manager.get_dsn().unwrap().clone());
+        }
+    } // Release read lock immediately
+
+    // If not initialized, we need to create it. Get write lock to check again and initialize.
+    let manager_guard = CONTAINER_MANAGER.write().unwrap();
+
+    // Double-check pattern: another thread might have initialized while we waited for write lock
+    if let Some(manager) = manager_guard.as_ref() {
+        return Ok(manager.get_dsn().unwrap().clone());
+    }
+
+    // Release the write lock before doing async operations
+    drop(manager_guard);
+
+    // Do all async operations without holding any locks
+    let container: Box<dyn DatabaseContainer> =
+        if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
+            Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
+        } else if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+            Box::new(crate::common::postgres::ExternalPostgresContainer::new(dsn))
+        } else {
+            Box::new(crate::common::postgres::PostgresContainer::new().await?)
+        };
+
+    let mut manager = ContainerManager::new(container);
+    let dsn = manager.initialize().await?;
+
+    // Only now acquire write lock to store the result
     let mut manager_guard = CONTAINER_MANAGER.write().unwrap();
 
+    // Triple-check: ensure no other thread initialized while we were doing async work
     if manager_guard.is_none() {
-        let container: Box<dyn DatabaseContainer> =
-            if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
-                Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
-            } else if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
-                Box::new(crate::common::postgres::ExternalPostgresContainer::new(dsn))
-            } else {
-                Box::new(crate::common::postgres::PostgresContainer::new().await?)
-            };
-
-        let mut manager = ContainerManager::new(container);
-        let dsn = manager.initialize().await?;
         *manager_guard = Some(manager);
         Ok(dsn)
     } else {
-        let manager = manager_guard.as_ref().unwrap();
-        Ok(manager.get_dsn().unwrap().clone())
+        // Another thread won the race - we need to cleanup our container
+        drop(manager_guard); // Release lock before async cleanup
+        let _ = manager.cleanup().await; // Cleanup our unused container
+
+        // Return the DSN from the winning thread's manager
+        let manager_guard = CONTAINER_MANAGER.read().unwrap();
+        Ok(manager_guard.as_ref().unwrap().get_dsn().unwrap().clone())
     }
 }
 
