@@ -94,20 +94,9 @@ impl DatabaseContainer for PostgresContainer {
                 println!("PostgreSQL container stopped gracefully");
                 Ok(())
             }
-            Err(_) => {
-                println!("Graceful stop failed, using docker commands");
-
-                std::process::Command::new("docker")
-                    .arg("kill")
-                    .arg(id)
-                    .output()?;
-
-                std::process::Command::new("docker")
-                    .arg("rm")
-                    .arg(id)
-                    .output()?;
-
-                println!("PostgreSQL container stopped via docker commands");
+            Err(e) => {
+                println!("Failed to stop container: {}", e);
+                // Container will be stopped automatically on drop
                 Ok(())
             }
         }

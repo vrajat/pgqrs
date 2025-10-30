@@ -181,31 +181,21 @@ impl DatabaseContainer for PgBouncerContainer {
         println!("Stopping PgBouncer container...");
 
         // Stop PgBouncer container first
-        let pgbouncer_id = self.pgbouncer_container.id();
         if let Err(e) = self.pgbouncer_container.stop().await {
             eprintln!(
                 "Error stopping PgBouncer container via testcontainers: {}",
                 e
             );
-            let _ = tokio::process::Command::new("docker")
-                .args(&["stop", &pgbouncer_id])
-                .output()
-                .await;
         }
 
         println!("Stopping PostgreSQL container (PgBouncer backend)...");
 
         // Stop PostgreSQL container
-        let postgres_id = self.postgres_container.id();
         if let Err(e) = self.postgres_container.stop().await {
             eprintln!(
                 "Error stopping PostgreSQL container via testcontainers: {}",
                 e
             );
-            let _ = tokio::process::Command::new("docker")
-                .args(&["stop", &postgres_id])
-                .output()
-                .await;
         }
 
         println!("PgBouncer and PostgreSQL containers stopped");
