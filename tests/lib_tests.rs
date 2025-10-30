@@ -117,7 +117,7 @@ async fn test_send_message() {
     let read_messages = queue.read(READ_MESSAGE_COUNT).await;
     assert!(read_messages.is_ok());
     let read_messages = read_messages.unwrap();
-    assert!(read_messages.len() == 1);
+    assert!(read_messages.len() == READ_MESSAGE_COUNT);
     assert!(read_messages[0].message == payload);
     let dequeued_message = queue.dequeue(read_messages[0].msg_id).await;
     assert!(dequeued_message.is_ok());

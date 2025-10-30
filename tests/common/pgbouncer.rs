@@ -127,8 +127,8 @@ impl PgBouncerContainer {
                             println!("PgBouncer query failed on attempt {}: {}", attempt, e);
                             if attempt == PGBOUNCER_READY_MAX_ATTEMPTS {
                                 return Err(format!(
-                                    "PgBouncer connection failed after 10 attempts: {}",
-                                    e
+                                    "PgBouncer connection failed after {} attempts: {}",
+                                    PGBOUNCER_READY_MAX_ATTEMPTS, e
                                 )
                                 .into());
                             }
@@ -139,8 +139,8 @@ impl PgBouncerContainer {
                     println!("PgBouncer connection failed on attempt {}: {}", attempt, e);
                     if attempt == PGBOUNCER_READY_MAX_ATTEMPTS {
                         return Err(format!(
-                            "PgBouncer connection failed after 10 attempts: {}",
-                            e
+                            "PgBouncer connection failed after {} attempts: {}",
+                            PGBOUNCER_READY_MAX_ATTEMPTS, e
                         )
                         .into());
                     }
