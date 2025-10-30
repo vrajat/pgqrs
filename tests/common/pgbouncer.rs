@@ -4,11 +4,8 @@ use sqlx;
 use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
+use super::constants::*;
 use super::container::DatabaseContainer;
-
-// PgBouncer container configuration
-const PGBOUNCER_IMAGE: &str = "edoburu/pgbouncer";
-const PGBOUNCER_VERSION: &str = "latest";
 
 /// PgBouncer + PostgreSQL container setup
 pub struct PgBouncerContainer {
@@ -22,16 +19,19 @@ impl PgBouncerContainer {
         // First start PostgreSQL
         println!("Starting PostgreSQL container for PgBouncer...");
         let postgres_image = Postgres::default()
-            .with_db_name("test_db")
-            .with_user("test_user")
-            .with_password("test_password");
+            .with_db_name(TEST_DB_NAME)
+            .with_user(TEST_DB_USER)
+            .with_password(TEST_DB_PASSWORD);
 
         let postgres_container = postgres_image.start().await?;
 
         let postgres_dsn = format!(
-            "postgres://test_user:test_password@{}:{}/test_db",
+            "postgres://{}:{}@{}:{}/{}",
+            TEST_DB_USER,
+            TEST_DB_PASSWORD,
             postgres_container.get_host().await?,
-            postgres_container.get_host_port_ipv4(5432).await?
+            postgres_container.get_host_port_ipv4(POSTGRES_PORT).await?,
+            TEST_DB_NAME
         );
 
         println!("PostgreSQL container started for PgBouncer backend");
@@ -40,7 +40,7 @@ impl PgBouncerContainer {
         // Test PostgreSQL connection first
         println!("Testing PostgreSQL connection...");
         let pool = sqlx::PgPool::connect(&postgres_dsn).await?;
-        let _: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
+        let _: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
         pool.close().await;
         println!("PostgreSQL connection verified");
 
@@ -71,26 +71,32 @@ impl PgBouncerContainer {
 
         println!("Using host IP for PgBouncer: {}", host_ip);
         let database_url = format!(
-            "postgres://test_user:test_password@{}:{}/test_db",
+            "postgres://{}:{}@{}:{}/{}",
+            TEST_DB_USER,
+            TEST_DB_PASSWORD,
             host_ip,
-            postgres_container.get_host_port_ipv4(5432).await?
+            postgres_container.get_host_port_ipv4(POSTGRES_PORT).await?,
+            TEST_DB_NAME
         );
 
         let pgbouncer_image = GenericImage::new(PGBOUNCER_IMAGE, PGBOUNCER_VERSION)
             .with_env_var("DATABASE_URL", &database_url)
-            .with_env_var("POOL_MODE", "session") // Use session mode for better compatibility
-            .with_env_var("AUTH_TYPE", "md5") // Use md5 auth like PostgreSQL
-            .with_env_var("MAX_CLIENT_CONN", "100")
-            .with_env_var("DEFAULT_POOL_SIZE", "20")
-            .with_env_var("ADMIN_USERS", "test_user")
-            .with_env_var("STATS_USERS", "test_user");
+            .with_env_var("POOL_MODE", PGBOUNCER_POOL_MODE) // Use session mode for better compatibility
+            .with_env_var("AUTH_TYPE", PGBOUNCER_AUTH_TYPE) // Use md5 auth like PostgreSQL
+            .with_env_var("MAX_CLIENT_CONN", PGBOUNCER_MAX_CLIENT_CONN)
+            .with_env_var("DEFAULT_POOL_SIZE", PGBOUNCER_DEFAULT_POOL_SIZE)
+            .with_env_var("ADMIN_USERS", TEST_DB_USER)
+            .with_env_var("STATS_USERS", TEST_DB_USER);
 
         let pgbouncer_container = pgbouncer_image.start().await?;
 
         let dsn = format!(
-            "postgres://test_user:test_password@{}:{}/test_db",
+            "postgres://{}:{}@{}:{}/{}",
+            TEST_DB_USER,
+            TEST_DB_PASSWORD,
             pgbouncer_container.get_host().await?,
-            pgbouncer_container.get_host_port_ipv4(5432).await?
+            pgbouncer_container.get_host_port_ipv4(POSTGRES_PORT).await?,
+            TEST_DB_NAME
         );
 
         println!("PgBouncer container started");
@@ -98,12 +104,12 @@ impl PgBouncerContainer {
 
         // Wait for PgBouncer to be ready and test connection
         println!("Waiting for PgBouncer to be ready...");
-        for attempt in 1..=10 {
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        for attempt in 1..=PGBOUNCER_READY_MAX_ATTEMPTS {
+            tokio::time::sleep(tokio::time::Duration::from_secs(PGBOUNCER_RETRY_DELAY_SECS)).await;
 
             match sqlx::PgPool::connect(&dsn).await {
                 Ok(pool) => {
-                    match sqlx::query_scalar::<_, i32>("SELECT 1")
+                    match sqlx::query_scalar::<_, i32>(VERIFICATION_QUERY)
                         .fetch_one(&pool)
                         .await
                     {
@@ -115,7 +121,7 @@ impl PgBouncerContainer {
                         Err(e) => {
                             pool.close().await;
                             println!("PgBouncer query failed on attempt {}: {}", attempt, e);
-                            if attempt == 10 {
+                            if attempt == PGBOUNCER_READY_MAX_ATTEMPTS {
                                 return Err(format!(
                                     "PgBouncer connection failed after 10 attempts: {}",
                                     e
@@ -127,7 +133,7 @@ impl PgBouncerContainer {
                 }
                 Err(e) => {
                     println!("PgBouncer connection failed on attempt {}: {}", attempt, e);
-                    if attempt == 10 {
+                    if attempt == PGBOUNCER_READY_MAX_ATTEMPTS {
                         return Err(format!(
                             "PgBouncer connection failed after 10 attempts: {}",
                             e

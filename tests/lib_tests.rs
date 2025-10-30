@@ -1,6 +1,13 @@
 use pgqrs::PgqrsAdmin;
 use serde_json::json;
 
+// Test-specific constants
+const TEST_QUEUE_LOGGED: &str = "test_create_logged_queue";
+const TEST_QUEUE_UNLOGGED: &str = "test_create_unlogged_queue";
+const TEST_QUEUE_SEND_MESSAGE: &str = "test_send_message";
+const EXPECTED_MESSAGE_COUNT: i64 = 1;
+const READ_MESSAGE_COUNT: usize = 1;
+
 #[derive(sqlx::FromRow)]
 struct RelPersistence {
     relpersistence: String,
@@ -28,7 +35,7 @@ async fn verify() {
 #[tokio::test]
 async fn test_create_logged_queue() {
     let admin = create_admin().await;
-    let queue_name = "test_create_logged_queue".to_string();
+    let queue_name = TEST_QUEUE_LOGGED.to_string();
     let queue = admin.create_queue(&queue_name, false).await;
     let queue_list = admin.list_queues().await;
     assert!(queue.is_ok());
@@ -63,7 +70,7 @@ async fn test_create_logged_queue() {
 #[tokio::test]
 async fn test_create_unlogged_queue() {
     let admin = create_admin().await;
-    let queue_name = "test_create_unlogged_queue".to_string();
+    let queue_name = TEST_QUEUE_UNLOGGED.to_string();
     let queue = admin.create_queue(&queue_name, true).await;
     let queue_list = admin.list_queues().await;
     assert!(queue.is_ok());
@@ -98,7 +105,7 @@ async fn test_create_unlogged_queue() {
 async fn test_send_message() {
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(&"test_send_message".to_string(), false)
+        .create_queue(&TEST_QUEUE_SEND_MESSAGE.to_string(), false)
         .await;
     assert!(queue.is_ok());
     let queue = queue.unwrap();
@@ -106,8 +113,8 @@ async fn test_send_message() {
         "k": "v"
     });
     assert!(queue.enqueue(&payload).await.is_ok());
-    assert!(queue.pending_count().await.unwrap() == 1);
-    let read_messages = queue.read(1).await;
+    assert!(queue.pending_count().await.unwrap() == EXPECTED_MESSAGE_COUNT);
+    let read_messages = queue.read(READ_MESSAGE_COUNT).await;
     assert!(read_messages.is_ok());
     let read_messages = read_messages.unwrap();
     assert!(read_messages.len() == 1);

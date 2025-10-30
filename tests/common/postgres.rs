@@ -4,6 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
 
+use super::constants::*;
 use super::container::DatabaseContainer;
 
 /// PostgreSQL testcontainer implementation
@@ -17,16 +18,19 @@ impl PostgresContainer {
         println!("Starting PostgreSQL testcontainer...");
 
         let postgres_image = Postgres::default()
-            .with_db_name("test_db")
-            .with_user("test_user")
-            .with_password("test_password");
+            .with_db_name(TEST_DB_NAME)
+            .with_user(TEST_DB_USER)
+            .with_password(TEST_DB_PASSWORD);
 
         let container = postgres_image.start().await?;
 
         let dsn = format!(
-            "postgres://test_user:test_password@{}:{}/test_db",
+            "postgres://{}:{}@{}:{}/{}",
+            TEST_DB_USER,
+            TEST_DB_PASSWORD,
             container.get_host().await?,
-            container.get_host_port_ipv4(5432).await?
+            container.get_host_port_ipv4(POSTGRES_PORT).await?,
+            TEST_DB_NAME
         );
 
         println!("PostgreSQL container started");
@@ -50,12 +54,12 @@ impl DatabaseContainer for PostgresContainer {
         // Test the connection
         {
             let pool = PgPoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(std::time::Duration::from_secs(5))
+                .max_connections(MAX_CONNECTIONS)
+                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
                 .connect(&dsn)
                 .await?;
 
-            let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
             println!("PostgreSQL connection verified");
         }
 
@@ -127,12 +131,12 @@ impl DatabaseContainer for ExternalPostgresContainer {
         // Test the connection
         {
             let pool = PgPoolOptions::new()
-                .max_connections(1)
-                .acquire_timeout(std::time::Duration::from_secs(5))
+                .max_connections(MAX_CONNECTIONS)
+                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
                 .connect(&dsn)
                 .await?;
 
-            let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
             println!("External PostgreSQL connection verified");
         }
 
