@@ -104,7 +104,10 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
         // Another thread won the race - we need to cleanup our container
         drop(manager_guard); // Release lock before async cleanup
         if let Err(e) = manager.cleanup().await {
-            eprintln!("Warning: Failed to cleanup losing container in race condition: {}", e);
+            eprintln!(
+                "Warning: Failed to cleanup losing container in race condition: {}",
+                e
+            );
         }
 
         // Return the DSN from the winning thread's manager

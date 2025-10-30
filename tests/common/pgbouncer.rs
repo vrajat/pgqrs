@@ -49,7 +49,7 @@ impl PgBouncerContainer {
 
         // Start PgBouncer container
         println!("Starting PgBouncer container...");
-        
+
         // Get the host IP that Docker containers can reach
         let host_ip = std::process::Command::new("docker")
             .args(&[
@@ -62,12 +62,12 @@ impl PgBouncerContainer {
             .output()
             .map_err(|e| format!("Failed to execute docker command: {}", e))?
             .stdout;
-        
+
         let host_ip = String::from_utf8(host_ip)
             .map_err(|e| format!("Invalid UTF-8 in docker output: {}", e))?
             .trim()
             .to_string();
-            
+
         if host_ip.is_empty() {
             return Err("Docker bridge gateway IP is empty".into());
         }
