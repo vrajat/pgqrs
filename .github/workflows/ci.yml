@@ -20,6 +20,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
+          # Configure MD5 authentication for PgBouncer compatibility
+          POSTGRES_HOST_AUTH_METHOD: md5
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -111,6 +113,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
+          # Configure MD5 authentication for PgBouncer compatibility
+          POSTGRES_HOST_AUTH_METHOD: md5
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
