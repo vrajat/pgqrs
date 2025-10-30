@@ -11,7 +11,7 @@ mod common;
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
     let database_url = common::get_postgres_dsn().await;
     PgqrsAdmin::new(&pgqrs::config::Config {
-        dsn: database_url.to_string(),
+        dsn: database_url,
         ..Default::default()
     })
     .await

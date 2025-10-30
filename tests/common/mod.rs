@@ -12,8 +12,8 @@ use ctor::dtor;
 /// installed and cleaned up when tests complete.
 ///
 /// # Returns
-/// A string reference to the database DSN that can be used for tests
-pub async fn get_postgres_dsn() -> &'static str {
+/// The database DSN string that can be used for tests
+pub async fn get_postgres_dsn() -> String {
     container::get_database_dsn().await
 }
 

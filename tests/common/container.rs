@@ -68,6 +68,9 @@ static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| 
 
 /// Initialize the global container manager with the appropriate database type
 pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>> {
+    // NOTE: Holding a write lock across async operations is generally not good practice
+    // as it can block other threads. However, for test infrastructure where we need
+    // to ensure only one container setup happens globally, this is acceptable.
     let mut manager_guard = CONTAINER_MANAGER.write().unwrap();
 
     if manager_guard.is_none() {
@@ -91,11 +94,10 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
 }
 
 /// Get the DSN for the initialized database
-pub async fn get_database_dsn() -> &'static str {
-    let dsn = initialize_database()
+pub async fn get_database_dsn() -> String {
+    initialize_database()
         .await
-        .expect("Failed to initialize database");
-    Box::leak(dsn.into_boxed_str())
+        .expect("Failed to initialize database")
 }
 
 /// Cleanup function called by dtor

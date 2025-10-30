@@ -50,14 +50,16 @@ impl DatabaseContainer for PostgresContainer {
 
     async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Test the connection
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(dsn)
-            .await?;
+        {
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(dsn)
+                .await?;
 
-        let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
-        println!("PostgreSQL connection verified");
+            let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
+            println!("PostgreSQL connection verified");
+        }
 
         // Install schema
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
@@ -136,14 +138,16 @@ impl DatabaseContainer for ExternalPostgresContainer {
 
     async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Test the connection
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(dsn)
-            .await?;
+        {
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(dsn)
+                .await?;
 
-        let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
-        println!("External PostgreSQL connection verified");
+            let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
+            println!("External PostgreSQL connection verified");
+        }
 
         // Install schema
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
