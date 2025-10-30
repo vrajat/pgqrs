@@ -149,12 +149,12 @@ impl DatabaseContainer for PgBouncerContainer {
         Some(self.pgbouncer_container.id().to_string())
     }
 
-    async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         println!("Setting up admin schema via PgBouncer...");
 
         // Install schema via PgBouncer
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;
@@ -164,11 +164,11 @@ impl DatabaseContainer for PgBouncerContainer {
         Ok(())
     }
 
-    async fn cleanup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         println!("Cleaning up admin schema via PgBouncer...");
 
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;

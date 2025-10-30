@@ -12,10 +12,10 @@ pub trait DatabaseContainer: Send + Sync {
     fn get_container_id(&self) -> Option<String>;
 
     /// Setup the database (install schema, etc.)
-    async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>>;
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Cleanup the database (uninstall schema, etc.)
-    async fn cleanup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>>;
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Stop the container gracefully
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>>;
@@ -38,7 +38,7 @@ impl ContainerManager {
     pub async fn initialize(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         if self.dsn.is_none() {
             let dsn = self.container.get_dsn().await;
-            self.container.setup_database(&dsn).await?;
+            self.container.setup_database(dsn.clone()).await?;
             self.dsn = Some(dsn.clone());
             println!("Database initialized with DSN: {}", dsn);
         }
@@ -48,7 +48,7 @@ impl ContainerManager {
     pub async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(dsn) = &self.dsn {
             // Always cleanup schema first
-            let _ = self.container.cleanup_database(dsn).await;
+            let _ = self.container.cleanup_database(dsn.clone()).await;
 
             // Stop container if it exists
             if self.container.get_container_id().is_some() {

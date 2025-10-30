@@ -48,13 +48,13 @@ impl DatabaseContainer for PostgresContainer {
         Some(self.container.id().to_string())
     }
 
-    async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         // Test the connection
         {
             let pool = PgPoolOptions::new()
                 .max_connections(1)
                 .acquire_timeout(std::time::Duration::from_secs(5))
-                .connect(dsn)
+                .connect(&dsn)
                 .await?;
 
             let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
@@ -63,7 +63,7 @@ impl DatabaseContainer for PostgresContainer {
 
         // Install schema
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;
@@ -73,9 +73,9 @@ impl DatabaseContainer for PostgresContainer {
         Ok(())
     }
 
-    async fn cleanup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;
@@ -136,13 +136,13 @@ impl DatabaseContainer for ExternalPostgresContainer {
         None // External database, no container to manage
     }
 
-    async fn setup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         // Test the connection
         {
             let pool = PgPoolOptions::new()
                 .max_connections(1)
                 .acquire_timeout(std::time::Duration::from_secs(5))
-                .connect(dsn)
+                .connect(&dsn)
                 .await?;
 
             let _val: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&pool).await?;
@@ -151,7 +151,7 @@ impl DatabaseContainer for ExternalPostgresContainer {
 
         // Install schema
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;
@@ -161,9 +161,9 @@ impl DatabaseContainer for ExternalPostgresContainer {
         Ok(())
     }
 
-    async fn cleanup_database(&self, dsn: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn: dsn.to_string(),
+            dsn,
             ..Default::default()
         })
         .await?;
