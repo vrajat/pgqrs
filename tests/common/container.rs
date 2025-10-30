@@ -80,40 +80,45 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
         }
     } // Release read lock immediately
 
-    // Do all async operations without holding any locks
-    let container: Box<dyn DatabaseContainer> = if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok()
-    {
-        Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
-    } else if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
-        Box::new(crate::common::postgres::ExternalPostgresContainer::new(dsn))
-    } else {
-        Box::new(crate::common::postgres::PostgresContainer::new().await?)
-    };
-
-    let mut manager = ContainerManager::new(container);
-    let dsn = manager.initialize().await?;
-
-    // Only now acquire write lock to store the result
+    // Try to acquire write lock - only initialize if we successfully get it AND there's no existing manager
     let mut manager_guard = CONTAINER_MANAGER.write().unwrap();
 
-    // Triple-check: ensure no other thread initialized while we were doing async work
-    if manager_guard.is_none() {
-        *manager_guard = Some(manager);
-        Ok(dsn)
-    } else {
-        // Another thread won the race - we need to cleanup our container
-        drop(manager_guard); // Release lock before async cleanup
-        if let Err(e) = manager.cleanup().await {
-            eprintln!(
-                "Warning: Failed to cleanup losing container in race condition: {}",
-                e
-            );
-        }
-
-        // Return the DSN from the winning thread's manager
-        let manager_guard = CONTAINER_MANAGER.read().unwrap();
-        Ok(manager_guard.as_ref().unwrap().get_dsn().unwrap().clone())
+    // Double-check: ensure no other thread initialized while we were waiting for write lock
+    if let Some(manager) = manager_guard.as_ref() {
+        return Ok(manager.get_dsn().unwrap().clone());
     }
+
+    // We have the write lock and no existing manager - do initialization
+    let dsn = if let Some(external_dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+        // For external containers, we must do initialization while holding the lock
+        // to prevent concurrent schema installation
+        let container: Box<dyn DatabaseContainer> = Box::new(
+            crate::common::postgres::ExternalPostgresContainer::new(external_dsn),
+        );
+        let mut manager = ContainerManager::new(container);
+        let dsn = manager.initialize().await?;
+
+        // Store the initialized manager
+        *manager_guard = Some(manager);
+        dsn
+    } else {
+        // For TestContainers, we can safely release the lock and do initialization normally
+        let container: Box<dyn DatabaseContainer> =
+            if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
+                Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
+            } else {
+                Box::new(crate::common::postgres::PostgresContainer::new().await?)
+            };
+
+        let mut manager = ContainerManager::new(container);
+        let dsn = manager.initialize().await?;
+
+        // Store the initialized manager
+        *manager_guard = Some(manager);
+        dsn
+    };
+
+    Ok(dsn)
 }
 
 /// Get the DSN for the initialized database
