@@ -35,13 +35,13 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
           POOL_MODE: session
-          AUTH_TYPE: md5
+          AUTH_TYPE: any
           MAX_CLIENT_CONN: 100
           DEFAULT_POOL_SIZE: 20
           ADMIN_USERS: postgres
           STATS_USERS: postgres
         options: >-
-          --health-cmd "PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres pgbouncer -c 'SHOW USERS' >/dev/null"
+          --health-cmd "PGPASSWORD=postgres psql -h localhost -U postgres pgbouncer -c 'SHOW USERS' >/dev/null"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -128,13 +128,13 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
           POOL_MODE: session
-          AUTH_TYPE: md5
+          AUTH_TYPE: any
           MAX_CLIENT_CONN: 100
           DEFAULT_POOL_SIZE: 20
           ADMIN_USERS: postgres
           STATS_USERS: postgres
         options: >-
-          --health-cmd "PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres pgbouncer -c 'SHOW USERS' >/dev/null"
+          --health-cmd "PGPASSWORD=postgres psql -h localhost -U postgres pgbouncer -c 'SHOW USERS' >/dev/null"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
