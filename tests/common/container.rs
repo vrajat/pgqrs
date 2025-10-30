@@ -76,26 +76,15 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
         }
     } // Release read lock immediately
 
-    // If not initialized, we need to create it. Get write lock to check again and initialize.
-    let manager_guard = CONTAINER_MANAGER.write().unwrap();
-
-    // Double-check pattern: another thread might have initialized while we waited for write lock
-    if let Some(manager) = manager_guard.as_ref() {
-        return Ok(manager.get_dsn().unwrap().clone());
-    }
-
-    // Release the write lock before doing async operations
-    drop(manager_guard);
-
     // Do all async operations without holding any locks
-    let container: Box<dyn DatabaseContainer> =
-        if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
-            Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
-        } else if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
-            Box::new(crate::common::postgres::ExternalPostgresContainer::new(dsn))
-        } else {
-            Box::new(crate::common::postgres::PostgresContainer::new().await?)
-        };
+    let container: Box<dyn DatabaseContainer> = if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok()
+    {
+        Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
+    } else if let Some(dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+        Box::new(crate::common::postgres::ExternalPostgresContainer::new(dsn))
+    } else {
+        Box::new(crate::common::postgres::PostgresContainer::new().await?)
+    };
 
     let mut manager = ContainerManager::new(container);
     let dsn = manager.initialize().await?;
