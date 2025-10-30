@@ -59,7 +59,9 @@ impl DatabaseContainer for PostgresContainer {
                 .connect(&dsn)
                 .await?;
 
-            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
+                .fetch_one(&pool)
+                .await?;
             println!("PostgreSQL connection verified");
         }
 
@@ -136,7 +138,9 @@ impl DatabaseContainer for ExternalPostgresContainer {
                 .connect(&dsn)
                 .await?;
 
-            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
+                .fetch_one(&pool)
+                .await?;
             println!("External PostgreSQL connection verified");
         }
 

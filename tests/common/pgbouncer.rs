@@ -40,7 +40,9 @@ impl PgBouncerContainer {
         // Test PostgreSQL connection first
         println!("Testing PostgreSQL connection...");
         let pool = sqlx::PgPool::connect(&postgres_dsn).await?;
-        let _: i32 = sqlx::query_scalar(VERIFICATION_QUERY).fetch_one(&pool).await?;
+        let _: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
+            .fetch_one(&pool)
+            .await?;
         pool.close().await;
         println!("PostgreSQL connection verified");
 
@@ -95,7 +97,9 @@ impl PgBouncerContainer {
             TEST_DB_USER,
             TEST_DB_PASSWORD,
             pgbouncer_container.get_host().await?,
-            pgbouncer_container.get_host_port_ipv4(POSTGRES_PORT).await?,
+            pgbouncer_container
+                .get_host_port_ipv4(POSTGRES_PORT)
+                .await?,
             TEST_DB_NAME
         );
 
