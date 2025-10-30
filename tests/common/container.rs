@@ -48,11 +48,15 @@ impl ContainerManager {
     pub async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(dsn) = &self.dsn {
             // Always cleanup schema first
-            let _ = self.container.cleanup_database(dsn.clone()).await;
+            if let Err(e) = self.container.cleanup_database(dsn.clone()).await {
+                eprintln!("Warning: Failed to cleanup database schema: {}", e);
+            }
 
             // Stop container if it exists
             if self.container.get_container_id().is_some() {
-                let _ = self.container.stop_container().await;
+                if let Err(e) = self.container.stop_container().await {
+                    eprintln!("Warning: Failed to stop container: {}", e);
+                }
             }
         }
         Ok(())
@@ -99,7 +103,9 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
     } else {
         // Another thread won the race - we need to cleanup our container
         drop(manager_guard); // Release lock before async cleanup
-        let _ = manager.cleanup().await; // Cleanup our unused container
+        if let Err(e) = manager.cleanup().await {
+            eprintln!("Warning: Failed to cleanup losing container in race condition: {}", e);
+        }
 
         // Return the DSN from the winning thread's manager
         let manager_guard = CONTAINER_MANAGER.read().unwrap();

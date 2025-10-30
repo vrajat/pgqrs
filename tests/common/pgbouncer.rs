@@ -8,7 +8,7 @@ use super::container::DatabaseContainer;
 
 // PgBouncer container configuration
 const PGBOUNCER_IMAGE: &str = "edoburu/pgbouncer";
-const PGBOUNCER_VERSION: &str = "1.20.1";
+const PGBOUNCER_VERSION: &str = "latest";
 
 /// PgBouncer + PostgreSQL container setup
 pub struct PgBouncerContainer {
@@ -49,7 +49,8 @@ impl PgBouncerContainer {
 
         // Start PgBouncer container
         println!("Starting PgBouncer container...");
-        // Try to get the host IP that Docker containers can reach
+        
+        // Get the host IP that Docker containers can reach
         let host_ip = std::process::Command::new("docker")
             .args(&[
                 "network",
@@ -59,8 +60,17 @@ impl PgBouncerContainer {
                 "{{(index .IPAM.Config 0).Gateway}}",
             ])
             .output()
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .unwrap_or_else(|_| "172.17.0.1".to_string()); // fallback to common Docker bridge IP
+            .map_err(|e| format!("Failed to execute docker command: {}", e))?
+            .stdout;
+        
+        let host_ip = String::from_utf8(host_ip)
+            .map_err(|e| format!("Invalid UTF-8 in docker output: {}", e))?
+            .trim()
+            .to_string();
+            
+        if host_ip.is_empty() {
+            return Err("Docker bridge gateway IP is empty".into());
+        }
 
         println!("Using host IP for PgBouncer: {}", host_ip);
         let database_url = format!(
