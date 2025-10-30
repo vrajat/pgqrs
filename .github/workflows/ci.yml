@@ -20,8 +20,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
-          # Configure MD5 authentication for PgBouncer compatibility
-          POSTGRES_HOST_AUTH_METHOD: md5
+          # Configure trust authentication for PgBouncer compatibility
+          POSTGRES_HOST_AUTH_METHOD: trust
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -35,7 +35,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
           POOL_MODE: session
-          AUTH_TYPE: any
+          AUTH_TYPE: trust
           MAX_CLIENT_CONN: 100
           DEFAULT_POOL_SIZE: 20
           ADMIN_USERS: postgres
@@ -113,8 +113,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
-          # Configure MD5 authentication for PgBouncer compatibility
-          POSTGRES_HOST_AUTH_METHOD: md5
+          # Configure trust authentication for PgBouncer compatibility
+          POSTGRES_HOST_AUTH_METHOD: trust
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -128,7 +128,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
           POOL_MODE: session
-          AUTH_TYPE: any
+          AUTH_TYPE: trust
           MAX_CLIENT_CONN: 100
           DEFAULT_POOL_SIZE: 20
           ADMIN_USERS: postgres
