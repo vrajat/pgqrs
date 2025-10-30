@@ -24,15 +24,13 @@ impl PostgresContainer {
         let container = postgres_image.start().await?;
 
         let dsn = format!(
-            "postgresql://test_user:test_password@127.0.0.1:{}/test_db",
+            "postgres://test_user:test_password@{}:{}/test_db",
+            container.get_host().await?,
             container.get_host_port_ipv4(5432).await?
         );
 
         println!("PostgreSQL container started");
         println!("Database URL: {}", dsn);
-
-        // Wait for postgres to be ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         Ok(Self { container, dsn })
     }

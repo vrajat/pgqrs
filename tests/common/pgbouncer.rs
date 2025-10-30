@@ -27,18 +27,15 @@ impl PgBouncerContainer {
             .with_password("test_password");
 
         let postgres_container = postgres_image.start().await?;
-        let postgres_port = postgres_container.get_host_port_ipv4(5432).await?;
 
         let postgres_dsn = format!(
-            "postgresql://test_user:test_password@127.0.0.1:{}/test_db",
-            postgres_port
+            "postgres://test_user:test_password@{}:{}/test_db",
+            postgres_container.get_host().await?,
+            postgres_container.get_host_port_ipv4(5432).await?
         );
 
         println!("PostgreSQL container started for PgBouncer backend");
         println!("PostgreSQL URL: {}", postgres_dsn);
-
-        // Wait for PostgreSQL to be ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         // Test PostgreSQL connection first
         println!("Testing PostgreSQL connection...");
@@ -75,7 +72,8 @@ impl PgBouncerContainer {
         println!("Using host IP for PgBouncer: {}", host_ip);
         let database_url = format!(
             "postgres://test_user:test_password@{}:{}/test_db",
-            host_ip, postgres_port
+            host_ip,
+            postgres_container.get_host_port_ipv4(5432).await?
         );
 
         let pgbouncer_image = GenericImage::new(PGBOUNCER_IMAGE, PGBOUNCER_VERSION)
@@ -88,11 +86,11 @@ impl PgBouncerContainer {
             .with_env_var("STATS_USERS", "test_user");
 
         let pgbouncer_container = pgbouncer_image.start().await?;
-        let pgbouncer_port = pgbouncer_container.get_host_port_ipv4(5432).await?;
 
         let dsn = format!(
-            "postgresql://test_user:test_password@127.0.0.1:{}/test_db",
-            pgbouncer_port
+            "postgres://test_user:test_password@{}:{}/test_db",
+            pgbouncer_container.get_host().await?,
+            pgbouncer_container.get_host_port_ipv4(5432).await?
         );
 
         println!("PgBouncer container started");
