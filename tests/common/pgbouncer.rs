@@ -6,6 +6,10 @@ use testcontainers_modules::postgres::Postgres;
 
 use super::container::DatabaseContainer;
 
+// PgBouncer container configuration
+const PGBOUNCER_IMAGE: &str = "edoburu/pgbouncer";
+const PGBOUNCER_VERSION: &str = "1.20.1";
+
 /// PgBouncer + PostgreSQL container setup
 pub struct PgBouncerContainer {
     postgres_container: ContainerAsync<Postgres>,
@@ -64,7 +68,7 @@ impl PgBouncerContainer {
             host_ip, postgres_port
         );
 
-        let pgbouncer_image = GenericImage::new("edoburu/pgbouncer", "latest")
+        let pgbouncer_image = GenericImage::new(PGBOUNCER_IMAGE, PGBOUNCER_VERSION)
             .with_env_var("DATABASE_URL", &database_url)
             .with_env_var("POOL_MODE", "session") // Use session mode for better compatibility
             .with_env_var("AUTH_TYPE", "md5") // Use md5 auth like PostgreSQL
