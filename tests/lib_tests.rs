@@ -17,12 +17,9 @@ mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
     let database_url = common::get_postgres_dsn().await;
-    PgqrsAdmin::new(&pgqrs::config::Config {
-        dsn: database_url,
-        ..Default::default()
-    })
-    .await
-    .expect("Failed to create PgqrsAdmin")
+    PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(database_url))
+        .await
+        .expect("Failed to create PgqrsAdmin")
 }
 
 #[tokio::test]

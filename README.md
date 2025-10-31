@@ -1,16 +1,108 @@
 
 # pgqrs
 
-A PostgreSQL-backed job queue for Rust applications, with a CLI for administration and a type-safe async library API.
+A PostgreSQL-backed job queue for Rust applications.
 
 ## Features
-
+- **Simple Installation**: Add `pgqrs` library as a dependency in your Rust applications.
+- **Compatible with Cxn Poolers** Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
-- **Type-Safe**: Rust types for message payloads
-- **Visibility Timeout**: Exactly-once delivery within a lock period
-- **CLI Tools**: Administer and debug queues from the command line
 
-## Installation
+## Getting Started
+
+### Install the binary
+
+```
+cargo install pgqrs
+```
+
+### Start a Postgres DB or get the DSN of an existing db.
+
+You'll need a PostgreSQL database to use pgqrs. Here are your options:
+
+#### Option 1: Using Docker (Recommended for development)
+```bash
+# Start a PostgreSQL container
+docker run --name pgqrs-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
+
+# Your DSN will be:
+# postgresql://postgres:postgres@localhost:5432/postgres
+```
+
+#### Option 2: Using an existing PostgreSQL database
+Get your database connection string (DSN) in this format:
+```
+postgresql://username:password@hostname:port/database
+```
+
+#### Option 3: Using a cloud PostgreSQL service
+- **AWS RDS**: Get the connection string from the RDS console
+- **Google Cloud SQL**: Get the connection string from the Cloud Console
+- **Azure Database**: Get the connection string from the Azure portal
+- **Heroku Postgres**: Use the `DATABASE_URL` from your Heroku config
+
+### Configure pgqrs
+
+Set your database connection using one of these methods (in order of priority):
+
+####
+```bash
+# Method 1: Command line argument (highest priority)
+pgqrs --dsn "postgresql://postgres:postgres@localhost:5432/postgres"
+
+# Method 2: Environment variable
+export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
+pgqrs ...
+```
+
+Create a `pgqrs.yaml` file:
+```yaml
+dsn: "postgresql://postgres:postgres@localhost:5432/postgres"
+```
+
+Then run:
+```bash
+# Method 3: Use a yaml config file.
+pgqrs ...
+```
+
+### Install the pgqrs schema
+
+pgqrs requires a few tables to store metadata. It creates these tables as well as
+queue tables in the schema `pgqrs`.
+
+Once you have your database configured, install the pgqrs schema:
+
+```bash
+pgqrs install
+# Verify the state
+pgqrs verify
+```
+
+### Test queue commands from the CLI
+
+Items can be enqueued or dequeued using the CLI. This option is only available for testing
+or experiments.
+
+```bash
+# Create a test queue
+pgqrs queue create test_queue
+
+# Send a message to the queue
+pgqrs message send test_queue '{"message": "Hello, World!", "priority": 1}'
+
+# Send a delayed message (available after 30 seconds)
+pgqrs message send test_queue '{"task": "delayed_task"}' --delay 30
+
+
+# Read and immediately consume one message
+pgqrs message dequeue test_queue
+
+# Delete a specific message by ID
+pgqrs message delete test_queue 12345
+```
+
+## Queue API
 
 Add to your `Cargo.toml`:
 
@@ -19,63 +111,142 @@ Add to your `Cargo.toml`:
 pgqrs = "0.1.0"
 ```
 
-## Library Usage
-
 See `examples/basic_usage.rs` for a full example. Typical usage:
 
 ```rust
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::Config;
+use pgqrs::config::Config;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        // Initialize tracing
-        tracing_subscriber::fmt::init();
+    // Initialize tracing
+    tracing_subscriber::fmt::init();
 
-        // Load configuration
-        let config = Config::default();
-        let admin = PgqrsAdmin::new(&config);
+    // Load configuration - choose one of these approaches:
 
-        // Install schema
-        admin.install(false)?;
+    // Option 1: Load from multiple sources automatically (recommended)
+    let config = Config::load().expect("Failed to load configuration");
 
-        // Create queues
-        admin.create_queue(&"email_queue".to_string()).await?;
-        admin.create_queue(&"task_queue".to_string()).await?;
+    // Option 2: Load from environment variables
+    // let config = Config::from_env().expect("PGQRS_DSN environment variable required");
 
-        // Send messages
-        let email_payload = json!({ "to": "user@example.com", "subject": "Welcome!", "body": "Welcome to our service!" });
-        let email_queue = admin.get_queue("email_queue").await?;
-        let email_id = email_queue.enqueue(&email_payload).await?;
-        println!("Sent email message with ID: {}", email_id);
+    // Option 3: Load from a specific file
+    // let config = Config::from_file("pgqrs.yaml").expect("Failed to load config");
 
-        // Read messages
-        let messages = email_queue.read_delay(10, 2).await?;
-        println!("Read {} messages", messages.len());
+    // Option 4: Create with explicit DSN
+    // let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
-        // Delete a message
-        if let Some(msg) = messages.first() {
-                let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
-                if deleted.first().copied().unwrap_or(false) {
-                        println!("Deleted message {}");
-                }
+    let admin = PgqrsAdmin::new(&config).await?;
+
+    // Create queues
+    admin.create_queue("email_queue", false).await?;
+    admin.create_queue("task_queue", false).await?;
+
+    // Send messages
+    let email_payload = json!({
+        "to": "user@example.com",
+        "subject": "Welcome!",
+        "body": "Welcome to our service!"
+    });
+    let email_queue = admin.get_queue("email_queue").await?;
+    let email_id = email_queue.enqueue(&email_payload).await?;
+    println!("Sent email message with ID: {}", email_id);
+
+    // Read messages
+    let messages = email_queue.read(10).await?;
+    println!("Read {} messages", messages.len());
+
+    // Delete a message
+    if let Some(msg) = messages.first() {
+        let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
+        if deleted.first().copied().unwrap_or(false) {
+            println!("Deleted message {}", msg.msg_id);
         }
+    }
 
-        Ok(())
+    Ok(())
 }
 ```
 
 ## Configuration
 
-You can configure pgqrs via:
+pgqrs uses a prioritized configuration system. Configuration is loaded in the following order (highest priority first):
 
-- **Environment variables**:
-    - `DATABASE_URL`, `PGQRS_SCHEMA`, etc.
-- **YAML config file** (default: `pgqrs.yaml`):
-    - See example in this repo for all options.
-- **Programmatic**:
-    - `Config::default()` or build your own config struct.
+### 1. Command Line Arguments (Highest Priority)
+```bash
+# Override DSN via command line
+pgqrs --dsn "postgresql://user:pass@localhost/db" verify
+
+# Override config file location
+pgqrs --config "custom-config.yaml" verify
+```
+
+### 2. Environment Variables
+```bash
+# Required: Database connection string
+export PGQRS_DSN="postgresql://user:pass@localhost/db"
+
+# Optional: Connection pool settings
+export PGQRS_MAX_CONNECTIONS=32
+export PGQRS_CONNECTION_TIMEOUT=60
+
+# Optional: Default job settings
+export PGQRS_DEFAULT_LOCK_TIME=10
+export PGQRS_DEFAULT_BATCH_SIZE=200
+
+# Optional: Config file location
+export PGQRS_CONFIG_FILE="path/to/config.yaml"
+```
+
+### 3. Configuration File
+Create a YAML configuration file (default locations: `pgqrs.yaml`, `pgqrs.yml`):
+
+```yaml
+# Required: Database connection string
+dsn: "postgresql://user:pass@localhost/db"
+
+# Optional: Connection pool settings (defaults shown)
+max_connections: 16
+connection_timeout_seconds: 30
+
+# Optional: Default job settings (defaults shown)
+default_lock_time_seconds: 5
+default_max_batch_size: 100
+```
+
+### 4. Programmatic Configuration
+```rust
+use pgqrs::config::Config;
+
+// Create from explicit DSN
+let config = Config::from_dsn("postgresql://user:pass@localhost/db");
+
+// Load from environment variables
+let config = Config::from_env()?;
+
+// Load from specific file
+let config = Config::from_file("config.yaml")?;
+
+// Load automatically with priority order
+let config = Config::load()?;
+
+// Load with explicit overrides (for CLI tools)
+let config = Config::load_with_options(
+    Some("postgresql://explicit:dsn@localhost/db"), // DSN override
+    Some("custom-config.yaml")                      // Config file override
+)?;
+```
+
+### Configuration Reference
+
+| Field | Environment Variable | Description | Default |
+|-------|---------------------|-------------|---------|
+| `dsn` | `PGQRS_DSN` | PostgreSQL connection string | **Required** |
+| `max_connections` | `PGQRS_MAX_CONNECTIONS` | Maximum database connections | 16 |
+| `connection_timeout_seconds` | `PGQRS_CONNECTION_TIMEOUT` | Connection timeout in seconds | 30 |
+| `default_lock_time_seconds` | `PGQRS_DEFAULT_LOCK_TIME` | Default job lock time | 5 |
+| `default_max_batch_size` | `PGQRS_DEFAULT_BATCH_SIZE` | Default batch size for operations | 100 |
 
 ## CLI Usage
 
@@ -83,8 +254,8 @@ The CLI is defined in `src/main.rs` and supports the following commands:
 
 ### Top-level commands
 
-- `install [--dry-run]` — Install pgqrs schema
-- `uninstall [--dry-run]` — Uninstall pgqrs schema
+- `install` — Install pgqrs schema
+- `uninstall` — Uninstall pgqrs schema
 - `verify` — Verify installation
 - `queue <subcommand>` — Queue management
 - `message <subcommand>` — Message management
@@ -109,35 +280,12 @@ The CLI is defined in `src/main.rs` and supports the following commands:
 
 All commands support global flags:
 
-- `--database-url <url>` — Override database URL
-- `--config <path>` — Config file path (default: pgqrs.yaml)
+- `-d, --dsn <DSN>` — Database URL (highest priority, overrides all other config sources)
+- `-c, --config <CONFIG>` — Config file path (overrides environment variables and defaults)
 - `--log-dest <stderr|file>` — Log destination
 - `--log-level <error|warn|info|debug|trace>` — Log level
-- `--output-format <json|csv|yaml>` — Output format
-- `--output-dest <stdout|file>` — Output destination
-
-## API Reference
-
-See `src/main.rs` and `examples/basic_usage.rs` for the current API. Key types and methods:
-
-- `PgqrsAdmin::install(dry_run)` — Install schema
-- `PgqrsAdmin::create_queue(name)` — Create queue
-- `PgqrsAdmin::list_queues()` — List queues
-- `PgqrsAdmin::get_queue(name)` — Get queue handle
-- `QueueHandle::enqueue(payload)` — Send message
-- `QueueHandle::batch_enqueue(payloads)` — Send batch
-- `QueueHandle::enqueue_delayed(payload, delay_secs)` — Send delayed message
-- `QueueHandle::read(count)` — Read messages
-- `QueueHandle::read_delay(count, delay_secs)` — Read messages with delay
-- `QueueHandle::delete_batch(ids)` — Delete messages
-- `QueueHandle::extend_visibility(id, seconds)` — Extend lock
-- `QueueHandle::pending_count()` — Pending message count
-- `PgqrsAdmin::queue_metrics(name)` — Queue metrics
-- `PgqrsAdmin::all_queues_metrics()` — Metrics for all queues
-
-## Development Status
-
-**Note:** Many functions are currently `todo!()` placeholders. See `src/main.rs` and `examples/basic_usage.rs` for the evolving API.
+- `--format <json|table>` — Output format
+- `--out <stdout|file>` — Output destination
 
 ## License
 

@@ -7,8 +7,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Load configuration (will use defaults for now since implementation is todo)
-    let config = Config::default();
+    // Load configuration
+    // In a real application, you would use one of these approaches:
+    // let config = Config::load().expect("Failed to load configuration");
+    // let config = Config::from_env().expect("PGQRS_DSN required");
+    // let config = Config::from_file("pgqrs.yaml").expect("Failed to load config");
+    
+    // For this example, we'll use a hardcoded DSN (replace with your database)
+    let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
     // Create client
     let admin = PgqrsAdmin::new(&config).await?;

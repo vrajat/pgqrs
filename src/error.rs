@@ -38,6 +38,12 @@ pub enum PgqrsError {
     #[error("Configuration error: {0}")]
     Config(#[from] config::ConfigError),
 
+    #[error("Missing required configuration: {field}")]
+    MissingConfig { field: String },
+
+    #[error("Invalid configuration value for {field}: {message}")]
+    InvalidConfig { field: String, message: String },
+
     #[error("Queue '{name}' not found")]
     QueueNotFound { name: String },
 
