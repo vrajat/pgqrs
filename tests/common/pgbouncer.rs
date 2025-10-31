@@ -171,11 +171,7 @@ impl DatabaseContainer for PgBouncerContainer {
         println!("Setting up admin schema via PgBouncer...");
 
         // Install schema via PgBouncer
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.install().await?;
         println!("Admin schema setup complete via PgBouncer");
 
@@ -185,11 +181,7 @@ impl DatabaseContainer for PgBouncerContainer {
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         println!("Cleaning up admin schema via PgBouncer...");
 
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.uninstall().await?;
         println!("Admin schema cleanup complete via PgBouncer");
         Ok(())

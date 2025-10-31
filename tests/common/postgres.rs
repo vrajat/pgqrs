@@ -66,11 +66,7 @@ impl DatabaseContainer for PostgresContainer {
         }
 
         // Install schema
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.install().await?;
         println!("PostgreSQL schema installed");
 
@@ -78,11 +74,7 @@ impl DatabaseContainer for PostgresContainer {
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.uninstall().await?;
         println!("PostgreSQL schema uninstalled");
         Ok(())
@@ -145,11 +137,7 @@ impl DatabaseContainer for ExternalPostgresContainer {
         }
 
         // Install schema
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.install().await?;
         println!("External PostgreSQL schema installed");
 
@@ -157,11 +145,7 @@ impl DatabaseContainer for ExternalPostgresContainer {
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config {
-            dsn,
-            ..Default::default()
-        })
-        .await?;
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
         admin.uninstall().await?;
         println!("External PostgreSQL schema uninstalled");
         Ok(())

@@ -36,13 +36,13 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Database URL (overrides config file)
-    #[arg(long)]
-    database_url: Option<String>,
+    /// Database URL (highest priority, overrides all other config sources)
+    #[arg(long, short = 'd')]
+    dsn: Option<String>,
 
-    /// Config file path
-    #[arg(long, short = 'c', default_value = "pgqrs.yaml")]
-    config: String,
+    /// Config file path (overrides environment variables and defaults)
+    #[arg(long, short = 'c')]
+    config: Option<String>,
 
     /// Log destination: stderr or file path
     #[arg(long, default_value = "stderr")]
@@ -192,18 +192,27 @@ async fn main() {
     }
 }
 
+/// Run the CLI with the provided arguments and configuration.
+///
+/// This function handles loading configuration from multiple sources,
+/// initializing the admin interface, and dispatching to the appropriate
+/// command handlers.
+///
+/// # Arguments
+/// * `cli` - Parsed CLI arguments and options
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn run_cli(cli: Cli) -> anyhow::Result<()> {
-    // Load configuration
-    let config = if let Some(db_url) = cli.database_url {
-        let mut config = Config::default();
-        config.dsn = db_url;
-        config
-    } else {
-        Config::from_file(&cli.config).unwrap_or_else(|_| {
-            tracing::warn!("Could not load config file, using defaults");
-            Config::default()
-        })
-    };
+    // Load configuration using the new prioritized loading system
+    // Priority order:
+    // 1. --dsn CLI argument (if provided)
+    // 2. --config CLI argument (if provided)
+    // 3. PGQRS_CONFIG_FILE environment variable
+    // 4. PGQRS_DSN and other environment variables
+    // 5. Default config files (pgqrs.yaml, pgqrs.yml)
+    let config = Config::load_with_options(cli.dsn, cli.config)
+        .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
 
     let admin = PgqrsAdmin::new(&config).await?;
     let writer = match cli.format.to_lowercase().as_str() {
@@ -248,6 +257,19 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle queue-related CLI commands.
+///
+/// This function processes all queue management commands including create,
+/// list, delete, purge, and metrics operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for queue operations
+/// * `action` - Specific queue command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn handle_queue_commands(
     admin: &PgqrsAdmin,
     action: QueueCommands,
@@ -333,6 +355,19 @@ async fn handle_queue_commands(
     Ok(())
 }
 
+/// Handle message-related CLI commands.
+///
+/// This function processes all message management commands including send,
+/// read, dequeue, delete, and count operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for accessing queues
+/// * `action` - Specific message command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn handle_message_commands(
     admin: &PgqrsAdmin,
     action: MessageCommands,

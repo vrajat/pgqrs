@@ -25,7 +25,11 @@ use crate::types::QueueMessage;
 use chrono::Utc;
 use sqlx::PgPool;
 
-/// Producer interface for adding messages to queues
+/// Producer and consumer interface for a specific queue.
+///
+/// A Queue instance provides methods for enqueuing messages, reading messages,
+/// and managing message lifecycle within a specific PostgreSQL-backed queue.
+/// Each Queue corresponds to a table in the database.
 pub struct Queue {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
@@ -48,7 +52,15 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// Create a new Producer instance
+    /// Create a new Queue instance for the specified queue name.
+    ///
+    /// This method is internal and sets up all the SQL statements needed
+    /// for queue operations by replacing template placeholders with the
+    /// actual queue name and schema.
+    ///
+    /// # Arguments
+    /// * `pool` - Database connection pool
+    /// * `queue_name` - Name of the queue (will be used to form table name)
     pub(crate) fn new(pool: PgPool, queue_name: &str) -> Self {
         let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
         let insert_sql = crate::constants::INSERT_MESSAGE
@@ -136,6 +148,15 @@ impl Queue {
         self.get_message_by_id(id).await
     }
 
+    /// Internal method to insert a message with specific timestamps.
+    ///
+    /// # Arguments
+    /// * `payload` - JSON payload for the message
+    /// * `now` - Current timestamp for enqueued_at field
+    /// * `vt` - Visibility timeout timestamp (when message becomes available)
+    ///
+    /// # Returns
+    /// The ID of the inserted message.
     async fn insert_message(
         &self,
         payload: &serde_json::Value,

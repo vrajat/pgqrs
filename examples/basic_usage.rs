@@ -1,3 +1,18 @@
+//! Basic usage example for pgqrs.
+//!
+//! This example demonstrates the core functionality of pgqrs:
+//! - Installing the schema
+//! - Creating queues
+//! - Sending messages (immediate and delayed)
+//! - Reading messages from queues
+//! - Batch operations
+//! - Counting pending messages
+//!
+//! Run this example with:
+//! ```sh
+//! cargo run --example basic_usage
+//! ```
+
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
 use serde_json::json;
@@ -7,8 +22,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Load configuration (will use defaults for now since implementation is todo)
-    let config = Config::default();
+    // Load configuration
+    // In a real application, you would use one of these approaches:
+    // let config = Config::load().expect("Failed to load configuration");
+    // let config = Config::from_env().expect("PGQRS_DSN required");
+    // let config = Config::from_file("pgqrs.yaml").expect("Failed to load config");
+
+    // For this example, we'll use a hardcoded DSN (replace with your database)
+    let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
     // Create client
     let admin = PgqrsAdmin::new(&config).await?;
