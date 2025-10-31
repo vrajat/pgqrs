@@ -318,6 +318,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
 
@@ -367,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_complete() {
         // Use a nested scope to ensure cleanup happens
         {
@@ -390,6 +392,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_minimal() {
         clear_test_env_vars();
 
@@ -410,6 +413,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_missing_dsn() {
         clear_test_env_vars();
 
@@ -424,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_invalid_numbers() {
         clear_test_env_vars();
 
@@ -588,6 +593,7 @@ max_connections: 128
     }
 
     #[test]
+    #[serial]
     fn test_load_env_file_priority() {
         clear_test_env_vars();
 
@@ -609,6 +615,7 @@ max_connections: 256
     }
 
     #[test]
+    #[serial]
     fn test_load_fallback_to_env_vars() {
         clear_test_env_vars();
 
