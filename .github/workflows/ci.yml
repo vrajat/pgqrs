@@ -106,51 +106,12 @@ jobs:
     # (If you set this, use the same environment name when creating the Trusted Publisher on crates.io)
     # environment: release
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-          # Configure trust authentication for PgBouncer compatibility
-          POSTGRES_HOST_AUTH_METHOD: trust
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
-      pgbouncer:
-        image: edoburu/pgbouncer:latest
-        env:
-          DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
-          POOL_MODE: session
-          AUTH_TYPE: trust
-          MAX_CLIENT_CONN: 100
-          DEFAULT_POOL_SIZE: 20
-          ADMIN_USERS: postgres
-          STATS_USERS: postgres
-        options: >-
-          --health-cmd "PGPASSWORD=postgres psql -h localhost -U postgres pgbouncer -c 'SHOW USERS' >/dev/null"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-        ports:
-          - 6432:5432
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # If you already pin toolchain via rust-toolchain file, you can omit this
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4
@@ -160,21 +121,6 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      # Optional sanity checks before publishing
-      - name: Build & test
-        run: |
-          cargo build --release --locked
-          cargo test --release --locked
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-          PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
-
-      - name: Test PgBouncer configuration
-        run: cargo test --release --locked
-        env:
-          PGQRS_TEST_USE_PGBOUNCER: 1
-          PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:6432/postgres
 
       # Get short-lived crates.io token via OIDC
       - name: Authenticate with crates.io (Trusted Publishing)
@@ -187,3 +133,5 @@ jobs:
           cargo package --list
           cargo publish --dry-run --locked
           cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
