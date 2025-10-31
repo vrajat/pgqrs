@@ -17,7 +17,7 @@ fn test_cli_create_list_delete_queue() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "create", queue_name])
+        .args(["--dsn", &db_url, "queue", "create", queue_name])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -29,7 +29,7 @@ fn test_cli_create_list_delete_queue() {
     // List queues
     let list_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "list"])
+        .args(["--dsn", &db_url, "queue", "list"])
         .output()
         .expect("Failed to run CLI list queues");
     assert!(
@@ -47,7 +47,7 @@ fn test_cli_create_list_delete_queue() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "delete", queue_name])
+        .args(["--dsn", &db_url, "queue", "delete", queue_name])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -59,7 +59,7 @@ fn test_cli_create_list_delete_queue() {
     // List queues again to verify deletion
     let list_output2 = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "list"])
+        .args(["--dsn", &db_url, "queue", "list"])
         .output()
         .expect("Failed to run CLI list queues after delete");
     assert!(
@@ -85,7 +85,7 @@ fn test_cli_create_list_delete_unlogged_queue() {
     let create_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
         .args([
-            "--database-url",
+            "--dsn",
             &db_url,
             "queue",
             "create",
@@ -103,14 +103,7 @@ fn test_cli_create_list_delete_unlogged_queue() {
     // List queues and check unlogged field
     let list_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args([
-            "--database-url",
-            &db_url,
-            "--format",
-            "json",
-            "queue",
-            "list",
-        ])
+        .args(["--dsn", &db_url, "--format", "json", "queue", "list"])
         .output()
         .expect("Failed to run CLI list queues");
     assert!(
@@ -146,7 +139,7 @@ fn test_cli_create_list_delete_unlogged_queue() {
     // Delete queue
     let delete_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "delete", queue_name])
+        .args(["--dsn", &db_url, "queue", "delete", queue_name])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -165,7 +158,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "create", queue_name])
+        .args(["--dsn", &db_url, "queue", "create", queue_name])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -177,14 +170,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Send message
     let send_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args([
-            "--database-url",
-            &db_url,
-            "message",
-            "send",
-            queue_name,
-            payload,
-        ])
+        .args(["--dsn", &db_url, "message", "send", queue_name, payload])
         .output()
         .expect("Failed to run CLI send message");
     assert!(
@@ -196,7 +182,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Dequeue message
     let dequeue_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "message", "dequeue", queue_name])
+        .args(["--dsn", &db_url, "message", "dequeue", queue_name])
         .output()
         .expect("Failed to run CLI dequeue message");
     assert!(
@@ -214,7 +200,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--database-url", &db_url, "queue", "delete", queue_name])
+        .args(["--dsn", &db_url, "queue", "delete", queue_name])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(

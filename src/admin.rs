@@ -19,7 +19,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = Config::default();
+//!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //!     let admin = PgqrsAdmin::new(&config).await?;
 //!     admin.install().await?;
 //!     admin.create_queue(&"jobs".to_string(), false).await?;

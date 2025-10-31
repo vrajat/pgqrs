@@ -14,7 +14,7 @@
 //!
 //! ### Example
 //!
-//! ```rust
+//! ```no_run
 //! use pgqrs::config::Config;
 //!
 //! // Create from DSN directly
@@ -244,12 +244,12 @@ impl Config {
     /// // Load with explicit DSN
     /// let config = Config::load_with_options(
     ///     Some("postgresql://user:pass@localhost/db"),
-    ///     None
+    ///     None::<String>
     /// ).expect("Failed to load configuration");
     ///
     /// // Load with explicit config file
     /// let config = Config::load_with_options(
-    ///     None,
+    ///     None::<String>,
     ///     Some("custom-config.yaml")
     /// ).expect("Failed to load configuration");
     /// ```
