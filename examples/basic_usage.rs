@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let config = Config::load().expect("Failed to load configuration");
     // let config = Config::from_env().expect("PGQRS_DSN required");
     // let config = Config::from_file("pgqrs.yaml").expect("Failed to load config");
-    
+
     // For this example, we'll use a hardcoded DSN (replace with your database)
     let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 

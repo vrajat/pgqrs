@@ -107,10 +107,9 @@ impl Config {
         use std::env;
 
         // DSN is required
-        let dsn = env::var(ENV_DSN)
-            .map_err(|_| crate::error::PgqrsError::MissingConfig {
-                field: ENV_DSN.to_string(),
-            })?;
+        let dsn = env::var(ENV_DSN).map_err(|_| crate::error::PgqrsError::MissingConfig {
+            field: ENV_DSN.to_string(),
+        })?;
 
         // Parse optional environment variables with defaults
         let max_connections = env::var(ENV_MAX_CONNECTIONS)
@@ -163,17 +162,18 @@ impl Config {
     /// ```
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::error::PgqrsError::InvalidConfig {
+        let content =
+            std::fs::read_to_string(path).map_err(|e| crate::error::PgqrsError::InvalidConfig {
                 field: "file".to_string(),
                 message: format!("Failed to read config file '{}': {}", path.display(), e),
             })?;
 
-        let config: Config = serde_yaml::from_str(&content)
-            .map_err(|e| crate::error::PgqrsError::InvalidConfig {
+        let config: Config = serde_yaml::from_str(&content).map_err(|e| {
+            crate::error::PgqrsError::InvalidConfig {
                 field: "yaml".to_string(),
                 message: format!("Failed to parse YAML config: {}", e),
-            })?;
+            }
+        })?;
 
         Ok(config)
     }
@@ -247,7 +247,10 @@ impl Config {
     ///     Some("custom-config.yaml")
     /// ).expect("Failed to load configuration");
     /// ```
-    pub fn load_with_options<D, P>(explicit_dsn: Option<D>, explicit_config_path: Option<P>) -> Result<Self>
+    pub fn load_with_options<D, P>(
+        explicit_dsn: Option<D>,
+        explicit_config_path: Option<P>,
+    ) -> Result<Self>
     where
         D: Into<String>,
         P: AsRef<Path>,
@@ -354,7 +357,10 @@ mod tests {
 
         assert_eq!(config.dsn, dsn);
         assert_eq!(config.max_connections, DEFAULT_MAX_CONNECTIONS);
-        assert_eq!(config.connection_timeout_seconds, DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+        assert_eq!(
+            config.connection_timeout_seconds,
+            DEFAULT_CONNECTION_TIMEOUT_SECONDS
+        );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
     }
@@ -399,7 +405,10 @@ mod tests {
 
         assert_eq!(config.dsn, "postgresql://minimal:test@localhost/minimaldb");
         assert_eq!(config.max_connections, DEFAULT_MAX_CONNECTIONS);
-        assert_eq!(config.connection_timeout_seconds, DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+        assert_eq!(
+            config.connection_timeout_seconds,
+            DEFAULT_CONNECTION_TIMEOUT_SECONDS
+        );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
 
@@ -428,11 +437,15 @@ mod tests {
         env::set_var(ENV_MAX_CONNECTIONS, "invalid");
         env::set_var(ENV_CONNECTION_TIMEOUT, "not_a_number");
 
-        let config = Config::from_env().expect("Should load from env with defaults for invalid numbers");
+        let config =
+            Config::from_env().expect("Should load from env with defaults for invalid numbers");
 
         assert_eq!(config.dsn, "postgresql://test:test@localhost/testdb");
         assert_eq!(config.max_connections, DEFAULT_MAX_CONNECTIONS);
-        assert_eq!(config.connection_timeout_seconds, DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+        assert_eq!(
+            config.connection_timeout_seconds,
+            DEFAULT_CONNECTION_TIMEOUT_SECONDS
+        );
 
         clear_test_env_vars();
     }
@@ -470,7 +483,10 @@ dsn: "postgresql://minimal:test@localhost/minimaldb"
 
         assert_eq!(config.dsn, "postgresql://minimal:test@localhost/minimaldb");
         assert_eq!(config.max_connections, DEFAULT_MAX_CONNECTIONS);
-        assert_eq!(config.connection_timeout_seconds, DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+        assert_eq!(
+            config.connection_timeout_seconds,
+            DEFAULT_CONNECTION_TIMEOUT_SECONDS
+        );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
 
@@ -548,7 +564,10 @@ max_connections: 128
         let config = Config::load_with_options(None::<&str>, Some(&config_path))
             .expect("Should load with explicit config file");
 
-        assert_eq!(config.dsn, "postgresql://explicit_file:test@localhost/explicitfiledb");
+        assert_eq!(
+            config.dsn,
+            "postgresql://explicit_file:test@localhost/explicitfiledb"
+        );
         assert_eq!(config.max_connections, 128);
 
         cleanup_test_file(&config_path);
@@ -604,7 +623,10 @@ max_connections: 256
 
         let config = Config::load().expect("Should load from env vars");
 
-        assert_eq!(config.dsn, "postgresql://fallback:test@localhost/fallbackdb");
+        assert_eq!(
+            config.dsn,
+            "postgresql://fallback:test@localhost/fallbackdb"
+        );
         assert_eq!(config.max_connections, 512);
 
         clear_test_env_vars();
