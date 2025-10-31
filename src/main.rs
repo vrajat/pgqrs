@@ -192,6 +192,17 @@ async fn main() {
     }
 }
 
+/// Run the CLI with the provided arguments and configuration.
+///
+/// This function handles loading configuration from multiple sources,
+/// initializing the admin interface, and dispatching to the appropriate
+/// command handlers.
+///
+/// # Arguments
+/// * `cli` - Parsed CLI arguments and options
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     // Load configuration using the new prioritized loading system
     // Priority order:
@@ -246,6 +257,19 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Handle queue-related CLI commands.
+///
+/// This function processes all queue management commands including create,
+/// list, delete, purge, and metrics operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for queue operations
+/// * `action` - Specific queue command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn handle_queue_commands(
     admin: &PgqrsAdmin,
     action: QueueCommands,
@@ -331,6 +355,19 @@ async fn handle_queue_commands(
     Ok(())
 }
 
+/// Handle message-related CLI commands.
+///
+/// This function processes all message management commands including send,
+/// read, dequeue, delete, and count operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for accessing queues
+/// * `action` - Specific message command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
 async fn handle_message_commands(
     admin: &PgqrsAdmin,
     action: MessageCommands,

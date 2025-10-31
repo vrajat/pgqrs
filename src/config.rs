@@ -84,7 +84,20 @@ fn default_max_batch_size() -> usize {
 }
 
 impl Config {
-    /// Create a new Config with the provided DSN and default values for other fields
+    /// Create a new Config with the provided DSN and default values for other fields.
+    ///
+    /// This is the simplest way to create a Config when you have a database connection string.
+    /// All other configuration fields will use their default values, ignoring environment variables.
+    ///
+    /// # Arguments
+    /// * `dsn` - PostgreSQL connection string (e.g., "postgresql://user:pass@localhost/db")
+    ///
+    /// # Example
+    /// ```
+    /// # use pgqrs::config::Config;
+    /// let config = Config::from_dsn("postgresql://user:pass@localhost/db");
+    /// assert_eq!(config.max_connections, 16); // default value
+    /// ```
     pub fn from_dsn<S: Into<String>>(dsn: S) -> Self {
         Self {
             dsn: dsn.into(),
@@ -111,6 +124,22 @@ impl Config {
             field: ENV_DSN.to_string(),
         })?;
 
+        Ok(Self::with_dsn_and_env_fallback(dsn))
+    }
+
+    /// Internal helper to create Config with a DSN and environment variable fallbacks.
+    ///
+    /// This method consolidates the logic for reading environment variables and applying
+    /// default values, reducing code duplication across different Config creation methods.
+    ///
+    /// # Arguments
+    /// * `dsn` - PostgreSQL connection string
+    ///
+    /// # Returns
+    /// Config instance with DSN set and other fields from environment or defaults
+    fn with_dsn_and_env_fallback(dsn: String) -> Self {
+        use std::env;
+
         // Parse optional environment variables with defaults
         let max_connections = env::var(ENV_MAX_CONNECTIONS)
             .ok()
@@ -132,13 +161,13 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_BATCH_SIZE);
 
-        Ok(Self {
+        Self {
             dsn,
             max_connections,
             connection_timeout_seconds,
             default_lock_time_seconds,
             default_max_batch_size,
-        })
+        }
     }
 
     /// Create config from YAML file
@@ -195,30 +224,7 @@ impl Config {
     /// let config = Config::load().expect("Failed to load configuration");
     /// ```
     pub fn load() -> Result<Self> {
-        use std::env;
-
-        // Try to load from config file specified by environment variable first
-        if let Ok(config_path) = env::var(ENV_CONFIG_FILE) {
-            return Self::from_file(config_path);
-        }
-
-        // Try to load from environment variables
-        if let Ok(config) = Self::from_env() {
-            return Ok(config);
-        }
-
-        // Try default config file locations
-        let default_paths = ["pgqrs.yaml", "pgqrs.yml"];
-        for path in &default_paths {
-            if std::path::Path::new(path).exists() {
-                return Self::from_file(path);
-            }
-        }
-
-        // No configuration source found
-        Err(crate::error::PgqrsError::MissingConfig {
-            field: "configuration".to_string(),
-        })
+        Self::load_with_options(None::<String>, None::<String>)
     }
 
     /// Create config from multiple sources with explicit options
@@ -255,46 +261,34 @@ impl Config {
         D: Into<String>,
         P: AsRef<Path>,
     {
-        use std::env;
-
         // If explicit DSN is provided, use it with env vars for other settings
         if let Some(dsn) = explicit_dsn {
-            let dsn = dsn.into();
-
-            // Load other settings from environment, but use the explicit DSN
-            let max_connections = env::var(ENV_MAX_CONNECTIONS)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_MAX_CONNECTIONS);
-
-            let connection_timeout_seconds = env::var(ENV_CONNECTION_TIMEOUT)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_CONNECTION_TIMEOUT_SECONDS);
-
-            let default_lock_time_seconds = env::var(ENV_DEFAULT_LOCK_TIME)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_LOCK_TIME_SECONDS);
-
-            let default_max_batch_size = env::var(ENV_DEFAULT_BATCH_SIZE)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_BATCH_SIZE);
-
-            return Ok(Self {
-                dsn,
-                max_connections,
-                connection_timeout_seconds,
-                default_lock_time_seconds,
-                default_max_batch_size,
-            });
+            return Ok(Self::with_dsn_and_env_fallback(dsn.into()));
         }
 
         // If explicit config path is provided, try that
         if let Some(config_path) = explicit_config_path {
             return Self::from_file(config_path);
         }
+
+        // Use standard fallback logic
+        Self::load_from_standard_sources()
+    }
+
+    /// Internal helper for loading config from standard sources with fallback logic.
+    ///
+    /// This method encapsulates the common fallback sequence used by both `load()`
+    /// and `load_with_options()` methods.
+    ///
+    /// Priority order:
+    /// 1. Config file specified by PGQRS_CONFIG_FILE environment variable
+    /// 2. Environment variables (PGQRS_DSN, etc.)
+    /// 3. Default config file locations (pgqrs.yaml, pgqrs.yml)
+    ///
+    /// # Returns
+    /// Config loaded from the first available source, or error if none found.
+    fn load_from_standard_sources() -> Result<Self> {
+        use std::env;
 
         // Try to load from config file specified by environment variable
         if let Ok(config_path) = env::var(ENV_CONFIG_FILE) {

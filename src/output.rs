@@ -1,3 +1,25 @@
+//! Output formatting for pgqrs CLI.
+//!
+//! This module provides output writers for formatting command results in different formats.
+//!
+//! ## What
+//!
+//! - [`OutputWriter`] enum handles different output formats (JSON, Table)
+//! - [`JsonOutputWriter`] serializes results to JSON
+//! - [`TableOutputWriter`] displays results in human-readable tables
+//!
+//! ## How
+//!
+//! Use the appropriate writer based on user preference for displaying CLI command results.
+//!
+//! ### Example
+//!
+//! ```rust
+//! use pgqrs::output::{OutputWriter, JsonOutputWriter};
+//! let writer = OutputWriter::Json(JsonOutputWriter);
+//! // writer.write_list(&results, &mut output)?;
+//! ```
+
 use serde::Serialize;
 use tabled::{Table, Tabled};
 
@@ -9,6 +31,14 @@ pub enum OutputWriter {
 }
 
 impl OutputWriter {
+    /// Write a list of items using the configured output format.
+    ///
+    /// # Arguments
+    /// * `items` - Slice of items to write (must implement Serialize + Tabled)
+    /// * `out` - Output writer destination
+    ///
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
     pub fn write_list<T: Serialize + Tabled>(
         &self,
         items: &[T],
@@ -21,8 +51,17 @@ impl OutputWriter {
     }
 }
 
+/// Writer for formatting output as human-readable tables
 pub struct TableOutputWriter;
 impl TableOutputWriter {
+    /// Write items as a formatted table.
+    ///
+    /// # Arguments
+    /// * `items` - Slice of items to format as table rows
+    /// * `out` - Output writer destination
+    ///
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
     pub fn write_list<T: Serialize + Tabled>(
         &self,
         items: &[T],
@@ -34,8 +73,17 @@ impl TableOutputWriter {
     }
 }
 
+/// Writer for formatting output as JSON
 pub struct JsonOutputWriter;
 impl JsonOutputWriter {
+    /// Write items as pretty-printed JSON.
+    ///
+    /// # Arguments
+    /// * `items` - Slice of items to serialize as JSON
+    /// * `out` - Output writer destination
+    ///
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
     pub fn write_list<T: Serialize>(
         &self,
         items: &[T],

@@ -246,6 +246,16 @@ impl PgqrsAdmin {
         Ok(Queue::new(self.pool.clone(), name))
     }
 
+    /// Execute multiple SQL statements in a single transaction.
+    ///
+    /// This method ensures that either all statements succeed or all are rolled back,
+    /// providing atomicity for operations that require multiple SQL commands.
+    ///
+    /// # Arguments
+    /// * `statements` - Vector of SQL statements to execute
+    ///
+    /// # Returns
+    /// Ok if all statements executed successfully, error otherwise.
     async fn run_statements_in_transaction(&self, statements: Vec<String>) -> Result<()> {
         let mut tx = self
             .pool

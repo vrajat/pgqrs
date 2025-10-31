@@ -5,7 +5,7 @@ A PostgreSQL-backed job queue for Rust applications.
 
 ## Features
 - **Simple Installation**: Add `pgqrs` library as a dependency in your Rust applications.
-- **Compatible with Cxn Poolers** Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
+- **Compatible with Connection Poolers** Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
 
 ## Getting Started
@@ -45,7 +45,6 @@ postgresql://username:password@hostname:port/database
 
 Set your database connection using one of these methods (in order of priority):
 
-####
 ```bash
 # Method 1: Command line argument (highest priority)
 pgqrs --dsn "postgresql://postgres:postgres@localhost:5432/postgres"

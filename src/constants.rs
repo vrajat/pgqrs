@@ -1,5 +1,24 @@
+//! SQL constants and configuration values for pgqrs.
+//!
+//! This module contains all SQL statement templates, schema constants, and default values
+//! used throughout the pgqrs system.
+//!
+//! ## What
+//!
+//! - Database schema and table names
+//! - SQL statement templates for queue operations
+//! - Default timeout and configuration values
+//!
+//! ## How
+//!
+//! These constants are used internally by the admin and queue modules to generate
+//! dynamic SQL statements with proper schema and table names.
+
+/// Prefix for queue table names in the database
 pub const QUEUE_PREFIX: &str = r#"q"#;
+/// Name of the pgqrs schema in PostgreSQL
 pub const PGQRS_SCHEMA: &str = "pgqrs";
+/// Default visibility timeout in seconds for locked messages
 pub const VISIBILITY_TIMEOUT: i32 = 5;
 
 pub const CREATE_SCHEMA_STATEMENT: &str = r#"CREATE SCHEMA IF NOT EXISTS pgqrs;"#;

@@ -1,3 +1,18 @@
+//! Basic usage example for pgqrs.
+//!
+//! This example demonstrates the core functionality of pgqrs:
+//! - Installing the schema
+//! - Creating queues
+//! - Sending messages (immediate and delayed)
+//! - Reading messages from queues
+//! - Batch operations
+//! - Counting pending messages
+//!
+//! Run this example with:
+//! ```sh
+//! cargo run --example basic_usage
+//! ```
+
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
 use serde_json::json;
