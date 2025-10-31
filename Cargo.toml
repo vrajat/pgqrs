@@ -27,7 +27,7 @@ testcontainers-modules = { version = "0.13", features = ["postgres"] }
 ctor = "0.2.4"
 once_cell = "1.19"
 async-trait = "0.1"
-serial_test = "3.0"
+serial_test = "3.2"
 
 [dependencies]
 sqlx = { version = "0.8.6", features = ["postgres", "chrono", "uuid", "json", "runtime-tokio-rustls", "macros"] }
