@@ -72,7 +72,9 @@ graph TB
     class PQ,WQ,AA,CLI pgqrsLib
     class QT,DLQ,META database
     class CP optional
-```### Component Details
+```
+
+### Component Details
 
 #### 1. **PostgreSQL Database**
 - **Central storage** for all queue data and metadata
