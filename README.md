@@ -17,28 +17,28 @@ pgqrs is a distributed job queue system built around PostgreSQL. The architectur
 ```mermaid
 graph TB
     subgraph "Application Layer"
-        P[Producer Services<br/>Your Rust Apps]
-        W[Worker Services<br/>Your Rust Apps]
-        A[Admin Server<br/>Optional Monitoring]
+        P["Producer Services<br/>Your Rust Apps"]
+        W["Worker Services<br/>Your Rust Apps"]
+        A["Admin Server<br/>Optional Monitoring"]
     end
 
     subgraph "pgqrs APIs"
-        PQ[Queue API<br/>enqueue()<br/>batch_enqueue()]
-        WQ[Queue API<br/>read()<br/>delete_batch()<br/>fail_message()]
-        AA[PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()]
+        PQ["Queue API<br/>enqueue()<br/>batch_enqueue()"]
+        WQ["Queue API<br/>read()<br/>delete_batch()<br/>fail_message()"]
+        AA["PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()"]
     end
 
-    CLI[pgqrs CLI<br/>install<br/>queue create<br/>message send<br/>metrics]
+    CLI["pgqrs CLI<br/>install<br/>queue create<br/>message send<br/>metrics"]
 
     subgraph "Connection Layer"
-        CP[Connection Pooler<br/>PgBouncer/pgcat<br/>Optional]
+        CP["Connection Pooler<br/>PgBouncer/pgcat<br/>Optional"]
     end
 
     subgraph "PostgreSQL Database"
         subgraph "pgqrs Schema"
-            QT[Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports]
-            DLQ[Dead Letter Queues<br/>dlq_email<br/>dlq_tasks<br/>dlq_reports]
-            META[Metadata Tables<br/>pgqrs.meta]
+            QT["Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports"]
+            DLQ["Dead Letter Queues<br/>dlq_email<br/>dlq_tasks<br/>dlq_reports"]
+            META["Metadata Tables<br/>pgqrs.meta"]
         end
     end
 
@@ -72,9 +72,7 @@ graph TB
     class PQ,WQ,AA,CLI pgqrsLib
     class QT,DLQ,META database
     class CP optional
-```
-
-### Component Details
+```### Component Details
 
 #### 1. **PostgreSQL Database**
 - **Central storage** for all queue data and metadata
