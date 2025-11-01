@@ -4,9 +4,142 @@
 A PostgreSQL-backed job queue for Rust applications.
 
 ## Features
-- **Simple Installation**: Add `pgqrs` library as a dependency in your Rust applications.
+- **Lightweight**: Use `pgqrs` as a library in your Rust applications.
 - **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
+
+## Architecture
+
+pgqrs is a distributed job queue system built around PostgreSQL. The architecture consists of several components that work together to provide reliable, scalable background job processing.
+
+### System Overview
+
+```mermaid
+graph TB
+    subgraph "Application Layer"
+        P[Producer Services<br/>Your Rust Apps]
+        W[Worker Services<br/>Your Rust Apps]
+        A[Admin Server<br/>Optional Monitoring]
+    end
+
+    subgraph "pgqrs APIs"
+        PQ[Queue API<br/>enqueue()<br/>batch_enqueue()]
+        WQ[Queue API<br/>read()<br/>delete_batch()<br/>fail_message()]
+        AA[PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()]
+    end
+
+    CLI[pgqrs CLI<br/>install<br/>queue create<br/>message send<br/>metrics]
+
+    subgraph "Connection Layer"
+        CP[Connection Pooler<br/>PgBouncer/pgcat<br/>Optional]
+    end
+
+    subgraph "PostgreSQL Database"
+        subgraph "pgqrs Schema"
+            QT[Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports]
+            DLQ[Dead Letter Queues<br/>dlq_email<br/>dlq_tasks<br/>dlq_reports]
+            META[Metadata Tables<br/>pgqrs.meta]
+        end
+    end
+
+    %% Connections
+    P --> PQ
+    W --> WQ
+    A --> AA
+
+    PQ --> CP
+    WQ --> CP
+    AA --> CP
+    CLI --> CP
+
+    CP --> QT
+    CP --> DLQ
+    CP --> META
+
+    %% Alternative direct connection (without pooler)
+    PQ -.-> QT
+    WQ -.-> QT
+    AA -.-> QT
+    CLI -.-> QT
+
+    %% Styling
+    classDef userApp fill:#e1f5fe
+    classDef pgqrsLib fill:#f3e5f5
+    classDef database fill:#e8f5e8
+    classDef optional fill:#fff3e0
+
+    class P,W,A userApp
+    class PQ,WQ,AA,CLI pgqrsLib
+    class QT,DLQ,META database
+    class CP optional
+```
+
+### Component Details
+
+#### 1. **PostgreSQL Database**
+- **Central storage** for all queue data and metadata
+- **ACID compliance** ensures message durability and exactly-once processing
+- **SKIP LOCKED** feature enables efficient concurrent message processing
+- **Schema isolation** via dedicated `pgqrs` schema
+
+#### 2. **Connection Pooler (Optional)**
+- **PgBouncer or pgcat** for connection management and scaling
+- **Connection multiplexing** allows more workers than database connections
+
+#### 3. **Producer Services**
+- **Your Rust applications** that create and enqueue jobs
+- **Uses pgqrs library** to interact with queues programmatically
+- **Key operations**:
+  - `queue.enqueue(payload)` - Add single job
+  - `queue.batch_enqueue(payloads)` - Add multiple jobs efficiently
+  - `queue.enqueue_delayed(payload, delay)` - Schedule future jobs
+
+#### 4. **Worker Services**
+- **Your Rust applications** that process jobs from queues
+- **Consumes messages** using pgqrs library APIs
+- **Key operations**:
+  - `queue.read(batch_size)` - Fetch jobs for processing
+  - `queue.delete_batch(msg_ids)` - Mark jobs as completed
+
+#### 5. **Admin Server (Optional)**
+- **Your monitoring/admin service** using `PgqrsAdmin` APIs
+- **Operational management** and metrics collection
+- **Key operations**:
+  - `admin.queue_metrics(name)` - Get queue health metrics
+  - `admin.all_queues_metrics()` - System-wide monitoring
+  - `admin.create_queue(name)` - Queue lifecycle management
+
+#### 6. **pgqrs CLI**
+- **Command-line tool** for administrative operations
+- **Direct database access** for debugging and management
+- **Key commands**:
+  - `pgqrs install` - Set up database schema
+  - `pgqrs queue create <name>` - Create new queues
+  - `pgqrs message send <queue> <payload>` - Manual job creation
+  - `pgqrs queue metrics <name>` - Inspect queue health
+
+### Data Flow
+
+1. **Job Creation**: Producer services use `queue.enqueue()` to add jobs to PostgreSQL
+2. **Job Processing**: Worker services use `queue.read()` to fetch and process jobs
+3. **Job Completion**: Workers call `queue.delete_batch()` to mark jobs as done
+4. **Error Handling**: Failed jobs automatically retry or move to dead letter queues
+5. **Monitoring**: Admin services and CLI provide operational visibility
+
+### Scalability Patterns
+
+- **Horizontal Workers**: Run multiple worker instances for increased throughput
+- **Queue Partitioning**: Use multiple queues to distribute load
+- **Connection Pooling**: PgBouncer enables more workers than database connections
+- **Batch Processing**: Process multiple jobs per database transaction for efficiency
+
+### Deployment Considerations
+
+- **Database**: Single PostgreSQL instance or managed service (RDS, Cloud SQL)
+- **Workers**: Deploy as separate services/containers, scale independently
+- **Producers**: Integrate pgqrs library into existing application services
+- **Admin/CLI**: Use for operational management and debugging
+
 
 ## Getting Started
 
