@@ -87,6 +87,9 @@ impl PgqrsAdmin {
                 message: e.to_string(),
             })?;
 
+        // Create workers table
+        self.setup_workers_table().await?;
+
         Ok(())
     }
 
@@ -169,18 +172,31 @@ impl PgqrsAdmin {
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{queue_name}", &name);
 
+        // Add worker_id column and index for new queues
+        let add_worker_column = format!(
+            r#"ALTER TABLE pgqrs.queue_{} ADD COLUMN worker_id UUID REFERENCES pgqrs.pgqrs_workers(id)"#,
+            name
+        );
+
+        let create_worker_index = format!(
+            r#"CREATE INDEX idx_queue_{}_worker_id ON pgqrs.queue_{}(worker_id)"#,
+            name, name
+        );
+
         tracing::debug!("Queue statement: {}", create_statement);
         tracing::debug!("Meta statement: {}", insert_meta);
         tracing::debug!("Archive statement: {}", create_archive_statement);
         tracing::debug!("Archive index 1: {}", create_archive_index1);
         tracing::debug!("Archive index 2: {}", create_archive_index2);
 
-        // Execute all statements in a transaction (queue table, archive table, archive indexes, metadata)
+        // Execute all statements in a transaction (queue table, archive table, archive indexes, worker column, worker index, metadata)
         self.run_statements_in_transaction(vec![
             create_statement,
             create_archive_statement,
             create_archive_index1,
             create_archive_index2,
+            add_worker_column,
+            create_worker_index,
             insert_meta,
         ])
         .await?;
@@ -341,5 +357,196 @@ impl PgqrsAdmin {
         })?;
 
         Ok(())
+    }
+
+    /// Create workers table if it doesn't exist
+    ///
+    /// This is part of the worker management infrastructure setup
+    ///
+    /// # Returns
+    /// Ok if table creation succeeds, error otherwise
+    pub async fn setup_workers_table(&self) -> Result<()> {
+        let sql = r#"
+            CREATE TABLE IF NOT EXISTS pgqrs.pgqrs_workers (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                hostname TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                queue_id TEXT NOT NULL,
+                started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                shutdown_at TIMESTAMP WITH TIME ZONE,
+                status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'shutting_down', 'stopped')),
+                
+                UNIQUE(hostname, port)
+            )
+        "#;
+
+        sqlx::query(sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(())
+    }
+
+    /// Add worker_id column to existing queues (migration)
+    ///
+    /// # Arguments
+    /// * `queue_name` - Name of the queue to migrate
+    ///
+    /// # Returns
+    /// Ok if migration succeeds, error otherwise
+    pub async fn migrate_queue_for_workers(&self, queue_name: &str) -> Result<()> {
+        // Add worker_id column if it doesn't exist
+        let add_column_sql = format!(
+            r#"
+            ALTER TABLE pgqrs.queue_{} 
+            ADD COLUMN IF NOT EXISTS worker_id UUID REFERENCES pgqrs.pgqrs_workers(id)
+            "#,
+            queue_name
+        );
+
+        // Create index for worker_id
+        let create_index_sql = format!(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_queue_{}_worker_id 
+            ON pgqrs.queue_{}(worker_id)
+            "#,
+            queue_name, queue_name
+        );
+
+        self.run_statements_in_transaction(vec![add_column_sql, create_index_sql])
+            .await
+    }
+
+    /// Get all workers across all queues
+    ///
+    /// # Returns
+    /// Vector of all workers in the system
+    pub async fn list_all_workers(&self) -> Result<Vec<crate::types::Worker>> {
+        let sql = r#"
+            SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+            FROM pgqrs.pgqrs_workers
+            ORDER BY started_at DESC
+        "#;
+
+        let workers = sqlx::query_as(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(workers)
+    }
+
+    /// Get workers for a specific queue
+    ///
+    /// # Arguments
+    /// * `queue_name` - Name of the queue
+    ///
+    /// # Returns
+    /// Vector of workers processing the specified queue
+    pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<crate::types::Worker>> {
+        let sql = r#"
+            SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+            FROM pgqrs.pgqrs_workers
+            WHERE queue_id = $1
+            ORDER BY started_at DESC
+        "#;
+
+        let workers = sqlx::query_as(sql)
+            .bind(queue_name)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(workers)
+    }
+
+    /// Remove stopped workers older than specified duration
+    ///
+    /// # Arguments
+    /// * `older_than` - Duration threshold for worker removal
+    ///
+    /// # Returns
+    /// Number of workers removed
+    pub async fn purge_old_workers(&self, older_than: std::time::Duration) -> Result<u64> {
+        let threshold = chrono::Utc::now() - chrono::Duration::from_std(older_than).unwrap();
+
+        let sql = r#"
+            DELETE FROM pgqrs.pgqrs_workers
+            WHERE status = 'stopped' AND heartbeat_at < $1
+        "#;
+
+        let result = sqlx::query(sql)
+            .bind(threshold)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Get worker statistics
+    ///
+    /// # Arguments
+    /// * `queue_name` - Name of the queue to get stats for
+    ///
+    /// # Returns
+    /// Worker statistics for the queue
+    pub async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+        let workers = self.list_queue_workers(queue_name).await?;
+        
+        let total_workers = workers.len() as u32;
+        let ready_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::Ready).count() as u32;
+        let shutting_down_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::ShuttingDown).count() as u32;
+        let stopped_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::Stopped).count() as u32;
+
+        // Get message counts per worker
+        let queue = self.get_queue(queue_name).await?;
+        let mut total_messages = 0u64;
+        
+        for worker in &workers {
+            let messages = queue.get_worker_messages(worker.id).await?;
+            total_messages += messages.len() as u64;
+        }
+
+        let average_messages_per_worker = if total_workers > 0 {
+            total_messages as f64 / total_workers as f64
+        } else {
+            0.0
+        };
+
+        let now = chrono::Utc::now();
+        let oldest_worker_age = workers.iter()
+            .map(|w| now.signed_duration_since(w.started_at))
+            .max()
+            .unwrap_or(chrono::Duration::zero())
+            .to_std()
+            .unwrap_or(std::time::Duration::ZERO);
+
+        let newest_heartbeat_age = workers.iter()
+            .map(|w| now.signed_duration_since(w.heartbeat_at))
+            .min()
+            .unwrap_or(chrono::Duration::zero())
+            .to_std()
+            .unwrap_or(std::time::Duration::ZERO);
+
+        Ok(crate::types::WorkerStats {
+            total_workers,
+            ready_workers,
+            shutting_down_workers,
+            stopped_workers,
+            average_messages_per_worker,
+            oldest_worker_age,
+            newest_heartbeat_age,
+        })
     }
 }

@@ -79,6 +79,11 @@ enum Commands {
         #[command(subcommand)]
         action: MessageCommands,
     },
+    /// Worker management commands
+    Worker {
+        #[command(subcommand)]
+        action: WorkerCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -173,6 +178,57 @@ enum MessageCommands {
         /// Query archive table instead of active queue
         #[arg(long, help = "Query archive table instead of active queue")]
         archive: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerCommands {
+    /// List all workers
+    List {
+        /// Name of the queue to filter workers by
+        #[arg(long, short = 'q')]
+        queue: Option<String>,
+    },
+    /// Show detailed worker information
+    Show {
+        /// Worker ID
+        id: String,
+    },
+    /// Show worker statistics
+    Stats {
+        /// Name of the queue
+        #[arg(long, short = 'q')]
+        queue: String,
+    },
+    /// Stop a worker (mark as stopped)
+    Stop {
+        /// Worker ID
+        id: String,
+    },
+    /// Show messages assigned to a worker
+    Messages {
+        /// Worker ID
+        id: String,
+    },
+    /// Release messages from a worker
+    Release {
+        /// Worker ID
+        id: String,
+    },
+    /// Remove old stopped workers
+    Purge {
+        /// Remove workers older than this duration (e.g., '7d', '24h', '30m')
+        #[arg(long, default_value = "7d")]
+        older_than: String,
+    },
+    /// Check worker health
+    Health {
+        /// Name of the queue
+        #[arg(long, short = 'q')]
+        queue: String,
+        /// Maximum heartbeat age in seconds
+        #[arg(long, default_value = "300")]
+        max_age: u64,
     },
 }
 
@@ -273,6 +329,10 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
         Commands::Message { action } => {
             handle_message_commands(&admin, action, writer, out).await?;
+        }
+
+        Commands::Worker { action } => {
+            handle_worker_commands(&admin, action, writer, out).await?;
         }
     }
 
@@ -535,4 +595,210 @@ async fn handle_message_commands(
             Ok(())
         }
     }
+}
+
+/// Handle worker-related CLI commands.
+///
+/// This function processes all worker management commands including list,
+/// show, stats, stop, messages, release, purge, and health operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for worker operations
+/// * `action` - Specific worker command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
+async fn handle_worker_commands(
+    admin: &PgqrsAdmin,
+    action: WorkerCommands,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
+    match action {
+        WorkerCommands::List { queue } => {
+            let workers = match queue {
+                Some(queue_name) => {
+                    tracing::info!("Listing workers for queue '{}'...", queue_name);
+                    admin.list_queue_workers(&queue_name).await?
+                }
+                None => {
+                    tracing::info!("Listing all workers...");
+                    admin.list_all_workers().await?
+                }
+            };
+            tracing::info!("Found {} workers", workers.len());
+            writer.write_list(&workers, out)?;
+            Ok(())
+        }
+
+        WorkerCommands::Show { id } => {
+            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            })?;
+
+            let workers = admin.list_all_workers().await?;
+            if let Some(worker) = workers.iter().find(|w| w.id == worker_id) {
+                tracing::info!("Worker found");
+                writer.write_list(&[worker.clone()], out)?;
+            } else {
+                tracing::error!("Worker not found");
+                return Err(anyhow::anyhow!("Worker with ID {} not found", id));
+            }
+            Ok(())
+        }
+
+        WorkerCommands::Stats { queue } => {
+            tracing::info!("Getting worker statistics for queue '{}'...", queue);
+            let stats = admin.worker_stats(&queue).await?;
+            tracing::info!("Worker statistics retrieved");
+            
+            // Print stats in a readable format
+            writeln!(out, "Worker Statistics for Queue '{}':", queue)?;
+            writeln!(out, "  Total Workers: {}", stats.total_workers)?;
+            writeln!(out, "  Ready Workers: {}", stats.ready_workers)?;
+            writeln!(out, "  Shutting Down Workers: {}", stats.shutting_down_workers)?;
+            writeln!(out, "  Stopped Workers: {}", stats.stopped_workers)?;
+            writeln!(out, "  Average Messages per Worker: {:.2}", stats.average_messages_per_worker)?;
+            writeln!(out, "  Oldest Worker Age: {:?}", stats.oldest_worker_age)?;
+            writeln!(out, "  Newest Heartbeat Age: {:?}", stats.newest_heartbeat_age)?;
+            Ok(())
+        }
+
+        WorkerCommands::Stop { id } => {
+            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            })?;
+
+            // Find the worker to get queue context
+            let workers = admin.list_all_workers().await?;
+            if let Some(worker) = workers.iter().find(|w| w.id == worker_id) {
+                let queue = admin.get_queue(&worker.queue_id).await?;
+                let worker_instance = pgqrs::Worker {
+                    id: worker.id,
+                    hostname: worker.hostname.clone(),
+                    port: worker.port,
+                    queue_id: worker.queue_id.clone(),
+                    started_at: worker.started_at,
+                    heartbeat_at: worker.heartbeat_at,
+                    shutdown_at: worker.shutdown_at,
+                    status: worker.status.clone(),
+                };
+                
+                tracing::info!("Stopping worker {}...", id);
+                worker_instance.mark_stopped(&queue).await?;
+                tracing::info!("Worker stopped successfully");
+            } else {
+                return Err(anyhow::anyhow!("Worker with ID {} not found", id));
+            }
+            Ok(())
+        }
+
+        WorkerCommands::Messages { id } => {
+            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            })?;
+
+            // Find the worker to get queue context
+            let workers = admin.list_all_workers().await?;
+            if let Some(worker) = workers.iter().find(|w| w.id == worker_id) {
+                let queue = admin.get_queue(&worker.queue_id).await?;
+                tracing::info!("Getting messages for worker {}...", id);
+                let messages = queue.get_worker_messages(worker_id).await?;
+                tracing::info!("Found {} messages", messages.len());
+                writer.write_list(&messages, out)?;
+            } else {
+                return Err(anyhow::anyhow!("Worker with ID {} not found", id));
+            }
+            Ok(())
+        }
+
+        WorkerCommands::Release { id } => {
+            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            })?;
+
+            // Find the worker to get queue context
+            let workers = admin.list_all_workers().await?;
+            if let Some(worker) = workers.iter().find(|w| w.id == worker_id) {
+                let queue = admin.get_queue(&worker.queue_id).await?;
+                tracing::info!("Releasing messages from worker {}...", id);
+                let released_count = queue.release_worker_messages(worker_id).await?;
+                tracing::info!("Released {} messages", released_count);
+                writeln!(out, "Released {} messages from worker {}", released_count, id)?;
+            } else {
+                return Err(anyhow::anyhow!("Worker with ID {} not found", id));
+            }
+            Ok(())
+        }
+
+        WorkerCommands::Purge { older_than } => {
+            // Parse duration string (e.g., "7d", "24h", "30m")
+            let duration = parse_duration(&older_than)?;
+            tracing::info!("Purging workers older than {:?}...", duration);
+            let purged_count = admin.purge_old_workers(duration).await?;
+            tracing::info!("Purged {} old workers", purged_count);
+            writeln!(out, "Purged {} old workers", purged_count)?;
+            Ok(())
+        }
+
+        WorkerCommands::Health { queue, max_age } => {
+            tracing::info!("Checking worker health for queue '{}'...", queue);
+            let workers = admin.list_queue_workers(&queue).await?;
+            let max_age_duration = std::time::Duration::from_secs(max_age);
+            
+            let mut healthy = 0;
+            let mut unhealthy = 0;
+            
+            writeln!(out, "Worker Health Report for Queue '{}':", queue)?;
+            for worker in &workers {
+                let is_healthy = worker.is_healthy(max_age_duration);
+                if is_healthy {
+                    healthy += 1;
+                } else {
+                    unhealthy += 1;
+                }
+                writeln!(
+                    out,
+                    "  Worker {}: {} ({}:{})",
+                    worker.id,
+                    if is_healthy { "HEALTHY" } else { "UNHEALTHY" },
+                    worker.hostname,
+                    worker.port
+                )?;
+            }
+            
+            writeln!(out)?;
+            writeln!(out, "Summary: {} healthy, {} unhealthy", healthy, unhealthy)?;
+            Ok(())
+        }
+    }
+}
+
+/// Parse duration string into std::time::Duration
+/// Supports formats like "7d", "24h", "30m", "60s"
+fn parse_duration(duration_str: &str) -> anyhow::Result<std::time::Duration> {
+    let duration_str = duration_str.trim();
+    let (number, unit) = if duration_str.ends_with('d') {
+        (duration_str[..duration_str.len()-1].parse::<u64>()?, "days")
+    } else if duration_str.ends_with('h') {
+        (duration_str[..duration_str.len()-1].parse::<u64>()?, "hours")
+    } else if duration_str.ends_with('m') {
+        (duration_str[..duration_str.len()-1].parse::<u64>()?, "minutes")
+    } else if duration_str.ends_with('s') {
+        (duration_str[..duration_str.len()-1].parse::<u64>()?, "seconds")
+    } else {
+        return Err(anyhow::anyhow!("Invalid duration format. Use 'd' for days, 'h' for hours, 'm' for minutes, 's' for seconds"));
+    };
+
+    let duration = match unit {
+        "days" => std::time::Duration::from_secs(number * 24 * 60 * 60),
+        "hours" => std::time::Duration::from_secs(number * 60 * 60),
+        "minutes" => std::time::Duration::from_secs(number * 60),
+        "seconds" => std::time::Duration::from_secs(number),
+        _ => return Err(anyhow::anyhow!("Invalid duration unit")),
+    };
+
+    Ok(duration)
 }

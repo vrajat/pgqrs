@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self};
 use tabled::Tabled;
+use uuid::Uuid;
 
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
@@ -39,6 +40,10 @@ pub struct QueueMessage {
     pub vt: chrono::DateTime<chrono::Utc>,
     /// The actual message payload (JSON)
     pub message: serde_json::Value,
+    /// Worker ID that has this message assigned (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub worker_id: Option<Uuid>,
 }
 
 impl fmt::Display for QueueMessage {
@@ -132,5 +137,89 @@ impl ArchivedMessage {
     /// Set the processing duration from a `std::time::Duration`
     pub fn set_processing_duration(&mut self, duration: std::time::Duration) {
         self.processing_duration = Some(duration.as_millis() as i64);
+    }
+}
+
+/// A worker instance that processes messages from queues
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+pub struct Worker {
+    /// Unique worker ID
+    pub id: Uuid,
+    /// Hostname where the worker is running
+    pub hostname: String,
+    /// Port number for the worker
+    pub port: i32,
+    /// Queue ID this worker is processing
+    pub queue_id: String,
+    /// Timestamp when the worker started
+    pub started_at: DateTime<Utc>,
+    /// Last heartbeat timestamp
+    pub heartbeat_at: DateTime<Utc>,
+    /// Timestamp when shutdown was initiated (if any)
+    #[tabled(skip)]
+    pub shutdown_at: Option<DateTime<Utc>>,
+    /// Current status of the worker
+    pub status: WorkerStatus,
+}
+
+impl fmt::Display for Worker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Worker {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
+            self.id, self.hostname, self.port, self.queue_id, self.status
+        )
+    }
+}
+
+/// Worker status enumeration
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "worker_status", rename_all = "snake_case")]
+pub enum WorkerStatus {
+    /// Worker is ready to process messages
+    Ready,
+    /// Worker is shutting down gracefully
+    ShuttingDown,
+    /// Worker has stopped
+    Stopped,
+}
+
+impl fmt::Display for WorkerStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkerStatus::Ready => write!(f, "ready"),
+            WorkerStatus::ShuttingDown => write!(f, "shutting_down"),
+            WorkerStatus::Stopped => write!(f, "stopped"),
+        }
+    }
+}
+
+/// Worker statistics for monitoring and management
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerStats {
+    /// Total number of workers
+    pub total_workers: u32,
+    /// Number of ready workers
+    pub ready_workers: u32,
+    /// Number of workers shutting down
+    pub shutting_down_workers: u32,
+    /// Number of stopped workers
+    pub stopped_workers: u32,
+    /// Average messages per worker
+    pub average_messages_per_worker: f64,
+    /// Age of the oldest worker
+    pub oldest_worker_age: std::time::Duration,
+    /// Age of the newest heartbeat
+    pub newest_heartbeat_age: std::time::Duration,
+}
+
+impl fmt::Display for WorkerStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "WorkerStats {{ total: {}, ready: {}, shutting_down: {}, stopped: {}, avg_messages: {:.2} }}",
+            self.total_workers, self.ready_workers, self.shutting_down_workers, 
+            self.stopped_workers, self.average_messages_per_worker
+        )
     }
 }
