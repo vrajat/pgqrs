@@ -211,12 +211,12 @@ pub const PURGE_ARCHIVE_TABLE: &str = r#"
 
 /// Create index on worker table for efficient worker lookups
 pub const CREATE_WORKERS_INDEX_QUEUE_STATUS: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status 
+    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status
     ON pgqrs.pgqrs_workers(queue_id, status);
 "#;
 
 /// Create index on worker table for heartbeat monitoring
 pub const CREATE_WORKERS_INDEX_HEARTBEAT: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_heartbeat 
+    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_heartbeat
     ON pgqrs.pgqrs_workers(heartbeat_at);
 "#;

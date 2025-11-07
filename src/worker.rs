@@ -27,17 +27,17 @@
 //!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //!     let admin = PgqrsAdmin::new(&config).await?;
 //!     let queue = admin.create_queue(&"jobs".to_string(), false).await?;
-//!     
+//!
 //!     // Register a worker
 //!     let worker = Worker::register(&queue, "worker-host".to_string(), 8080).await?;
-//!     
+//!
 //!     // Send heartbeat
 //!     worker.heartbeat(&queue).await?;
-//!     
+//!
 //!     // Graceful shutdown
 //!     worker.begin_shutdown(&queue).await?;
 //!     worker.mark_stopped(&queue).await?;
-//!     
+//!
 //!     Ok(())
 //! }
 //! ```
@@ -112,8 +112,8 @@ impl Worker {
         let now = Utc::now();
 
         let sql = r#"
-            UPDATE pgqrs.pgqrs_workers 
-            SET heartbeat_at = $1 
+            UPDATE pgqrs.pgqrs_workers
+            SET heartbeat_at = $1
             WHERE id = $2
         "#;
 
@@ -143,8 +143,8 @@ impl Worker {
         let now = Utc::now();
 
         let sql = r#"
-            UPDATE pgqrs.pgqrs_workers 
-            SET status = 'shutting_down', shutdown_at = $1 
+            UPDATE pgqrs.pgqrs_workers
+            SET status = 'shutting_down', shutdown_at = $1
             WHERE id = $2
         "#;
 
@@ -171,8 +171,8 @@ impl Worker {
     /// Returns `PgqrsError` if the database update fails
     pub async fn mark_stopped(&self, queue: &Queue) -> Result<()> {
         let sql = r#"
-            UPDATE pgqrs.pgqrs_workers 
-            SET status = 'stopped' 
+            UPDATE pgqrs.pgqrs_workers
+            SET status = 'stopped'
             WHERE id = $1
         "#;
 
@@ -213,7 +213,7 @@ impl Queue {
     pub async fn list_workers(&self) -> Result<Vec<Worker>> {
         let sql = r#"
             SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-            FROM pgqrs.pgqrs_workers 
+            FROM pgqrs.pgqrs_workers
             WHERE queue_id = $1
             ORDER BY started_at DESC
         "#;
@@ -252,13 +252,13 @@ impl Queue {
         let sql = if worker_id.is_some() {
             format!(
                 r#"
-                UPDATE pgqrs.q_{} 
+                UPDATE pgqrs.q_{}
                 SET vt = $1, read_ct = read_ct + 1, worker_id = $3
                 WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.q_{} 
-                    WHERE vt < NOW() 
-                    ORDER BY msg_id 
-                    FOR UPDATE SKIP LOCKED 
+                    SELECT msg_id FROM pgqrs.q_{}
+                    WHERE vt < NOW()
+                    ORDER BY msg_id
+                    FOR UPDATE SKIP LOCKED
                     LIMIT $2
                 )
                 RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
@@ -268,13 +268,13 @@ impl Queue {
         } else {
             format!(
                 r#"
-                UPDATE pgqrs.q_{} 
+                UPDATE pgqrs.q_{}
                 SET vt = $1, read_ct = read_ct + 1
                 WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.q_{} 
-                    WHERE vt < NOW() 
-                    ORDER BY msg_id 
-                    FOR UPDATE SKIP LOCKED 
+                    SELECT msg_id FROM pgqrs.q_{}
+                    WHERE vt < NOW()
+                    ORDER BY msg_id
+                    FOR UPDATE SKIP LOCKED
                     LIMIT $2
                 )
                 RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
@@ -316,8 +316,8 @@ impl Queue {
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         let sql = format!(
             r#"
-            UPDATE pgqrs.q_{} 
-            SET vt = NOW(), worker_id = NULL 
+            UPDATE pgqrs.q_{}
+            SET vt = NOW(), worker_id = NULL
             WHERE worker_id = $1
             "#,
             self.queue_name

@@ -153,25 +153,25 @@ impl PgqrsAdmin {
         let create_statement = create_statement
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", &name);
+            .replace("{queue_name}", name);
 
         let insert_meta = INSERT_QUEUE_METADATA
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{name}", &name)
+            .replace("{name}", name)
             .replace("{unlogged}", if unlogged { "TRUE" } else { "FALSE" });
 
         // Create archive table for message archiving
         let create_archive_statement = CREATE_ARCHIVE_TABLE
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", &name);
+            .replace("{queue_name}", name);
 
         let create_archive_index1 = CREATE_ARCHIVE_INDEX_ARCHIVED_AT
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", &name);
+            .replace("{queue_name}", name);
 
         let create_archive_index2 = CREATE_ARCHIVE_INDEX_ENQUEUED_AT
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", &name);
+            .replace("{queue_name}", name);
 
         tracing::debug!("Queue statement: {}", create_statement);
         tracing::debug!("Meta statement: {}", insert_meta);
@@ -367,7 +367,7 @@ impl PgqrsAdmin {
                 heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 shutdown_at TIMESTAMP WITH TIME ZONE,
                 status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'shutting_down', 'stopped')),
-                
+
                 UNIQUE(hostname, port)
             )
         "#;
@@ -408,7 +408,7 @@ impl PgqrsAdmin {
         // Add worker_id column if it doesn't exist
         let add_column_sql = format!(
             r#"
-            ALTER TABLE pgqrs.q_{} 
+            ALTER TABLE pgqrs.q_{}
             ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES pgqrs.pgqrs_workers(id)
             "#,
             queue_name
@@ -417,7 +417,7 @@ impl PgqrsAdmin {
         // Create index for worker_id
         let create_index_sql = format!(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_q_{}_worker_id 
+            CREATE INDEX IF NOT EXISTS idx_q_{}_worker_id
             ON pgqrs.q_{}(worker_id)
             "#,
             queue_name, queue_name
