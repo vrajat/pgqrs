@@ -136,7 +136,7 @@ pub const CREATE_ARCHIVE_TABLE: &str = r#"
         archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         processing_duration BIGINT,
 
-        PRIMARY KEY (msg_id, archived_at)
+        PRIMARY KEY (msg_id)
     )
 "#;
 

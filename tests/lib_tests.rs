@@ -192,12 +192,14 @@ async fn test_archive_batch_messages() {
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
-    let archived_results = queue
-        .archive_batch(batch_to_archive.clone())
-        .await;
+    let archived_results = queue.archive_batch(batch_to_archive.clone()).await;
     assert!(archived_results.is_ok());
     let archived_results = archived_results.unwrap();
-    assert_eq!(archived_results.len(), 3, "Should have results for exactly 3 messages");
+    assert_eq!(
+        archived_results.len(),
+        3,
+        "Should have results for exactly 3 messages"
+    );
 
     // Verify all messages were successfully archived
     for (i, id) in batch_to_archive.iter().enumerate() {

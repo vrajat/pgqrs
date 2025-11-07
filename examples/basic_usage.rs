@@ -146,9 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
-        let archived = task_queue
-            .archive(task_msg.msg_id)
-            .await?;
+        let archived = task_queue.archive(task_msg.msg_id).await?;
         if archived {
             println!("Successfully archived task message {}", task_msg.msg_id);
         } else {
@@ -163,9 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Batch archiving email messages...");
     let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.msg_id).collect();
     if !email_msg_ids.is_empty() {
-        let archived_ids = email_queue
-            .archive_batch(email_msg_ids)
-            .await?;
+        let archived_ids = email_queue.archive_batch(email_msg_ids).await?;
         println!(
             "Successfully archived {} email messages",
             archived_ids.len()
