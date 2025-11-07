@@ -4,6 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
+### Git and GitHub Operations
+**IMPORTANT: Use command line tools only - no MCP git tools**
+- `git status` - Check working directory status
+- `git add <file>` or `git add .` - Stage changes for commit
+- `git commit -m "message"` - Commit staged changes with message
+- `git push` - Push commits to remote repository
+- `git pull` - Pull latest changes from remote
+- `git log --oneline` - View commit history
+- `git diff` - View unstaged changes
+- `git diff --cached` - View staged changes
+- `gh pr view <number>` - View pull request details
+- `gh pr view <number> --comments` - View PR comments
+- `gh api repos/owner/repo/pulls/number/comments` - Get PR comments via API
+
 ### Building and Testing
 - `cargo build` - Build the project
 - `cargo build --release` - Build optimized release version
@@ -310,5 +324,40 @@ Always include:
 - Clean up test data between test runs
 - Use meaningful test data that reflects real-world scenarios
 - Avoid hardcoded values; use constants or generate test data programmatically
+
+### Handling PR Feedback and CI Issues
+
+#### Common CI Failures and Fixes
+1. **Formatting Issues**
+   - Run `cargo fmt --all` to fix formatting violations
+   - CI uses rustfmt action which checks all files
+   - Ensure consistent formatting before pushing
+
+2. **Clippy Warnings**
+   - Run `cargo clippy --all-targets --all-features` locally
+   - Address all warnings before pushing
+   - Some warnings can be allowed with `#[allow(clippy::lint_name)]` if justified
+
+3. **Test Failures**
+   - Run `cargo test` locally before pushing
+   - Check database connectivity for integration test failures
+   - Use `RUST_LOG=debug` for detailed failure output
+
+#### Addressing Review Feedback
+- Read all review comments carefully before making changes
+- Address each concern systematically:
+  - Resource lifecycle management (cleanup, deletion)
+  - API consistency and error handling
+  - Documentation and examples completeness
+- Add tests for any new functionality or bug fixes
+- Update documentation and examples when APIs change
+- Commit with descriptive messages explaining what feedback was addressed
+
+#### Archive System Development Notes
+- Archive tables follow naming pattern: `archive_{queue_name}`
+- DELETE operations should handle both queue and archive tables
+- PURGE operations can be separate for queue vs archive
+- Always test table creation, deletion, and cleanup operations
+- Consider transaction rollback scenarios for multi-table operations
 
 ````

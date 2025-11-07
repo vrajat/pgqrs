@@ -122,3 +122,88 @@ pub const SCHEMA_EXISTS_QUERY: &str = r#"
 pub const UNINSTALL_STATEMENT: &str = r#"
     DROP SCHEMA IF EXISTS {PGQRS_SCHEMA} CASCADE;
 "#;
+
+/// Create archive table for queue
+pub const CREATE_ARCHIVE_TABLE: &str = r#"
+    CREATE UNLOGGED TABLE IF NOT EXISTS {PGQRS_SCHEMA}.archive_{queue_name} (
+        msg_id BIGINT NOT NULL,
+        message JSONB NOT NULL,
+        enqueued_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        vt TIMESTAMP WITH TIME ZONE NOT NULL,
+        read_ct INTEGER NOT NULL,
+
+        -- Archive-specific tracking columns
+        archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        processing_duration BIGINT,
+
+        PRIMARY KEY (msg_id)
+    )
+"#;
+
+/// Create indexes for archive table
+pub const CREATE_ARCHIVE_INDEX_ARCHIVED_AT: &str = r#"
+    CREATE INDEX IF NOT EXISTS idx_archive_{queue_name}_archived_at ON {PGQRS_SCHEMA}.archive_{queue_name}(archived_at)
+"#;
+
+pub const CREATE_ARCHIVE_INDEX_ENQUEUED_AT: &str = r#"
+    CREATE INDEX IF NOT EXISTS idx_archive_{queue_name}_enqueued_at ON {PGQRS_SCHEMA}.archive_{queue_name}(enqueued_at)
+"#;
+
+/// Archive single message (atomic operation)
+pub const ARCHIVE_MESSAGE: &str = r#"
+    WITH archived_msg AS (
+        DELETE FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+        WHERE msg_id = $1
+        RETURNING msg_id, message, enqueued_at, vt, read_ct
+    )
+    INSERT INTO {PGQRS_SCHEMA}.archive_{queue_name}
+        (msg_id, message, enqueued_at, vt, read_ct, processing_duration)
+    SELECT
+        msg_id, message, enqueued_at, vt, read_ct,
+        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
+    FROM archived_msg
+    RETURNING (msg_id IS NOT NULL);
+"#;
+
+/// Archive batch messages (efficient batch operation)
+pub const ARCHIVE_BATCH: &str = r#"
+    WITH archived_msgs AS (
+        DELETE FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
+        WHERE msg_id = ANY($1)
+        RETURNING msg_id, message, enqueued_at, vt, read_ct
+    )
+    INSERT INTO {PGQRS_SCHEMA}.archive_{queue_name}
+        (msg_id, message, enqueued_at, vt, read_ct, processing_duration)
+    SELECT
+        msg_id, message, enqueued_at, vt, read_ct,
+        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
+    FROM archived_msgs
+    RETURNING msg_id;
+"#;
+
+/// Select messages from archive table
+pub const ARCHIVE_LIST: &str = r#"
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, processing_duration
+    FROM {PGQRS_SCHEMA}.archive_{queue_name}
+    ORDER BY archived_at DESC
+    LIMIT $1 OFFSET $2;
+"#;
+
+/// Select single message from archive table by ID
+pub const ARCHIVE_SELECT_BY_ID: &str = r#"
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, processing_duration
+    FROM {PGQRS_SCHEMA}.archive_{queue_name}
+    WHERE msg_id = $1
+    ORDER BY archived_at DESC
+    LIMIT 1;
+"#;
+
+/// Drop the archive table for a queue
+pub const DROP_ARCHIVE_TABLE: &str = r#"
+    DROP TABLE IF EXISTS {PGQRS_SCHEMA}.archive_{queue_name} CASCADE;
+"#;
+
+/// Purge all messages from archive table
+pub const PURGE_ARCHIVE_TABLE: &str = r#"
+    DELETE FROM {PGQRS_SCHEMA}.archive_{queue_name};
+"#;

@@ -89,3 +89,48 @@ impl fmt::Display for MetaResult {
         )
     }
 }
+
+/// An archived message with additional tracking information
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+pub struct ArchivedMessage {
+    /// Unique message ID
+    pub msg_id: i64,
+    /// Number of times this message has been read
+    pub read_ct: i32,
+    /// Timestamp when the message was enqueued
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Visibility timeout (when the message becomes available again)
+    pub vt: chrono::DateTime<chrono::Utc>,
+    /// The actual message payload (JSON)
+    pub message: serde_json::Value,
+    /// Timestamp when the message was archived
+    #[tabled(skip)]
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How long the message was being processed before archiving (in milliseconds)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub processing_duration: Option<i64>,
+}
+
+impl fmt::Display for ArchivedMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ArchivedMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, archived_at: {:?} }}",
+            self.msg_id, self.read_ct, self.enqueued_at, self.archived_at
+        )
+    }
+}
+
+impl ArchivedMessage {
+    /// Get the processing duration as a `std::time::Duration`
+    pub fn get_processing_duration(&self) -> Option<std::time::Duration> {
+        self.processing_duration
+            .map(|millis| std::time::Duration::from_millis(millis as u64))
+    }
+
+    /// Set the processing duration from a `std::time::Duration`
+    pub fn set_processing_duration(&mut self, duration: std::time::Duration) {
+        self.processing_duration = Some(duration.as_millis() as i64);
+    }
+}

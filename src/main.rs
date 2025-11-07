@@ -21,6 +21,7 @@
 use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
+use pgqrs::error::PgqrsError;
 use std::fs::File;
 use std::process;
 
@@ -102,6 +103,11 @@ enum QueueCommands {
         /// Name of the queue to purge
         name: String,
     },
+    /// Purge all archived messages from a queue's archive table
+    PurgeArchive {
+        /// Name of the queue whose archive to purge
+        name: String,
+    },
     /// Show queue metrics
     Metrics {
         /// Name of the queue (if not provided, shows all queues)
@@ -134,6 +140,9 @@ enum MessageCommands {
         /// Filter by message type
         #[arg(long, short = 't')]
         message_type: Option<String>,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
     },
     /// Dequeue a message from a queue (reads and returns one message)
     Dequeue {
@@ -151,6 +160,19 @@ enum MessageCommands {
     Count {
         /// Name of the queue
         queue: String,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
+    },
+    /// Show message details by ID
+    Show {
+        /// Name of the queue
+        queue: String,
+        /// Message ID to show
+        id: String,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
     },
 }
 
@@ -301,6 +323,12 @@ async fn handle_queue_commands(
             tracing::info!("Queue '{}' purged successfully", name);
         }
 
+        QueueCommands::PurgeArchive { name } => {
+            tracing::info!("Purging archive for queue '{}'...", name);
+            admin.purge_archive(&name).await?;
+            tracing::info!("Archive for queue '{}' purged successfully", name);
+        }
+
         QueueCommands::Metrics { name } => {
             if let Some(queue_name) = name {
                 tracing::info!("Getting metrics for queue '{}'...", queue_name);
@@ -309,7 +337,6 @@ async fn handle_queue_commands(
                 tracing::info!("  Total Messages: {}", metrics.total_messages);
                 tracing::info!("  Pending Messages: {}", metrics.pending_messages);
                 tracing::info!("  Locked Messages: {}", metrics.locked_messages);
-                tracing::info!("  Archived Messages: {}", metrics.archived_messages);
                 if let Some(oldest) = metrics.oldest_pending_message {
                     tracing::info!(
                         "  Oldest Pending: {}",
@@ -397,8 +424,22 @@ async fn handle_message_commands(
             count,
             lock_time,
             message_type,
+            archive,
         } => {
             let queue_obj = admin.get_queue(&queue).await?;
+
+            if archive {
+                tracing::info!(
+                    "Reading {} archived messages from queue '{}'...",
+                    count,
+                    queue
+                );
+                let messages = queue_obj.archive_list(count as i64, 0).await?;
+                tracing::info!("Found {} archived messages", messages.len());
+                writer.write_list(&messages, out)?;
+                return Ok(());
+            }
+
             tracing::info!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
                 count,
@@ -439,11 +480,58 @@ async fn handle_message_commands(
             }
             Ok(())
         }
-        MessageCommands::Count { queue } => {
+        MessageCommands::Count { queue, archive } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            tracing::info!("Getting pending message count for queue '{}'...", queue);
-            let count = queue_obj.pending_count().await?;
-            tracing::info!("Pending messages: {}", count);
+
+            if archive {
+                tracing::info!("Getting archived message count for queue '{}'...", queue);
+                // Get archive count using archive_list to avoid SQL injection
+                let archived_messages = queue_obj.archive_list(i64::MAX, 0).await?;
+                let count = archived_messages.len();
+                tracing::info!("Archived messages: {}", count);
+            } else {
+                tracing::info!("Getting pending message count for queue '{}'...", queue);
+                let count = queue_obj.pending_count().await?;
+                tracing::info!("Pending messages: {}", count);
+            }
+            Ok(())
+        }
+
+        MessageCommands::Show { queue, id, archive } => {
+            let queue_obj = admin.get_queue(&queue).await?;
+            let msg_id: i64 = id.parse().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid message ID format - must be a number".to_string(),
+            })?;
+
+            if archive {
+                tracing::debug!(
+                    "Retrieving archived message {} from queue '{}'...",
+                    msg_id,
+                    queue
+                );
+                match queue_obj.get_archived_message_by_id(msg_id).await {
+                    Ok(message) => {
+                        tracing::info!("Archived message found");
+                        writer.write_list(&[message], out)?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error retrieving archived message: {:?}", e);
+                        tracing::debug!("Archived message not found");
+                    }
+                }
+            } else {
+                tracing::debug!("Retrieving message {} from queue '{}'...", msg_id, queue);
+                match queue_obj.get_message_by_id(msg_id).await {
+                    Ok(message) => {
+                        tracing::debug!("Message found");
+                        writer.write_list(&[message], out)?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error retrieving message: {:?}", e);
+                        tracing::debug!("Message not found");
+                    }
+                }
+            }
             Ok(())
         }
     }

@@ -6,7 +6,9 @@
 //! - Sending messages (immediate and delayed)
 //! - Reading messages from queues
 //! - Batch operations
-//! - Counting pending messages
+//! - Message archiving (recommended for data retention)
+//! - Traditional message deletion
+//! - Counting pending and archived messages
 //!
 //! Run this example with:
 //! ```sh
@@ -142,12 +144,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Simulate processing time
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // Delete the message completely
-        let deleted = task_queue.delete_batch(vec![task_msg.msg_id]).await?;
-        if deleted.first().copied().unwrap_or(false) {
-            println!("Deleted task message {}", task_msg.msg_id);
+        // PREFERRED: Archive the message instead of deleting for data retention
+        println!("Archiving processed message...");
+        let archived = task_queue.archive(task_msg.msg_id).await?;
+        if archived {
+            println!("Successfully archived task message {}", task_msg.msg_id);
         } else {
-            println!("Failed to delete task message {}", task_msg.msg_id);
+            println!(
+                "Failed to archive task message {} (may not exist)",
+                task_msg.msg_id
+            );
+        }
+    }
+
+    // Demonstrate batch archiving for email messages
+    println!("Batch archiving email messages...");
+    let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.msg_id).collect();
+    if !email_msg_ids.is_empty() {
+        let archived_ids = email_queue.archive_batch(email_msg_ids.clone()).await?;
+        println!(
+            "Successfully archived {} email messages",
+            archived_ids.len()
+        );
+
+        for (msg_id, archived) in email_msg_ids.iter().zip(archived_ids.iter()) {
+            if *archived {
+                println!("  Archived email message {}", msg_id);
+            } else {
+                println!("  Failed to archive email message {}", msg_id);
+            }
+        }
+    }
+
+    // Show archive counts
+    println!("Archive counts:");
+    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
+    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
+    println!("  email_queue archived: {}", email_archive_count);
+    println!("  task_queue archived: {}", task_archive_count);
+
+    // Example of traditional deletion for comparison
+    // Note: Use archiving instead for data retention and audit trails
+    if let Some(remaining_task) = task_messages.get(1) {
+        println!("Traditional deletion (not recommended for data retention):");
+
+        // Delete the message completely
+        let deleted = task_queue.delete_batch(vec![remaining_task.msg_id]).await?;
+        if deleted.first().copied().unwrap_or(false) {
+            println!("Deleted task message {}", remaining_task.msg_id);
+        } else {
+            println!("Failed to delete task message {}", remaining_task.msg_id);
         }
     }
 
@@ -178,6 +224,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nPending messages:");
     println!("  email_queue: {}", email_pending);
     println!("  task_queue: {}", task_pending);
+
+    // Demonstrate admin archive management operations
+    println!("\n--- Archive Management Example ---");
+
+    // Check archive counts before operations
+    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
+    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
+    println!(
+        "Archive counts - email: {}, task: {}",
+        email_archive_count, task_archive_count
+    );
+
+    if email_archive_count > 0 {
+        println!("Purging email queue archive...");
+        admin.purge_archive("email_queue").await?;
+        let new_count = email_queue.archive_list(1000, 0).await?.len();
+        println!("Email archive count after purge: {}", new_count);
+    }
+
+    // Note about queue deletion behavior
+    println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");
+    println!("and its archive table are removed to prevent orphaned archive tables.");
+    println!("Use admin.purge_archive() to clear archives while preserving structure.");
 
     println!("\nExample completed successfully!");
 
