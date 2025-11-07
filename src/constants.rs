@@ -131,12 +131,12 @@ pub const CREATE_ARCHIVE_TABLE: &str = r#"
         enqueued_at TIMESTAMP WITH TIME ZONE NOT NULL,
         vt TIMESTAMP WITH TIME ZONE NOT NULL,
         read_ct INTEGER NOT NULL,
-        
+
         -- Archive-specific tracking columns
         archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         archived_by VARCHAR(255),
         processing_duration INTERVAL,
-        
+
         PRIMARY KEY (msg_id, archived_at)
     )
 "#;
@@ -205,4 +205,14 @@ pub const ARCHIVE_SELECT_BY_ID: &str = r#"
     WHERE msg_id = $1
     ORDER BY archived_at DESC
     LIMIT 1;
+"#;
+
+/// Drop the archive table for a queue
+pub const DROP_ARCHIVE_TABLE: &str = r#"
+    DROP TABLE IF EXISTS {PGQRS_SCHEMA}.archive_{queue_name} CASCADE;
+"#;
+
+/// Purge all messages from archive table
+pub const PURGE_ARCHIVE_TABLE: &str = r#"
+    DELETE FROM {PGQRS_SCHEMA}.archive_{queue_name};
 "#;

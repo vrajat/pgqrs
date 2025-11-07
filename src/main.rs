@@ -103,6 +103,11 @@ enum QueueCommands {
         /// Name of the queue to purge
         name: String,
     },
+    /// Purge all archived messages from a queue's archive table
+    PurgeArchive {
+        /// Name of the queue whose archive to purge
+        name: String,
+    },
     /// Show queue metrics
     Metrics {
         /// Name of the queue (if not provided, shows all queues)
@@ -321,6 +326,12 @@ async fn handle_queue_commands(
             tracing::info!("Queue '{}' purged successfully", name);
         }
 
+        QueueCommands::PurgeArchive { name } => {
+            tracing::info!("Purging archive for queue '{}'...", name);
+            admin.purge_archive(&name).await?;
+            tracing::info!("Archive for queue '{}' purged successfully", name);
+        }
+
         QueueCommands::Metrics { name, archive } => {
             if let Some(queue_name) = name {
                 if archive {
@@ -426,9 +437,13 @@ async fn handle_message_commands(
             archive,
         } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            
+
             if archive {
-                tracing::info!("Reading {} archived messages from queue '{}'...", count, queue);
+                tracing::info!(
+                    "Reading {} archived messages from queue '{}'...",
+                    count,
+                    queue
+                );
                 // TODO: Implement archive message listing
                 tracing::info!("Archive message listing not yet implemented");
                 return Ok(());
@@ -476,7 +491,7 @@ async fn handle_message_commands(
         }
         MessageCommands::Count { queue, archive } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            
+
             if archive {
                 tracing::info!("Getting archived message count for queue '{}'...", queue);
                 let count = queue_obj.archive_count().await?;
@@ -491,14 +506,16 @@ async fn handle_message_commands(
 
         MessageCommands::Show { queue, id, archive } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            let msg_id: i64 = id.parse().map_err(|_| {
-                PgqrsError::InvalidMessage {
-                    message: "Invalid message ID format - must be a number".to_string(),
-                }
+            let msg_id: i64 = id.parse().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid message ID format - must be a number".to_string(),
             })?;
 
             if archive {
-                tracing::info!("Retrieving archived message {} from queue '{}'...", msg_id, queue);
+                tracing::info!(
+                    "Retrieving archived message {} from queue '{}'...",
+                    msg_id,
+                    queue
+                );
                 // TODO: Implement archive message retrieval
                 tracing::info!("Archive message retrieval not yet implemented");
             } else {

@@ -135,7 +135,10 @@ async fn test_archive_single_message() {
 
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
-    let message = queue.enqueue(&payload).await.expect("Failed to enqueue message");
+    let message = queue
+        .enqueue(&payload)
+        .await
+        .expect("Failed to enqueue message");
     let msg_id = message.msg_id;
 
     // Verify message is in active queue
@@ -154,7 +157,10 @@ async fn test_archive_single_message() {
     // Try to archive the same message again (should return false)
     let archived_again = queue.archive(msg_id, Some("test-worker")).await;
     assert!(archived_again.is_ok());
-    assert!(!archived_again.unwrap(), "Message should not be archived twice");
+    assert!(
+        !archived_again.unwrap(),
+        "Message should not be archived twice"
+    );
 
     // Cleanup
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
@@ -173,7 +179,10 @@ async fn test_archive_batch_messages() {
     let mut msg_ids = Vec::new();
     for i in 0..5 {
         let payload = json!({"action": "batch_process", "index": i});
-        let message = queue.enqueue(&payload).await.expect("Failed to enqueue message");
+        let message = queue
+            .enqueue(&payload)
+            .await
+            .expect("Failed to enqueue message");
         msg_ids.push(message.msg_id);
     }
 
@@ -183,14 +192,20 @@ async fn test_archive_batch_messages() {
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
-    let archived_ids = queue.archive_batch(batch_to_archive.clone(), Some("batch-worker")).await;
+    let archived_ids = queue
+        .archive_batch(batch_to_archive.clone(), Some("batch-worker"))
+        .await;
     assert!(archived_ids.is_ok());
     let archived_ids = archived_ids.unwrap();
     assert_eq!(archived_ids.len(), 3, "Should archive exactly 3 messages");
-    
+
     // Verify the correct messages were archived
     for id in &batch_to_archive {
-        assert!(archived_ids.contains(id), "Message {} should be in archived list", id);
+        assert!(
+            archived_ids.contains(id),
+            "Message {} should be in archived list",
+            id
+        );
     }
 
     // Verify counts after batch archive
@@ -219,7 +234,10 @@ async fn test_archive_nonexistent_message() {
     let fake_msg_id = 999999;
     let archived = queue.archive(fake_msg_id, Some("test-worker")).await;
     assert!(archived.is_ok());
-    assert!(!archived.unwrap(), "Non-existent message should not be archived");
+    assert!(
+        !archived.unwrap(),
+        "Non-existent message should not be archived"
+    );
 
     // Verify archive count remains zero
     assert_eq!(queue.archive_count().await.unwrap(), 0);
@@ -232,7 +250,7 @@ async fn test_archive_nonexistent_message() {
 async fn test_archive_table_creation() {
     const TEST_QUEUE_TABLE: &str = "test_archive_table_creation";
     let admin = create_admin().await;
-    
+
     // Create queue (should automatically create archive table)
     let queue = admin
         .create_queue(&TEST_QUEUE_TABLE.to_string(), false)
@@ -250,7 +268,7 @@ async fn test_archive_table_creation() {
         .create_queue(&TEST_QUEUE_STANDALONE.to_string(), false)
         .await
         .expect("Failed to create second queue");
-    
+
     // Create additional archive table (should succeed even if it exists)
     let create_result = admin.create_archive_table(TEST_QUEUE_STANDALONE).await;
     assert!(create_result.is_ok());
@@ -261,4 +279,84 @@ async fn test_archive_table_creation() {
     // Cleanup both queues
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
     assert!(admin.delete_queue(&queue2.queue_name).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_delete_queue_removes_archive() {
+    const TEST_QUEUE_DELETE: &str = "test_delete_queue_removes_archive";
+    let admin = create_admin().await;
+
+    // Create queue and archive a message
+    let queue = admin
+        .create_queue(&TEST_QUEUE_DELETE.to_string(), false)
+        .await
+        .expect("Failed to create queue");
+
+    // Send and archive a message
+    let payload = json!({"action": "test_delete", "data": "cleanup_test"});
+    let message = queue
+        .enqueue(&payload)
+        .await
+        .expect("Failed to enqueue message");
+    let archived = queue
+        .archive(message.msg_id, Some("test-worker"))
+        .await
+        .expect("Failed to archive message");
+    assert!(archived, "Message should be archived");
+
+    // Verify archive has content
+    assert_eq!(queue.archive_count().await.unwrap(), 1);
+
+    // Delete the queue (should also delete archive table)
+    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+
+    // Try to recreate the queue and verify archive table is fresh
+    let new_queue = admin
+        .create_queue(&TEST_QUEUE_DELETE.to_string(), false)
+        .await
+        .expect("Failed to recreate queue");
+
+    // Archive count should be 0 (fresh archive table)
+    assert_eq!(new_queue.archive_count().await.unwrap(), 0);
+
+    // Cleanup
+    assert!(admin.delete_queue(&new_queue.queue_name).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_purge_archive() {
+    const TEST_QUEUE_PURGE_ARCHIVE: &str = "test_purge_archive";
+    let admin = create_admin().await;
+
+    // Create queue and archive some messages
+    let queue = admin
+        .create_queue(&TEST_QUEUE_PURGE_ARCHIVE.to_string(), false)
+        .await
+        .expect("Failed to create queue");
+
+    // Archive multiple messages
+    for i in 0..3 {
+        let payload = json!({"action": "test_purge_archive", "index": i});
+        let message = queue
+            .enqueue(&payload)
+            .await
+            .expect("Failed to enqueue message");
+        let archived = queue
+            .archive(message.msg_id, Some("test-worker"))
+            .await
+            .expect("Failed to archive message");
+        assert!(archived, "Message {} should be archived", i);
+    }
+
+    // Verify archive has 3 messages
+    assert_eq!(queue.archive_count().await.unwrap(), 3);
+
+    // Purge archive
+    assert!(admin.purge_archive(&queue.queue_name).await.is_ok());
+
+    // Verify archive is empty
+    assert_eq!(queue.archive_count().await.unwrap(), 0);
+
+    // Cleanup
+    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }

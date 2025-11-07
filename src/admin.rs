@@ -30,8 +30,9 @@ use crate::config::Config;
 use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
     CREATE_META_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_SCHEMA_STATEMENT,
-    DELETE_QUEUE_METADATA, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA, PGQRS_SCHEMA,
-    PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY, UNINSTALL_STATEMENT,
+    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
+    PGQRS_SCHEMA, PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
+    UNINSTALL_STATEMENT,
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
@@ -240,6 +241,7 @@ impl PgqrsAdmin {
     }
 
     /// Delete a queue and all its messages from the database.
+    /// This also deletes the corresponding archive table.
     ///
     /// # Arguments
     /// * `name` - Name of the queue to delete
@@ -252,16 +254,32 @@ impl PgqrsAdmin {
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", name);
 
+        let drop_archive_statement = DROP_ARCHIVE_TABLE
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{queue_name}", name);
+
         let delete_meta = DELETE_QUEUE_METADATA
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{name}", name);
+
         tracing::debug!("Executing delete metadata statement: {}", delete_meta);
         tracing::debug!("Executing drop queue statement: {}", drop_statement);
-        self.run_statements_in_transaction(vec![drop_statement, delete_meta])
-            .await
+        tracing::debug!(
+            "Executing drop archive statement: {}",
+            drop_archive_statement
+        );
+
+        self.run_statements_in_transaction(vec![
+            drop_statement,
+            drop_archive_statement,
+            delete_meta,
+        ])
+        .await
     }
 
     /// Purge all messages from a queue, but keep the queue itself.
+    /// Note: This only purges the active queue, not the archive table.
+    /// Use `purge_archive` to purge archived messages.
     ///
     /// # Arguments
     /// * `name` - Name of the queue to purge
@@ -275,6 +293,26 @@ impl PgqrsAdmin {
             .replace("{queue_name}", name);
         tracing::debug!("Executing purge queue statement: {}", purge_statement);
         self.run_statements_in_transaction(vec![purge_statement])
+            .await
+    }
+
+    /// Purge all archived messages from a queue's archive table.
+    /// The queue and archive table structure are preserved.
+    ///
+    /// # Arguments
+    /// * `name` - Name of the queue whose archive to purge
+    ///
+    /// # Returns
+    /// Ok if purge succeeds, error otherwise.
+    pub async fn purge_archive(&self, name: &str) -> Result<()> {
+        let purge_archive_statement = PURGE_ARCHIVE_TABLE
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{queue_name}", name);
+        tracing::debug!(
+            "Executing purge archive statement: {}",
+            purge_archive_statement
+        );
+        self.run_statements_in_transaction(vec![purge_archive_statement])
             .await
     }
 

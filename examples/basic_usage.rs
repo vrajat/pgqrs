@@ -146,21 +146,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
-        let archived = task_queue.archive(task_msg.msg_id, Some("example-worker")).await?;
+        let archived = task_queue
+            .archive(task_msg.msg_id, Some("example-worker"))
+            .await?;
         if archived {
             println!("Successfully archived task message {}", task_msg.msg_id);
         } else {
-            println!("Failed to archive task message {} (may not exist)", task_msg.msg_id);
+            println!(
+                "Failed to archive task message {} (may not exist)",
+                task_msg.msg_id
+            );
         }
     }
 
-    // Demonstrate batch archiving for email messages  
+    // Demonstrate batch archiving for email messages
     println!("Batch archiving email messages...");
     let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.msg_id).collect();
     if !email_msg_ids.is_empty() {
-        let archived_ids = email_queue.archive_batch(email_msg_ids, Some("batch-processor")).await?;
-        println!("Successfully archived {} email messages", archived_ids.len());
-        
+        let archived_ids = email_queue
+            .archive_batch(email_msg_ids, Some("batch-processor"))
+            .await?;
+        println!(
+            "Successfully archived {} email messages",
+            archived_ids.len()
+        );
+
         for archived_id in &archived_ids {
             println!("  Archived email message {}", archived_id);
         }
@@ -177,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: Use archiving instead for data retention and audit trails
     if let Some(remaining_task) = task_messages.get(1) {
         println!("Traditional deletion (not recommended for data retention):");
-        
+
         // Delete the message completely
         let deleted = task_queue.delete_batch(vec![remaining_task.msg_id]).await?;
         if deleted.first().copied().unwrap_or(false) {
