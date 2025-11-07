@@ -66,13 +66,10 @@ impl Worker {
         let now = Utc::now();
 
         // Insert the worker into the database and get the generated ID
-        let sql = r#"
-            INSERT INTO pgqrs.pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id
-        "#;
+        let sql = crate::constants::INSERT_WORKER
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_id: i64 = sqlx::query_scalar(sql)
+        let worker_id: i64 = sqlx::query_scalar(&sql)
             .bind(&hostname)
             .bind(port)
             .bind(&queue.queue_name)
@@ -111,13 +108,10 @@ impl Worker {
     pub async fn heartbeat(&self, queue: &Queue) -> Result<()> {
         let now = Utc::now();
 
-        let sql = r#"
-            UPDATE pgqrs.pgqrs_workers
-            SET heartbeat_at = $1
-            WHERE id = $2
-        "#;
+        let sql = crate::constants::UPDATE_WORKER_HEARTBEAT
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        sqlx::query(sql)
+        sqlx::query(&sql)
             .bind(now)
             .bind(self.id)
             .execute(&queue.pool)
@@ -142,13 +136,10 @@ impl Worker {
     pub async fn begin_shutdown(&self, queue: &Queue) -> Result<()> {
         let now = Utc::now();
 
-        let sql = r#"
-            UPDATE pgqrs.pgqrs_workers
-            SET status = 'shutting_down', shutdown_at = $1
-            WHERE id = $2
-        "#;
+        let sql = crate::constants::UPDATE_WORKER_SHUTDOWN
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        sqlx::query(sql)
+        sqlx::query(&sql)
             .bind(now)
             .bind(self.id)
             .execute(&queue.pool)
@@ -170,13 +161,10 @@ impl Worker {
     /// # Errors
     /// Returns `PgqrsError` if the database update fails
     pub async fn mark_stopped(&self, queue: &Queue) -> Result<()> {
-        let sql = r#"
-            UPDATE pgqrs.pgqrs_workers
-            SET status = 'stopped'
-            WHERE id = $1
-        "#;
+        let sql = crate::constants::UPDATE_WORKER_STOPPED
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        sqlx::query(sql)
+        sqlx::query(&sql)
             .bind(self.id)
             .execute(&queue.pool)
             .await
@@ -211,14 +199,10 @@ impl Queue {
     /// # Errors
     /// Returns `PgqrsError` if database query fails
     pub async fn list_workers(&self) -> Result<Vec<Worker>> {
-        let sql = r#"
-            SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-            FROM pgqrs.pgqrs_workers
-            WHERE queue_id = $1
-            ORDER BY started_at DESC
-        "#;
+        let sql = crate::constants::LIST_QUEUE_WORKERS
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
             .bind(&self.queue_name)
             .fetch_all(&self.pool)
             .await
@@ -250,37 +234,15 @@ impl Queue {
             + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
 
         let sql = if worker_id.is_some() {
-            format!(
-                r#"
-                UPDATE pgqrs.q_{}
-                SET vt = $1, read_ct = read_ct + 1, worker_id = $3
-                WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.q_{}
-                    WHERE vt < NOW()
-                    ORDER BY msg_id
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT $2
-                )
-                RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
-                "#,
-                self.queue_name, self.queue_name
-            )
+            crate::constants::READ_MESSAGES_WITH_WORKER
+                .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+                .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+                .replace("{queue_name}", &self.queue_name)
         } else {
-            format!(
-                r#"
-                UPDATE pgqrs.q_{}
-                SET vt = $1, read_ct = read_ct + 1
-                WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.q_{}
-                    WHERE vt < NOW()
-                    ORDER BY msg_id
-                    FOR UPDATE SKIP LOCKED
-                    LIMIT $2
-                )
-                RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
-                "#,
-                self.queue_name, self.queue_name
-            )
+            crate::constants::READ_MESSAGES_WITHOUT_WORKER
+                .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+                .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+                .replace("{queue_name}", &self.queue_name)
         };
 
         let messages = if let Some(wid) = worker_id {
@@ -314,14 +276,10 @@ impl Queue {
     /// # Errors
     /// Returns `PgqrsError` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
-        let sql = format!(
-            r#"
-            UPDATE pgqrs.q_{}
-            SET vt = NOW(), worker_id = NULL
-            WHERE worker_id = $1
-            "#,
-            self.queue_name
-        );
+        let sql = crate::constants::RELEASE_WORKER_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", &self.queue_name);
 
         let result = sqlx::query(&sql)
             .bind(worker_id)
@@ -348,14 +306,10 @@ impl Queue {
         &self,
         worker_id: i64,
     ) -> Result<Vec<crate::types::QueueMessage>> {
-        let sql = format!(
-            r#"
-            SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM pgqrs.q_{}
-            WHERE worker_id = $1
-            ORDER BY msg_id
-            "#,
-            self.queue_name
-        );
+        let sql = crate::constants::GET_WORKER_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", &self.queue_name);
 
         let messages = sqlx::query_as(&sql)
             .bind(worker_id)

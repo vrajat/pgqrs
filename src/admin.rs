@@ -73,7 +73,8 @@ impl PgqrsAdmin {
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
         // Create schema
-        sqlx::query(CREATE_SCHEMA_STATEMENT)
+        let create_schema_sql = CREATE_SCHEMA_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&create_schema_sql)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -81,15 +82,40 @@ impl PgqrsAdmin {
             })?;
 
         // Create meta table
-        sqlx::query(CREATE_META_TABLE_STATEMENT)
+        let create_meta_sql = CREATE_META_TABLE_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&create_meta_sql)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
 
-        // Create workers table
-        self.setup_workers_table().await?;
+        // Create workers table directly in install
+        let create_workers_sql =
+            crate::constants::CREATE_WORKERS_TABLE.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&create_workers_sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        // Create worker indexes
+        let index_sql1 = CREATE_WORKERS_INDEX_QUEUE_STATUS.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&index_sql1)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        let index_sql2 = CREATE_WORKERS_INDEX_HEARTBEAT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&index_sql2)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
 
         Ok(())
     }
@@ -178,9 +204,6 @@ impl PgqrsAdmin {
         tracing::debug!("Archive statement: {}", create_archive_statement);
         tracing::debug!("Archive index 1: {}", create_archive_index1);
         tracing::debug!("Archive index 2: {}", create_archive_index2);
-
-        // Ensure workers table exists before creating queue with foreign key reference
-        self.setup_workers_table().await?;
 
         // Execute all statements in a transaction (queue table, archive table, archive indexes, metadata)
         self.run_statements_in_transaction(vec![
@@ -350,95 +373,15 @@ impl PgqrsAdmin {
         Ok(())
     }
 
-    /// Create workers table if it doesn't exist
-    ///
-    /// This is part of the worker management infrastructure setup
-    ///
-    /// # Returns
-    /// Ok if table creation succeeds, error otherwise
-    pub async fn setup_workers_table(&self) -> Result<()> {
-        let sql = r#"
-            CREATE TABLE IF NOT EXISTS pgqrs.pgqrs_workers (
-                id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                hostname TEXT NOT NULL,
-                port INTEGER NOT NULL,
-                queue_id TEXT NOT NULL,
-                started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                shutdown_at TIMESTAMP WITH TIME ZONE,
-                status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'shutting_down', 'stopped')),
-
-                UNIQUE(hostname, port)
-            )
-        "#;
-
-        sqlx::query(sql)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        // Create indexes for efficient worker operations
-        sqlx::query(CREATE_WORKERS_INDEX_QUEUE_STATUS)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        sqlx::query(CREATE_WORKERS_INDEX_HEARTBEAT)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Add worker_id column to existing queues (migration)
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue to migrate
-    ///
-    /// # Returns
-    /// Ok if migration succeeds, error otherwise
-    pub async fn migrate_queue_for_workers(&self, queue_name: &str) -> Result<()> {
-        // Add worker_id column if it doesn't exist
-        let add_column_sql = format!(
-            r#"
-            ALTER TABLE pgqrs.q_{}
-            ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES pgqrs.pgqrs_workers(id)
-            "#,
-            queue_name
-        );
-
-        // Create index for worker_id
-        let create_index_sql = format!(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_q_{}_worker_id
-            ON pgqrs.q_{}(worker_id)
-            "#,
-            queue_name, queue_name
-        );
-
-        self.run_statements_in_transaction(vec![add_column_sql, create_index_sql])
-            .await
-    }
-
     /// Get all workers across all queues
     ///
     /// # Returns
     /// Vector of all workers in the system
     pub async fn list_all_workers(&self) -> Result<Vec<crate::types::Worker>> {
-        let sql = r#"
-            SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-            FROM pgqrs.pgqrs_workers
-            ORDER BY started_at DESC
-        "#;
+        let sql = crate::constants::LIST_ALL_WORKERS
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -457,14 +400,10 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of workers processing the specified queue
     pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<crate::types::Worker>> {
-        let sql = r#"
-            SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-            FROM pgqrs.pgqrs_workers
-            WHERE queue_id = $1
-            ORDER BY started_at DESC
-        "#;
+        let sql = crate::constants::LIST_QUEUE_WORKERS
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
             .bind(queue_name)
             .fetch_all(&self.pool)
             .await
@@ -486,12 +425,10 @@ impl PgqrsAdmin {
     pub async fn purge_old_workers(&self, older_than: std::time::Duration) -> Result<u64> {
         let threshold = chrono::Utc::now() - chrono::Duration::from_std(older_than).unwrap();
 
-        let sql = r#"
-            DELETE FROM pgqrs.pgqrs_workers
-            WHERE status = 'stopped' AND heartbeat_at < $1
-        "#;
+        let sql = crate::constants::PURGE_OLD_WORKERS
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let result = sqlx::query(sql)
+        let result = sqlx::query(&sql)
             .bind(threshold)
             .execute(&self.pool)
             .await
