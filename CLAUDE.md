@@ -2,6 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL INSTRUCTIONS - READ FIRST ⚠️
+
+### MANDATORY Development Workflow
+**These instructions MUST be followed for every change:**
+
+1. **Git Operations**: Use command line tools ONLY - never use MCP git tools
+2. **Terminal Pager Workaround**: Always pipe git/gh commands with `| cat` to avoid pager issues
+3. **Code Quality**: ALWAYS run `cargo fmt` before committing - this is required
+4. **Testing**: Run `cargo test` to ensure all tests pass before creating PRs
+5. **Conventional Commits**: ALL commit messages MUST follow format: `<type>(<scope>): <description>`
+6. **Branch Naming**: Use kebabCase for branch names based on feature
+7. **SQL Organization**: ALL SQL templates must be in `src/constants.rs` with proper templating
+8. **Error Handling**: Use proper error handling - no `unwrap()` or `expect()` in production code
+
+### Pre-Commit Checklist
+- [ ] `cargo test` passes
+- [ ] `cargo fmt` applied
+- [ ] `cargo clippy` warnings addressed
+- [ ] Conventional commit message format
+- [ ] Tests added for new functionality
+
 ## Development Commands
 
 ### Git and GitHub Operations

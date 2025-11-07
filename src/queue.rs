@@ -248,7 +248,7 @@ impl Queue {
 
         // Fetch all messages in a single query using WHERE msg_id = ANY($1)
         let sql = format!(
-            "SELECT msg_id, read_ct, enqueued_at, vt, message FROM {} WHERE msg_id = ANY($1)",
+            "SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM {} WHERE msg_id = ANY($1)",
             self.table_name
         );
 

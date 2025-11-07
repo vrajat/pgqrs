@@ -47,3 +47,4 @@ mod constants;
 pub use crate::admin::PgqrsAdmin;
 pub use crate::error::{PgqrsError, Result};
 pub use crate::queue::Queue;
+pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};

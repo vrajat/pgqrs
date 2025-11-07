@@ -79,6 +79,11 @@ enum Commands {
         #[command(subcommand)]
         action: MessageCommands,
     },
+    /// Worker management commands
+    Worker {
+        #[command(subcommand)]
+        action: WorkerCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -173,6 +178,57 @@ enum MessageCommands {
         /// Query archive table instead of active queue
         #[arg(long, help = "Query archive table instead of active queue")]
         archive: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerCommands {
+    /// List all workers
+    List {
+        /// Name of the queue to filter workers by
+        #[arg(long, short = 'q')]
+        queue: Option<String>,
+    },
+    /// Show detailed worker information
+    Show {
+        /// Worker ID
+        id: i64,
+    },
+    /// Show worker statistics
+    Stats {
+        /// Name of the queue
+        #[arg(long, short = 'q')]
+        queue: String,
+    },
+    /// Stop a worker (mark as stopped)
+    Stop {
+        /// Worker ID
+        id: i64,
+    },
+    /// Show messages assigned to a worker
+    Messages {
+        /// Worker ID
+        id: i64,
+    },
+    /// Release messages from a worker
+    Release {
+        /// Worker ID
+        id: i64,
+    },
+    /// Remove old stopped workers
+    Purge {
+        /// Remove workers older than this duration (e.g., '7d', '24h', '30m')
+        #[arg(long, default_value = "7d")]
+        older_than: String,
+    },
+    /// Check worker health
+    Health {
+        /// Name of the queue
+        #[arg(long, short = 'q')]
+        queue: String,
+        /// Maximum heartbeat age in seconds
+        #[arg(long, default_value = "300")]
+        max_age: u64,
     },
 }
 
@@ -273,6 +329,10 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
         Commands::Message { action } => {
             handle_message_commands(&admin, action, writer, out).await?;
+        }
+
+        Commands::Worker { action } => {
+            handle_worker_commands(&admin, action, writer, out).await?;
         }
     }
 
@@ -532,6 +592,166 @@ async fn handle_message_commands(
                     }
                 }
             }
+            Ok(())
+        }
+    }
+}
+
+/// Handle worker-related CLI commands.
+///
+/// This function processes all worker management commands including list,
+/// show, stats, stop, messages, release, purge, and health operations.
+///
+/// # Arguments
+/// * `admin` - Admin interface for worker operations
+/// * `action` - Specific worker command to execute
+/// * `writer` - Output formatter for results
+/// * `out` - Output destination for formatted results
+///
+/// # Returns
+/// Ok if command executed successfully, error otherwise.
+async fn handle_worker_commands(
+    admin: &PgqrsAdmin,
+    action: WorkerCommands,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
+    match action {
+        WorkerCommands::List { queue } => {
+            let workers = match queue {
+                Some(queue_name) => {
+                    tracing::info!("Listing workers for queue '{}'...", queue_name);
+                    admin.list_queue_workers(&queue_name).await?
+                }
+                None => {
+                    tracing::info!("Listing all workers...");
+                    admin.list_all_workers().await?
+                }
+            };
+            tracing::info!("Found {} workers", workers.len());
+            writer.write_list(&workers, out)?;
+            Ok(())
+        }
+
+        WorkerCommands::Show { id } => {
+            match admin.get_worker_by_id(id).await {
+                Ok(worker) => {
+                    tracing::debug!("Worker found");
+                    writer.write_list(&[worker], out)?;
+                }
+                Err(_) => {
+                    tracing::error!("Worker not found");
+                    return Err(anyhow::anyhow!("Worker with ID {} not found", id));
+                }
+            }
+            Ok(())
+        }
+
+        WorkerCommands::Stats { queue } => {
+            tracing::info!("Getting worker statistics for queue '{}'...", queue);
+            let stats = admin.worker_stats(&queue).await?;
+            tracing::info!("Worker statistics retrieved");
+
+            // Print stats in a readable format
+            writeln!(out, "Worker Statistics for Queue '{}':", queue)?;
+            writeln!(out, "  Total Workers: {}", stats.total_workers)?;
+            writeln!(out, "  Ready Workers: {}", stats.ready_workers)?;
+            writeln!(
+                out,
+                "  Shutting Down Workers: {}",
+                stats.shutting_down_workers
+            )?;
+            writeln!(out, "  Stopped Workers: {}", stats.stopped_workers)?;
+            writeln!(
+                out,
+                "  Average Messages per Worker: {:.2}",
+                stats.average_messages_per_worker
+            )?;
+            writeln!(out, "  Oldest Worker Age: {:?}", stats.oldest_worker_age)?;
+            writeln!(
+                out,
+                "  Newest Heartbeat Age: {:?}",
+                stats.newest_heartbeat_age
+            )?;
+            Ok(())
+        }
+
+        WorkerCommands::Stop { id } => {
+            tracing::info!("Stopping worker {}...", id);
+            admin.mark_stopped(id).await?;
+            tracing::info!("Worker stopped successfully");
+            Ok(())
+        }
+
+        WorkerCommands::Messages { id } => {
+            // Find the worker and get its messages
+            let worker = admin
+                .get_worker_by_id(id)
+                .await
+                .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
+
+            tracing::info!("Getting messages for worker {}...", id);
+            let messages = admin.get_worker_messages(worker.id).await?;
+            tracing::info!("Found {} messages", messages.len());
+            writer.write_list(&messages, out)?;
+            Ok(())
+        }
+
+        WorkerCommands::Release { id } => {
+            tracing::info!("Releasing messages from worker {}...", id);
+            let released_count = admin.release_worker_messages(id).await?;
+            tracing::info!("Released {} messages", released_count);
+            writeln!(
+                out,
+                "Released {} messages from worker {}",
+                released_count, id
+            )?;
+            Ok(())
+        }
+
+        WorkerCommands::Purge { older_than } => {
+            // Parse duration string using humantime (supports "7d", "24h", "30m", "1s", etc.)
+            let duration = older_than
+                .parse::<humantime::Duration>()
+                .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e))?
+                .into();
+            tracing::info!("Purging workers older than {:?}...", duration);
+            let purged_count = admin.purge_old_workers(duration).await?;
+            tracing::info!("Purged {} old workers", purged_count);
+            writeln!(out, "Purged {} old workers", purged_count)?;
+            Ok(())
+        }
+
+        WorkerCommands::Health { queue, max_age } => {
+            tracing::info!("Checking worker health for queue '{}'...", queue);
+            let workers = admin.list_queue_workers(&queue).await?;
+            // admin.is_healthy expects a chrono::Duration (the same kind produced by
+            // now.signed_duration_since(...)), so create a chrono::Duration here.
+            let max_age_duration = chrono::Duration::seconds(max_age as i64);
+
+            let mut healthy = 0;
+            let mut unhealthy = 0;
+
+            writeln!(out, "Worker Health Report for Queue '{}':", queue)?;
+            for worker in &workers {
+                let is_healthy = admin.is_healthy(worker.id, max_age_duration).await?;
+                if is_healthy {
+                    healthy += 1;
+                } else {
+                    unhealthy += 1;
+                }
+                writeln!(
+                    out,
+                    "  Worker {}: {} ({}:{})",
+                    worker.id,
+                    if is_healthy { "HEALTHY" } else { "UNHEALTHY" },
+                    worker.hostname,
+                    worker.port
+                )?;
+            }
+
+            writeln!(out)?;
+            writeln!(out, "Summary: {} healthy, {} unhealthy", healthy, unhealthy)?;
             Ok(())
         }
     }
