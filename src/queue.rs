@@ -429,7 +429,7 @@ impl Queue {
     /// * `msg_ids` - Vector of message IDs to archive
     ///
     /// # Returns
-    /// Vector of message IDs that were successfully archived
+    /// Vector of booleans indicating success for each message (same order as input).
     pub async fn archive_batch(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
         if msg_ids.is_empty() {
             return Ok(vec![]);
