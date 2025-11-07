@@ -106,7 +106,7 @@ graph TB
 - **Key operations**:
   - `queue.read(batch_size)` - Fetch jobs for processing
   - `queue.delete_batch(msg_ids)` - Mark jobs as completed
-  - `queue.archive(msg_id, worker_id)` - Archive processed messages for audit trail
+  - `queue.archive(msg_id)` - Archive processed messages for audit trail
 
 #### 5. **Admin Server (Optional)**
 - **Your monitoring/admin service** using `PgqrsAdmin` APIs
@@ -303,7 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Processing message: {}", msg.msg_id);
 
         // Archive the message to maintain audit trail
-        let archived = email_queue.archive(msg.msg_id, Some("worker-01")).await?;
+        let archived = email_queue.archive(msg.msg_id).await?;
         if archived {
             println!("Archived message {} successfully", msg.msg_id);
         }
@@ -441,8 +441,7 @@ pgqrs provides message archiving functionality to maintain a historical record o
 The archive system automatically creates archive tables (`archive_<queue_name>`) when queues are created. Archived messages retain all original data plus additional metadata:
 
 - `archived_at` — Timestamp when the message was archived
-- `archived_by` — Optional identifier of the archiving process
-- `processing_duration` — Time taken to process the message (if applicable)
+- `processing_duration` — Time taken to process the message (in milliseconds)
 
 #### Archive Usage Examples
 
@@ -475,7 +474,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = admin.get_queue("email_queue").await?;
 
     // Archive a message after processing
-    let archived = queue.archive(message_id, Some("worker-01")).await?;
+    let archived = queue.archive(message_id).await?;
     if archived {
         println!("Message {} archived successfully", message_id);
     }
@@ -499,7 +498,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Archive Best Practices
 
 - **Archive after processing**: Archive messages only after successful processing
-- **Include worker ID**: Use the `archived_by` parameter to track which worker processed the message
 - **Regular cleanup**: Periodically purge old archived messages to manage database size
 - **Monitoring**: Track archive growth as part of your queue metrics
 - **Retention policy**: Establish how long to keep archived messages based on your compliance needs

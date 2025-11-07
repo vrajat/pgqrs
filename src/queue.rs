@@ -405,16 +405,12 @@ impl Queue {
     ///
     /// # Arguments
     /// * `msg_id` - ID of the message to archive
-    /// * `archived_by` - Optional identifier for who/what archived the message
     ///
     /// # Returns
     /// True if message was successfully archived, false if message was not found
-    pub async fn archive(&self, msg_id: i64, archived_by: Option<&str>) -> Result<bool> {
-        let archived_by_value = archived_by.unwrap_or("unknown");
-
+    pub async fn archive(&self, msg_id: i64) -> Result<bool> {
         let result: Option<bool> = sqlx::query_scalar(&self.archive_sql)
             .bind(msg_id)
-            .bind(archived_by_value)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
@@ -431,31 +427,29 @@ impl Queue {
     ///
     /// # Arguments
     /// * `msg_ids` - Vector of message IDs to archive
-    /// * `archived_by` - Optional identifier for who/what archived the messages
     ///
     /// # Returns
     /// Vector of message IDs that were successfully archived
-    pub async fn archive_batch(
-        &self,
-        msg_ids: Vec<i64>,
-        archived_by: Option<&str>,
-    ) -> Result<Vec<i64>> {
+    pub async fn archive_batch(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
         if msg_ids.is_empty() {
             return Ok(vec![]);
         }
 
-        let archived_by_value = archived_by.unwrap_or("unknown");
-
         let archived_ids: Vec<i64> = sqlx::query_scalar(&self.archive_batch_sql)
             .bind(&msg_ids)
-            .bind(archived_by_value)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
                 message: format!("Failed to archive batch messages: {}", e),
             })?;
 
-        Ok(archived_ids)
+        // For each input id, true if it was archived, false otherwise
+        let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
+        let result = msg_ids
+            .into_iter()
+            .map(|id| archived_set.contains(&id))
+            .collect();
+        Ok(result)
     }
 
     /// List archived messages from the queue.

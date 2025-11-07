@@ -146,7 +146,7 @@ async fn test_archive_single_message() {
     assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Archive the message
-    let archived = queue.archive(msg_id, Some("test-worker")).await;
+    let archived = queue.archive(msg_id).await;
     assert!(archived.is_ok());
     assert!(archived.unwrap(), "Message should be successfully archived");
 
@@ -155,7 +155,7 @@ async fn test_archive_single_message() {
     assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 1);
 
     // Try to archive the same message again (should return false)
-    let archived_again = queue.archive(msg_id, Some("test-worker")).await;
+    let archived_again = queue.archive(msg_id).await;
     assert!(archived_again.is_ok());
     assert!(
         !archived_again.unwrap(),
@@ -192,18 +192,18 @@ async fn test_archive_batch_messages() {
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
-    let archived_ids = queue
-        .archive_batch(batch_to_archive.clone(), Some("batch-worker"))
+    let archived_results = queue
+        .archive_batch(batch_to_archive.clone())
         .await;
-    assert!(archived_ids.is_ok());
-    let archived_ids = archived_ids.unwrap();
-    assert_eq!(archived_ids.len(), 3, "Should archive exactly 3 messages");
+    assert!(archived_results.is_ok());
+    let archived_results = archived_results.unwrap();
+    assert_eq!(archived_results.len(), 3, "Should have results for exactly 3 messages");
 
-    // Verify the correct messages were archived
-    for id in &batch_to_archive {
+    // Verify all messages were successfully archived
+    for (i, id) in batch_to_archive.iter().enumerate() {
         assert!(
-            archived_ids.contains(id),
-            "Message {} should be in archived list",
+            archived_results[i],
+            "Message {} should be successfully archived",
             id
         );
     }
@@ -213,7 +213,7 @@ async fn test_archive_batch_messages() {
     assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 3);
 
     // Try to archive empty batch (should return empty vec)
-    let empty_archive = queue.archive_batch(vec![], Some("empty-worker")).await;
+    let empty_archive = queue.archive_batch(vec![]).await;
     assert!(empty_archive.is_ok());
     assert!(empty_archive.unwrap().is_empty());
 
@@ -232,7 +232,7 @@ async fn test_archive_nonexistent_message() {
 
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
-    let archived = queue.archive(fake_msg_id, Some("test-worker")).await;
+    let archived = queue.archive(fake_msg_id).await;
     assert!(archived.is_ok());
     assert!(
         !archived.unwrap(),
@@ -295,7 +295,7 @@ async fn test_delete_queue_removes_archive() {
         .await
         .expect("Failed to enqueue message");
     let archived = queue
-        .archive(message.msg_id, Some("test-worker"))
+        .archive(message.msg_id)
         .await
         .expect("Failed to archive message");
     assert!(archived, "Message should be archived");
@@ -338,7 +338,7 @@ async fn test_purge_archive() {
             .await
             .expect("Failed to enqueue message");
         let archived = queue
-            .archive(message.msg_id, Some("test-worker"))
+            .archive(message.msg_id)
             .await
             .expect("Failed to archive message");
         assert!(archived, "Message {} should be archived", i);

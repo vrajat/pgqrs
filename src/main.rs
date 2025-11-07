@@ -504,7 +504,7 @@ async fn handle_message_commands(
             })?;
 
             if archive {
-                tracing::info!(
+                tracing::debug!(
                     "Retrieving archived message {} from queue '{}'...",
                     msg_id,
                     queue
@@ -516,19 +516,19 @@ async fn handle_message_commands(
                     }
                     Err(e) => {
                         tracing::error!("Error retrieving archived message: {:?}", e);
-                        tracing::info!("Archived message not found");
+                        tracing::debug!("Archived message not found");
                     }
                 }
             } else {
-                tracing::info!("Retrieving message {} from queue '{}'...", msg_id, queue);
+                tracing::debug!("Retrieving message {} from queue '{}'...", msg_id, queue);
                 match queue_obj.get_message_by_id(msg_id).await {
                     Ok(message) => {
-                        tracing::info!("Message found");
+                        tracing::debug!("Message found");
                         writer.write_list(&[message], out)?;
                     }
                     Err(e) => {
                         tracing::error!("Error retrieving message: {:?}", e);
-                        tracing::info!("Message not found");
+                        tracing::debug!("Message not found");
                     }
                 }
             }

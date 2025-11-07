@@ -134,8 +134,7 @@ pub const CREATE_ARCHIVE_TABLE: &str = r#"
 
         -- Archive-specific tracking columns
         archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        archived_by VARCHAR(255),
-        processing_duration INTERVAL,
+        processing_duration BIGINT,
 
         PRIMARY KEY (msg_id, archived_at)
     )
@@ -158,11 +157,10 @@ pub const ARCHIVE_MESSAGE: &str = r#"
         RETURNING msg_id, message, enqueued_at, vt, read_ct
     )
     INSERT INTO {PGQRS_SCHEMA}.archive_{queue_name}
-        (msg_id, message, enqueued_at, vt, read_ct, archived_by, processing_duration)
+        (msg_id, message, enqueued_at, vt, read_ct, processing_duration)
     SELECT
         msg_id, message, enqueued_at, vt, read_ct,
-        $2 as archived_by,
-        NOW() - enqueued_at as processing_duration
+        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
     FROM archived_msg
     RETURNING (msg_id IS NOT NULL);
 "#;
@@ -175,18 +173,17 @@ pub const ARCHIVE_BATCH: &str = r#"
         RETURNING msg_id, message, enqueued_at, vt, read_ct
     )
     INSERT INTO {PGQRS_SCHEMA}.archive_{queue_name}
-        (msg_id, message, enqueued_at, vt, read_ct, archived_by, processing_duration)
+        (msg_id, message, enqueued_at, vt, read_ct, processing_duration)
     SELECT
         msg_id, message, enqueued_at, vt, read_ct,
-        $2 as archived_by,
-        NOW() - enqueued_at as processing_duration
+        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
     FROM archived_msgs
     RETURNING msg_id;
 "#;
 
 /// Select messages from archive table
 pub const ARCHIVE_LIST: &str = r#"
-    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration::text as processing_duration
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, processing_duration
     FROM {PGQRS_SCHEMA}.archive_{queue_name}
     ORDER BY archived_at DESC
     LIMIT $1 OFFSET $2;
@@ -194,7 +191,7 @@ pub const ARCHIVE_LIST: &str = r#"
 
 /// Select single message from archive table by ID
 pub const ARCHIVE_SELECT_BY_ID: &str = r#"
-    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration::text as processing_duration
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, processing_duration
     FROM {PGQRS_SCHEMA}.archive_{queue_name}
     WHERE msg_id = $1
     ORDER BY archived_at DESC

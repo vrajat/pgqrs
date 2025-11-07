@@ -106,21 +106,31 @@ pub struct ArchivedMessage {
     /// Timestamp when the message was archived
     #[tabled(skip)]
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Who archived the message
-    #[tabled(skip)]
-    pub archived_by: Option<String>,
-    /// How long the message was being processed before archiving (as text for now)
+    /// How long the message was being processed before archiving (in milliseconds)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
-    pub processing_duration: Option<String>,
+    pub processing_duration: Option<i64>,
 }
 
 impl fmt::Display for ArchivedMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ArchivedMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, archived_at: {:?}, archived_by: {:?} }}",
-            self.msg_id, self.read_ct, self.enqueued_at, self.archived_at, self.archived_by
+            "ArchivedMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, archived_at: {:?} }}",
+            self.msg_id, self.read_ct, self.enqueued_at, self.archived_at
         )
+    }
+}
+
+impl ArchivedMessage {
+    /// Get the processing duration as a `std::time::Duration`
+    pub fn get_processing_duration(&self) -> Option<std::time::Duration> {
+        self.processing_duration
+            .map(|millis| std::time::Duration::from_millis(millis as u64))
+    }
+
+    /// Set the processing duration from a `std::time::Duration`
+    pub fn set_processing_duration(&mut self, duration: std::time::Duration) {
+        self.processing_duration = Some(duration.as_millis() as i64);
     }
 }
