@@ -225,6 +225,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  email_queue: {}", email_pending);
     println!("  task_queue: {}", task_pending);
 
+    // Demonstrate admin archive management operations
+    println!("\n--- Archive Management Example ---");
+
+    // Check archive counts before operations
+    let email_archive_count = email_queue.archive_count().await?;
+    let task_archive_count = task_queue.archive_count().await?;
+    println!(
+        "Archive counts - email: {}, task: {}",
+        email_archive_count, task_archive_count
+    );
+
+    if email_archive_count > 0 {
+        println!("Purging email queue archive...");
+        admin.purge_archive("email_queue").await?;
+        let new_count = email_queue.archive_count().await?;
+        println!("Email archive count after purge: {}", new_count);
+    }
+
+    // Note about queue deletion behavior
+    println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");
+    println!("and its archive table are removed to prevent orphaned archive tables.");
+    println!("Use admin.purge_archive() to clear archives while preserving structure.");
+
     println!("\nExample completed successfully!");
 
     Ok(())
