@@ -192,7 +192,7 @@ pub const ARCHIVE_COUNT: &str = r#"
 
 /// Select messages from archive table
 pub const ARCHIVE_LIST: &str = r#"
-    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration::text as processing_duration
     FROM {PGQRS_SCHEMA}.archive_{queue_name}
     ORDER BY archived_at DESC
     LIMIT $1 OFFSET $2;
@@ -200,7 +200,7 @@ pub const ARCHIVE_LIST: &str = r#"
 
 /// Select single message from archive table by ID
 pub const ARCHIVE_SELECT_BY_ID: &str = r#"
-    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration
+    SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration::text as processing_duration
     FROM {PGQRS_SCHEMA}.archive_{queue_name}
     WHERE msg_id = $1
     ORDER BY archived_at DESC

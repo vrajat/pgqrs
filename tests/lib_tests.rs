@@ -159,7 +159,7 @@ async fn test_archive_single_message() {
     assert!(archived_again.is_ok());
     assert!(
         !archived_again.unwrap(),
-        "Message should not be archived twice"
+        "Archiving already-archived message should return false"
     );
 
     // Cleanup
@@ -262,18 +262,14 @@ async fn test_archive_table_creation() {
     assert!(archive_count.is_ok());
     assert_eq!(archive_count.unwrap(), 0);
 
-    // Test the standalone archive table creation method
+    // Test that queue creation includes archive tables automatically
     const TEST_QUEUE_STANDALONE: &str = "test_standalone_archive";
     let queue2 = admin
         .create_queue(&TEST_QUEUE_STANDALONE.to_string(), false)
         .await
         .expect("Failed to create second queue");
 
-    // Create additional archive table (should succeed even if it exists)
-    let create_result = admin.create_archive_table(TEST_QUEUE_STANDALONE).await;
-    assert!(create_result.is_ok());
-
-    // Verify it still works
+    // Verify archive table was automatically created (accessing archive_count should work)
     assert_eq!(queue2.archive_count().await.unwrap(), 0);
 
     // Cleanup both queues

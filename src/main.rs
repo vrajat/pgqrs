@@ -371,6 +371,7 @@ async fn handle_queue_commands(
                         tracing::info!("  Total Messages: {}", metric.total_messages);
                         tracing::info!("  Pending Messages: {}", metric.pending_messages);
                         tracing::info!("  Locked Messages: {}", metric.locked_messages);
+                        tracing::info!("  Archived Messages: {}", metric.archived_messages);
                         if let Some(oldest) = metric.oldest_pending_message {
                             tracing::info!(
                                 "  Oldest Pending: {}",
@@ -444,8 +445,27 @@ async fn handle_message_commands(
                     count,
                     queue
                 );
-                // TODO: Implement archive message listing
-                tracing::info!("Archive message listing not yet implemented");
+                let messages = queue_obj.archive_list(count as i64, 0).await?;
+                tracing::info!("Found {} archived messages", messages.len());
+
+                for message in messages {
+                    tracing::info!("  Archived Message ID: {}", message.msg_id);
+                    tracing::info!("    Enqueued at: {}", message.enqueued_at);
+                    tracing::info!(
+                        "    Archived at: {}",
+                        message
+                            .archived_at
+                            .as_ref()
+                            .map(|t| t.to_string())
+                            .unwrap_or_else(|| "Unknown".to_string())
+                    );
+                    if let Some(ref archived_by) = message.archived_by {
+                        tracing::info!("    Archived by: {}", archived_by);
+                    }
+                    tracing::info!("    Read count: {}", message.read_ct);
+                    tracing::info!("    Payload: {}", message.message);
+                    println!("---");
+                }
                 return Ok(());
             }
 
@@ -516,8 +536,29 @@ async fn handle_message_commands(
                     msg_id,
                     queue
                 );
-                // TODO: Implement archive message retrieval
-                tracing::info!("Archive message retrieval not yet implemented");
+                match queue_obj.get_archived_message_by_id(msg_id).await {
+                    Ok(message) => {
+                        tracing::info!("Archived message found:");
+                        tracing::info!("  ID: {}", message.msg_id);
+                        tracing::info!("  Enqueued at: {}", message.enqueued_at);
+                        tracing::info!(
+                            "  Archived at: {}",
+                            message
+                                .archived_at
+                                .as_ref()
+                                .map(|t| t.to_string())
+                                .unwrap_or_else(|| "Unknown".to_string())
+                        );
+                        if let Some(ref archived_by) = message.archived_by {
+                            tracing::info!("  Archived by: {}", archived_by);
+                        }
+                        tracing::info!("  Read count: {}", message.read_ct);
+                        tracing::info!("  Payload: {}", message.message);
+                    }
+                    Err(_) => {
+                        tracing::info!("Archived message not found");
+                    }
+                }
             } else {
                 tracing::info!("Retrieving message {} from queue '{}'...", msg_id, queue);
                 match queue_obj.get_message_by_id(msg_id).await {

@@ -478,4 +478,51 @@ impl Queue {
 
         Ok(count)
     }
+
+    /// List archived messages from the queue.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of messages to return
+    /// * `offset` - Number of messages to skip
+    ///
+    /// # Returns
+    /// Vector of archived messages
+    pub async fn archive_list(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<crate::types::ArchivedMessage>> {
+        let messages: Vec<crate::types::ArchivedMessage> = sqlx::query_as(&self.archive_list_sql)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to list archive messages: {}", e),
+            })?;
+
+        Ok(messages)
+    }
+
+    /// Get a specific archived message by ID.
+    ///
+    /// # Arguments
+    /// * `msg_id` - ID of the archived message to retrieve
+    ///
+    /// # Returns
+    /// The archived message if found, error otherwise
+    pub async fn get_archived_message_by_id(
+        &self,
+        msg_id: i64,
+    ) -> Result<crate::types::ArchivedMessage> {
+        let message: crate::types::ArchivedMessage = sqlx::query_as(&self.archive_select_by_id_sql)
+            .bind(msg_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to retrieve archived message {}: {}", msg_id, e),
+            })?;
+
+        Ok(message)
+    }
 }

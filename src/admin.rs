@@ -187,44 +187,6 @@ impl PgqrsAdmin {
         Ok(Queue::new(self.pool.clone(), name))
     }
 
-    /// Create archive table for an existing queue.
-    ///
-    /// This helper method can be used to add archive tables to existing queues
-    /// that were created before the archiving feature was implemented.
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue to create archive table for
-    ///
-    /// # Returns
-    /// Ok if archive table creation succeeds, error otherwise.
-    pub async fn create_archive_table(&self, queue_name: &str) -> Result<()> {
-        let create_archive_statement = CREATE_ARCHIVE_TABLE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
-
-        let create_archive_index1 = CREATE_ARCHIVE_INDEX_ARCHIVED_AT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
-
-        let create_archive_index2 = CREATE_ARCHIVE_INDEX_ENQUEUED_AT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
-
-        tracing::debug!("Archive table statement: {}", create_archive_statement);
-        tracing::debug!("Archive index 1 statement: {}", create_archive_index1);
-        tracing::debug!("Archive index 2 statement: {}", create_archive_index2);
-
-        // Execute archive table and both indexes creation in a transaction
-        self.run_statements_in_transaction(vec![
-            create_archive_statement,
-            create_archive_index1,
-            create_archive_index2,
-        ])
-        .await?;
-
-        Ok(())
-    }
-
     /// List all queues managed by pgqrs.
     ///
     /// # Returns

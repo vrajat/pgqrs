@@ -319,7 +319,7 @@ Always include:
    - CI uses rustfmt action which checks all files
    - Ensure consistent formatting before pushing
 
-2. **Clippy Warnings** 
+2. **Clippy Warnings**
    - Run `cargo clippy --all-targets --all-features` locally
    - Address all warnings before pushing
    - Some warnings can be allowed with `#[allow(clippy::lint_name)]` if justified

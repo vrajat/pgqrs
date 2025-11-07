@@ -89,3 +89,38 @@ impl fmt::Display for MetaResult {
         )
     }
 }
+
+/// An archived message with additional tracking information
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+pub struct ArchivedMessage {
+    /// Unique message ID
+    pub msg_id: i64,
+    /// Number of times this message has been read
+    pub read_ct: i32,
+    /// Timestamp when the message was enqueued
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Visibility timeout (when the message becomes available again)
+    pub vt: chrono::DateTime<chrono::Utc>,
+    /// The actual message payload (JSON)
+    pub message: serde_json::Value,
+    /// Timestamp when the message was archived
+    #[tabled(skip)]
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Who archived the message
+    #[tabled(skip)]
+    pub archived_by: Option<String>,
+    /// How long the message was being processed before archiving (as text for now)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub processing_duration: Option<String>,
+}
+
+impl fmt::Display for ArchivedMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ArchivedMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, archived_at: {:?}, archived_by: {:?} }}",
+            self.msg_id, self.read_ct, self.enqueued_at, self.archived_at, self.archived_by
+        )
+    }
+}
