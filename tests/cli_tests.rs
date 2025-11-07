@@ -232,7 +232,14 @@ fn test_cli_archive_functionality() {
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
     let send_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "send", queue_name, message_payload])
+        .args([
+            "--dsn",
+            &db_url,
+            "message",
+            "send",
+            queue_name,
+            message_payload,
+        ])
         .output()
         .expect("Failed to run CLI send message");
     assert!(
@@ -244,7 +251,9 @@ fn test_cli_archive_functionality() {
     // Read the message to get its ID - just verify it exists
     let read_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "read", queue_name, "--count", "1"])
+        .args([
+            "--dsn", &db_url, "message", "read", queue_name, "--count", "1",
+        ])
         .output()
         .expect("Failed to run CLI read message");
     assert!(
@@ -256,7 +265,14 @@ fn test_cli_archive_functionality() {
     // Check archived message count (should be 0 initially)
     let count_archive_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "count", queue_name, "--archive"])
+        .args([
+            "--dsn",
+            &db_url,
+            "message",
+            "count",
+            queue_name,
+            "--archive",
+        ])
         .output()
         .expect("Failed to run CLI count archived messages");
     assert!(
@@ -268,7 +284,16 @@ fn test_cli_archive_functionality() {
     // Read archived messages (should be empty initially)
     let read_archive_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "read", queue_name, "--archive", "--count", "10"])
+        .args([
+            "--dsn",
+            &db_url,
+            "message",
+            "read",
+            queue_name,
+            "--archive",
+            "--count",
+            "10",
+        ])
         .output()
         .expect("Failed to run CLI read archived messages");
     assert!(
@@ -312,7 +337,14 @@ fn test_cli_message_show_archive() {
     let message_payload = r#"{"test": "show_archive", "id": 12345}"#;
     let send_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "send", queue_name, message_payload])
+        .args([
+            "--dsn",
+            &db_url,
+            "message",
+            "send",
+            queue_name,
+            message_payload,
+        ])
         .output()
         .expect("Failed to run CLI send message");
     assert!(
@@ -324,7 +356,15 @@ fn test_cli_message_show_archive() {
     // Try to show an archived message that doesn't exist (should fail gracefully)
     let show_archive_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "show", queue_name, "999", "--archive"])
+        .args([
+            "--dsn",
+            &db_url,
+            "message",
+            "show",
+            queue_name,
+            "999",
+            "--archive",
+        ])
         .output()
         .expect("Failed to run CLI show archived message");
     assert!(
