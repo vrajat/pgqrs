@@ -17,9 +17,10 @@
 //! // let queue = ...
 //! // queue.enqueue(...)
 //! ```
-use crate::constants::PENDING_COUNT;
-use crate::constants::PGQRS_SCHEMA;
-use crate::constants::QUEUE_PREFIX;
+use crate::constants::{
+    ARCHIVE_BATCH, ARCHIVE_COUNT, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID,
+    PENDING_COUNT, PGQRS_SCHEMA, QUEUE_PREFIX,
+};
 use crate::error::Result;
 use crate::types::QueueMessage;
 use chrono::Utc;
@@ -49,6 +50,16 @@ pub struct Queue {
     pub update_vt_sql: String,
     /// SQL for deleting a batch of messages
     pub delete_batch_sql: String,
+    /// SQL for archiving a single message
+    pub archive_sql: String,
+    /// SQL for archiving a batch of messages
+    pub archive_batch_sql: String,
+    /// SQL for counting archive messages
+    pub archive_count_sql: String,
+    /// SQL for listing archive messages
+    pub archive_list_sql: String,
+    /// SQL for selecting archived message by ID
+    pub archive_select_by_id_sql: String,
 }
 
 impl Queue {
@@ -87,6 +98,26 @@ impl Queue {
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
+
+        // Archive SQL statements
+        let archive_sql = ARCHIVE_MESSAGE
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let archive_batch_sql = ARCHIVE_BATCH
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+            .replace("{queue_name}", queue_name);
+        let archive_count_sql = ARCHIVE_COUNT
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{queue_name}", queue_name);
+        let archive_list_sql = ARCHIVE_LIST
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{queue_name}", queue_name);
+        let archive_select_by_id_sql = ARCHIVE_SELECT_BY_ID
+            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
+            .replace("{queue_name}", queue_name);
+
         Self {
             pool,
             queue_name: queue_name.to_string(),
@@ -97,6 +128,11 @@ impl Queue {
             dequeue_sql,
             update_vt_sql,
             delete_batch_sql,
+            archive_sql,
+            archive_batch_sql,
+            archive_count_sql,
+            archive_list_sql,
+            archive_select_by_id_sql,
         }
     }
 
@@ -366,5 +402,76 @@ impl Queue {
                 message: e.to_string(),
             })?;
         Ok(updated.rows_affected() > 0)
+    }
+
+    /// Archive a single message (PREFERRED over delete for data retention).
+    ///
+    /// Moves message from active queue to archive table with tracking metadata.
+    /// This is an atomic operation that deletes from the queue and inserts into archive.
+    ///
+    /// # Arguments
+    /// * `msg_id` - ID of the message to archive
+    /// * `archived_by` - Optional identifier for who/what archived the message
+    ///
+    /// # Returns
+    /// True if message was successfully archived, false if message was not found
+    pub async fn archive(&self, msg_id: i64, archived_by: Option<&str>) -> Result<bool> {
+        let archived_by_value = archived_by.unwrap_or("unknown");
+        
+        let result: Option<bool> = sqlx::query_scalar(&self.archive_sql)
+            .bind(msg_id)
+            .bind(archived_by_value)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to archive message {}: {}", msg_id, e),
+            })?;
+        
+        Ok(result.unwrap_or(false))
+    }
+
+    /// Archive multiple messages in a single transaction.
+    ///
+    /// More efficient than individual archive calls. Atomically moves messages
+    /// from active queue to archive table.
+    ///
+    /// # Arguments  
+    /// * `msg_ids` - Vector of message IDs to archive
+    /// * `archived_by` - Optional identifier for who/what archived the messages
+    ///
+    /// # Returns
+    /// Vector of message IDs that were successfully archived
+    pub async fn archive_batch(&self, msg_ids: Vec<i64>, archived_by: Option<&str>) -> Result<Vec<i64>> {
+        if msg_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let archived_by_value = archived_by.unwrap_or("unknown");
+        
+        let archived_ids: Vec<i64> = sqlx::query_scalar(&self.archive_batch_sql)
+            .bind(&msg_ids)
+            .bind(archived_by_value)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to archive batch messages: {}", e),
+            })?;
+        
+        Ok(archived_ids)
+    }
+
+    /// Count messages in the archive table.
+    ///
+    /// # Returns
+    /// Number of archived messages for this queue
+    pub async fn archive_count(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(&self.archive_count_sql)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to count archive messages: {}", e),
+            })?;
+        
+        Ok(count)
     }
 }

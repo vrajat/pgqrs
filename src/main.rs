@@ -21,6 +21,7 @@
 use clap::{Parser, Subcommand};
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
+use pgqrs::error::PgqrsError;
 use std::fs::File;
 use std::process;
 
@@ -106,6 +107,9 @@ enum QueueCommands {
     Metrics {
         /// Name of the queue (if not provided, shows all queues)
         name: Option<String>,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
     },
 }
 
@@ -134,6 +138,9 @@ enum MessageCommands {
         /// Filter by message type
         #[arg(long, short = 't')]
         message_type: Option<String>,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
     },
     /// Dequeue a message from a queue (reads and returns one message)
     Dequeue {
@@ -151,6 +158,19 @@ enum MessageCommands {
     Count {
         /// Name of the queue
         queue: String,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
+    },
+    /// Show message details by ID
+    Show {
+        /// Name of the queue
+        queue: String,
+        /// Message ID to show
+        id: String,
+        /// Query archive table instead of active queue
+        #[arg(long, help = "Query archive table instead of active queue")]
+        archive: bool,
     },
 }
 
@@ -301,26 +321,33 @@ async fn handle_queue_commands(
             tracing::info!("Queue '{}' purged successfully", name);
         }
 
-        QueueCommands::Metrics { name } => {
+        QueueCommands::Metrics { name, archive } => {
             if let Some(queue_name) = name {
-                tracing::info!("Getting metrics for queue '{}'...", queue_name);
-                let metrics = admin.queue_metrics(&queue_name).await?;
-                tracing::info!("Queue: {}", metrics.name);
-                tracing::info!("  Total Messages: {}", metrics.total_messages);
-                tracing::info!("  Pending Messages: {}", metrics.pending_messages);
-                tracing::info!("  Locked Messages: {}", metrics.locked_messages);
-                tracing::info!("  Archived Messages: {}", metrics.archived_messages);
-                if let Some(oldest) = metrics.oldest_pending_message {
-                    tracing::info!(
-                        "  Oldest Pending: {}",
-                        oldest.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                }
-                if let Some(newest) = metrics.newest_message {
-                    tracing::info!(
-                        "  Newest Message: {}",
-                        newest.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
+                if archive {
+                    // Get archive metrics - for now just show archive count
+                    let queue = admin.get_queue(&queue_name).await?;
+                    let archive_count = queue.archive_count().await?;
+                    tracing::info!("Queue: {} (archive)", queue_name);
+                    tracing::info!("  Archived Messages: {}", archive_count);
+                } else {
+                    tracing::info!("Getting metrics for queue '{}'...", queue_name);
+                    let metrics = admin.queue_metrics(&queue_name).await?;
+                    tracing::info!("Queue: {}", metrics.name);
+                    tracing::info!("  Total Messages: {}", metrics.total_messages);
+                    tracing::info!("  Pending Messages: {}", metrics.pending_messages);
+                    tracing::info!("  Locked Messages: {}", metrics.locked_messages);
+                    if let Some(oldest) = metrics.oldest_pending_message {
+                        tracing::info!(
+                            "  Oldest Pending: {}",
+                            oldest.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
+                    if let Some(newest) = metrics.newest_message {
+                        tracing::info!(
+                            "  Newest Message: {}",
+                            newest.format("%Y-%m-%d %H:%M:%S UTC")
+                        );
+                    }
                 }
             } else {
                 tracing::info!("Getting metrics for all queues...");
@@ -333,7 +360,6 @@ async fn handle_queue_commands(
                         tracing::info!("  Total Messages: {}", metric.total_messages);
                         tracing::info!("  Pending Messages: {}", metric.pending_messages);
                         tracing::info!("  Locked Messages: {}", metric.locked_messages);
-                        tracing::info!("  Archived Messages: {}", metric.archived_messages);
                         if let Some(oldest) = metric.oldest_pending_message {
                             tracing::info!(
                                 "  Oldest Pending: {}",
@@ -397,8 +423,17 @@ async fn handle_message_commands(
             count,
             lock_time,
             message_type,
+            archive,
         } => {
             let queue_obj = admin.get_queue(&queue).await?;
+            
+            if archive {
+                tracing::info!("Reading {} archived messages from queue '{}'...", count, queue);
+                // TODO: Implement archive message listing
+                tracing::info!("Archive message listing not yet implemented");
+                return Ok(());
+            }
+
             tracing::info!(
                 "Reading {} messages from queue '{}' (lock_time: {}s)...",
                 count,
@@ -439,11 +474,49 @@ async fn handle_message_commands(
             }
             Ok(())
         }
-        MessageCommands::Count { queue } => {
+        MessageCommands::Count { queue, archive } => {
             let queue_obj = admin.get_queue(&queue).await?;
-            tracing::info!("Getting pending message count for queue '{}'...", queue);
-            let count = queue_obj.pending_count().await?;
-            tracing::info!("Pending messages: {}", count);
+            
+            if archive {
+                tracing::info!("Getting archived message count for queue '{}'...", queue);
+                let count = queue_obj.archive_count().await?;
+                tracing::info!("Archived messages: {}", count);
+            } else {
+                tracing::info!("Getting pending message count for queue '{}'...", queue);
+                let count = queue_obj.pending_count().await?;
+                tracing::info!("Pending messages: {}", count);
+            }
+            Ok(())
+        }
+
+        MessageCommands::Show { queue, id, archive } => {
+            let queue_obj = admin.get_queue(&queue).await?;
+            let msg_id: i64 = id.parse().map_err(|_| {
+                PgqrsError::InvalidMessage {
+                    message: "Invalid message ID format - must be a number".to_string(),
+                }
+            })?;
+
+            if archive {
+                tracing::info!("Retrieving archived message {} from queue '{}'...", msg_id, queue);
+                // TODO: Implement archive message retrieval
+                tracing::info!("Archive message retrieval not yet implemented");
+            } else {
+                tracing::info!("Retrieving message {} from queue '{}'...", msg_id, queue);
+                match queue_obj.get_message_by_id(msg_id).await {
+                    Ok(message) => {
+                        tracing::info!("Message found:");
+                        tracing::info!("  ID: {}", message.msg_id);
+                        tracing::info!("  Enqueued at: {}", message.enqueued_at);
+                        tracing::info!("  Visibility timeout: {}", message.vt);
+                        tracing::info!("  Read count: {}", message.read_ct);
+                        tracing::info!("  Payload: {}", message.message);
+                    }
+                    Err(_) => {
+                        tracing::info!("Message not found");
+                    }
+                }
+            }
             Ok(())
         }
     }
