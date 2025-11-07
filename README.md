@@ -133,8 +133,6 @@ graph TB
 2. **Job Processing**: Worker services use `queue.read()` to fetch and process jobs
 3. **Job Completion**: Workers call `queue.delete_batch()` to mark jobs as done
 4. **Job Archiving**: Optionally, workers use `queue.archive()` to preserve processed message history
-5. **Error Handling**: Failed jobs automatically retry or move to dead letter queues
-6. **Monitoring**: Admin services and CLI provide operational visibility into both active and archived messages
 
 ### Scalability Patterns
 
@@ -292,8 +290,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "body": "Welcome to our service!"
     });
     let email_queue = admin.get_queue("email_queue").await?;
-    let email_id = email_queue.enqueue(&email_payload).await?;
-    println!("Sent email message with ID: {}", email_id);
+    let email_message = email_queue.enqueue(&email_payload).await?;
+    println!("Sent email message with ID: {}", email_message.msg_id);
 
     // Read messages
     let messages = email_queue.read(10).await?;
@@ -432,12 +430,11 @@ The CLI is defined in `src/main.rs` and supports the following commands:
 
 ### Archive commands
 
-pgqrs provides message archiving functionality to maintain a historical record of processed messages while keeping the active queue performant.
+pgqrs provides message archiving functionality to maintain a historical record of processed messages while keeping the active queue performant. Archive functionality is accessed through existing commands with the `--archive` flag.
 
-- `archive <queue> <id>` — Archive a specific message by ID
-- `archive list <queue> [--limit <n>] [--offset <n>]` — List archived messages
-- `archive purge <queue>` — Delete all archived messages for a queue
+- `message show <queue> <id> --archive` — Show archived message details by ID
 - `message count <queue> --archive` — Show archived message count
+- `message read <queue> --archive` — Read/list archived messages
 
 #### Archive System Overview
 
@@ -450,23 +447,17 @@ The archive system automatically creates archive tables (`archive_<queue_name>`)
 #### Archive Usage Examples
 
 ```bash
-# Archive a specific message that has been processed
-pgqrs archive email_queue 12345
-
-# List the 10 most recent archived messages
-pgqrs archive list email_queue --limit 10
-
-# List archived messages with pagination
-pgqrs archive list email_queue --limit 20 --offset 100
-
 # Show details of an archived message
 pgqrs message show email_queue 12345 --archive
 
 # Check how many messages are archived
 pgqrs message count email_queue --archive
 
-# Clean up old archived messages
-pgqrs archive purge email_queue
+# List archived messages (use read command with --archive flag)
+pgqrs message read email_queue --archive --count 10
+
+# Note: Message archiving is done programmatically via the Rust API
+# CLI does not provide direct archiving commands, only viewing archived messages
 ```
 
 #### Programmatic Archive API

@@ -436,25 +436,7 @@ async fn handle_message_commands(
                 );
                 let messages = queue_obj.archive_list(count as i64, 0).await?;
                 tracing::info!("Found {} archived messages", messages.len());
-
-                for message in messages {
-                    tracing::info!("  Archived Message ID: {}", message.msg_id);
-                    tracing::info!("    Enqueued at: {}", message.enqueued_at);
-                    tracing::info!(
-                        "    Archived at: {}",
-                        message
-                            .archived_at
-                            .as_ref()
-                            .map(|t| t.to_string())
-                            .unwrap_or_else(|| "Unknown".to_string())
-                    );
-                    if let Some(ref archived_by) = message.archived_by {
-                        tracing::info!("    Archived by: {}", archived_by);
-                    }
-                    tracing::info!("    Read count: {}", message.read_ct);
-                    tracing::info!("    Payload: {}", message.message);
-                    println!("---");
-                }
+                writer.write_list(&messages, out)?;
                 return Ok(());
             }
 
@@ -503,18 +485,9 @@ async fn handle_message_commands(
 
             if archive {
                 tracing::info!("Getting archived message count for queue '{}'...", queue);
-                // Use a direct query since archive_count function was removed
-                let count_query = format!(
-                    "SELECT COUNT(*) FROM {}.archive_{}",
-                    "pgqrs", // schema
-                    queue
-                );
-                let count: i64 = sqlx::query_scalar(&count_query)
-                    .fetch_one(&queue_obj.pool)
-                    .await
-                    .map_err(|e| PgqrsError::Connection {
-                        message: format!("Failed to count archived messages: {}", e),
-                    })?;
+                // Get archive count using archive_list to avoid SQL injection
+                let archived_messages = queue_obj.archive_list(i64::MAX, 0).await?;
+                let count = archived_messages.len();
                 tracing::info!("Archived messages: {}", count);
             } else {
                 tracing::info!("Getting pending message count for queue '{}'...", queue);
@@ -538,24 +511,11 @@ async fn handle_message_commands(
                 );
                 match queue_obj.get_archived_message_by_id(msg_id).await {
                     Ok(message) => {
-                        tracing::info!("Archived message found:");
-                        tracing::info!("  ID: {}", message.msg_id);
-                        tracing::info!("  Enqueued at: {}", message.enqueued_at);
-                        tracing::info!(
-                            "  Archived at: {}",
-                            message
-                                .archived_at
-                                .as_ref()
-                                .map(|t| t.to_string())
-                                .unwrap_or_else(|| "Unknown".to_string())
-                        );
-                        if let Some(ref archived_by) = message.archived_by {
-                            tracing::info!("  Archived by: {}", archived_by);
-                        }
-                        tracing::info!("  Read count: {}", message.read_ct);
-                        tracing::info!("  Payload: {}", message.message);
+                        tracing::info!("Archived message found");
+                        writer.write_list(&[message], out)?;
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::error!("Error retrieving archived message: {:?}", e);
                         tracing::info!("Archived message not found");
                     }
                 }
@@ -563,14 +523,11 @@ async fn handle_message_commands(
                 tracing::info!("Retrieving message {} from queue '{}'...", msg_id, queue);
                 match queue_obj.get_message_by_id(msg_id).await {
                     Ok(message) => {
-                        tracing::info!("Message found:");
-                        tracing::info!("  ID: {}", message.msg_id);
-                        tracing::info!("  Enqueued at: {}", message.enqueued_at);
-                        tracing::info!("  Visibility timeout: {}", message.vt);
-                        tracing::info!("  Read count: {}", message.read_ct);
-                        tracing::info!("  Payload: {}", message.message);
+                        tracing::info!("Message found");
+                        writer.write_list(&[message], out)?;
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::error!("Error retrieving message: {:?}", e);
                         tracing::info!("Message not found");
                     }
                 }
