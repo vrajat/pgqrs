@@ -6,17 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Git and GitHub Operations
 **IMPORTANT: Use command line tools only - no MCP git tools**
+
+**Note on Terminal Pager Workarounds:**
+Many git and gh commands use pagers (like `less`) which can interfere with terminal automation. Use these patterns to pipe output:
+
+**Basic Git Commands:**
 - `git status` - Check working directory status
 - `git add <file>` or `git add .` - Stage changes for commit
 - `git commit -m "message"` - Commit staged changes with message
 - `git push` - Push commits to remote repository
 - `git pull` - Pull latest changes from remote
-- `git log --oneline` - View commit history
-- `git diff` - View unstaged changes
-- `git diff --cached` - View staged changes
-- `gh pr view <number>` - View pull request details
-- `gh pr view <number> --comments` - View PR comments
-- `gh api repos/owner/repo/pulls/number/comments` - Get PR comments via API
+- `git log --oneline | cat` - View commit history (pipe to avoid pager)
+- `git log --oneline -10 | cat` - View last 10 commits
+- `git diff | cat` - View unstaged changes (pipe to avoid pager)
+- `git diff --cached | cat` - View staged changes (pipe to avoid pager)
+- `git branch | cat` - List branches
+- `git branch -r | cat` - List remote branches
+
+**GitHub CLI Commands with Pager Workarounds:**
+- `gh issue list | cat` - List issues without pager
+- `gh issue view <number> | cat` - View issue details
+- `gh pr list | cat` - List pull requests
+- `gh pr view <number> | cat` - View pull request details
+- `gh pr view <number> --comments | cat` - View PR comments
+- `gh api repos/owner/repo/pulls/number/comments | cat` - Get PR comments via API
+- `gh api repos/owner/repo/issues/number | cat` - Get issue details via API
 
 ### Building and Testing
 - `cargo build` - Build the project
