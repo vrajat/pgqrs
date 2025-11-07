@@ -7,6 +7,7 @@ A PostgreSQL-backed job queue for Rust applications.
 - **Lightweight**: Use `pgqrs` as a library in your Rust applications.
 - **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
+- **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit
 
 ## Architecture
 
@@ -37,7 +38,6 @@ graph TB
     subgraph "PostgreSQL Database"
         subgraph "pgqrs Schema"
             QT["Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports"]
-            DLQ["Dead Letter Queues<br/>dlq_email<br/>dlq_tasks<br/>dlq_reports"]
             META["Metadata Tables<br/>pgqrs.meta"]
         end
     end
@@ -53,7 +53,6 @@ graph TB
     CLI --> CP
 
     CP --> QT
-    CP --> DLQ
     CP --> META
 
     %% Alternative direct connection (without pooler)
@@ -70,7 +69,7 @@ graph TB
 
     class P,W,A userApp
     class PQ,WQ,AA,CLI pgqrsLib
-    class QT,DLQ,META database
+    class QT,META database
     class CP optional
 ```
 
@@ -78,7 +77,7 @@ graph TB
 
 #### 1. **PostgreSQL Database**
 - **Central storage** for all queue data and metadata
-- **ACID compliance** ensures message durability and exactly-once processing
+- **ACID compliance** ensures message durability and exactly-once processing within a visibility timeout.
 - **SKIP LOCKED** feature enables efficient concurrent message processing
 - **Schema isolation** via dedicated `pgqrs` schema
 
