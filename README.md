@@ -8,6 +8,7 @@ A PostgreSQL-backed job queue for Rust applications.
 - **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching
 - **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit
+- **Message Archiving**: Built-in archiving system for audit trails and historical data retention
 
 ## Architecture
 
@@ -38,6 +39,7 @@ graph TB
     subgraph "PostgreSQL Database"
         subgraph "pgqrs Schema"
             QT["Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports"]
+            AT["Archive Tables<br/>archive_email<br/>archive_tasks<br/>archive_reports"]
             META["Metadata Tables<br/>pgqrs.meta"]
         end
     end
@@ -53,13 +55,17 @@ graph TB
     CLI --> CP
 
     CP --> QT
+    CP --> AT
     CP --> META
 
     %% Alternative direct connection (without pooler)
     PQ -.-> QT
     WQ -.-> QT
+    WQ -.-> AT
     AA -.-> QT
+    AA -.-> AT
     CLI -.-> QT
+    CLI -.-> AT
 
     %% Styling
     classDef userApp fill:#e1f5fe
@@ -69,17 +75,18 @@ graph TB
 
     class P,W,A userApp
     class PQ,WQ,AA,CLI pgqrsLib
-    class QT,META database
+    class QT,AT,META database
     class CP optional
 ```
 
 ### Component Details
 
 #### 1. **PostgreSQL Database**
-- **Central storage** for all queue data and metadata
+- **Central storage** for all queue data, archived messages, and metadata
 - **ACID compliance** ensures message durability and exactly-once processing within a visibility timeout.
 - **SKIP LOCKED** feature enables efficient concurrent message processing
 - **Schema isolation** via dedicated `pgqrs` schema
+- **Archive system** maintains processed message history in separate archive tables
 
 #### 2. **Connection Pooler (Optional)**
 - **PgBouncer or pgcat** for connection management and scaling
@@ -99,6 +106,7 @@ graph TB
 - **Key operations**:
   - `queue.read(batch_size)` - Fetch jobs for processing
   - `queue.delete_batch(msg_ids)` - Mark jobs as completed
+  - `queue.archive(msg_id, worker_id)` - Archive processed messages for audit trail
 
 #### 5. **Admin Server (Optional)**
 - **Your monitoring/admin service** using `PgqrsAdmin` APIs
@@ -107,6 +115,7 @@ graph TB
   - `admin.queue_metrics(name)` - Get queue health metrics
   - `admin.all_queues_metrics()` - System-wide monitoring
   - `admin.create_queue(name)` - Queue lifecycle management
+  - `admin.purge_archive(name)` - Archive cleanup operations
 
 #### 6. **pgqrs CLI**
 - **Command-line tool** for administrative operations
@@ -116,14 +125,16 @@ graph TB
   - `pgqrs queue create <name>` - Create new queues
   - `pgqrs message send <queue> <payload>` - Manual job creation
   - `pgqrs queue metrics <name>` - Inspect queue health
+  - `pgqrs archive list <queue>` - View processed message history
 
 ### Data Flow
 
 1. **Job Creation**: Producer services use `queue.enqueue()` to add jobs to PostgreSQL
 2. **Job Processing**: Worker services use `queue.read()` to fetch and process jobs
 3. **Job Completion**: Workers call `queue.delete_batch()` to mark jobs as done
-4. **Error Handling**: Failed jobs automatically retry or move to dead letter queues
-5. **Monitoring**: Admin services and CLI provide operational visibility
+4. **Job Archiving**: Optionally, workers use `queue.archive()` to preserve processed message history
+5. **Error Handling**: Failed jobs automatically retry or move to dead letter queues
+6. **Monitoring**: Admin services and CLI provide operational visibility into both active and archived messages
 
 ### Scalability Patterns
 
@@ -288,12 +299,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let messages = email_queue.read(10).await?;
     println!("Read {} messages", messages.len());
 
-    // Delete a message
+    // Process and archive messages
     if let Some(msg) = messages.first() {
-        let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
-        if deleted.first().copied().unwrap_or(false) {
-            println!("Deleted message {}", msg.msg_id);
+        // Process the message here...
+        println!("Processing message: {}", msg.msg_id);
+
+        // Archive the message to maintain audit trail
+        let archived = email_queue.archive(msg.msg_id, Some("worker-01")).await?;
+        if archived {
+            println!("Archived message {} successfully", msg.msg_id);
         }
+
+        // Or delete the message if archiving is not needed
+        // let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
+        // if deleted.first().copied().unwrap_or(false) {
+        //     println!("Deleted message {}", msg.msg_id);
+        // }
     }
 
     Ok(())
@@ -406,6 +427,91 @@ The CLI is defined in `src/main.rs` and supports the following commands:
 - `message dequeue <queue>` — Read and return one message
 - `message delete <queue> <id>` — Delete a message by ID
 - `message count <queue>` — Show pending message count
+- `message show <queue> <id>` — Show message details by ID
+- `message show <queue> <id> --archive` — Show archived message details by ID
+
+### Archive commands
+
+pgqrs provides message archiving functionality to maintain a historical record of processed messages while keeping the active queue performant.
+
+- `archive <queue> <id>` — Archive a specific message by ID
+- `archive list <queue> [--limit <n>] [--offset <n>]` — List archived messages
+- `archive purge <queue>` — Delete all archived messages for a queue
+- `message count <queue> --archive` — Show archived message count
+
+#### Archive System Overview
+
+The archive system automatically creates archive tables (`archive_<queue_name>`) when queues are created. Archived messages retain all original data plus additional metadata:
+
+- `archived_at` — Timestamp when the message was archived
+- `archived_by` — Optional identifier of the archiving process
+- `processing_duration` — Time taken to process the message (if applicable)
+
+#### Archive Usage Examples
+
+```bash
+# Archive a specific message that has been processed
+pgqrs archive email_queue 12345
+
+# List the 10 most recent archived messages
+pgqrs archive list email_queue --limit 10
+
+# List archived messages with pagination
+pgqrs archive list email_queue --limit 20 --offset 100
+
+# Show details of an archived message
+pgqrs message show email_queue 12345 --archive
+
+# Check how many messages are archived
+pgqrs message count email_queue --archive
+
+# Clean up old archived messages
+pgqrs archive purge email_queue
+```
+
+#### Programmatic Archive API
+
+The archive functionality is also available through the Rust API:
+
+```rust
+use pgqrs::admin::PgqrsAdmin;
+use pgqrs::config::Config;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load()?;
+    let admin = PgqrsAdmin::new(&config).await?;
+    let queue = admin.get_queue("email_queue").await?;
+
+    // Archive a message after processing
+    let archived = queue.archive(message_id, Some("worker-01")).await?;
+    if archived {
+        println!("Message {} archived successfully", message_id);
+    }
+
+    // List archived messages with pagination
+    let archived_messages = queue.archive_list(50, 0).await?;
+    println!("Found {} archived messages", archived_messages.len());
+
+    // Get specific archived message by ID
+    let archived_msg = queue.get_archived_message_by_id(message_id).await?;
+    println!("Archived message: {:?}", archived_msg);
+
+    // Purge old archived messages (admin operation)
+    admin.purge_archive("email_queue").await?;
+    println!("Archive purged");
+
+    Ok(())
+}
+```
+
+#### Archive Best Practices
+
+- **Archive after processing**: Archive messages only after successful processing
+- **Include worker ID**: Use the `archived_by` parameter to track which worker processed the message
+- **Regular cleanup**: Periodically purge old archived messages to manage database size
+- **Monitoring**: Track archive growth as part of your queue metrics
+- **Retention policy**: Establish how long to keep archived messages based on your compliance needs
 
 ### Output and Logging Options
 
