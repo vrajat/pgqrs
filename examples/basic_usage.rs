@@ -178,8 +178,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show archive counts
     println!("Archive counts:");
-    let email_archive_count = email_queue.archive_count().await?;
-    let task_archive_count = task_queue.archive_count().await?;
+    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
+    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
     println!("  email_queue archived: {}", email_archive_count);
     println!("  task_queue archived: {}", task_archive_count);
 
@@ -229,8 +229,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Archive Management Example ---");
 
     // Check archive counts before operations
-    let email_archive_count = email_queue.archive_count().await?;
-    let task_archive_count = task_queue.archive_count().await?;
+    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
+    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
     println!(
         "Archive counts - email: {}, task: {}",
         email_archive_count, task_archive_count
@@ -239,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if email_archive_count > 0 {
         println!("Purging email queue archive...");
         admin.purge_archive("email_queue").await?;
-        let new_count = email_queue.archive_count().await?;
+        let new_count = email_queue.archive_list(1000, 0).await?.len();
         println!("Email archive count after purge: {}", new_count);
     }
 

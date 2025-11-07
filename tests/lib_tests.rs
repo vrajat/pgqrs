@@ -143,7 +143,7 @@ async fn test_archive_single_message() {
 
     // Verify message is in active queue
     assert_eq!(queue.pending_count().await.unwrap(), 1);
-    assert_eq!(queue.archive_count().await.unwrap(), 0);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Archive the message
     let archived = queue.archive(msg_id, Some("test-worker")).await;
@@ -152,7 +152,7 @@ async fn test_archive_single_message() {
 
     // Verify message moved from active to archive
     assert_eq!(queue.pending_count().await.unwrap(), 0);
-    assert_eq!(queue.archive_count().await.unwrap(), 1);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 1);
 
     // Try to archive the same message again (should return false)
     let archived_again = queue.archive(msg_id, Some("test-worker")).await;
@@ -188,7 +188,7 @@ async fn test_archive_batch_messages() {
 
     // Verify messages are in active queue
     assert_eq!(queue.pending_count().await.unwrap(), 5);
-    assert_eq!(queue.archive_count().await.unwrap(), 0);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
@@ -210,7 +210,7 @@ async fn test_archive_batch_messages() {
 
     // Verify counts after batch archive
     assert_eq!(queue.pending_count().await.unwrap(), 2);
-    assert_eq!(queue.archive_count().await.unwrap(), 3);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 3);
 
     // Try to archive empty batch (should return empty vec)
     let empty_archive = queue.archive_batch(vec![], Some("empty-worker")).await;
@@ -240,7 +240,7 @@ async fn test_archive_nonexistent_message() {
     );
 
     // Verify archive count remains zero
-    assert_eq!(queue.archive_count().await.unwrap(), 0);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Cleanup
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
@@ -257,10 +257,10 @@ async fn test_archive_table_creation() {
         .await
         .expect("Failed to create queue");
 
-    // Verify archive table was created by trying to count (should not error)
-    let archive_count = queue.archive_count().await;
-    assert!(archive_count.is_ok());
-    assert_eq!(archive_count.unwrap(), 0);
+    // Verify archive table was created by trying to access (should not error)
+    let archive_list = queue.archive_list(1000, 0).await;
+    assert!(archive_list.is_ok());
+    assert_eq!(archive_list.unwrap().len(), 0);
 
     // Test that queue creation includes archive tables automatically
     const TEST_QUEUE_STANDALONE: &str = "test_standalone_archive";
@@ -269,8 +269,8 @@ async fn test_archive_table_creation() {
         .await
         .expect("Failed to create second queue");
 
-    // Verify archive table was automatically created (accessing archive_count should work)
-    assert_eq!(queue2.archive_count().await.unwrap(), 0);
+    // Verify archive table was automatically created (accessing archive_list should work)
+    assert_eq!(queue2.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Cleanup both queues
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
@@ -301,7 +301,7 @@ async fn test_delete_queue_removes_archive() {
     assert!(archived, "Message should be archived");
 
     // Verify archive has content
-    assert_eq!(queue.archive_count().await.unwrap(), 1);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 1);
 
     // Delete the queue (should also delete archive table)
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
@@ -313,7 +313,7 @@ async fn test_delete_queue_removes_archive() {
         .expect("Failed to recreate queue");
 
     // Archive count should be 0 (fresh archive table)
-    assert_eq!(new_queue.archive_count().await.unwrap(), 0);
+    assert_eq!(new_queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Cleanup
     assert!(admin.delete_queue(&new_queue.queue_name).await.is_ok());
@@ -345,13 +345,13 @@ async fn test_purge_archive() {
     }
 
     // Verify archive has 3 messages
-    assert_eq!(queue.archive_count().await.unwrap(), 3);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 3);
 
     // Purge archive
     assert!(admin.purge_archive(&queue.queue_name).await.is_ok());
 
     // Verify archive is empty
-    assert_eq!(queue.archive_count().await.unwrap(), 0);
+    assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 0);
 
     // Cleanup
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());

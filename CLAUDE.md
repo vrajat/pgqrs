@@ -4,6 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
+### Git and GitHub Operations
+**IMPORTANT: Use command line tools only - no MCP git tools**
+- `git status` - Check working directory status
+- `git add <file>` or `git add .` - Stage changes for commit
+- `git commit -m "message"` - Commit staged changes with message
+- `git push` - Push commits to remote repository
+- `git pull` - Pull latest changes from remote
+- `git log --oneline` - View commit history
+- `git diff` - View unstaged changes
+- `git diff --cached` - View staged changes
+- `gh pr view <number>` - View pull request details
+- `gh pr view <number> --comments` - View PR comments
+- `gh api repos/owner/repo/pulls/number/comments` - Get PR comments via API
+
 ### Building and Testing
 - `cargo build` - Build the project
 - `cargo build --release` - Build optimized release version

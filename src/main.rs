@@ -112,9 +112,6 @@ enum QueueCommands {
     Metrics {
         /// Name of the queue (if not provided, shows all queues)
         name: Option<String>,
-        /// Query archive table instead of active queue
-        #[arg(long, help = "Query archive table instead of active queue")]
-        archive: bool,
     },
 }
 
@@ -332,33 +329,25 @@ async fn handle_queue_commands(
             tracing::info!("Archive for queue '{}' purged successfully", name);
         }
 
-        QueueCommands::Metrics { name, archive } => {
+        QueueCommands::Metrics { name } => {
             if let Some(queue_name) = name {
-                if archive {
-                    // Get archive metrics - for now just show archive count
-                    let queue = admin.get_queue(&queue_name).await?;
-                    let archive_count = queue.archive_count().await?;
-                    tracing::info!("Queue: {} (archive)", queue_name);
-                    tracing::info!("  Archived Messages: {}", archive_count);
-                } else {
-                    tracing::info!("Getting metrics for queue '{}'...", queue_name);
-                    let metrics = admin.queue_metrics(&queue_name).await?;
-                    tracing::info!("Queue: {}", metrics.name);
-                    tracing::info!("  Total Messages: {}", metrics.total_messages);
-                    tracing::info!("  Pending Messages: {}", metrics.pending_messages);
-                    tracing::info!("  Locked Messages: {}", metrics.locked_messages);
-                    if let Some(oldest) = metrics.oldest_pending_message {
-                        tracing::info!(
-                            "  Oldest Pending: {}",
-                            oldest.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
-                    }
-                    if let Some(newest) = metrics.newest_message {
-                        tracing::info!(
-                            "  Newest Message: {}",
-                            newest.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
-                    }
+                tracing::info!("Getting metrics for queue '{}'...", queue_name);
+                let metrics = admin.queue_metrics(&queue_name).await?;
+                tracing::info!("Queue: {}", metrics.name);
+                tracing::info!("  Total Messages: {}", metrics.total_messages);
+                tracing::info!("  Pending Messages: {}", metrics.pending_messages);
+                tracing::info!("  Locked Messages: {}", metrics.locked_messages);
+                if let Some(oldest) = metrics.oldest_pending_message {
+                    tracing::info!(
+                        "  Oldest Pending: {}",
+                        oldest.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
+                }
+                if let Some(newest) = metrics.newest_message {
+                    tracing::info!(
+                        "  Newest Message: {}",
+                        newest.format("%Y-%m-%d %H:%M:%S UTC")
+                    );
                 }
             } else {
                 tracing::info!("Getting metrics for all queues...");
@@ -514,7 +503,18 @@ async fn handle_message_commands(
 
             if archive {
                 tracing::info!("Getting archived message count for queue '{}'...", queue);
-                let count = queue_obj.archive_count().await?;
+                // Use a direct query since archive_count function was removed
+                let count_query = format!(
+                    "SELECT COUNT(*) FROM {}.archive_{}",
+                    "pgqrs", // schema
+                    queue
+                );
+                let count: i64 = sqlx::query_scalar(&count_query)
+                    .fetch_one(&queue_obj.pool)
+                    .await
+                    .map_err(|e| PgqrsError::Connection {
+                        message: format!("Failed to count archived messages: {}", e),
+                    })?;
                 tracing::info!("Archived messages: {}", count);
             } else {
                 tracing::info!("Getting pending message count for queue '{}'...", queue);

@@ -184,12 +184,6 @@ pub const ARCHIVE_BATCH: &str = r#"
     RETURNING msg_id;
 "#;
 
-/// Count messages in archive table
-pub const ARCHIVE_COUNT: &str = r#"
-    SELECT COUNT(*) AS count
-    FROM {PGQRS_SCHEMA}.archive_{queue_name};
-"#;
-
 /// Select messages from archive table
 pub const ARCHIVE_LIST: &str = r#"
     SELECT msg_id, read_ct, enqueued_at, vt, message, archived_at, archived_by, processing_duration::text as processing_duration

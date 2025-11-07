@@ -18,8 +18,8 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_COUNT, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID,
-    PENDING_COUNT, PGQRS_SCHEMA, QUEUE_PREFIX,
+    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, PENDING_COUNT,
+    PGQRS_SCHEMA, QUEUE_PREFIX,
 };
 use crate::error::Result;
 use crate::types::QueueMessage;
@@ -54,8 +54,6 @@ pub struct Queue {
     pub archive_sql: String,
     /// SQL for archiving a batch of messages
     pub archive_batch_sql: String,
-    /// SQL for counting archive messages
-    pub archive_count_sql: String,
     /// SQL for listing archive messages
     pub archive_list_sql: String,
     /// SQL for selecting archived message by ID
@@ -108,9 +106,6 @@ impl Queue {
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let archive_count_sql = ARCHIVE_COUNT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
         let archive_list_sql = ARCHIVE_LIST
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{queue_name}", queue_name);
@@ -130,7 +125,6 @@ impl Queue {
             delete_batch_sql,
             archive_sql,
             archive_batch_sql,
-            archive_count_sql,
             archive_list_sql,
             archive_select_by_id_sql,
         }
@@ -462,21 +456,6 @@ impl Queue {
             })?;
 
         Ok(archived_ids)
-    }
-
-    /// Count messages in the archive table.
-    ///
-    /// # Returns
-    /// Number of archived messages for this queue
-    pub async fn archive_count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(&self.archive_count_sql)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to count archive messages: {}", e),
-            })?;
-
-        Ok(count)
     }
 
     /// List archived messages from the queue.
