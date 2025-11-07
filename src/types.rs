@@ -75,7 +75,7 @@ pub struct QueueMetrics {
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
-pub struct MetaResult {
+pub struct QueueInfo {
     /// Name of the queue
     pub queue_name: String,
     /// Timestamp when the queue was created
@@ -84,11 +84,11 @@ pub struct MetaResult {
     pub unlogged: bool,
 }
 
-impl fmt::Display for MetaResult {
+impl fmt::Display for QueueInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MetaResult {{ queue_name: {}, created_at: {}, unlogged: {} }}",
+            "QueueInfo {{ queue_name: {}, created_at: {}, unlogged: {} }}",
             self.queue_name, self.created_at, self.unlogged
         )
     }
@@ -140,8 +140,8 @@ impl ArchivedMessage {
 }
 
 /// A worker instance that processes messages from queues
-#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
-pub struct Worker {
+#[derive(Debug, Clone, Serialize, Deserialize, Tabled, sqlx::FromRow)]
+pub struct WorkerInfo {
     /// Unique worker ID
     pub id: i64,
     /// Hostname where the worker is running
@@ -149,7 +149,7 @@ pub struct Worker {
     /// Port number for the worker
     pub port: i32,
     /// Queue ID this worker is processing
-    pub queue_id: String,
+    pub queue_name: String,
     /// Timestamp when the worker started
     pub started_at: DateTime<Utc>,
     /// Last heartbeat timestamp
@@ -161,60 +161,19 @@ pub struct Worker {
     pub status: WorkerStatus,
 }
 
-// Custom deserialization for Worker from database rows
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct WorkerRow {
-    pub id: i64,
-    pub hostname: String,
-    pub port: i32,
-    pub queue_id: String,
-    pub started_at: DateTime<Utc>,
-    pub heartbeat_at: DateTime<Utc>,
-    pub shutdown_at: Option<DateTime<Utc>>,
-    pub status: String,
-}
-
-impl From<WorkerRow> for Worker {
-    fn from(row: WorkerRow) -> Self {
-        let status = match row.status.as_str() {
-            "ready" => WorkerStatus::Ready,
-            "shutting_down" => WorkerStatus::ShuttingDown,
-            "stopped" => WorkerStatus::Stopped,
-            unknown => {
-                tracing::warn!(
-                    "Unknown worker status '{}' for worker {}, defaulting to 'ready'",
-                    unknown,
-                    row.id
-                );
-                WorkerStatus::Ready // Default fallback with logging
-            }
-        };
-
-        Worker {
-            id: row.id,
-            hostname: row.hostname,
-            port: row.port,
-            queue_id: row.queue_id,
-            started_at: row.started_at,
-            heartbeat_at: row.heartbeat_at,
-            shutdown_at: row.shutdown_at,
-            status,
-        }
-    }
-}
-
-impl fmt::Display for Worker {
+impl fmt::Display for WorkerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Worker {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
-            self.id, self.hostname, self.port, self.queue_id, self.status
+            "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_name: {}, status: {:?} }}",
+            self.id, self.hostname, self.port, self.queue_name, self.status
         )
     }
 }
 
 /// Worker status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "pgqrs.worker_status", rename_all = "snake_case")]
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,

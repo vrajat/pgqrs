@@ -29,7 +29,7 @@
 use crate::config::Config;
 use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
-    CREATE_META_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_SCHEMA_STATEMENT,
+    CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_SCHEMA_STATEMENT,
     CREATE_WORKERS_INDEX_HEARTBEAT, CREATE_WORKERS_INDEX_QUEUE_STATUS, DELETE_QUEUE_METADATA,
     DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA, PGQRS_SCHEMA,
     PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
@@ -37,8 +37,10 @@ use crate::constants::{
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
-use crate::types::MetaResult;
 use crate::types::QueueMetrics;
+use crate::types::{QueueInfo, WorkerInfo};
+use crate::WorkerStatus;
+use chrono::{Duration, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
@@ -82,8 +84,19 @@ impl PgqrsAdmin {
             })?;
 
         // Create meta table
-        let create_meta_sql = CREATE_META_TABLE_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        let create_meta_sql =
+            CREATE_QUEUE_INFO_TABLE_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
         sqlx::query(&create_meta_sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        // Create worker status enum type
+        let create_enum_sql =
+            crate::constants::CREATE_WORKER_STATUS_ENUM.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+        sqlx::query(&create_enum_sql)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -221,9 +234,10 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// Vector of [`MetaResult`] describing each queue.
-    pub async fn list_queues(&self) -> Result<Vec<MetaResult>> {
-        let sql = "SELECT queue_name, created_at, unlogged FROM pgqrs.meta";
-        let results = sqlx::query_as::<_, MetaResult>(sql)
+    pub async fn list_queues(&self) -> Result<Vec<QueueInfo>> {
+        let sql = crate::constants::LIST_QUEUE_INFO
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let results = sqlx::query_as::<_, QueueInfo>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -338,6 +352,31 @@ impl PgqrsAdmin {
         Ok(Queue::new(self.pool.clone(), name))
     }
 
+    /// Get a [`Queue`] instance for a given queue name.
+    ///
+    /// # Arguments
+    /// * `queue_name` - Name of the queue
+    ///
+    /// # Returns
+    /// [`Queue`] instance for the queue.
+    pub async fn get_queue_by_name(&self, queue_name: &str) -> Result<Queue> {
+        let sql = crate::constants::GET_QUEUE_INFO_BY_NAME
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        let queue_name: String = sqlx::query_scalar(&sql)
+            .bind(queue_name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_e| PgqrsError::QueueNotFound {
+                name: queue_name.to_string(),
+            })?;
+
+        Ok(Queue::new(self.pool.clone(), &queue_name))
+    }
+
+    ///
+    ///
+    ///
     /// Execute multiple SQL statements in a single transaction.
     ///
     /// This method ensures that either all statements succeed or all are rolled back,
@@ -373,22 +412,101 @@ impl PgqrsAdmin {
         Ok(())
     }
 
+    /// Create and register a new worker for a queue
+    ///
+    /// # Arguments
+    /// * `queue` - The queue this worker will process
+    /// * `hostname` - Hostname where the worker is running
+    /// * `port` - Port number for the worker
+    ///
+    /// # Returns
+    /// A new `Worker` instance registered in the database
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if database operations fail or if hostname+port
+    /// combination is already registered by another active worker
+    pub async fn register(
+        &self,
+        queue_name: String,
+        hostname: String,
+        port: i32,
+    ) -> Result<WorkerInfo> {
+        let queue = self.get_queue(&queue_name).await?;
+        let now = Utc::now();
+
+        // Insert the worker into the database and get the generated ID
+        let sql = crate::constants::INSERT_WORKER
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        let worker_id: i64 = sqlx::query_scalar(&sql)
+            .bind(&hostname)
+            .bind(port)
+            .bind(&queue.queue_name)
+            .bind(now)
+            .bind(now)
+            .bind(WorkerStatus::Ready)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        let worker = WorkerInfo {
+            id: worker_id,
+            hostname: hostname.clone(),
+            port,
+            queue_name: queue.queue_name.clone(),
+            started_at: now,
+            heartbeat_at: now,
+            shutdown_at: None,
+            status: WorkerStatus::Ready,
+        };
+
+        Ok(worker)
+    }
+
+    /// Update this worker's heartbeat timestamp
+    ///
+    /// Should be called periodically to indicate the worker is still alive
+    ///
+    /// # Arguments
+    /// * `queue` - The queue connection for database access
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if the database update fails
+    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
+        let now = Utc::now();
+
+        let sql = crate::constants::UPDATE_WORKER_HEARTBEAT
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        sqlx::query(&sql)
+            .bind(now)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(())
+    }
+
     /// Get all workers across all queues
     ///
     /// # Returns
     /// Vector of all workers in the system
-    pub async fn list_all_workers(&self) -> Result<Vec<crate::types::Worker>> {
+    pub async fn list_all_workers(&self) -> Result<Vec<WorkerInfo>> {
         let sql = crate::constants::LIST_ALL_WORKERS
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
+        let workers = sqlx::query_as::<_, WorkerInfo>(&sql)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
 
-        let workers = worker_rows.into_iter().map(|row| row.into()).collect();
         Ok(workers)
     }
 
@@ -402,11 +520,11 @@ impl PgqrsAdmin {
     ///
     /// # Errors
     /// Returns `PgqrsError` if database query fails or worker not found
-    pub async fn get_worker_by_id(&self, worker_id: i64) -> Result<crate::types::Worker> {
+    pub async fn get_worker_by_id(&self, worker_id: i64) -> Result<WorkerInfo> {
         let sql = crate::constants::GET_WORKER_BY_ID
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_row = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
+        let worker = sqlx::query_as::<_, WorkerInfo>(&sql)
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
@@ -414,7 +532,35 @@ impl PgqrsAdmin {
                 message: e.to_string(),
             })?;
 
-        Ok(worker_row.into())
+        Ok(worker)
+    }
+
+    /// Get messages being processed by a worker
+    ///
+    /// # Arguments
+    /// * `worker_id` - ID of the worker
+    ///
+    /// # Returns
+    /// Vector of messages being processed by the worker
+    pub async fn get_worker_messages(
+        &self,
+        worker_id: i64,
+    ) -> Result<Vec<crate::types::QueueMessage>> {
+        let worker = self.get_worker_by_id(worker_id).await?;
+        let sql = crate::constants::GET_WORKER_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", &worker.queue_name);
+
+        let messages = sqlx::query_as::<_, crate::types::QueueMessage>(&sql)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(messages)
     }
 
     /// Get workers for a specific queue
@@ -424,11 +570,11 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// Vector of workers processing the specified queue
-    pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<crate::types::Worker>> {
+    pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<WorkerInfo>> {
         let sql = crate::constants::LIST_QUEUE_WORKERS
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
 
-        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
+        let workers = sqlx::query_as::<_, WorkerInfo>(&sql)
             .bind(queue_name)
             .fetch_all(&self.pool)
             .await
@@ -436,8 +582,102 @@ impl PgqrsAdmin {
                 message: e.to_string(),
             })?;
 
-        let workers = worker_rows.into_iter().map(|row| row.into()).collect();
         Ok(workers)
+    }
+
+    /// Release messages from a specific worker (for shutdown)
+    ///
+    /// # Arguments
+    /// * `worker_id` - The worker whose messages should be released
+    ///
+    /// # Returns
+    /// Number of messages released
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if database operations fail
+    pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
+        let worker = self.get_worker_by_id(worker_id).await?;
+        let sql = crate::constants::RELEASE_WORKER_MESSAGES
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
+            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
+            .replace("{queue_name}", &worker.queue_name);
+
+        let result = sqlx::query(&sql)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Mark this worker as shutting down gracefully
+    ///
+    /// This signals that the worker is beginning shutdown process
+    /// and should not receive new message assignments
+    ///
+    /// # Arguments
+    /// * `queue` - The queue connection for database access
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if the database update fails
+    pub async fn begin_shutdown(&self, worker_id: i64) -> Result<()> {
+        let now = Utc::now();
+
+        let sql = crate::constants::UPDATE_WORKER_SHUTDOWN
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        sqlx::query(&sql)
+            .bind(now)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(())
+    }
+
+    /// Mark this worker as stopped (final state)
+    ///
+    /// This is the final step in worker lifecycle
+    ///
+    /// # Arguments
+    /// * `queue` - The queue connection for database access
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if the database update fails
+    pub async fn mark_stopped(&self, worker_id: i64) -> Result<()> {
+        let sql = crate::constants::UPDATE_WORKER_STOPPED
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        sqlx::query(&sql)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(())
+    }
+
+    /// Check if this worker is healthy based on heartbeat age
+    ///
+    /// # Arguments
+    /// * `max_age` - Maximum allowed age for the last heartbeat
+    ///
+    /// # Returns
+    /// `true` if the worker's last heartbeat is within the max_age threshold
+    pub async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> Result<bool> {
+        let now = Utc::now();
+        let worker = self.get_worker_by_id(worker_id).await?;
+        let heartbeat_age = now.signed_duration_since(worker.heartbeat_at);
+
+        Ok(heartbeat_age <= max_age)
     }
 
     /// Remove stopped workers older than specified duration
@@ -493,11 +733,10 @@ impl PgqrsAdmin {
             .count() as u32;
 
         // Get message counts per worker
-        let queue = self.get_queue(queue_name).await?;
         let mut total_messages = 0u64;
 
         for worker in &workers {
-            let messages = queue.get_worker_messages(worker.id).await?;
+            let messages = self.get_worker_messages(worker.id).await?;
             total_messages += messages.len() as u64;
         }
 

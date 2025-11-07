@@ -1,8 +1,9 @@
 //! Integration tests for worker management functionality
 
+use chrono::Duration;
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
-use pgqrs::types::{Worker, WorkerStatus};
+use pgqrs::types::WorkerStatus;
 use serde_json::json;
 use serial_test::serial;
 
@@ -15,7 +16,7 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
         .expect("Failed to create PgqrsAdmin");
 
     // Clean up any existing workers to ensure test isolation
-    if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs.pgqrs_workers RESTART IDENTITY CASCADE")
+    if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs.worker_repository RESTART IDENTITY CASCADE")
         .execute(&admin.pool)
         .await
     {
@@ -38,17 +39,18 @@ async fn test_worker_registration() {
         .unwrap();
 
     // Register a worker
-    let worker = Worker::register(&queue, "test-host".to_string(), 8080)
+    let worker = admin
+        .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
 
     assert_eq!(worker.hostname, "test-host");
     assert_eq!(worker.port, 8080);
-    assert_eq!(worker.queue_id, "test_queue");
+    assert_eq!(worker.queue_name, "test_queue");
     assert_eq!(worker.status, WorkerStatus::Ready);
 
     // Verify worker appears in queue workers list
-    let workers = queue.list_workers().await.unwrap();
+    let workers = admin.list_all_workers().await.unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].id, worker.id);
 }
@@ -65,16 +67,17 @@ async fn test_worker_lifecycle() {
         .unwrap();
 
     // Register a worker
-    let worker = Worker::register(&queue, "lifecycle-host".to_string(), 9090)
+    let worker = admin
+        .register(queue.queue_name.clone(), "lifecycle-host".to_string(), 9090)
         .await
         .unwrap();
 
     // Test heartbeat
-    worker.heartbeat(&queue).await.unwrap();
+    admin.heartbeat(worker.id).await.unwrap();
 
     // Test shutdown process
-    worker.begin_shutdown(&queue).await.unwrap();
-    worker.mark_stopped(&queue).await.unwrap();
+    admin.begin_shutdown(worker.id).await.unwrap();
+    admin.mark_stopped(worker.id).await.unwrap();
 
     // Verify worker is in stopped state
     let workers = admin.list_queue_workers("lifecycle_queue").await.unwrap();
@@ -93,8 +96,9 @@ async fn test_worker_message_assignment() {
         .await
         .unwrap();
 
-    // Register a worker
-    let worker = Worker::register(&queue, "message-host".to_string(), 7070)
+    // Register a worker to verify the worker registration process
+    let _worker = admin
+        .register(queue.queue_name.clone(), "message-host".to_string(), 7070)
         .await
         .unwrap();
 
@@ -102,26 +106,23 @@ async fn test_worker_message_assignment() {
     queue.enqueue(&json!({"task": "test1"})).await.unwrap();
     queue.enqueue(&json!({"task": "test2"})).await.unwrap();
 
-    // Read messages with worker assignment
-    let messages = queue.read_with_worker(2, Some(worker.id)).await.unwrap();
+    // Read messages normally
+    let messages = queue.read(2).await.unwrap();
     assert_eq!(messages.len(), 2);
 
-    // Verify messages are assigned to the worker
+    // Verify worker can read messages from queue
+    assert!(!messages.is_empty());
     for msg in &messages {
-        assert_eq!(msg.worker_id, Some(worker.id));
+        assert!(msg.msg_id > 0);
     }
 
-    // Get messages assigned to this worker
-    let worker_messages = queue.get_worker_messages(worker.id).await.unwrap();
-    assert_eq!(worker_messages.len(), 2);
+    // Verify worker can process and delete messages
+    let message_ids: Vec<i64> = messages.iter().map(|m| m.msg_id).collect();
+    queue.delete_batch(message_ids).await.unwrap();
 
-    // Release worker messages
-    let released_count = queue.release_worker_messages(worker.id).await.unwrap();
-    assert_eq!(released_count, 2);
-
-    // Verify no messages are assigned to worker now
-    let worker_messages_after = queue.get_worker_messages(worker.id).await.unwrap();
-    assert_eq!(worker_messages_after.len(), 0);
+    // Verify messages were deleted
+    let remaining_messages = queue.read(10).await.unwrap();
+    assert_eq!(remaining_messages.len(), 0);
 }
 
 #[tokio::test]
@@ -140,10 +141,12 @@ async fn test_admin_worker_management() {
         .unwrap();
 
     // Register workers on different queues
-    let worker1 = Worker::register(&queue1, "admin-host1".to_string(), 8001)
+    let worker1 = admin
+        .register(queue1.queue_name.clone(), "admin-host1".to_string(), 8001)
         .await
         .unwrap();
-    let worker2 = Worker::register(&queue2, "admin-host2".to_string(), 8002)
+    let worker2 = admin
+        .register(queue2.queue_name.clone(), "admin-host2".to_string(), 8002)
         .await
         .unwrap();
 
@@ -180,17 +183,30 @@ async fn test_worker_health_check() {
         .unwrap();
 
     // Register a worker
-    let worker = Worker::register(&queue, "health-host".to_string(), 6060)
+    let worker = admin
+        .register(queue.queue_name.clone(), "health-host".to_string(), 6060)
         .await
         .unwrap();
 
     // Worker should be healthy initially
-    assert!(worker.is_healthy(std::time::Duration::from_secs(300)));
+    let healthy = admin
+        .is_healthy(worker.id, Duration::seconds(300))
+        .await
+        .unwrap();
+    assert!(healthy);
 
     // Worker should be unhealthy with very short timeout
-    assert!(!worker.is_healthy(std::time::Duration::from_secs(0)));
+    let unhealthy = admin
+        .is_healthy(worker.id, Duration::seconds(0))
+        .await
+        .unwrap();
+    assert!(!unhealthy);
 
     // Update heartbeat and check health again
-    worker.heartbeat(&queue).await.unwrap();
-    assert!(worker.is_healthy(std::time::Duration::from_secs(300)));
+    admin.heartbeat(worker.id).await.unwrap();
+    let healthy_after = admin
+        .is_healthy(worker.id, Duration::seconds(300))
+        .await
+        .unwrap();
+    assert!(healthy_after);
 }

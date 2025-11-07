@@ -41,11 +41,10 @@ pub mod config;
 pub mod error;
 pub mod queue;
 pub mod types;
-pub mod worker;
 
 mod constants;
 
 pub use crate::admin::PgqrsAdmin;
 pub use crate::error::{PgqrsError, Result};
 pub use crate::queue::Queue;
-pub use crate::types::{Worker, WorkerStats, WorkerStatus};
+pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};

@@ -23,13 +23,19 @@ pub const VISIBILITY_TIMEOUT: i32 = 5;
 
 pub const CREATE_SCHEMA_STATEMENT: &str = r#"CREATE SCHEMA IF NOT EXISTS {PGQRS_SCHEMA};"#;
 
-pub const CREATE_META_TABLE_STATEMENT: &str = r#"
-    CREATE TABLE IF NOT EXISTS {PGQRS_SCHEMA}.meta (
+pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
+    CREATE TABLE IF NOT EXISTS {PGQRS_SCHEMA}.queue_repository (
         queue_name VARCHAR UNIQUE NOT NULL PRIMARY KEY,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
         unlogged BOOLEAN DEFAULT FALSE
     );
 "#;
+
+pub const LIST_QUEUE_INFO: &str = r#"
+    SELECT queue_name, created_at, unlogged
+    FROM {PGQRS_SCHEMA}.queue_repository;
+"#;
+
 pub const CREATE_QUEUE_STATEMENT: &str = r#"
     CREATE {UNLOGGED} TABLE IF NOT EXISTS {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name} (
         msg_id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
@@ -37,7 +43,7 @@ pub const CREATE_QUEUE_STATEMENT: &str = r#"
         enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
         vt TIMESTAMP WITH TIME ZONE NOT NULL,
         message JSONB,
-        worker_id BIGINT REFERENCES {PGQRS_SCHEMA}.pgqrs_workers(id)
+        worker_id BIGINT REFERENCES {PGQRS_SCHEMA}.worker_repository(id)
     );"#;
 
 pub const DROP_QUEUE_STATEMENT: &str = r#"
@@ -45,14 +51,20 @@ pub const DROP_QUEUE_STATEMENT: &str = r#"
 "#;
 
 pub const INSERT_QUEUE_METADATA: &str = r#"
-    INSERT INTO {PGQRS_SCHEMA}.meta (queue_name, unlogged)
+    INSERT INTO {PGQRS_SCHEMA}.queue_repository (queue_name, unlogged)
     VALUES ('{name}', {unlogged})
     ON CONFLICT (queue_name)
     DO UPDATE SET unlogged = EXCLUDED.unlogged;
 "#;
 
+pub const GET_QUEUE_INFO_BY_NAME: &str = r#"
+    SELECT queue_name, created_at, unlogged
+    FROM {PGQRS_SCHEMA}.queue_repository
+    WHERE queue_name = $1;
+"#;
+
 pub const DELETE_QUEUE_METADATA: &str = r#"
-        DELETE FROM {PGQRS_SCHEMA}.meta
+        DELETE FROM {PGQRS_SCHEMA}.queue_repository
         WHERE queue_name = '{name}';
 "#;
 
@@ -211,29 +223,39 @@ pub const PURGE_ARCHIVE_TABLE: &str = r#"
 
 /// Create index on worker table for efficient worker lookups
 pub const CREATE_WORKERS_INDEX_QUEUE_STATUS: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status
-    ON {PGQRS_SCHEMA}.pgqrs_workers(queue_id, status);
+    CREATE INDEX IF NOT EXISTS idx_worker_repository_queue_status
+    ON {PGQRS_SCHEMA}.worker_repository(queue_name, status);
 "#;
 
 /// Create index on worker table for heartbeat monitoring
 pub const CREATE_WORKERS_INDEX_HEARTBEAT: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_heartbeat
-    ON {PGQRS_SCHEMA}.pgqrs_workers(heartbeat_at);
+    CREATE INDEX IF NOT EXISTS idx_worker_repository_heartbeat
+    ON {PGQRS_SCHEMA}.worker_repository(heartbeat_at);
 "#;
 
 // Worker Management SQL Templates
 
+/// Create worker status enum type
+pub const CREATE_WORKER_STATUS_ENUM: &str = r#"
+    DO $$
+    BEGIN
+        CREATE TYPE {PGQRS_SCHEMA}.worker_status AS ENUM ('ready', 'shutting_down', 'stopped');
+    EXCEPTION
+        WHEN duplicate_object THEN null;
+    END $$;
+"#;
+
 /// Create workers table
 pub const CREATE_WORKERS_TABLE: &str = r#"
-    CREATE TABLE IF NOT EXISTS {PGQRS_SCHEMA}.pgqrs_workers (
+    CREATE TABLE IF NOT EXISTS {PGQRS_SCHEMA}.worker_repository (
         id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
         hostname TEXT NOT NULL,
         port INTEGER NOT NULL,
-        queue_id TEXT NOT NULL,
+        queue_name TEXT NOT NULL,
         started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         shutdown_at TIMESTAMP WITH TIME ZONE,
-        status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'shutting_down', 'stopped')),
+        status {PGQRS_SCHEMA}.worker_status NOT NULL DEFAULT 'ready'::{PGQRS_SCHEMA}.worker_status,
 
         UNIQUE(hostname, port)
     )
@@ -241,86 +263,58 @@ pub const CREATE_WORKERS_TABLE: &str = r#"
 
 /// Insert new worker registration
 pub const INSERT_WORKER: &str = r#"
-    INSERT INTO {PGQRS_SCHEMA}.pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
+    INSERT INTO {PGQRS_SCHEMA}.worker_repository (hostname, port, queue_name, started_at, heartbeat_at, status)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING id
 "#;
 
 /// Update worker heartbeat timestamp
 pub const UPDATE_WORKER_HEARTBEAT: &str = r#"
-    UPDATE {PGQRS_SCHEMA}.pgqrs_workers
+    UPDATE {PGQRS_SCHEMA}.worker_repository
     SET heartbeat_at = $1
     WHERE id = $2
 "#;
 
 /// Update worker status to shutting down
 pub const UPDATE_WORKER_SHUTDOWN: &str = r#"
-    UPDATE {PGQRS_SCHEMA}.pgqrs_workers
+    UPDATE {PGQRS_SCHEMA}.worker_repository
     SET status = 'shutting_down', shutdown_at = $1
     WHERE id = $2
 "#;
 
 /// Update worker status to stopped
 pub const UPDATE_WORKER_STOPPED: &str = r#"
-    UPDATE {PGQRS_SCHEMA}.pgqrs_workers
+    UPDATE {PGQRS_SCHEMA}.worker_repository
     SET status = 'stopped'
     WHERE id = $1
 "#;
 
 /// List workers for a specific queue
 pub const LIST_QUEUE_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-    FROM {PGQRS_SCHEMA}.pgqrs_workers
-    WHERE queue_id = $1
+    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
+    FROM {PGQRS_SCHEMA}.worker_repository
+    WHERE queue_name = $1
     ORDER BY started_at DESC
 "#;
 
 /// List all workers in the system
 pub const LIST_ALL_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-    FROM {PGQRS_SCHEMA}.pgqrs_workers
+    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
+    FROM {PGQRS_SCHEMA}.worker_repository
     ORDER BY started_at DESC
 "#;
 
 /// Get a specific worker by ID
 pub const GET_WORKER_BY_ID: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-    FROM {PGQRS_SCHEMA}.pgqrs_workers
+    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
+    FROM {PGQRS_SCHEMA}.worker_repository
     WHERE id = $1
 "#;
 
 /// Delete old stopped workers
 pub const PURGE_OLD_WORKERS: &str = r#"
-    DELETE FROM {PGQRS_SCHEMA}.pgqrs_workers
+    DELETE FROM {PGQRS_SCHEMA}.worker_repository
     WHERE status = 'stopped' AND heartbeat_at < $1
-"#;
-
-/// Read messages with worker assignment (with worker_id)
-pub const READ_MESSAGES_WITH_WORKER: &str = r#"
-    UPDATE {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-    SET vt = $1, read_ct = read_ct + 1, worker_id = $3
-    WHERE msg_id IN (
-        SELECT msg_id FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-        WHERE vt < NOW()
-        ORDER BY msg_id
-        FOR UPDATE SKIP LOCKED
-        LIMIT $2
-    )
-    RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
-"#;
-
-/// Read messages without worker assignment (without worker_id)
-pub const READ_MESSAGES_WITHOUT_WORKER: &str = r#"
-    UPDATE {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-    SET vt = $1, read_ct = read_ct + 1
-    WHERE msg_id IN (
-        SELECT msg_id FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
-        WHERE vt < NOW()
-        ORDER BY msg_id
-        FOR UPDATE SKIP LOCKED
-        LIMIT $2
-    )
-    RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
 "#;
 
 /// Release messages assigned to a worker
