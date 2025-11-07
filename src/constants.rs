@@ -282,6 +282,13 @@ pub const LIST_ALL_WORKERS: &str = r#"
     ORDER BY started_at DESC
 "#;
 
+/// Get a specific worker by ID
+pub const GET_WORKER_BY_ID: &str = r#"
+    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    FROM {PGQRS_SCHEMA}.pgqrs_workers
+    WHERE id = $1
+"#;
+
 /// Delete old stopped workers
 pub const PURGE_OLD_WORKERS: &str = r#"
     DELETE FROM {PGQRS_SCHEMA}.pgqrs_workers
@@ -302,7 +309,7 @@ pub const READ_MESSAGES_WITH_WORKER: &str = r#"
     RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
 "#;
 
-/// Read messages without worker assignment (without worker_id)  
+/// Read messages without worker assignment (without worker_id)
 pub const READ_MESSAGES_WITHOUT_WORKER: &str = r#"
     UPDATE {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
     SET vt = $1, read_ct = read_ct + 1

@@ -392,6 +392,31 @@ impl PgqrsAdmin {
         Ok(workers)
     }
 
+    /// Get a specific worker by ID
+    ///
+    /// # Arguments
+    /// * `worker_id` - ID of the worker to retrieve
+    ///
+    /// # Returns
+    /// The worker with the specified ID, or error if not found
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if database query fails or worker not found
+    pub async fn get_worker_by_id(&self, worker_id: i64) -> Result<crate::types::Worker> {
+        let sql = crate::constants::GET_WORKER_BY_ID
+            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+
+        let worker_row = sqlx::query_as::<_, crate::types::WorkerRow>(&sql)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(worker_row.into())
+    }
+
     /// Get workers for a specific queue
     ///
     /// # Arguments
@@ -423,7 +448,11 @@ impl PgqrsAdmin {
     /// # Returns
     /// Number of workers removed
     pub async fn purge_old_workers(&self, older_than: std::time::Duration) -> Result<u64> {
-        let threshold = chrono::Utc::now() - chrono::Duration::from_std(older_than).unwrap();
+        let threshold = chrono::Utc::now()
+            - chrono::Duration::from_std(older_than).map_err(|e| PgqrsError::InvalidConfig {
+                field: "older_than".to_string(),
+                message: format!("Invalid duration: {}", e),
+            })?;
 
         let sql = crate::constants::PURGE_OLD_WORKERS
             .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);

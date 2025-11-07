@@ -180,7 +180,14 @@ impl From<WorkerRow> for Worker {
             "ready" => WorkerStatus::Ready,
             "shutting_down" => WorkerStatus::ShuttingDown,
             "stopped" => WorkerStatus::Stopped,
-            _ => WorkerStatus::Ready, // Default fallback
+            unknown => {
+                tracing::warn!(
+                    "Unknown worker status '{}' for worker {}, defaulting to 'ready'",
+                    unknown,
+                    row.id
+                );
+                WorkerStatus::Ready // Default fallback with logging
+            }
         };
 
         Worker {
