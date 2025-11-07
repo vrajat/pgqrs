@@ -30,8 +30,9 @@ use crate::config::Config;
 use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
     CREATE_META_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_SCHEMA_STATEMENT,
-    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
-    PGQRS_SCHEMA, PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
+    CREATE_WORKERS_INDEX_HEARTBEAT, CREATE_WORKERS_INDEX_QUEUE_STATUS, DELETE_QUEUE_METADATA,
+    DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA, PGQRS_SCHEMA,
+    PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
     UNINSTALL_STATEMENT,
 };
 use crate::error::{PgqrsError, Result};
@@ -172,31 +173,21 @@ impl PgqrsAdmin {
             .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{queue_name}", &name);
 
-        // Add worker_id column and index for new queues
-        let add_worker_column = format!(
-            r#"ALTER TABLE pgqrs.queue_{} ADD COLUMN worker_id UUID REFERENCES pgqrs.pgqrs_workers(id)"#,
-            name
-        );
-
-        let create_worker_index = format!(
-            r#"CREATE INDEX idx_queue_{}_worker_id ON pgqrs.queue_{}(worker_id)"#,
-            name, name
-        );
-
         tracing::debug!("Queue statement: {}", create_statement);
         tracing::debug!("Meta statement: {}", insert_meta);
         tracing::debug!("Archive statement: {}", create_archive_statement);
         tracing::debug!("Archive index 1: {}", create_archive_index1);
         tracing::debug!("Archive index 2: {}", create_archive_index2);
 
-        // Execute all statements in a transaction (queue table, archive table, archive indexes, worker column, worker index, metadata)
+        // Ensure workers table exists before creating queue with foreign key reference
+        self.setup_workers_table().await?;
+
+        // Execute all statements in a transaction (queue table, archive table, archive indexes, metadata)
         self.run_statements_in_transaction(vec![
             create_statement,
             create_archive_statement,
             create_archive_index1,
             create_archive_index2,
-            add_worker_column,
-            create_worker_index,
             insert_meta,
         ])
         .await?;
@@ -368,7 +359,7 @@ impl PgqrsAdmin {
     pub async fn setup_workers_table(&self) -> Result<()> {
         let sql = r#"
             CREATE TABLE IF NOT EXISTS pgqrs.pgqrs_workers (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
                 hostname TEXT NOT NULL,
                 port INTEGER NOT NULL,
                 queue_id TEXT NOT NULL,
@@ -382,6 +373,21 @@ impl PgqrsAdmin {
         "#;
 
         sqlx::query(sql)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        // Create indexes for efficient worker operations
+        sqlx::query(CREATE_WORKERS_INDEX_QUEUE_STATUS)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        sqlx::query(CREATE_WORKERS_INDEX_HEARTBEAT)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -402,8 +408,8 @@ impl PgqrsAdmin {
         // Add worker_id column if it doesn't exist
         let add_column_sql = format!(
             r#"
-            ALTER TABLE pgqrs.queue_{} 
-            ADD COLUMN IF NOT EXISTS worker_id UUID REFERENCES pgqrs.pgqrs_workers(id)
+            ALTER TABLE pgqrs.q_{} 
+            ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES pgqrs.pgqrs_workers(id)
             "#,
             queue_name
         );
@@ -411,8 +417,8 @@ impl PgqrsAdmin {
         // Create index for worker_id
         let create_index_sql = format!(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_queue_{}_worker_id 
-            ON pgqrs.queue_{}(worker_id)
+            CREATE INDEX IF NOT EXISTS idx_q_{}_worker_id 
+            ON pgqrs.q_{}(worker_id)
             "#,
             queue_name, queue_name
         );
@@ -432,13 +438,14 @@ impl PgqrsAdmin {
             ORDER BY started_at DESC
         "#;
 
-        let workers = sqlx::query_as(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
 
+        let workers = worker_rows.into_iter().map(|row| row.into()).collect();
         Ok(workers)
     }
 
@@ -457,7 +464,7 @@ impl PgqrsAdmin {
             ORDER BY started_at DESC
         "#;
 
-        let workers = sqlx::query_as(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
             .bind(queue_name)
             .fetch_all(&self.pool)
             .await
@@ -465,6 +472,7 @@ impl PgqrsAdmin {
                 message: e.to_string(),
             })?;
 
+        let workers = worker_rows.into_iter().map(|row| row.into()).collect();
         Ok(workers)
     }
 
@@ -503,16 +511,25 @@ impl PgqrsAdmin {
     /// Worker statistics for the queue
     pub async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
         let workers = self.list_queue_workers(queue_name).await?;
-        
+
         let total_workers = workers.len() as u32;
-        let ready_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::Ready).count() as u32;
-        let shutting_down_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::ShuttingDown).count() as u32;
-        let stopped_workers = workers.iter().filter(|w| w.status == crate::types::WorkerStatus::Stopped).count() as u32;
+        let ready_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Ready)
+            .count() as u32;
+        let shutting_down_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::ShuttingDown)
+            .count() as u32;
+        let stopped_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Stopped)
+            .count() as u32;
 
         // Get message counts per worker
         let queue = self.get_queue(queue_name).await?;
         let mut total_messages = 0u64;
-        
+
         for worker in &workers {
             let messages = queue.get_worker_messages(worker.id).await?;
             total_messages += messages.len() as u64;
@@ -525,14 +542,16 @@ impl PgqrsAdmin {
         };
 
         let now = chrono::Utc::now();
-        let oldest_worker_age = workers.iter()
+        let oldest_worker_age = workers
+            .iter()
             .map(|w| now.signed_duration_since(w.started_at))
             .max()
             .unwrap_or(chrono::Duration::zero())
             .to_std()
             .unwrap_or(std::time::Duration::ZERO);
 
-        let newest_heartbeat_age = workers.iter()
+        let newest_heartbeat_age = workers
+            .iter()
             .map(|w| now.signed_duration_since(w.heartbeat_at))
             .min()
             .unwrap_or(chrono::Duration::zero())

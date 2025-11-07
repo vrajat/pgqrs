@@ -36,7 +36,8 @@ pub const CREATE_QUEUE_STATEMENT: &str = r#"
         read_ct INT DEFAULT 0 NOT NULL,
         enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
         vt TIMESTAMP WITH TIME ZONE NOT NULL,
-        message JSONB
+        message JSONB,
+        worker_id BIGINT REFERENCES pgqrs.pgqrs_workers(id)
     );"#;
 
 pub const DROP_QUEUE_STATEMENT: &str = r#"
@@ -66,7 +67,7 @@ pub const INSERT_MESSAGE: &str = r#"
 "#;
 
 pub const SELECT_MESSAGE_BY_ID: &str = r#"
-    SELECT msg_id, read_ct, enqueued_at, vt, message
+    SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id
     FROM {PGQRS_SCHEMA}.{QUEUE_PREFIX}_{queue_name}
     WHERE msg_id = $1;
 "#;
@@ -206,4 +207,16 @@ pub const DROP_ARCHIVE_TABLE: &str = r#"
 /// Purge all messages from archive table
 pub const PURGE_ARCHIVE_TABLE: &str = r#"
     DELETE FROM {PGQRS_SCHEMA}.archive_{queue_name};
+"#;
+
+/// Create index on worker table for efficient worker lookups
+pub const CREATE_WORKERS_INDEX_QUEUE_STATUS: &str = r#"
+    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status 
+    ON pgqrs.pgqrs_workers(queue_id, status);
+"#;
+
+/// Create index on worker table for heartbeat monitoring
+pub const CREATE_WORKERS_INDEX_HEARTBEAT: &str = r#"
+    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_heartbeat 
+    ON pgqrs.pgqrs_workers(heartbeat_at);
 "#;

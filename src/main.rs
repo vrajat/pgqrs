@@ -634,8 +634,8 @@ async fn handle_worker_commands(
         }
 
         WorkerCommands::Show { id } => {
-            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
-                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            let worker_id = id.parse::<i64>().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid integer".to_string(),
             })?;
 
             let workers = admin.list_all_workers().await?;
@@ -653,22 +653,34 @@ async fn handle_worker_commands(
             tracing::info!("Getting worker statistics for queue '{}'...", queue);
             let stats = admin.worker_stats(&queue).await?;
             tracing::info!("Worker statistics retrieved");
-            
+
             // Print stats in a readable format
             writeln!(out, "Worker Statistics for Queue '{}':", queue)?;
             writeln!(out, "  Total Workers: {}", stats.total_workers)?;
             writeln!(out, "  Ready Workers: {}", stats.ready_workers)?;
-            writeln!(out, "  Shutting Down Workers: {}", stats.shutting_down_workers)?;
+            writeln!(
+                out,
+                "  Shutting Down Workers: {}",
+                stats.shutting_down_workers
+            )?;
             writeln!(out, "  Stopped Workers: {}", stats.stopped_workers)?;
-            writeln!(out, "  Average Messages per Worker: {:.2}", stats.average_messages_per_worker)?;
+            writeln!(
+                out,
+                "  Average Messages per Worker: {:.2}",
+                stats.average_messages_per_worker
+            )?;
             writeln!(out, "  Oldest Worker Age: {:?}", stats.oldest_worker_age)?;
-            writeln!(out, "  Newest Heartbeat Age: {:?}", stats.newest_heartbeat_age)?;
+            writeln!(
+                out,
+                "  Newest Heartbeat Age: {:?}",
+                stats.newest_heartbeat_age
+            )?;
             Ok(())
         }
 
         WorkerCommands::Stop { id } => {
-            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
-                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            let worker_id = id.parse::<i64>().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid integer".to_string(),
             })?;
 
             // Find the worker to get queue context
@@ -685,7 +697,7 @@ async fn handle_worker_commands(
                     shutdown_at: worker.shutdown_at,
                     status: worker.status.clone(),
                 };
-                
+
                 tracing::info!("Stopping worker {}...", id);
                 worker_instance.mark_stopped(&queue).await?;
                 tracing::info!("Worker stopped successfully");
@@ -696,8 +708,8 @@ async fn handle_worker_commands(
         }
 
         WorkerCommands::Messages { id } => {
-            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
-                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            let worker_id = id.parse::<i64>().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid integer".to_string(),
             })?;
 
             // Find the worker to get queue context
@@ -715,8 +727,8 @@ async fn handle_worker_commands(
         }
 
         WorkerCommands::Release { id } => {
-            let worker_id = uuid::Uuid::parse_str(&id).map_err(|_| PgqrsError::InvalidMessage {
-                message: "Invalid worker ID format - must be a valid UUID".to_string(),
+            let worker_id = id.parse::<i64>().map_err(|_| PgqrsError::InvalidMessage {
+                message: "Invalid worker ID format - must be a valid integer".to_string(),
             })?;
 
             // Find the worker to get queue context
@@ -726,7 +738,11 @@ async fn handle_worker_commands(
                 tracing::info!("Releasing messages from worker {}...", id);
                 let released_count = queue.release_worker_messages(worker_id).await?;
                 tracing::info!("Released {} messages", released_count);
-                writeln!(out, "Released {} messages from worker {}", released_count, id)?;
+                writeln!(
+                    out,
+                    "Released {} messages from worker {}",
+                    released_count, id
+                )?;
             } else {
                 return Err(anyhow::anyhow!("Worker with ID {} not found", id));
             }
@@ -747,10 +763,10 @@ async fn handle_worker_commands(
             tracing::info!("Checking worker health for queue '{}'...", queue);
             let workers = admin.list_queue_workers(&queue).await?;
             let max_age_duration = std::time::Duration::from_secs(max_age);
-            
+
             let mut healthy = 0;
             let mut unhealthy = 0;
-            
+
             writeln!(out, "Worker Health Report for Queue '{}':", queue)?;
             for worker in &workers {
                 let is_healthy = worker.is_healthy(max_age_duration);
@@ -768,7 +784,7 @@ async fn handle_worker_commands(
                     worker.port
                 )?;
             }
-            
+
             writeln!(out)?;
             writeln!(out, "Summary: {} healthy, {} unhealthy", healthy, unhealthy)?;
             Ok(())
@@ -781,13 +797,25 @@ async fn handle_worker_commands(
 fn parse_duration(duration_str: &str) -> anyhow::Result<std::time::Duration> {
     let duration_str = duration_str.trim();
     let (number, unit) = if duration_str.ends_with('d') {
-        (duration_str[..duration_str.len()-1].parse::<u64>()?, "days")
+        (
+            duration_str[..duration_str.len() - 1].parse::<u64>()?,
+            "days",
+        )
     } else if duration_str.ends_with('h') {
-        (duration_str[..duration_str.len()-1].parse::<u64>()?, "hours")
+        (
+            duration_str[..duration_str.len() - 1].parse::<u64>()?,
+            "hours",
+        )
     } else if duration_str.ends_with('m') {
-        (duration_str[..duration_str.len()-1].parse::<u64>()?, "minutes")
+        (
+            duration_str[..duration_str.len() - 1].parse::<u64>()?,
+            "minutes",
+        )
     } else if duration_str.ends_with('s') {
-        (duration_str[..duration_str.len()-1].parse::<u64>()?, "seconds")
+        (
+            duration_str[..duration_str.len() - 1].parse::<u64>()?,
+            "seconds",
+        )
     } else {
         return Err(anyhow::anyhow!("Invalid duration format. Use 'd' for days, 'h' for hours, 'm' for minutes, 's' for seconds"));
     };

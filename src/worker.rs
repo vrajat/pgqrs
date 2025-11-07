@@ -19,12 +19,14 @@
 //! ### Example
 //!
 //! ```no_run
-//! use pgqrs::worker::Worker;
-//! use pgqrs::queue::Queue;
-//! use uuid::Uuid;
+//! use pgqrs::types::Worker;
+//! use pgqrs::admin::PgqrsAdmin;
+//! use pgqrs::config::Config;
 //!
 //! async fn worker_example() -> Result<(), Box<dyn std::error::Error>> {
-//!     let queue = Queue::new("jobs", &config).await?;
+//!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
+//!     let admin = PgqrsAdmin::new(&config).await?;
+//!     let queue = admin.create_queue(&"jobs".to_string(), false).await?;
 //!     
 //!     // Register a worker
 //!     let worker = Worker::register(&queue, "worker-host".to_string(), 8080).await?;
@@ -45,7 +47,6 @@ use crate::queue::Queue;
 use crate::types::{Worker, WorkerStatus};
 use chrono::Utc;
 use std::time::Duration;
-use uuid::Uuid;
 
 impl Worker {
     /// Create and register a new worker for a queue
@@ -62,9 +63,28 @@ impl Worker {
     /// Returns `PgqrsError` if database operations fail or if hostname+port
     /// combination is already registered by another active worker
     pub async fn register(queue: &Queue, hostname: String, port: i32) -> Result<Worker> {
-        let worker_id = Uuid::new_v4();
         let now = Utc::now();
-        
+
+        // Insert the worker into the database and get the generated ID
+        let sql = r#"
+            INSERT INTO pgqrs.pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        "#;
+
+        let worker_id: i64 = sqlx::query_scalar(sql)
+            .bind(&hostname)
+            .bind(port)
+            .bind(&queue.queue_name)
+            .bind(now)
+            .bind(now)
+            .bind("ready")
+            .fetch_one(&queue.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
         let worker = Worker {
             id: worker_id,
             hostname: hostname.clone(),
@@ -75,26 +95,6 @@ impl Worker {
             shutdown_at: None,
             status: WorkerStatus::Ready,
         };
-
-        // Insert the worker into the database
-        let sql = r#"
-            INSERT INTO pgqrs.pgqrs_workers (id, hostname, port, queue_id, started_at, heartbeat_at, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#;
-
-        sqlx::query(sql)
-            .bind(worker.id)
-            .bind(&worker.hostname)
-            .bind(worker.port)
-            .bind(&worker.queue_id)
-            .bind(worker.started_at)
-            .bind(worker.heartbeat_at)
-            .bind("ready")
-            .execute(&queue.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
 
         Ok(worker)
     }
@@ -110,7 +110,7 @@ impl Worker {
     /// Returns `PgqrsError` if the database update fails
     pub async fn heartbeat(&self, queue: &Queue) -> Result<()> {
         let now = Utc::now();
-        
+
         let sql = r#"
             UPDATE pgqrs.pgqrs_workers 
             SET heartbeat_at = $1 
@@ -141,7 +141,7 @@ impl Worker {
     /// Returns `PgqrsError` if the database update fails
     pub async fn begin_shutdown(&self, queue: &Queue) -> Result<()> {
         let now = Utc::now();
-        
+
         let sql = r#"
             UPDATE pgqrs.pgqrs_workers 
             SET status = 'shutting_down', shutdown_at = $1 
@@ -197,7 +197,7 @@ impl Worker {
     pub fn is_healthy(&self, max_age: Duration) -> bool {
         let now = Utc::now();
         let heartbeat_age = now.signed_duration_since(self.heartbeat_at);
-        
+
         heartbeat_age.to_std().unwrap_or(Duration::MAX) <= max_age
     }
 }
@@ -218,7 +218,7 @@ impl Queue {
             ORDER BY started_at DESC
         "#;
 
-        let workers = sqlx::query_as::<_, Worker>(sql)
+        let worker_rows = sqlx::query_as::<_, crate::types::WorkerRow>(sql)
             .bind(&self.queue_name)
             .fetch_all(&self.pool)
             .await
@@ -226,6 +226,7 @@ impl Queue {
                 message: e.to_string(),
             })?;
 
+        let workers = worker_rows.into_iter().map(|row| row.into()).collect();
         Ok(workers)
     }
 
@@ -240,38 +241,43 @@ impl Queue {
     ///
     /// # Errors
     /// Returns `PgqrsError` if database operations fail
-    pub async fn read_with_worker(&self, limit: usize, worker_id: Option<Uuid>) -> Result<Vec<crate::types::QueueMessage>> {
-        let vt = chrono::Utc::now() + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
+    pub async fn read_with_worker(
+        &self,
+        limit: usize,
+        worker_id: Option<i64>,
+    ) -> Result<Vec<crate::types::QueueMessage>> {
+        let vt = chrono::Utc::now()
+            + chrono::Duration::seconds(crate::constants::VISIBILITY_TIMEOUT as i64);
 
         let sql = if worker_id.is_some() {
             format!(
                 r#"
-                UPDATE pgqrs.queue_{} 
+                UPDATE pgqrs.q_{} 
                 SET vt = $1, read_ct = read_ct + 1, worker_id = $3
                 WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.queue_{} 
+                    SELECT msg_id FROM pgqrs.q_{} 
                     WHERE vt < NOW() 
                     ORDER BY msg_id 
                     FOR UPDATE SKIP LOCKED 
                     LIMIT $2
                 )
-                RETURNING *
+                RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
                 "#,
                 self.queue_name, self.queue_name
             )
         } else {
             format!(
                 r#"
-                UPDATE pgqrs.queue_{} 
+                UPDATE pgqrs.q_{} 
                 SET vt = $1, read_ct = read_ct + 1
                 WHERE msg_id IN (
-                    SELECT msg_id FROM pgqrs.queue_{} 
+                    SELECT msg_id FROM pgqrs.q_{} 
                     WHERE vt < NOW() 
                     ORDER BY msg_id 
                     FOR UPDATE SKIP LOCKED 
                     LIMIT $2
                 )
-                RETURNING *
+                RETURNING msg_id, read_ct, enqueued_at, vt, message, worker_id
                 "#,
                 self.queue_name, self.queue_name
             )
@@ -307,10 +313,10 @@ impl Queue {
     ///
     /// # Errors
     /// Returns `PgqrsError` if database operations fail
-    pub async fn release_worker_messages(&self, worker_id: Uuid) -> Result<u64> {
+    pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         let sql = format!(
             r#"
-            UPDATE pgqrs.queue_{} 
+            UPDATE pgqrs.q_{} 
             SET vt = NOW(), worker_id = NULL 
             WHERE worker_id = $1
             "#,
@@ -338,10 +344,13 @@ impl Queue {
     ///
     /// # Errors
     /// Returns `PgqrsError` if database query fails
-    pub async fn get_worker_messages(&self, worker_id: Uuid) -> Result<Vec<crate::types::QueueMessage>> {
+    pub async fn get_worker_messages(
+        &self,
+        worker_id: i64,
+    ) -> Result<Vec<crate::types::QueueMessage>> {
         let sql = format!(
             r#"
-            SELECT * FROM pgqrs.queue_{}
+            SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM pgqrs.q_{}
             WHERE worker_id = $1
             ORDER BY msg_id
             "#,

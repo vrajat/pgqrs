@@ -25,7 +25,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self};
 use tabled::Tabled;
-use uuid::Uuid;
 
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
@@ -43,7 +42,7 @@ pub struct QueueMessage {
     /// Worker ID that has this message assigned (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
-    pub worker_id: Option<Uuid>,
+    pub worker_id: Option<i64>,
 }
 
 impl fmt::Display for QueueMessage {
@@ -141,10 +140,10 @@ impl ArchivedMessage {
 }
 
 /// A worker instance that processes messages from queues
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
 pub struct Worker {
     /// Unique worker ID
-    pub id: Uuid,
+    pub id: i64,
     /// Hostname where the worker is running
     pub hostname: String,
     /// Port number for the worker
@@ -162,6 +161,41 @@ pub struct Worker {
     pub status: WorkerStatus,
 }
 
+// Custom deserialization for Worker from database rows
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WorkerRow {
+    pub id: i64,
+    pub hostname: String,
+    pub port: i32,
+    pub queue_id: String,
+    pub started_at: DateTime<Utc>,
+    pub heartbeat_at: DateTime<Utc>,
+    pub shutdown_at: Option<DateTime<Utc>>,
+    pub status: String,
+}
+
+impl From<WorkerRow> for Worker {
+    fn from(row: WorkerRow) -> Self {
+        let status = match row.status.as_str() {
+            "ready" => WorkerStatus::Ready,
+            "shutting_down" => WorkerStatus::ShuttingDown,
+            "stopped" => WorkerStatus::Stopped,
+            _ => WorkerStatus::Ready, // Default fallback
+        };
+
+        Worker {
+            id: row.id,
+            hostname: row.hostname,
+            port: row.port,
+            queue_id: row.queue_id,
+            started_at: row.started_at,
+            heartbeat_at: row.heartbeat_at,
+            shutdown_at: row.shutdown_at,
+            status,
+        }
+    }
+}
+
 impl fmt::Display for Worker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -173,8 +207,7 @@ impl fmt::Display for Worker {
 }
 
 /// Worker status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
-#[sqlx(type_name = "worker_status", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,
@@ -218,7 +251,7 @@ impl fmt::Display for WorkerStats {
         write!(
             f,
             "WorkerStats {{ total: {}, ready: {}, shutting_down: {}, stopped: {}, avg_messages: {:.2} }}",
-            self.total_workers, self.ready_workers, self.shutting_down_workers, 
+            self.total_workers, self.ready_workers, self.shutting_down_workers,
             self.stopped_workers, self.average_messages_per_worker
         )
     }
