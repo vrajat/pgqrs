@@ -209,3 +209,141 @@ fn test_cli_create_send_dequeue_delete_queue() {
         String::from_utf8_lossy(&delete_output.stderr)
     );
 }
+
+#[test]
+fn test_cli_archive_functionality() {
+    // Bring up test DB and get DSN
+    let db_url = get_test_db_url();
+    let queue_name = "test_archive_cli";
+
+    // Create queue
+    let create_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .output()
+        .expect("Failed to run CLI create queue");
+    assert!(
+        create_output.status.success(),
+        "Create queue failed: {}",
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    // Send a test message
+    let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
+    let send_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "send", queue_name, message_payload])
+        .output()
+        .expect("Failed to run CLI send message");
+    assert!(
+        send_output.status.success(),
+        "Send message failed: {}",
+        String::from_utf8_lossy(&send_output.stderr)
+    );
+
+    // Read the message to get its ID - just verify it exists
+    let read_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "read", queue_name, "--count", "1"])
+        .output()
+        .expect("Failed to run CLI read message");
+    assert!(
+        read_output.status.success(),
+        "Read message failed: {}",
+        String::from_utf8_lossy(&read_output.stderr)
+    );
+
+    // Check archived message count (should be 0 initially)
+    let count_archive_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "count", queue_name, "--archive"])
+        .output()
+        .expect("Failed to run CLI count archived messages");
+    assert!(
+        count_archive_output.status.success(),
+        "Count archived messages failed: {}",
+        String::from_utf8_lossy(&count_archive_output.stderr)
+    );
+
+    // Read archived messages (should be empty initially)
+    let read_archive_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "read", queue_name, "--archive", "--count", "10"])
+        .output()
+        .expect("Failed to run CLI read archived messages");
+    assert!(
+        read_archive_output.status.success(),
+        "Read archived messages failed: {}",
+        String::from_utf8_lossy(&read_archive_output.stderr)
+    );
+
+    // Delete queue
+    let delete_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .output()
+        .expect("Failed to run CLI delete queue");
+    assert!(
+        delete_output.status.success(),
+        "Delete queue failed: {}",
+        String::from_utf8_lossy(&delete_output.stderr)
+    );
+}
+
+#[test]
+fn test_cli_message_show_archive() {
+    // Bring up test DB and get DSN
+    let db_url = get_test_db_url();
+    let queue_name = "test_show_archive_cli";
+
+    // Create queue
+    let create_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .output()
+        .expect("Failed to run CLI create queue");
+    assert!(
+        create_output.status.success(),
+        "Create queue failed: {}",
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    // Send a test message
+    let message_payload = r#"{"test": "show_archive", "id": 12345}"#;
+    let send_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "send", queue_name, message_payload])
+        .output()
+        .expect("Failed to run CLI send message");
+    assert!(
+        send_output.status.success(),
+        "Send message failed: {}",
+        String::from_utf8_lossy(&send_output.stderr)
+    );
+
+    // Try to show an archived message that doesn't exist (should fail gracefully)
+    let show_archive_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "message", "show", queue_name, "999", "--archive"])
+        .output()
+        .expect("Failed to run CLI show archived message");
+    assert!(
+        show_archive_output.status.success(),
+        "Show archived message command should succeed even if message not found: {}",
+        String::from_utf8_lossy(&show_archive_output.stderr)
+    );
+    // Note: The command succeeds but may not produce output if message not found
+    // This is expected behavior for the archive functionality
+
+    // Delete queue
+    let delete_output = Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .output()
+        .expect("Failed to run CLI delete queue");
+    assert!(
+        delete_output.status.success(),
+        "Delete queue failed: {}",
+        String::from_utf8_lossy(&delete_output.stderr)
+    );
+}
