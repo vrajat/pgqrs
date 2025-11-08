@@ -221,7 +221,7 @@ impl PgqrsAdmin {
         // Check if queue_repository table exists
         let queue_repo_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables 
+                SELECT 1 FROM information_schema.tables
                 WHERE table_name = 'queue_repository'
             )"
         )
@@ -240,7 +240,7 @@ impl PgqrsAdmin {
         // Check if worker_repository table exists
         let worker_repo_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables 
+                SELECT 1 FROM information_schema.tables
                 WHERE table_name = 'worker_repository'
             )"
         )
@@ -258,15 +258,15 @@ impl PgqrsAdmin {
 
         // Get all queues from queue_repository and verify their tables exist
         let queues = self.list_queues().await?;
-        
+
         for queue_info in &queues {
             let queue_name = &queue_info.queue_name;
-            
+
             // Check if queue table exists
             let queue_table_name = format!("{}_{}", QUEUE_PREFIX, queue_name);
             let queue_table_exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
+                    SELECT 1 FROM information_schema.tables
                     WHERE table_name = $1
                 )"
             )
@@ -287,7 +287,7 @@ impl PgqrsAdmin {
             let archive_table_name = format!("archive_{}", queue_name);
             let archive_table_exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
+                    SELECT 1 FROM information_schema.tables
                     WHERE table_name = $1
                 )"
             )

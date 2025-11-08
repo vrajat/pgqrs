@@ -51,7 +51,7 @@ impl PgBouncerContainer {
 
         // Get the host IP that Docker containers can reach
         let host_ip = std::process::Command::new("docker")
-            .args(&[
+            .args([
                 "network",
                 "inspect",
                 "bridge",

@@ -171,7 +171,7 @@ async fn test_schema_operations_with_search_path() {
 
     // Verify operations work with search_path
     let _queue = admin
-        .create_queue(&"test_queue".to_string(), false)
+        .create_queue("test_queue", false)
         .await
         .expect("Should be able to create queue");
 

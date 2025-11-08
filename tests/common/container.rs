@@ -71,6 +71,9 @@ impl ContainerManager {
 static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| RwLock::new(None));
 
 /// Initialize the global container manager with the appropriate database type
+#[allow(clippy::await_holding_lock)]
+// NOTE: Holding lock across await is intentional here to prevent concurrent container initialization
+// and schema installation which could cause race conditions in test setup
 pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
     // First, check if we already have an initialized manager (read lock only)
     {
@@ -81,6 +84,8 @@ pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn
     } // Release read lock immediately
 
     // Try to acquire write lock - only initialize if we successfully get it AND there's no existing manager
+    // NOTE: Holding lock across await is intentional here to prevent concurrent container initialization
+    // and schema installation which could cause race conditions in test setup
     let mut manager_guard = CONTAINER_MANAGER.write().unwrap();
 
     // Double-check: ensure no other thread initialized while we were waiting for write lock
@@ -89,7 +94,7 @@ pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn
     }
 
     // We have the write lock and no existing manager - do initialization
-    let dsn = if let Some(external_dsn) = std::env::var("PGQRS_TEST_DSN").ok() {
+    let dsn = if let Ok(external_dsn) = std::env::var("PGQRS_TEST_DSN") {
         // For external containers, we must do initialization while holding the lock
         // to prevent concurrent schema installation
         let container: Box<dyn DatabaseContainer> = Box::new(
@@ -129,6 +134,9 @@ pub async fn get_database_dsn(schema: Option<&str>) -> String {
 }
 
 /// Cleanup function called by dtor
+#[allow(clippy::await_holding_lock)]
+// NOTE: Holding lock across await is intentional here to ensure exclusive access
+// during cleanup to prevent concurrent access during container shutdown
 pub async fn cleanup_database() -> Result<(), Box<dyn std::error::Error>> {
     let manager_guard = CONTAINER_MANAGER.read().unwrap();
     if let Some(manager) = manager_guard.as_ref() {

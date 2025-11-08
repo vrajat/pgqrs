@@ -45,8 +45,8 @@ async fn test_create_logged_queue() {
         .iter()
         .find(|q| q.queue_name == queue.queue_name)
         .unwrap();
-    assert_eq!(
-        meta.unlogged, false,
+    assert!(
+        !meta.unlogged,
         "MetaResult.unlogged should be false for logged queue"
     );
 
@@ -83,8 +83,8 @@ async fn test_create_unlogged_queue() {
         .iter()
         .find(|q| q.queue_name == queue.queue_name)
         .unwrap();
-    assert_eq!(
-        meta.unlogged, true,
+    assert!(
+        meta.unlogged,
         "MetaResult.unlogged should be true for unlogged queue"
     );
 
@@ -110,7 +110,7 @@ async fn test_create_unlogged_queue() {
 async fn test_send_message() {
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(&TEST_QUEUE_SEND_MESSAGE.to_string(), false)
+        .create_queue(TEST_QUEUE_SEND_MESSAGE, false)
         .await;
     assert!(queue.is_ok());
     let queue = queue.unwrap();
@@ -137,7 +137,7 @@ async fn test_archive_single_message() {
     const TEST_QUEUE_ARCHIVE: &str = "test_archive_single";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(&TEST_QUEUE_ARCHIVE.to_string(), false)
+        .create_queue(TEST_QUEUE_ARCHIVE, false)
         .await
         .expect("Failed to create queue");
 
@@ -179,7 +179,7 @@ async fn test_archive_batch_messages() {
     const TEST_QUEUE_BATCH_ARCHIVE: &str = "test_archive_batch";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(&TEST_QUEUE_BATCH_ARCHIVE.to_string(), false)
+        .create_queue(TEST_QUEUE_BATCH_ARCHIVE, false)
         .await
         .expect("Failed to create queue");
 
@@ -236,7 +236,7 @@ async fn test_archive_nonexistent_message() {
     const TEST_QUEUE_NONEXISTENT: &str = "test_archive_nonexistent";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(&TEST_QUEUE_NONEXISTENT.to_string(), false)
+        .create_queue(TEST_QUEUE_NONEXISTENT, false)
         .await
         .expect("Failed to create queue");
 
@@ -263,7 +263,7 @@ async fn test_archive_table_creation() {
 
     // Create queue (should automatically create archive table)
     let queue = admin
-        .create_queue(&TEST_QUEUE_TABLE.to_string(), false)
+        .create_queue(TEST_QUEUE_TABLE, false)
         .await
         .expect("Failed to create queue");
 
@@ -275,7 +275,7 @@ async fn test_archive_table_creation() {
     // Test that queue creation includes archive tables automatically
     const TEST_QUEUE_STANDALONE: &str = "test_standalone_archive";
     let queue2 = admin
-        .create_queue(&TEST_QUEUE_STANDALONE.to_string(), false)
+        .create_queue(TEST_QUEUE_STANDALONE, false)
         .await
         .expect("Failed to create second queue");
 
@@ -294,7 +294,7 @@ async fn test_delete_queue_removes_archive() {
 
     // Create queue and archive a message
     let queue = admin
-        .create_queue(&TEST_QUEUE_DELETE.to_string(), false)
+        .create_queue(TEST_QUEUE_DELETE, false)
         .await
         .expect("Failed to create queue");
 
@@ -318,7 +318,7 @@ async fn test_delete_queue_removes_archive() {
 
     // Try to recreate the queue and verify archive table is fresh
     let new_queue = admin
-        .create_queue(&TEST_QUEUE_DELETE.to_string(), false)
+        .create_queue(TEST_QUEUE_DELETE, false)
         .await
         .expect("Failed to recreate queue");
 
@@ -336,7 +336,7 @@ async fn test_purge_archive() {
 
     // Create queue and archive some messages
     let queue = admin
-        .create_queue(&TEST_QUEUE_PURGE_ARCHIVE.to_string(), false)
+        .create_queue(TEST_QUEUE_PURGE_ARCHIVE, false)
         .await
         .expect("Failed to create queue");
 

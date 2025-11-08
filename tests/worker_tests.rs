@@ -35,7 +35,7 @@ async fn test_worker_registration() {
 
     // Create a test queue
     let queue = admin
-        .create_queue(&"test_queue".to_string(), false)
+        .create_queue("test_queue", false)
         .await
         .unwrap();
 
@@ -63,7 +63,7 @@ async fn test_worker_lifecycle() {
 
     // Create a test queue
     let queue = admin
-        .create_queue(&"lifecycle_queue".to_string(), false)
+        .create_queue("lifecycle_queue", false)
         .await
         .unwrap();
 
@@ -93,7 +93,7 @@ async fn test_worker_message_assignment() {
 
     // Create a test queue
     let queue = admin
-        .create_queue(&"message_queue".to_string(), false)
+        .create_queue("message_queue", false)
         .await
         .unwrap();
 
@@ -133,11 +133,11 @@ async fn test_admin_worker_management() {
 
     // Create test queues
     let queue1 = admin
-        .create_queue(&"admin_queue1".to_string(), false)
+        .create_queue("admin_queue1", false)
         .await
         .unwrap();
     let queue2 = admin
-        .create_queue(&"admin_queue2".to_string(), false)
+        .create_queue("admin_queue2", false)
         .await
         .unwrap();
 
@@ -179,7 +179,7 @@ async fn test_worker_health_check() {
 
     // Create a test queue
     let queue = admin
-        .create_queue(&"health_queue".to_string(), false)
+        .create_queue("health_queue", false)
         .await
         .unwrap();
 
@@ -233,7 +233,7 @@ async fn test_custom_schema_search_path() {
 
     // Create a queue to verify functionality works in custom schema
     let queue = admin
-        .create_queue(&"schema_test_queue".to_string(), false)
+        .create_queue("schema_test_queue", false)
         .await
         .unwrap();
 
