@@ -74,7 +74,11 @@ static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| 
 #[allow(clippy::await_holding_lock)]
 // NOTE: Holding lock across await is intentional here to prevent concurrent container initialization
 // and schema installation which could cause race conditions in test setup
-pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+async fn initialize_database(
+    schema: Option<&str>,
+    external_dsn: Option<&str>,
+    use_pgbouncer: bool
+) -> Result<String, Box<dyn std::error::Error>> {
     // First, check if we already have an initialized manager (read lock only)
     {
         let manager_guard = CONTAINER_MANAGER.read().unwrap();
@@ -94,12 +98,13 @@ pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn
     }
 
     // We have the write lock and no existing manager - do initialization
-    let dsn = if let Ok(external_dsn) = std::env::var("PGQRS_TEST_DSN") {
-        // For external containers, we must do initialization while holding the lock
-        // to prevent concurrent schema installation
-        let container: Box<dyn DatabaseContainer> = Box::new(
-            crate::common::postgres::ExternalPostgresContainer::new(external_dsn, schema),
-        );
+    let dsn = if let Some(external_dsn) = external_dsn {
+        // Use provided external DSN
+        let container: Box<dyn DatabaseContainer> = if use_pgbouncer {
+            Box::new(crate::common::pgbouncer::ExternalPgBouncerContainer::new(external_dsn.to_string(), schema))
+        } else {
+            Box::new(crate::common::postgres::ExternalPostgresContainer::new(external_dsn.to_string(), schema))
+        };
         let mut manager = ContainerManager::new(container);
         let dsn = manager.initialize().await?;
 
@@ -107,13 +112,12 @@ pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn
         *manager_guard = Some(manager);
         dsn
     } else {
-        // For TestContainers, we can safely release the lock and do initialization normally
-        let container: Box<dyn DatabaseContainer> =
-            if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
-                Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
-            } else {
-                Box::new(crate::common::postgres::PostgresContainer::new(schema).await?)
-            };
+        // Use TestContainers
+        let container: Box<dyn DatabaseContainer> = if use_pgbouncer {
+            Box::new(crate::common::pgbouncer::PgBouncerContainer::new(schema).await?)
+        } else {
+            Box::new(crate::common::postgres::PostgresContainer::new(schema).await?)
+        };
 
         let mut manager = ContainerManager::new(container);
         let dsn = manager.initialize().await?;
@@ -127,10 +131,21 @@ pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn
 }
 
 /// Get the DSN for the initialized database
-pub async fn get_database_dsn(schema: Option<&str>) -> String {
-    initialize_database(schema)
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
+    let external_dsn = std::env::var("PGQRS_TEST_DSN").ok();
+    initialize_database(schema, external_dsn.as_deref(), false)
         .await
         .expect("Failed to initialize database")
+}
+
+/// Get the DSN for the initialized database with PgBouncer
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
+    let external_dsn = std::env::var("PGBOUNCER_TEST_DSN").ok();
+    initialize_database(schema, external_dsn.as_deref(), true)
+        .await
+        .expect("Failed to initialize database with PgBouncer")
 }
 
 /// Cleanup function called by dtor

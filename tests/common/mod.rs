@@ -14,8 +14,14 @@ use ctor::dtor;
 ///
 /// # Returns
 /// The database DSN string that can be used for tests
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
 pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
-    container::get_database_dsn(schema).await
+    container::get_postgres_dsn(schema).await
+}
+
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
+    container::get_pgbouncer_dsn(schema).await
 }
 
 #[dtor]

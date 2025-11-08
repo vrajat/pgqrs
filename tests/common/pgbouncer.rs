@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use pgqrs::admin::PgqrsAdmin;
 use sqlx;
+use sqlx::postgres::PgPoolOptions;
 use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
@@ -12,10 +13,12 @@ pub struct PgBouncerContainer {
     postgres_container: ContainerAsync<Postgres>,
     pgbouncer_container: ContainerAsync<GenericImage>,
     dsn: String,
+    schema: String,
 }
 
 impl PgBouncerContainer {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+        let schema_name = schema.unwrap_or("public").to_string();
         // First start PostgreSQL
         println!("Starting PostgreSQL container for PgBouncer...");
         let postgres_image = Postgres::default()
@@ -152,6 +155,7 @@ impl PgBouncerContainer {
             postgres_container,
             pgbouncer_container,
             dsn,
+            schema: schema_name,
         })
     }
 }
@@ -168,22 +172,53 @@ impl DatabaseContainer for PgBouncerContainer {
     }
 
     async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Setting up admin schema via PgBouncer...");
+        // Test the connection
+        {
+            let pool = PgPoolOptions::new()
+                .max_connections(MAX_CONNECTIONS)
+                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
+                .connect(&dsn)
+                .await?;
 
-        // Install schema via PgBouncer
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
+                .fetch_one(&pool)
+                .await?;
+            println!("PostgreSQL connection verified");
+
+            // Create custom schema if not using 'public'
+            if self.schema != "public" {
+                let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", self.schema);
+                sqlx::query(&create_schema_sql).execute(&pool).await?;
+                println!("Schema '{}' created", self.schema);
+            }
+        }
+
+        // Install schema using the configured schema
+        let config = if self.schema == "public" {
+            pgqrs::config::Config::from_dsn(dsn)
+        } else {
+            pgqrs::config::Config::from_dsn_with_schema(dsn, &self.schema)?
+        };
+        let admin = PgqrsAdmin::new(&config).await?;
         admin.install().await?;
-        println!("Admin schema setup complete via PgBouncer");
+        println!("PostgreSQL schema installed in '{}'", self.schema);
 
         Ok(())
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Cleaning up admin schema via PgBouncer...");
-
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
+        let config = if self.schema == "public" {
+            pgqrs::config::Config::from_dsn(dsn)
+        } else {
+            pgqrs::config::Config::from_dsn_with_schema(dsn, &self.schema)?
+        };
+        let admin = PgqrsAdmin::new(&config).await?;
         admin.uninstall().await?;
-        println!("Admin schema cleanup complete via PgBouncer");
+        if self.schema != "public" {
+            let drop_schema_sql = format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema);
+            sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
+            println!("PostgreSQL schema uninstalled from '{}'", self.schema);
+        }
         Ok(())
     }
 
@@ -209,6 +244,87 @@ impl DatabaseContainer for PgBouncerContainer {
         }
 
         println!("PgBouncer and PostgreSQL containers stopped");
+        Ok(())
+    }
+}
+
+pub struct ExternalPgBouncerContainer {
+    dsn: String,
+    schema: String,
+}
+
+impl ExternalPgBouncerContainer {
+    pub fn new(dsn: String, schema: Option<&str>) -> Self {
+        let schema_name = schema.unwrap_or("public").to_string();
+        println!(
+            "Using external PgBouncer database: {} with schema: {}",
+            dsn, schema_name
+        );
+        Self {
+            dsn,
+            schema: schema_name,
+        }
+    }
+}
+
+#[async_trait]
+impl DatabaseContainer for ExternalPgBouncerContainer {
+    async fn get_dsn(&self) -> String {
+        self.dsn.clone()
+    }
+
+    fn get_container_id(&self) -> Option<String> {
+        None // External database, no container to manage
+    }
+
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
+        // Test the connection
+        {
+            let pool = PgPoolOptions::new()
+                .max_connections(MAX_CONNECTIONS)
+                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
+                .connect(&dsn)
+                .await?;
+
+            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
+                .fetch_one(&pool)
+                .await?;
+            println!("External PostgreSQL connection verified");
+
+            // Create custom schema if not using 'public'
+            if self.schema != "public" {
+                let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", self.schema);
+                sqlx::query(&create_schema_sql).execute(&pool).await?;
+                println!("Schema '{}' created", self.schema);
+            }
+        }
+
+        // Install schema using the configured schema
+        let config = if self.schema == "public" {
+            pgqrs::config::Config::from_dsn(dsn)
+        } else {
+            pgqrs::config::Config::from_dsn_with_schema(dsn, &self.schema)?
+        };
+        let admin = PgqrsAdmin::new(&config).await?;
+        admin.install().await?;
+        println!("External PostgreSQL schema installed in '{}'", self.schema);
+
+        Ok(())
+    }
+
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
+        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
+        admin.uninstall().await?;
+        if self.schema != "public" {
+            let drop_schema_sql = format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema);
+            sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
+            println!("PostgreSQL schema uninstalled from '{}'", self.schema);
+        }
+        Ok(())
+    }
+
+    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("External PostgreSQL database, not stopping container");
         Ok(())
     }
 }
