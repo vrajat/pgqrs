@@ -318,13 +318,13 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
         Commands::Uninstall => {
             tracing::info!("Uninstalling pgqrs schema ...");
-            admin.uninstall(&config.schema).await?;
+            admin.uninstall().await?;
             tracing::info!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
             tracing::info!("Verifying pgqrs installation...");
-            admin.verify(&config.schema).await?;
+            admin.verify().await?;
             tracing::info!("Verification completed successfully");
         }
 

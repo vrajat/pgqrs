@@ -16,7 +16,7 @@ struct RelPersistence {
 mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
-    let database_url = common::get_database_dsn_with_schema("pgqrs_lib_test").await;
+    let database_url = common::get_postgres_dsn(Some("pgqrs_lib_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_test")
         .expect("Failed to create config with lib_test schema");
     PgqrsAdmin::new(&config)
@@ -28,7 +28,7 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
 async fn verify() {
     let admin = create_admin().await;
     // Verify should succeed (using custom schema "pgqrs_lib_test")
-    assert!(admin.verify("pgqrs_lib_test").await.is_ok());
+    assert!(admin.verify().await.is_ok());
 }
 
 #[tokio::test]

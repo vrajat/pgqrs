@@ -1,6 +1,6 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
-    rt.block_on(async { common::get_database_dsn_with_schema("pgqrs_cli_test").await })
+    rt.block_on(async { common::get_postgres_dsn(Some("pgqrs_cli_test")).await })
 }
 
 fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {

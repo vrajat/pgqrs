@@ -14,22 +14,8 @@ use ctor::dtor;
 ///
 /// # Returns
 /// The database DSN string that can be used for tests
-pub async fn get_postgres_dsn() -> String {
-    container::get_database_dsn().await
-}
-
-/// Get a PostgreSQL DSN for testing with a specific schema for isolation.
-///
-/// This creates a separate schema within the same database for test isolation.
-/// The schema will be created if it doesn't exist.
-///
-/// # Arguments
-/// * `schema` - The schema name to use for isolation
-///
-/// # Returns
-/// The database DSN string that can be used for tests with the specified schema
-pub async fn get_database_dsn_with_schema(schema: &str) -> String {
-    container::get_database_dsn_with_schema(schema).await
+pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
+    container::get_database_dsn(schema).await
 }
 
 #[dtor]

@@ -15,11 +15,7 @@ pub struct PostgresContainer {
 }
 
 impl PostgresContainer {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        Self::new_with_schema(None).await
-    }
-
-    pub async fn new_with_schema(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         println!("Starting PostgreSQL testcontainer...");
 
         let postgres_image = Postgres::default()
@@ -99,8 +95,12 @@ impl DatabaseContainer for PostgresContainer {
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall(&self.schema).await?;
-        println!("PostgreSQL schema uninstalled from '{}'", self.schema);
+        admin.uninstall().await?;
+        if self.schema != "public" {
+            let drop_schema_sql = format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema);
+            sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
+            println!("PostgreSQL schema uninstalled from '{}'", self.schema);
+        }
         Ok(())
     }
 
@@ -130,11 +130,7 @@ pub struct ExternalPostgresContainer {
 }
 
 impl ExternalPostgresContainer {
-    pub fn new(dsn: String) -> Self {
-        Self::new_with_schema(dsn, None)
-    }
-
-    pub fn new_with_schema(dsn: String, schema: Option<&str>) -> Self {
+    pub fn new(dsn: String, schema: Option<&str>) -> Self {
         let schema_name = schema.unwrap_or("public").to_string();
         println!(
             "Using external PostgreSQL database: {} with schema: {}",
@@ -194,11 +190,12 @@ impl DatabaseContainer for ExternalPostgresContainer {
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
         let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall(&self.schema).await?;
-        println!(
-            "External PostgreSQL schema uninstalled from '{}'",
-            self.schema
-        );
+        admin.uninstall().await?;
+        if self.schema != "public" {
+            let drop_schema_sql = format!("DROP SCHEMA IF EXISTS {} CASCADE", self.schema);
+            sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
+            println!("PostgreSQL schema uninstalled from '{}'", self.schema);
+        }
         Ok(())
     }
 

@@ -10,7 +10,7 @@ use serial_test::serial;
 mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
-    let database_url = common::get_database_dsn_with_schema("pgqrs_worker_test").await;
+    let database_url = common::get_postgres_dsn(Some("pgqrs_worker_test")).await;
     let admin =
         PgqrsAdmin::new(&Config::from_dsn_with_schema(database_url, "pgqrs_worker_test").unwrap())
             .await

@@ -31,9 +31,9 @@ use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
     CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
     CREATE_WORKERS_INDEX_QUEUE_STATUS, CREATE_WORKERS_TABLE, CREATE_WORKER_STATUS_ENUM,
-    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
-    PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
-    UNINSTALL_STATEMENT,
+    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_REPOSITORY, DROP_QUEUE_STATEMENT,
+    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA,
+    PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
@@ -134,52 +134,178 @@ impl PgqrsAdmin {
 
     /// Uninstall pgqrs schema and remove all state from the database.
     ///
-    /// **Warning**: This will permanently delete the schema and all its data.
-    ///
-    /// # Arguments
-    /// * `schema_name` - The name of the schema to drop
+    /// **Warning**: This will permanently delete all pgqrs data including:
+    /// - All queue tables (q_*)
+    /// - All archive tables (archive_*)
+    /// - Queue repository table
+    /// - Worker repository table
+    /// - Worker status enum type
     ///
     /// # Returns
     /// Ok if uninstallation succeeds, error otherwise.
-    pub async fn uninstall(&self, schema_name: &str) -> Result<()> {
-        let uninstall_statement = UNINSTALL_STATEMENT.replace("{SCHEMA_NAME}", schema_name);
-        tracing::debug!("Executing uninstall statement: {}", uninstall_statement);
-        sqlx::query(&uninstall_statement)
+    pub async fn uninstall(&self) -> Result<()> {
+        // First, get list of all queues to drop their tables
+        let queues = self.list_queues().await?;
+
+        // Drop all queue tables first (they have foreign keys to worker_repository)
+        for queue_info in &queues {
+            let queue_name = &queue_info.queue_name;
+
+            // Drop queue table
+            let drop_queue_sql = DROP_QUEUE_STATEMENT
+                .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
+                .replace("{queue_name}", &format!("\"{}\"", queue_name));
+
+            sqlx::query(&drop_queue_sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to drop queue table for '{}': {}", queue_name, e),
+                })?;
+        }
+
+        // Drop all archive tables
+        for queue_info in &queues {
+            let queue_name = &queue_info.queue_name;
+
+            // Drop archive table
+            let drop_archive_sql = DROP_ARCHIVE_TABLE
+                .replace("{queue_name}", &format!("\"{}\"", queue_name));
+
+            sqlx::query(&drop_archive_sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to drop archive table for '{}': {}", queue_name, e),
+                })?;
+        }
+
+        // Now drop the repository tables (order matters due to dependencies)
+        // Drop queue_repository table (no foreign key dependencies from other tables)
+        sqlx::query(DROP_QUEUE_REPOSITORY)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
+                message: format!("Failed to drop queue_repository table: {}", e),
             })?;
+
+        // Drop worker_repository table (no longer referenced by queue tables)
+        sqlx::query(DROP_WORKER_REPOSITORY)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to drop worker_repository table: {}", e),
+            })?;
+
+        // Drop the enum type last (after all tables that use it)
+        sqlx::query(DROP_WORKER_STATUS_ENUM)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to drop worker_status enum type: {}", e),
+            })?;
+
         Ok(())
     }
 
     /// Verify that pgqrs installation is valid and healthy.
     ///
-    /// # Arguments
-    /// * `schema_name` - The name of the schema to verify
+    /// This method checks that all required infrastructure is in place:
+    /// - QueueRepository table exists
+    /// - WorkerRepository table exists
+    /// - All queues in queue repository have corresponding queue and archive tables
     ///
     /// # Returns
     /// Ok if installation is valid, error otherwise.
-    pub async fn verify(&self, schema_name: &str) -> Result<()> {
-        let schema_exists_statement = SCHEMA_EXISTS_QUERY.replace("{SCHEMA_NAME}", schema_name);
-        tracing::debug!(
-            "Executing schema exists statement: {}",
-            schema_exists_statement
-        );
-        let exists: bool = sqlx::query_scalar(&schema_exists_statement)
+    pub async fn verify(&self) -> Result<()> {
+        // Check if queue_repository table exists
+        let queue_repo_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'queue_repository'
+            )"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to check queue_repository existence: {}", e),
+        })?;
+
+        if !queue_repo_exists {
+            return Err(PgqrsError::Connection {
+                message: "queue_repository table does not exist".to_string(),
+            });
+        }
+
+        // Check if worker_repository table exists
+        let worker_repo_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'worker_repository'
+            )"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to check worker_repository existence: {}", e),
+        })?;
+
+        if !worker_repo_exists {
+            return Err(PgqrsError::Connection {
+                message: "worker_repository table does not exist".to_string(),
+            });
+        }
+
+        // Get all queues from queue_repository and verify their tables exist
+        let queues = self.list_queues().await?;
+        
+        for queue_info in &queues {
+            let queue_name = &queue_info.queue_name;
+            
+            // Check if queue table exists
+            let queue_table_name = format!("{}_{}", QUEUE_PREFIX, queue_name);
+            let queue_table_exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = $1
+                )"
+            )
+            .bind(&queue_table_name)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
+                message: format!("Failed to check queue table '{}' existence: {}", queue_table_name, e),
             })?;
 
-        if exists {
-            Ok(())
-        } else {
-            Err(PgqrsError::Internal {
-                message: "pgqrs schema does not exist".to_string(),
-            })
+            if !queue_table_exists {
+                return Err(PgqrsError::Connection {
+                    message: format!("Queue table '{}' does not exist for queue '{}'", queue_table_name, queue_name),
+                });
+            }
+
+            // Check if archive table exists
+            let archive_table_name = format!("archive_{}", queue_name);
+            let archive_table_exists = sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = $1
+                )"
+            )
+            .bind(&archive_table_name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to check archive table '{}' existence: {}", archive_table_name, e),
+            })?;
+
+            if !archive_table_exists {
+                return Err(PgqrsError::Connection {
+                    message: format!("Archive table '{}' does not exist for queue '{}'", archive_table_name, queue_name),
+                });
+            }
         }
+
+        Ok(())
     }
 
     /// Create a new queue in the database.
@@ -190,7 +316,7 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// The created [`Queue`] instance.
-    pub async fn create_queue(&self, name: &String, unlogged: bool) -> Result<Queue> {
+    pub async fn create_queue(&self, name: &str, unlogged: bool) -> Result<Queue> {
         let create_statement = if unlogged {
             CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "UNLOGGED")
         } else {
@@ -619,9 +745,7 @@ impl PgqrsAdmin {
     /// # Errors
     /// Returns `PgqrsError` if the database update fails
     pub async fn mark_stopped(&self, worker_id: i64) -> Result<()> {
-        let sql = crate::constants::UPDATE_WORKER_STOPPED;
-
-        sqlx::query(&sql)
+        sqlx::query(crate::constants::UPDATE_WORKER_STOPPED)
             .bind(worker_id)
             .execute(&self.pool)
             .await
@@ -661,9 +785,7 @@ impl PgqrsAdmin {
                 message: format!("Invalid duration: {}", e),
             })?;
 
-        let sql = crate::constants::PURGE_OLD_WORKERS;
-
-        let result = sqlx::query(&sql)
+        let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
             .bind(threshold)
             .execute(&self.pool)
             .await

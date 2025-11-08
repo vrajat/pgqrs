@@ -71,7 +71,7 @@ impl ContainerManager {
 static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| RwLock::new(None));
 
 /// Initialize the global container manager with the appropriate database type
-pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>> {
+pub async fn initialize_database(schema: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
     // First, check if we already have an initialized manager (read lock only)
     {
         let manager_guard = CONTAINER_MANAGER.read().unwrap();
@@ -93,7 +93,7 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
         // For external containers, we must do initialization while holding the lock
         // to prevent concurrent schema installation
         let container: Box<dyn DatabaseContainer> = Box::new(
-            crate::common::postgres::ExternalPostgresContainer::new(external_dsn),
+            crate::common::postgres::ExternalPostgresContainer::new(external_dsn, schema),
         );
         let mut manager = ContainerManager::new(container);
         let dsn = manager.initialize().await?;
@@ -107,7 +107,7 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
             if std::env::var("PGQRS_TEST_USE_PGBOUNCER").is_ok() {
                 Box::new(crate::common::pgbouncer::PgBouncerContainer::new().await?)
             } else {
-                Box::new(crate::common::postgres::PostgresContainer::new().await?)
+                Box::new(crate::common::postgres::PostgresContainer::new(schema).await?)
             };
 
         let mut manager = ContainerManager::new(container);
@@ -122,39 +122,10 @@ pub async fn initialize_database() -> Result<String, Box<dyn std::error::Error>>
 }
 
 /// Get the DSN for the initialized database
-pub async fn get_database_dsn() -> String {
-    initialize_database()
+pub async fn get_database_dsn(schema: Option<&str>) -> String {
+    initialize_database(schema)
         .await
         .expect("Failed to initialize database")
-}
-
-/// Get a database DSN with a specific schema for test isolation
-/// This creates a separate schema within the same database for isolation
-pub async fn get_database_dsn_with_schema(schema: &str) -> String {
-    // Get the base DSN first
-    let base_dsn = get_database_dsn().await;
-
-    // Create a temporary connection to set up the schema
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(std::time::Duration::from_secs(30))
-        .connect(&base_dsn)
-        .await
-        .expect("Failed to connect to database");
-
-    // Create the schema if it doesn't exist
-    let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", schema);
-    if let Err(e) = sqlx::query(&create_schema_sql).execute(&pool).await {
-        // Ignore error if schema already exists (concurrent creation)
-        if !e.to_string().contains("already exists") {
-            panic!("Failed to create schema: {:?}", e);
-        }
-    }
-
-    println!("Schema '{}' ensured to exist", schema);
-
-    // Return the same DSN - the schema will be configured via search_path
-    base_dsn
 }
 
 /// Cleanup function called by dtor

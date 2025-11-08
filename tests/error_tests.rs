@@ -10,8 +10,7 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_invalid_schema_name_empty() {
-    let database_url = common::get_postgres_dsn().await;
-
+    let database_url = "postgres://user:password@localhost:5432/testdb";
     // Test empty schema name
     let result = Config::from_dsn_with_schema(database_url, "");
     assert!(result.is_err());
@@ -27,7 +26,7 @@ async fn test_invalid_schema_name_empty() {
 #[tokio::test]
 #[serial]
 async fn test_invalid_schema_name_too_long() {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = "postgres://user:password@localhost:5432/testdb";
 
     // Test schema name longer than 63 characters
     let long_schema = "a".repeat(64);
@@ -45,7 +44,7 @@ async fn test_invalid_schema_name_too_long() {
 #[tokio::test]
 #[serial]
 async fn test_invalid_schema_name_bad_start() {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = "postgres://user:password@localhost:5432/testdb";
 
     // Test schema name starting with digit
     let result = Config::from_dsn_with_schema(database_url, "123invalid");
@@ -62,7 +61,7 @@ async fn test_invalid_schema_name_bad_start() {
 #[tokio::test]
 #[serial]
 async fn test_invalid_schema_name_bad_characters() {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = "postgres://user:password@localhost:5432/testdb";
 
     // Test schema name with invalid characters
     let result = Config::from_dsn_with_schema(database_url, "test-schema");
@@ -79,7 +78,7 @@ async fn test_invalid_schema_name_bad_characters() {
 #[tokio::test]
 #[serial]
 async fn test_valid_schema_names() {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = "postgres://user:password@localhost:5432/testdb";
 
     // Test various valid schema names
     let long_schema = "a".repeat(63);
@@ -94,7 +93,7 @@ async fn test_valid_schema_names() {
     ];
 
     for schema_name in valid_names {
-        let result = Config::from_dsn_with_schema(database_url.clone(), schema_name);
+        let result = Config::from_dsn_with_schema(database_url, schema_name);
         assert!(result.is_ok(), "Schema '{}' should be valid", schema_name);
 
         let config = result.unwrap();
@@ -105,7 +104,7 @@ async fn test_valid_schema_names() {
 #[tokio::test]
 #[serial]
 async fn test_nonexistent_schema_operations() {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = "postgres://user:password@localhost:5432/testdb";
 
     // Create config with a schema that doesn't exist
     let config = Config::from_dsn_with_schema(database_url, "nonexistent_schema_test")
@@ -118,7 +117,7 @@ async fn test_nonexistent_schema_operations() {
 
     // However, operations should fail when PostgreSQL realizes the schema doesn't exist
     // Let's check if we can verify the schema exists - this should fail
-    let result = admin.verify("nonexistent_schema_test").await;
+    let result = admin.verify().await;
     assert!(
         result.is_err(),
         "Verify should fail for non-existent schema"
@@ -138,7 +137,7 @@ async fn test_nonexistent_schema_operations() {
 #[tokio::test]
 #[serial]
 async fn test_install_requires_existing_schema() {
-    let database_url = common::get_database_dsn_with_schema("pgqrs_error_test").await;
+    let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
 
     // Create admin with existing schema
     let config =
@@ -152,57 +151,13 @@ async fn test_install_requires_existing_schema() {
     assert!(result.is_ok(), "Install should work with existing schema");
 
     // Cleanup
-    admin.uninstall("pgqrs_error_test").await.ok();
-}
-
-#[tokio::test]
-#[serial]
-async fn test_uninstall_nonexistent_schema() {
-    let database_url = common::get_postgres_dsn().await;
-    let config = Config::from_dsn(database_url);
-    let admin = PgqrsAdmin::new(&config)
-        .await
-        .expect("Should be able to create admin");
-
-    // Try to uninstall a schema that doesn't exist
-    let result = admin.uninstall("definitely_does_not_exist").await;
-
-    // This should succeed (DROP SCHEMA IF EXISTS should not error)
-    assert!(
-        result.is_ok(),
-        "Uninstall should succeed even for non-existent schema"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn test_verify_nonexistent_schema() {
-    let database_url = common::get_postgres_dsn().await;
-    let config = Config::from_dsn(database_url);
-    let admin = PgqrsAdmin::new(&config)
-        .await
-        .expect("Should be able to create admin");
-
-    // Try to verify a schema that doesn't exist
-    let result = admin.verify("definitely_does_not_exist").await;
-
-    // This should return an error (schema doesn't exist)
-    assert!(
-        result.is_err(),
-        "Verify should return error for non-existent schema"
-    );
-
-    if let Err(PgqrsError::Internal { message }) = result {
-        assert!(message.contains("does not exist"));
-    } else {
-        panic!("Expected Internal error for non-existent schema");
-    }
+    admin.uninstall().await.ok();
 }
 
 #[tokio::test]
 #[serial]
 async fn test_schema_operations_with_search_path() {
-    let database_url = common::get_database_dsn_with_schema("pgqrs_search_test").await;
+    let database_url = common::get_postgres_dsn(Some("pgqrs_search_test")).await;
 
     // Create config with custom schema
     let config =
@@ -230,5 +185,5 @@ async fn test_schema_operations_with_search_path() {
 
     // Cleanup
     admin.delete_queue("test_queue").await.ok();
-    admin.uninstall("pgqrs_search_test").await.ok();
+    admin.uninstall().await.ok();
 }

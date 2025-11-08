@@ -19,16 +19,6 @@ pub const QUEUE_PREFIX: &str = r#"q"#;
 /// Default visibility timeout in seconds for locked messages
 pub const VISIBILITY_TIMEOUT: i32 = 5;
 
-// Note: Schema existence checking and uninstall require the actual schema name
-// and cannot use search_path, so these still use placeholders
-pub const SCHEMA_EXISTS_QUERY: &str = r#"
-    SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = '{SCHEMA_NAME}') AS exists;
-"#;
-
-pub const UNINSTALL_STATEMENT: &str = r#"
-    DROP SCHEMA IF EXISTS {SCHEMA_NAME} CASCADE;
-"#;
-
 pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
     CREATE TABLE IF NOT EXISTS queue_repository (
         queue_name VARCHAR UNIQUE NOT NULL PRIMARY KEY,
@@ -327,4 +317,19 @@ pub const GET_WORKER_MESSAGES: &str = r#"
     SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM {QUEUE_PREFIX}_{queue_name}
     WHERE worker_id = $1
     ORDER BY msg_id
+"#;
+
+/// Drop the queue repository table
+pub const DROP_QUEUE_REPOSITORY: &str = r#"
+    DROP TABLE IF EXISTS queue_repository CASCADE;
+"#;
+
+/// Drop the worker repository table
+pub const DROP_WORKER_REPOSITORY: &str = r#"
+    DROP TABLE IF EXISTS worker_repository CASCADE;
+"#;
+
+/// Drop the worker status enum type
+pub const DROP_WORKER_STATUS_ENUM: &str = r#"
+    DROP TYPE IF EXISTS worker_status CASCADE;
 "#;

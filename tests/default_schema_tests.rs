@@ -3,7 +3,7 @@ use pgqrs::PgqrsAdmin;
 mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = common::get_postgres_dsn(None).await;
     PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(database_url))
         .await
         .expect("Failed to create PgqrsAdmin")
@@ -13,14 +13,14 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
 async fn verify() {
     let admin = create_admin().await;
     // Verify should succeed (using default schema "public")
-    assert!(admin.verify("public").await.is_ok());
+    assert!(admin.verify().await.is_ok());
 }
 
 #[tokio::test]
 async fn test_default_schema_backward_compatibility() {
     // This test ensures that the default behavior (using "public" schema)
     // works without any explicit schema configuration
-    let database_url = common::get_postgres_dsn().await;
+    let database_url = common::get_postgres_dsn(None).await;
 
     // Test Config::from_dsn creates config with default "public" schema
     let config = pgqrs::config::Config::from_dsn(&database_url);
@@ -32,7 +32,7 @@ async fn test_default_schema_backward_compatibility() {
         .expect("Failed to create admin");
 
     // Verify installation in default schema
-    assert!(admin.verify("public").await.is_ok());
+    assert!(admin.verify().await.is_ok());
 
     // Test basic queue operations in default schema
     let queue_name = "test_default_schema_queue".to_string();
