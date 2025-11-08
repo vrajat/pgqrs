@@ -21,12 +21,13 @@ async fn test_pgbouncer_happy_path() {
     let admin = create_admin().await;
 
     // Verify the installation works through PgBouncer
-    admin.verify().await.expect("Verify should succeed through PgBouncer");
+    admin
+        .verify()
+        .await
+        .expect("Verify should succeed through PgBouncer");
 
     // Create a queue through PgBouncer
-    let queue_result = admin
-        .create_queue(TEST_QUEUE_PGBOUNCER_HAPPY, false)
-        .await;
+    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY, false).await;
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
@@ -62,7 +63,10 @@ async fn test_pgbouncer_happy_path() {
     assert_eq!(messages.len(), 1, "Should receive exactly one message");
 
     let received_message = &messages[0];
-    assert_eq!(received_message.message, test_message, "Message content should match");
+    assert_eq!(
+        received_message.message, test_message,
+        "Message content should match"
+    );
 
     // Dequeue the message through PgBouncer
     queue
@@ -76,7 +80,10 @@ async fn test_pgbouncer_happy_path() {
         .await
         .expect("Failed to get pending count after dequeue");
 
-    assert_eq!(pending_count_after, 0, "Queue should be empty after dequeuing");
+    assert_eq!(
+        pending_count_after, 0,
+        "Queue should be empty after dequeuing"
+    );
 
     // Cleanup: delete the queue through PgBouncer
     admin
@@ -103,8 +110,13 @@ async fn test_pgbouncer_queue_list() {
         .await
         .expect("Failed to list queues through PgBouncer");
 
-    let found_queue = queues.iter().find(|q| q.queue_name == TEST_QUEUE_PGBOUNCER_LIST);
-    assert!(found_queue.is_some(), "Created queue should appear in queue list");
+    let found_queue = queues
+        .iter()
+        .find(|q| q.queue_name == TEST_QUEUE_PGBOUNCER_LIST);
+    assert!(
+        found_queue.is_some(),
+        "Created queue should appear in queue list"
+    );
 
     let queue_info = found_queue.unwrap();
     assert_eq!(queue_info.queue_name, TEST_QUEUE_PGBOUNCER_LIST);

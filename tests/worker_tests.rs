@@ -34,10 +34,7 @@ async fn test_worker_registration() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin
-        .create_queue("test_queue", false)
-        .await
-        .unwrap();
+    let queue = admin.create_queue("test_queue", false).await.unwrap();
 
     // Register a worker
     let worker = admin
@@ -62,10 +59,7 @@ async fn test_worker_lifecycle() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin
-        .create_queue("lifecycle_queue", false)
-        .await
-        .unwrap();
+    let queue = admin.create_queue("lifecycle_queue", false).await.unwrap();
 
     // Register a worker
     let worker = admin
@@ -92,10 +86,7 @@ async fn test_worker_message_assignment() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin
-        .create_queue("message_queue", false)
-        .await
-        .unwrap();
+    let queue = admin.create_queue("message_queue", false).await.unwrap();
 
     // Register a worker to verify the worker registration process
     let _worker = admin
@@ -132,14 +123,8 @@ async fn test_admin_worker_management() {
     let admin = create_admin().await;
 
     // Create test queues
-    let queue1 = admin
-        .create_queue("admin_queue1", false)
-        .await
-        .unwrap();
-    let queue2 = admin
-        .create_queue("admin_queue2", false)
-        .await
-        .unwrap();
+    let queue1 = admin.create_queue("admin_queue1", false).await.unwrap();
+    let queue2 = admin.create_queue("admin_queue2", false).await.unwrap();
 
     // Register workers on different queues
     let worker1 = admin
@@ -178,10 +163,7 @@ async fn test_worker_health_check() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin
-        .create_queue("health_queue", false)
-        .await
-        .unwrap();
+    let queue = admin.create_queue("health_queue", false).await.unwrap();
 
     // Register a worker
     let worker = admin

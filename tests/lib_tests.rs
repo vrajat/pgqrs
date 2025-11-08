@@ -109,9 +109,7 @@ async fn test_create_unlogged_queue() {
 #[tokio::test]
 async fn test_send_message() {
     let admin = create_admin().await;
-    let queue = admin
-        .create_queue(TEST_QUEUE_SEND_MESSAGE, false)
-        .await;
+    let queue = admin.create_queue(TEST_QUEUE_SEND_MESSAGE, false).await;
     assert!(queue.is_ok());
     let queue = queue.unwrap();
     let payload = json!({

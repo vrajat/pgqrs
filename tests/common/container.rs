@@ -77,7 +77,7 @@ static CONTAINER_MANAGER: Lazy<RwLock<Option<ContainerManager>>> = Lazy::new(|| 
 async fn initialize_database(
     schema: Option<&str>,
     external_dsn: Option<&str>,
-    use_pgbouncer: bool
+    use_pgbouncer: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // First, check if we already have an initialized manager (read lock only)
     {
@@ -101,9 +101,15 @@ async fn initialize_database(
     let dsn = if let Some(external_dsn) = external_dsn {
         // Use provided external DSN
         let container: Box<dyn DatabaseContainer> = if use_pgbouncer {
-            Box::new(crate::common::pgbouncer::ExternalPgBouncerContainer::new(external_dsn.to_string(), schema))
+            Box::new(crate::common::pgbouncer::ExternalPgBouncerContainer::new(
+                external_dsn.to_string(),
+                schema,
+            ))
         } else {
-            Box::new(crate::common::postgres::ExternalPostgresContainer::new(external_dsn.to_string(), schema))
+            Box::new(crate::common::postgres::ExternalPostgresContainer::new(
+                external_dsn.to_string(),
+                schema,
+            ))
         };
         let mut manager = ContainerManager::new(container);
         let dsn = manager.initialize().await?;

@@ -32,8 +32,8 @@ use crate::constants::{
     CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
     CREATE_WORKERS_INDEX_QUEUE_STATUS, CREATE_WORKERS_TABLE, CREATE_WORKER_STATUS_ENUM,
     DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_REPOSITORY, DROP_QUEUE_STATEMENT,
-    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA,
-    PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX
+    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA, PURGE_ARCHIVE_TABLE,
+    PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
 };
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
@@ -169,8 +169,8 @@ impl PgqrsAdmin {
             let queue_name = &queue_info.queue_name;
 
             // Drop archive table
-            let drop_archive_sql = DROP_ARCHIVE_TABLE
-                .replace("{queue_name}", &format!("\"{}\"", queue_name));
+            let drop_archive_sql =
+                DROP_ARCHIVE_TABLE.replace("{queue_name}", &format!("\"{}\"", queue_name));
 
             sqlx::query(&drop_archive_sql)
                 .execute(&self.pool)
@@ -223,7 +223,7 @@ impl PgqrsAdmin {
             "SELECT EXISTS (
                 SELECT 1 FROM information_schema.tables
                 WHERE table_name = 'queue_repository'
-            )"
+            )",
         )
         .fetch_one(&self.pool)
         .await
@@ -242,7 +242,7 @@ impl PgqrsAdmin {
             "SELECT EXISTS (
                 SELECT 1 FROM information_schema.tables
                 WHERE table_name = 'worker_repository'
-            )"
+            )",
         )
         .fetch_one(&self.pool)
         .await
@@ -268,18 +268,24 @@ impl PgqrsAdmin {
                 "SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables
                     WHERE table_name = $1
-                )"
+                )",
             )
             .bind(&queue_table_name)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to check queue table '{}' existence: {}", queue_table_name, e),
+                message: format!(
+                    "Failed to check queue table '{}' existence: {}",
+                    queue_table_name, e
+                ),
             })?;
 
             if !queue_table_exists {
                 return Err(PgqrsError::Connection {
-                    message: format!("Queue table '{}' does not exist for queue '{}'", queue_table_name, queue_name),
+                    message: format!(
+                        "Queue table '{}' does not exist for queue '{}'",
+                        queue_table_name, queue_name
+                    ),
                 });
             }
 
@@ -289,18 +295,24 @@ impl PgqrsAdmin {
                 "SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables
                     WHERE table_name = $1
-                )"
+                )",
             )
             .bind(&archive_table_name)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to check archive table '{}' existence: {}", archive_table_name, e),
+                message: format!(
+                    "Failed to check archive table '{}' existence: {}",
+                    archive_table_name, e
+                ),
             })?;
 
             if !archive_table_exists {
                 return Err(PgqrsError::Connection {
-                    message: format!("Archive table '{}' does not exist for queue '{}'", archive_table_name, queue_name),
+                    message: format!(
+                        "Archive table '{}' does not exist for queue '{}'",
+                        archive_table_name, queue_name
+                    ),
                 });
             }
         }
