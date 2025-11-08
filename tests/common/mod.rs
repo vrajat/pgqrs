@@ -1,5 +1,6 @@
 pub mod constants;
 pub mod container;
+pub mod database_setup;
 pub mod pgbouncer;
 pub mod postgres;
 

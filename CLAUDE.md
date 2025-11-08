@@ -151,11 +151,6 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications, providing b
 5. **Test Isolation**: Each test suite uses isolated schemas for parallel execution
 6. **Backward Compatibility**: Defaults to 'public' schema if not specified
 
-**Migration from v0.2.0 and earlier:**
-- Old string replacement method (`{PGQRS_SCHEMA}`) has been completely removed
-- Update code to use new Config methods or CLI parameters
-- Ensure target schema exists before install operations
-
 ### Error Handling
 - Custom `PgqrsError` enum for domain-specific errors
 - Integration with `anyhow` for error context
