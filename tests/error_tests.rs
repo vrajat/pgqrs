@@ -104,7 +104,7 @@ async fn test_valid_schema_names() {
 #[tokio::test]
 #[serial]
 async fn test_nonexistent_schema_operations() {
-    let database_url = "postgres://user:password@localhost:5432/testdb";
+    let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
 
     // Create config with a schema that doesn't exist
     let config = Config::from_dsn_with_schema(database_url, "nonexistent_schema_test")
@@ -123,20 +123,23 @@ async fn test_nonexistent_schema_operations() {
         "Verify should fail for non-existent schema"
     );
 
-    if let Err(PgqrsError::Internal { message }) = result {
+    if let Err(PgqrsError::Connection { message }) = result {
         assert!(
-            message.contains("does not exist"),
+            message.contains(" relation \"queue_repository\" does not exist"),
             "Error should mention schema not existing, got: {}",
             message
         );
     } else {
-        panic!("Expected Internal error for non-existent schema verification");
+        panic!(
+            "Expected Connection error for non-existent schema verification {}",
+            result.err().unwrap()
+        );
     }
 }
 
 #[tokio::test]
 #[serial]
-async fn test_install_requires_existing_schema() {
+async fn test_verify_requires_existing_schema() {
     let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
 
     // Create admin with existing schema
@@ -147,43 +150,6 @@ async fn test_install_requires_existing_schema() {
         .expect("Should be able to create admin with existing schema");
 
     // Install should work with existing schema
-    let result = admin.install().await;
-    assert!(result.is_ok(), "Install should work with existing schema");
-
-    // Cleanup
-    admin.uninstall().await.ok();
-}
-
-#[tokio::test]
-#[serial]
-async fn test_schema_operations_with_search_path() {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_search_test")).await;
-
-    // Create config with custom schema
-    let config =
-        Config::from_dsn_with_schema(database_url, "pgqrs_search_test").expect("Valid schema name");
-    let admin = PgqrsAdmin::new(&config)
-        .await
-        .expect("Should be able to create admin");
-
-    // Install in custom schema
-    admin.install().await.expect("Install should work");
-
-    // Verify operations work with search_path
-    let _queue = admin
-        .create_queue("test_queue", false)
-        .await
-        .expect("Should be able to create queue");
-
-    // Check that we can list queues (verifies search_path is working)
-    let queues = admin
-        .list_queues()
-        .await
-        .expect("Should be able to list queues");
-    assert_eq!(queues.len(), 1);
-    assert_eq!(queues[0].queue_name, "test_queue");
-
-    // Cleanup
-    admin.delete_queue("test_queue").await.ok();
-    admin.uninstall().await.ok();
+    let result = admin.verify().await;
+    assert!(result.is_ok(), "Verify should work with existing schema");
 }

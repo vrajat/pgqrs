@@ -26,7 +26,7 @@
 //!     Ok(())
 //! }
 //! ```
-use crate::config::Config;
+use crate::config::{validate_identifier, Config};
 use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
     CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
@@ -59,8 +59,9 @@ impl PgqrsAdmin {
     /// # Returns
     /// A new `PgqrsAdmin` instance.
     pub async fn new(config: &Config) -> Result<Self> {
+        validate_identifier(&config.schema)?;
         // Create the search_path setting
-        let search_path_sql = format!("SET search_path = {}, public", config.schema);
+        let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
 
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)

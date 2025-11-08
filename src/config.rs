@@ -51,7 +51,7 @@ use std::path::Path;
 /// # Returns
 /// * `Ok(())` if the schema name is valid
 /// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
-pub fn validate_schema_name(schema: &str) -> Result<()> {
+pub fn validate_identifier(schema: &str) -> Result<()> {
     if schema.is_empty() {
         return Err(crate::error::PgqrsError::InvalidConfig {
             field: "schema".to_string(),
@@ -214,7 +214,7 @@ impl Config {
         S: Into<String>,
     {
         let schema_str = schema.into();
-        validate_schema_name(&schema_str)?;
+        validate_identifier(&schema_str)?;
 
         Ok(Self {
             dsn: dsn.into(),
@@ -261,7 +261,7 @@ impl Config {
 
         // Parse schema from environment variable with validation
         let schema = env::var(ENV_SCHEMA).unwrap_or_else(|_| DEFAULT_SCHEMA.to_string());
-        validate_schema_name(&schema)?;
+        validate_identifier(&schema)?;
 
         // Parse optional environment variables with defaults
         let max_connections = env::var(ENV_MAX_CONNECTIONS)
@@ -329,7 +329,7 @@ impl Config {
         })?;
 
         // Validate schema name
-        validate_schema_name(&config.schema)?;
+        validate_identifier(&config.schema)?;
 
         Ok(config)
     }
@@ -436,7 +436,7 @@ impl Config {
         // Override schema if explicitly provided
         if let Some(schema) = explicit_schema {
             let schema_str = schema.into();
-            validate_schema_name(&schema_str)?;
+            validate_identifier(&schema_str)?;
             config.schema = schema_str;
         }
 
@@ -819,32 +819,32 @@ max_connections: 256
     // Schema validation tests
     #[test]
     fn test_validate_schema_name_valid() {
-        assert!(validate_schema_name("public").is_ok());
-        assert!(validate_schema_name("_private").is_ok());
-        assert!(validate_schema_name("schema123").is_ok());
-        assert!(validate_schema_name("my_schema").is_ok());
-        assert!(validate_schema_name("schema$name").is_ok());
-        assert!(validate_schema_name("a").is_ok());
-        assert!(validate_schema_name("A").is_ok());
+        assert!(validate_identifier("public").is_ok());
+        assert!(validate_identifier("_private").is_ok());
+        assert!(validate_identifier("schema123").is_ok());
+        assert!(validate_identifier("my_schema").is_ok());
+        assert!(validate_identifier("schema$name").is_ok());
+        assert!(validate_identifier("a").is_ok());
+        assert!(validate_identifier("A").is_ok());
     }
 
     #[test]
     fn test_validate_schema_name_invalid() {
         // Empty schema
-        assert!(validate_schema_name("").is_err());
+        assert!(validate_identifier("").is_err());
 
         // Starts with digit
-        assert!(validate_schema_name("1schema").is_err());
+        assert!(validate_identifier("1schema").is_err());
 
         // Contains invalid characters
-        assert!(validate_schema_name("schema-name").is_err());
-        assert!(validate_schema_name("schema.name").is_err());
-        assert!(validate_schema_name("schema name").is_err());
-        assert!(validate_schema_name("schema@name").is_err());
+        assert!(validate_identifier("schema-name").is_err());
+        assert!(validate_identifier("schema.name").is_err());
+        assert!(validate_identifier("schema name").is_err());
+        assert!(validate_identifier("schema@name").is_err());
 
         // Too long (64+ characters)
         let long_name = "a".repeat(64);
-        assert!(validate_schema_name(&long_name).is_err());
+        assert!(validate_identifier(&long_name).is_err());
     }
 
     #[test]
