@@ -6,21 +6,29 @@
 //!
 //! - [`Config`] holds all settings for connecting to PostgreSQL and tuning queue behavior.
 //! - The DSN (database connection string) is required and must be provided.
+//! - Schema configuration determines which PostgreSQL schema contains pgqrs tables.
 //! - Configuration can be loaded from environment variables, files, or created directly.
 //!
 //! ## How
 //!
 //! Create a [`Config`] using one of the provided methods. The DSN is always required.
+//! The schema must exist before installing pgqrs.
 //!
 //! ### Example
 //!
 //! ```no_run
 //! use pgqrs::config::Config;
 //!
-//! // Create from DSN directly
+//! // Create from DSN directly (uses 'public' schema)
 //! let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //!
-//! // Load from environment variables
+//! // Create with custom schema
+//! let config = Config::from_dsn_with_schema(
+//!     "postgresql://user:pass@localhost/db",
+//!     "my_schema"
+//! ).expect("Valid schema name");
+//!
+//! // Load from environment variables (PGQRS_DSN and PGQRS_SCHEMA)
 //! let config = Config::from_env().expect("PGQRS_DSN environment variable required");
 //!
 //! // Load from file
@@ -30,6 +38,65 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Validates PostgreSQL schema name according to SQL identifier rules
+///
+/// Rules from PostgreSQL documentation:
+/// - Must begin with a letter (a-z, A-Z) or underscore (_)
+/// - Subsequent characters can be letters, underscores, digits (0-9), or dollar signs ($)
+/// - Maximum length is 63 bytes (NAMEDATALEN-1)
+///
+/// # Arguments
+/// * `schema` - The schema name to validate
+///
+/// # Returns
+/// * `Ok(())` if the schema name is valid
+/// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
+pub fn validate_schema_name(schema: &str) -> Result<()> {
+    if schema.is_empty() {
+        return Err(crate::error::PgqrsError::InvalidConfig {
+            field: "schema".to_string(),
+            message: "Schema name cannot be empty".to_string(),
+        });
+    }
+
+    if schema.len() > 63 {
+        return Err(crate::error::PgqrsError::InvalidConfig {
+            field: "schema".to_string(),
+            message: format!(
+                "Schema name '{}' exceeds maximum length of 63 bytes",
+                schema
+            ),
+        });
+    }
+
+    // Check first character
+    let first_char = schema.chars().next().unwrap();
+    if !first_char.is_ascii_alphabetic() && first_char != '_' {
+        return Err(crate::error::PgqrsError::InvalidConfig {
+            field: "schema".to_string(),
+            message: format!(
+                "Schema name '{}' must start with a letter or underscore",
+                schema
+            ),
+        });
+    }
+
+    // Check remaining characters
+    for c in schema.chars() {
+        if !c.is_ascii_alphanumeric() && c != '_' && c != '$' {
+            return Err(crate::error::PgqrsError::InvalidConfig {
+                field: "schema".to_string(),
+                message: format!(
+                    "Schema name '{}' contains invalid character '{}'. Only letters, digits, underscores, and dollar signs are allowed",
+                    schema, c
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 // Environment variable names
 const ENV_DSN: &str = "PGQRS_DSN";
 const ENV_MAX_CONNECTIONS: &str = "PGQRS_MAX_CONNECTIONS";
@@ -37,21 +104,27 @@ const ENV_CONNECTION_TIMEOUT: &str = "PGQRS_CONNECTION_TIMEOUT";
 const ENV_DEFAULT_LOCK_TIME: &str = "PGQRS_DEFAULT_LOCK_TIME";
 const ENV_DEFAULT_BATCH_SIZE: &str = "PGQRS_DEFAULT_BATCH_SIZE";
 const ENV_CONFIG_FILE: &str = "PGQRS_CONFIG_FILE";
+const ENV_SCHEMA: &str = "PGQRS_SCHEMA";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_LOCK_TIME_SECONDS: u32 = 5;
 const DEFAULT_BATCH_SIZE: usize = 100;
+const DEFAULT_SCHEMA: &str = "public";
 
 /// Configuration for pgqrs
 ///
 /// The DSN (database connection string) is required and must be provided
-/// when creating a Config instance.
+/// when creating a Config instance. The schema must exist in the database
+/// before installing pgqrs infrastructure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// PostgreSQL connection string (DSN) - REQUIRED
     pub dsn: String,
+    /// Schema name for pgqrs tables and objects (must exist before install)
+    #[serde(default = "default_schema")]
+    pub schema: String,
     /// Maximum number of database connections in the pool
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -83,6 +156,10 @@ fn default_max_batch_size() -> usize {
     DEFAULT_BATCH_SIZE
 }
 
+fn default_schema() -> String {
+    DEFAULT_SCHEMA.to_string()
+}
+
 impl Config {
     /// Create a new Config with the provided DSN and default values for other fields.
     ///
@@ -101,6 +178,7 @@ impl Config {
     pub fn from_dsn<S: Into<String>>(dsn: S) -> Self {
         Self {
             dsn: dsn.into(),
+            schema: DEFAULT_SCHEMA.to_string(),
             max_connections: DEFAULT_MAX_CONNECTIONS,
             connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
@@ -108,10 +186,51 @@ impl Config {
         }
     }
 
+    /// Create a new Config with the provided DSN and schema.
+    ///
+    /// This method validates the schema name according to PostgreSQL identifier rules.
+    /// All other configuration fields will use their default values.
+    ///
+    /// # Arguments
+    /// * `dsn` - PostgreSQL connection string (e.g., "postgresql://user:pass@localhost/db")
+    /// * `schema` - Schema name for pgqrs tables
+    ///
+    /// # Returns
+    /// * `Ok(Config)` if the schema name is valid
+    /// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
+    ///
+    /// # Example
+    /// ```
+    /// # use pgqrs::config::Config;
+    /// let config = Config::from_dsn_with_schema(
+    ///     "postgresql://user:pass@localhost/db",
+    ///     "my_schema"
+    /// ).expect("Valid schema name");
+    /// assert_eq!(config.schema, "my_schema");
+    /// ```
+    pub fn from_dsn_with_schema<D, S>(dsn: D, schema: S) -> Result<Self>
+    where
+        D: Into<String>,
+        S: Into<String>,
+    {
+        let schema_str = schema.into();
+        validate_schema_name(&schema_str)?;
+
+        Ok(Self {
+            dsn: dsn.into(),
+            schema: schema_str,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
+            default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
+            default_max_batch_size: DEFAULT_BATCH_SIZE,
+        })
+    }
+
     /// Create config from environment variables
     ///
     /// Environment variables supported:
     /// - PGQRS_DSN (required): PostgreSQL connection string
+    /// - PGQRS_SCHEMA: Schema name for pgqrs tables (default: public)
     /// - PGQRS_MAX_CONNECTIONS: Maximum database connections (default: 16)
     /// - PGQRS_CONNECTION_TIMEOUT: Connection timeout in seconds (default: 30)
     /// - PGQRS_DEFAULT_LOCK_TIME: Default lock time in seconds (default: 5)
@@ -124,7 +243,7 @@ impl Config {
             field: ENV_DSN.to_string(),
         })?;
 
-        Ok(Self::with_dsn_and_env_fallback(dsn))
+        Self::with_dsn_and_env_fallback(dsn)
     }
 
     /// Internal helper to create Config with a DSN and environment variable fallbacks.
@@ -137,8 +256,12 @@ impl Config {
     ///
     /// # Returns
     /// Config instance with DSN set and other fields from environment or defaults
-    fn with_dsn_and_env_fallback(dsn: String) -> Self {
+    fn with_dsn_and_env_fallback(dsn: String) -> Result<Self> {
         use std::env;
+
+        // Parse schema from environment variable with validation
+        let schema = env::var(ENV_SCHEMA).unwrap_or_else(|_| DEFAULT_SCHEMA.to_string());
+        validate_schema_name(&schema)?;
 
         // Parse optional environment variables with defaults
         let max_connections = env::var(ENV_MAX_CONNECTIONS)
@@ -161,13 +284,14 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_BATCH_SIZE);
 
-        Self {
+        Ok(Self {
             dsn,
+            schema,
             max_connections,
             connection_timeout_seconds,
             default_lock_time_seconds,
             default_max_batch_size,
-        }
+        })
     }
 
     /// Create config from YAML file
@@ -203,6 +327,9 @@ impl Config {
                 message: format!("Failed to parse YAML config: {}", e),
             }
         })?;
+
+        // Validate schema name
+        validate_schema_name(&config.schema)?;
 
         Ok(config)
     }
@@ -261,18 +388,59 @@ impl Config {
         D: Into<String>,
         P: AsRef<Path>,
     {
-        // If explicit DSN is provided, use it with env vars for other settings
-        if let Some(dsn) = explicit_dsn {
-            return Ok(Self::with_dsn_and_env_fallback(dsn.into()));
+        Self::load_with_schema_options(explicit_dsn, None::<String>, explicit_config_path)
+    }
+
+    /// Create config from multiple sources with explicit options including schema
+    ///
+    /// This method allows overriding the DSN, schema, and config file path explicitly.
+    /// Priority order:
+    /// 1. Explicit DSN parameter (if provided)
+    /// 2. Explicit config file path (if provided)
+    /// 3. Config file specified by PGQRS_CONFIG_FILE environment variable
+    /// 4. Environment variables (PGQRS_DSN, etc.)
+    /// 5. Default config file locations (pgqrs.yaml, pgqrs.yml)
+    ///
+    /// If an explicit schema is provided, it overrides any schema from other sources and is validated.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use pgqrs::config::Config;
+    /// // Load with explicit DSN and schema
+    /// let config = Config::load_with_schema_options(
+    ///     Some("postgresql://user:pass@localhost/db"),
+    ///     Some("custom_schema"),
+    ///     None::<String>
+    /// ).expect("Failed to load configuration");
+    /// ```
+    pub fn load_with_schema_options<D, S, P>(
+        explicit_dsn: Option<D>,
+        explicit_schema: Option<S>,
+        explicit_config_path: Option<P>,
+    ) -> Result<Self>
+    where
+        D: Into<String>,
+        S: Into<String>,
+        P: AsRef<Path>,
+    {
+        // First, get base config using existing logic
+        let mut config = if let Some(dsn) = explicit_dsn {
+            Self::with_dsn_and_env_fallback(dsn.into())?
+        } else if let Some(config_path) = explicit_config_path {
+            Self::from_file(config_path)?
+        } else {
+            Self::load_from_standard_sources()?
+        };
+
+        // Override schema if explicitly provided
+        if let Some(schema) = explicit_schema {
+            let schema_str = schema.into();
+            validate_schema_name(&schema_str)?;
+            config.schema = schema_str;
         }
 
-        // If explicit config path is provided, try that
-        if let Some(config_path) = explicit_config_path {
-            return Self::from_file(config_path);
-        }
-
-        // Use standard fallback logic
-        Self::load_from_standard_sources()
+        Ok(config)
     }
 
     /// Internal helper for loading config from standard sources with fallback logic.
@@ -343,6 +511,7 @@ mod tests {
         env::remove_var(ENV_DEFAULT_LOCK_TIME);
         env::remove_var(ENV_DEFAULT_BATCH_SIZE);
         env::remove_var(ENV_CONFIG_FILE);
+        env::remove_var(ENV_SCHEMA);
     }
 
     #[test]
@@ -645,5 +814,130 @@ max_connections: 256
         } else {
             panic!("Expected MissingConfig error for configuration");
         }
+    }
+
+    // Schema validation tests
+    #[test]
+    fn test_validate_schema_name_valid() {
+        assert!(validate_schema_name("public").is_ok());
+        assert!(validate_schema_name("_private").is_ok());
+        assert!(validate_schema_name("schema123").is_ok());
+        assert!(validate_schema_name("my_schema").is_ok());
+        assert!(validate_schema_name("schema$name").is_ok());
+        assert!(validate_schema_name("a").is_ok());
+        assert!(validate_schema_name("A").is_ok());
+    }
+
+    #[test]
+    fn test_validate_schema_name_invalid() {
+        // Empty schema
+        assert!(validate_schema_name("").is_err());
+
+        // Starts with digit
+        assert!(validate_schema_name("1schema").is_err());
+
+        // Contains invalid characters
+        assert!(validate_schema_name("schema-name").is_err());
+        assert!(validate_schema_name("schema.name").is_err());
+        assert!(validate_schema_name("schema name").is_err());
+        assert!(validate_schema_name("schema@name").is_err());
+
+        // Too long (64+ characters)
+        let long_name = "a".repeat(64);
+        assert!(validate_schema_name(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_from_dsn_with_schema_valid() {
+        let config = Config::from_dsn_with_schema("postgresql://test@localhost/db", "my_schema")
+            .expect("Valid schema should work");
+        assert_eq!(config.schema, "my_schema");
+        assert_eq!(config.dsn, "postgresql://test@localhost/db");
+    }
+
+    #[test]
+    fn test_from_dsn_with_schema_invalid() {
+        let result = Config::from_dsn_with_schema("postgresql://test@localhost/db", "123invalid");
+        assert!(result.is_err());
+
+        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+            assert_eq!(field, "schema");
+        } else {
+            panic!("Expected InvalidConfig error for schema");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_with_schema() {
+        clear_test_env_vars();
+
+        env::set_var(ENV_DSN, "postgresql://test:test@localhost/testdb");
+        env::set_var(ENV_SCHEMA, "test_schema");
+
+        let config = Config::from_env().expect("Should load from env with schema");
+
+        assert_eq!(config.dsn, "postgresql://test:test@localhost/testdb");
+        assert_eq!(config.schema, "test_schema");
+
+        clear_test_env_vars();
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_with_invalid_schema() {
+        clear_test_env_vars();
+
+        env::set_var(ENV_DSN, "postgresql://test:test@localhost/testdb");
+        env::set_var(ENV_SCHEMA, "invalid-schema");
+
+        let result = Config::from_env();
+        assert!(result.is_err());
+
+        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+            assert_eq!(field, "schema");
+        } else {
+            panic!("Expected InvalidConfig error for schema");
+        }
+
+        clear_test_env_vars();
+    }
+
+    #[test]
+    fn test_from_file_with_schema() {
+        let config_content = r#"
+dsn: "postgresql://file:test@localhost/filedb"
+schema: "file_schema"
+max_connections: 64
+"#;
+        let config_path = create_test_config_file(config_content, "with_schema");
+
+        let config = Config::from_file(&config_path).expect("Should load from file with schema");
+
+        assert_eq!(config.dsn, "postgresql://file:test@localhost/filedb");
+        assert_eq!(config.schema, "file_schema");
+        assert_eq!(config.max_connections, 64);
+
+        cleanup_test_file(&config_path);
+    }
+
+    #[test]
+    fn test_from_file_with_invalid_schema() {
+        let config_content = r#"
+dsn: "postgresql://file:test@localhost/filedb"
+schema: "invalid-schema-name"
+"#;
+        let config_path = create_test_config_file(config_content, "invalid_schema");
+
+        let result = Config::from_file(&config_path);
+        assert!(result.is_err());
+
+        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+            assert_eq!(field, "schema");
+        } else {
+            panic!("Expected InvalidConfig error for schema");
+        }
+
+        cleanup_test_file(&config_path);
     }
 }

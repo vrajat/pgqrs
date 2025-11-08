@@ -182,7 +182,7 @@ impl DatabaseContainer for PgBouncerContainer {
         println!("Cleaning up admin schema via PgBouncer...");
 
         let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall().await?;
+        admin.uninstall("public").await?;
         println!("Admin schema cleanup complete via PgBouncer");
         Ok(())
     }

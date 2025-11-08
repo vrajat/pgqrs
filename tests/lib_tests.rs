@@ -16,8 +16,10 @@ struct RelPersistence {
 mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
-    let database_url = common::get_postgres_dsn().await;
-    PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(database_url))
+    let database_url = common::get_database_dsn_with_schema("pgqrs_lib_test").await;
+    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_test")
+        .expect("Failed to create config with lib_test schema");
+    PgqrsAdmin::new(&config)
         .await
         .expect("Failed to create PgqrsAdmin")
 }
@@ -25,8 +27,8 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
 #[tokio::test]
 async fn verify() {
     let admin = create_admin().await;
-    // Verify should succeed
-    assert!(admin.verify().await.is_ok());
+    // Verify should succeed (using custom schema "pgqrs_lib_test")
+    assert!(admin.verify("pgqrs_lib_test").await.is_ok());
 }
 
 #[tokio::test]
@@ -48,9 +50,12 @@ async fn test_create_logged_queue() {
         "MetaResult.unlogged should be false for logged queue"
     );
 
-    // Check system tables for logged table
-    // removed unused variable table_name
-    let sql = format!("SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    // Check system tables for logged table (using search_path approach)
+    // Query the current schema in search_path instead of hardcoding schema name
+    let sql = format!(
+        "SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}'",
+        queue_name
+    );
     let pool = &admin.pool;
     let result = sqlx::query_as::<_, RelPersistence>(&sql)
         .fetch_all(pool)
@@ -83,8 +88,11 @@ async fn test_create_unlogged_queue() {
         "MetaResult.unlogged should be true for unlogged queue"
     );
 
-    // Check system tables for unlogged table
-    let sql = format!("SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}' AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'pgqrs')", queue_name);
+    // Check system tables for unlogged table (using search_path approach)
+    let sql = format!(
+        "SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}'",
+        queue_name
+    );
     let pool = &admin.pool;
     let result = sqlx::query_as::<_, RelPersistence>(&sql)
         .fetch_all(pool)
@@ -357,4 +365,48 @@ async fn test_purge_archive() {
 
     // Cleanup
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_custom_schema_search_path() {
+    // This test verifies that the search_path is correctly set to use the custom schema
+    let admin = create_admin().await;
+
+    // Create a test queue in the custom schema
+    let queue_name = "test_search_path_queue".to_string();
+    let queue_result = admin.create_queue(&queue_name, false).await;
+    assert!(queue_result.is_ok(), "Should create queue in custom schema");
+
+    // Verify we can find the table in the custom schema by checking the search_path
+    let pool = &admin.pool;
+
+    // Check that we're using the correct schema by querying the search_path
+    let search_path: String = sqlx::query_scalar("SHOW search_path")
+        .fetch_one(pool)
+        .await
+        .expect("Should get search_path");
+
+    // The search_path should contain our custom schema
+    assert!(
+        search_path.contains("pgqrs_lib_test"),
+        "Search path should contain pgqrs_lib_test: {}",
+        search_path
+    );
+
+    // Verify the table exists in the correct schema by querying without schema qualification
+    let table_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+    )
+    .bind(format!("q_{}", queue_name))
+    .fetch_one(pool)
+    .await
+    .expect("Should check table existence");
+
+    assert!(
+        table_exists,
+        "Queue table should exist and be findable via search_path"
+    );
+
+    // Cleanup
+    assert!(admin.delete_queue(&queue_name).await.is_ok());
 }

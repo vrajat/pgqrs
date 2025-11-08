@@ -173,7 +173,7 @@ impl fmt::Display for WorkerInfo {
 
 /// Worker status enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
-#[sqlx(type_name = "pgqrs.worker_status", rename_all = "snake_case")]
+#[sqlx(type_name = "worker_status", rename_all = "snake_case")]
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,

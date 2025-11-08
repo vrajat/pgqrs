@@ -131,10 +131,30 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications, providing b
 - File-based configuration with YAML/JSON support
 
 ### Database Schema
-- Uses `pgqrs` schema namespace to avoid conflicts
-- Queue tables are dynamically created per queue
+- Uses configurable schema namespace (default: 'public') to support multi-tenant deployments
+- Queue tables are dynamically created per queue within the specified schema
 - Metadata tables track queue information and statistics
 - SKIP LOCKED pattern for concurrent job processing
+- **IMPORTANT**: Schema must be pre-created before running `pgqrs install`
+
+### Schema Management (Security Update - GitHub Issue #21)
+**As of v0.2.1+, pgqrs uses PostgreSQL search_path instead of string replacement for schema handling:**
+
+1. **Secure Schema Handling**: Uses PostgreSQL's search_path feature instead of SQL string replacement to prevent injection
+2. **Schema Pre-creation Required**: The target schema must exist before running `pgqrs install`
+3. **Configuration Options**:
+   - CLI: `--schema my_schema`
+   - Environment: `PGQRS_SCHEMA=my_schema`
+   - Config file: `schema: "my_schema"`
+   - Programmatic: `Config::from_dsn_with_schema(dsn, "my_schema")`
+4. **Schema Validation**: Validates schema names according to PostgreSQL identifier rules
+5. **Test Isolation**: Each test suite uses isolated schemas for parallel execution
+6. **Backward Compatibility**: Defaults to 'public' schema if not specified
+
+**Migration from v0.2.0 and earlier:**
+- Old string replacement method (`{PGQRS_SCHEMA}`) has been completely removed
+- Update code to use new Config methods or CLI parameters
+- Ensure target schema exists before install operations
 
 ### Error Handling
 - Custom `PgqrsError` enum for domain-specific errors

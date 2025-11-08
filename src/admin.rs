@@ -29,9 +29,9 @@
 use crate::config::Config;
 use crate::constants::{
     CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
-    CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_SCHEMA_STATEMENT,
-    CREATE_WORKERS_INDEX_HEARTBEAT, CREATE_WORKERS_INDEX_QUEUE_STATUS, DELETE_QUEUE_METADATA,
-    DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA, PGQRS_SCHEMA,
+    CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
+    CREATE_WORKERS_INDEX_QUEUE_STATUS, CREATE_WORKERS_TABLE, CREATE_WORKER_STATUS_ENUM,
+    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_STATEMENT, INSERT_QUEUE_METADATA,
     PURGE_ARCHIVE_TABLE, PURGE_QUEUE_STATEMENT, QUEUE_PREFIX, SCHEMA_EXISTS_QUERY,
     UNINSTALL_STATEMENT,
 };
@@ -59,8 +59,18 @@ impl PgqrsAdmin {
     /// # Returns
     /// A new `PgqrsAdmin` instance.
     pub async fn new(config: &Config) -> Result<Self> {
+        // Create the search_path setting
+        let search_path_sql = format!("SET search_path = {}, public", config.schema);
+
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
+            .after_connect(move |conn, _meta| {
+                let sql = search_path_sql.clone();
+                Box::pin(async move {
+                    sqlx::query(&sql).execute(conn).await?;
+                    Ok(())
+                })
+            })
             .connect(&config.dsn)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -71,22 +81,17 @@ impl PgqrsAdmin {
 
     /// Install pgqrs schema and infrastructure in the database.
     ///
+    /// **Important**: The schema must be created before running install.
+    /// Use your preferred method to create the schema, for example:
+    /// ```sql
+    /// CREATE SCHEMA IF NOT EXISTS my_schema;
+    /// ```
+    ///
     /// # Returns
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
-        // Create schema
-        let create_schema_sql = CREATE_SCHEMA_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&create_schema_sql)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
         // Create meta table
-        let create_meta_sql =
-            CREATE_QUEUE_INFO_TABLE_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&create_meta_sql)
+        sqlx::query(CREATE_QUEUE_INFO_TABLE_STATEMENT)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -94,9 +99,7 @@ impl PgqrsAdmin {
             })?;
 
         // Create worker status enum type
-        let create_enum_sql =
-            crate::constants::CREATE_WORKER_STATUS_ENUM.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&create_enum_sql)
+        sqlx::query(CREATE_WORKER_STATUS_ENUM)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -104,9 +107,7 @@ impl PgqrsAdmin {
             })?;
 
         // Create workers table directly in install
-        let create_workers_sql =
-            crate::constants::CREATE_WORKERS_TABLE.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&create_workers_sql)
+        sqlx::query(CREATE_WORKERS_TABLE)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -114,16 +115,14 @@ impl PgqrsAdmin {
             })?;
 
         // Create worker indexes
-        let index_sql1 = CREATE_WORKERS_INDEX_QUEUE_STATUS.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&index_sql1)
+        sqlx::query(CREATE_WORKERS_INDEX_QUEUE_STATUS)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
 
-        let index_sql2 = CREATE_WORKERS_INDEX_HEARTBEAT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
-        sqlx::query(&index_sql2)
+        sqlx::query(CREATE_WORKERS_INDEX_HEARTBEAT)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -135,10 +134,15 @@ impl PgqrsAdmin {
 
     /// Uninstall pgqrs schema and remove all state from the database.
     ///
+    /// **Warning**: This will permanently delete the schema and all its data.
+    ///
+    /// # Arguments
+    /// * `schema_name` - The name of the schema to drop
+    ///
     /// # Returns
-    /// Ok if uninstall (or validation) succeeds, error otherwise.
-    pub async fn uninstall(&self) -> Result<()> {
-        let uninstall_statement = UNINSTALL_STATEMENT.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+    /// Ok if uninstallation succeeds, error otherwise.
+    pub async fn uninstall(&self, schema_name: &str) -> Result<()> {
+        let uninstall_statement = UNINSTALL_STATEMENT.replace("{SCHEMA_NAME}", schema_name);
         tracing::debug!("Executing uninstall statement: {}", uninstall_statement);
         sqlx::query(&uninstall_statement)
             .execute(&self.pool)
@@ -151,10 +155,13 @@ impl PgqrsAdmin {
 
     /// Verify that pgqrs installation is valid and healthy.
     ///
+    /// # Arguments
+    /// * `schema_name` - The name of the schema to verify
+    ///
     /// # Returns
     /// Ok if installation is valid, error otherwise.
-    pub async fn verify(&self) -> Result<()> {
-        let schema_exists_statement = SCHEMA_EXISTS_QUERY.replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA);
+    pub async fn verify(&self, schema_name: &str) -> Result<()> {
+        let schema_exists_statement = SCHEMA_EXISTS_QUERY.replace("{SCHEMA_NAME}", schema_name);
         tracing::debug!(
             "Executing schema exists statement: {}",
             schema_exists_statement
@@ -190,27 +197,19 @@ impl PgqrsAdmin {
             CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "")
         };
         let create_statement = create_statement
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", name);
 
         let insert_meta = INSERT_QUEUE_METADATA
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{name}", name)
             .replace("{unlogged}", if unlogged { "TRUE" } else { "FALSE" });
 
         // Create archive table for message archiving
-        let create_archive_statement = CREATE_ARCHIVE_TABLE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", name);
+        let create_archive_statement = CREATE_ARCHIVE_TABLE.replace("{queue_name}", name);
 
-        let create_archive_index1 = CREATE_ARCHIVE_INDEX_ARCHIVED_AT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", name);
+        let create_archive_index1 = CREATE_ARCHIVE_INDEX_ARCHIVED_AT.replace("{queue_name}", name);
 
-        let create_archive_index2 = CREATE_ARCHIVE_INDEX_ENQUEUED_AT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", name);
+        let create_archive_index2 = CREATE_ARCHIVE_INDEX_ENQUEUED_AT.replace("{queue_name}", name);
 
         tracing::debug!("Queue statement: {}", create_statement);
         tracing::debug!("Meta statement: {}", insert_meta);
@@ -235,9 +234,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of [`MetaResult`] describing each queue.
     pub async fn list_queues(&self) -> Result<Vec<QueueInfo>> {
-        let sql = crate::constants::LIST_QUEUE_INFO
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-        let results = sqlx::query_as::<_, QueueInfo>(&sql)
+        let results = sqlx::query_as::<_, QueueInfo>(crate::constants::LIST_QUEUE_INFO)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -256,17 +253,12 @@ impl PgqrsAdmin {
     /// Ok if deletion succeeds, error otherwise.
     pub async fn delete_queue(&self, name: &str) -> Result<()> {
         let drop_statement = DROP_QUEUE_STATEMENT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", name);
 
-        let drop_archive_statement = DROP_ARCHIVE_TABLE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", name);
+        let drop_archive_statement = DROP_ARCHIVE_TABLE.replace("{queue_name}", name);
 
-        let delete_meta = DELETE_QUEUE_METADATA
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{name}", name);
+        let delete_meta = DELETE_QUEUE_METADATA.replace("{name}", name);
 
         tracing::debug!("Executing delete metadata statement: {}", delete_meta);
         tracing::debug!("Executing drop queue statement: {}", drop_statement);
@@ -294,7 +286,6 @@ impl PgqrsAdmin {
     /// Ok if purge succeeds, error otherwise.
     pub async fn purge_queue(&self, name: &str) -> Result<()> {
         let purge_statement = PURGE_QUEUE_STATEMENT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", name);
         tracing::debug!("Executing purge queue statement: {}", purge_statement);
@@ -311,9 +302,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if purge succeeds, error otherwise.
     pub async fn purge_archive(&self, name: &str) -> Result<()> {
-        let purge_archive_statement = PURGE_ARCHIVE_TABLE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", name);
+        let purge_archive_statement = PURGE_ARCHIVE_TABLE.replace("{queue_name}", name);
         tracing::debug!(
             "Executing purge archive statement: {}",
             purge_archive_statement
@@ -360,10 +349,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// [`Queue`] instance for the queue.
     pub async fn get_queue_by_name(&self, queue_name: &str) -> Result<Queue> {
-        let sql = crate::constants::GET_QUEUE_INFO_BY_NAME
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        let queue_name: String = sqlx::query_scalar(&sql)
+        let queue_name: String = sqlx::query_scalar(crate::constants::GET_QUEUE_INFO_BY_NAME)
             .bind(queue_name)
             .fetch_one(&self.pool)
             .await
@@ -435,10 +421,7 @@ impl PgqrsAdmin {
         let now = Utc::now();
 
         // Insert the worker into the database and get the generated ID
-        let sql = crate::constants::INSERT_WORKER
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        let worker_id: i64 = sqlx::query_scalar(&sql)
+        let worker_id: i64 = sqlx::query_scalar(crate::constants::INSERT_WORKER)
             .bind(&hostname)
             .bind(port)
             .bind(&queue.queue_name)
@@ -477,10 +460,9 @@ impl PgqrsAdmin {
     pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
         let now = Utc::now();
 
-        let sql = crate::constants::UPDATE_WORKER_HEARTBEAT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let sql = crate::constants::UPDATE_WORKER_HEARTBEAT;
 
-        sqlx::query(&sql)
+        sqlx::query(sql)
             .bind(now)
             .bind(worker_id)
             .execute(&self.pool)
@@ -497,10 +479,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of all workers in the system
     pub async fn list_all_workers(&self) -> Result<Vec<WorkerInfo>> {
-        let sql = crate::constants::LIST_ALL_WORKERS
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        let workers = sqlx::query_as::<_, WorkerInfo>(&sql)
+        let workers = sqlx::query_as::<_, WorkerInfo>(crate::constants::LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -521,10 +500,7 @@ impl PgqrsAdmin {
     /// # Errors
     /// Returns `PgqrsError` if database query fails or worker not found
     pub async fn get_worker_by_id(&self, worker_id: i64) -> Result<WorkerInfo> {
-        let sql = crate::constants::GET_WORKER_BY_ID
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        let worker = sqlx::query_as::<_, WorkerInfo>(&sql)
+        let worker = sqlx::query_as::<_, WorkerInfo>(crate::constants::GET_WORKER_BY_ID)
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
@@ -548,7 +524,6 @@ impl PgqrsAdmin {
     ) -> Result<Vec<crate::types::QueueMessage>> {
         let worker = self.get_worker_by_id(worker_id).await?;
         let sql = crate::constants::GET_WORKER_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", &worker.queue_name);
 
@@ -571,10 +546,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of workers processing the specified queue
     pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<WorkerInfo>> {
-        let sql = crate::constants::LIST_QUEUE_WORKERS
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        let workers = sqlx::query_as::<_, WorkerInfo>(&sql)
+        let workers = sqlx::query_as::<_, WorkerInfo>(crate::constants::LIST_QUEUE_WORKERS)
             .bind(queue_name)
             .fetch_all(&self.pool)
             .await
@@ -598,7 +570,6 @@ impl PgqrsAdmin {
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         let worker = self.get_worker_by_id(worker_id).await?;
         let sql = crate::constants::RELEASE_WORKER_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", &worker.queue_name);
 
@@ -626,10 +597,7 @@ impl PgqrsAdmin {
     pub async fn begin_shutdown(&self, worker_id: i64) -> Result<()> {
         let now = Utc::now();
 
-        let sql = crate::constants::UPDATE_WORKER_SHUTDOWN
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
-
-        sqlx::query(&sql)
+        sqlx::query(crate::constants::UPDATE_WORKER_SHUTDOWN)
             .bind(now)
             .bind(worker_id)
             .execute(&self.pool)
@@ -651,8 +619,7 @@ impl PgqrsAdmin {
     /// # Errors
     /// Returns `PgqrsError` if the database update fails
     pub async fn mark_stopped(&self, worker_id: i64) -> Result<()> {
-        let sql = crate::constants::UPDATE_WORKER_STOPPED
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let sql = crate::constants::UPDATE_WORKER_STOPPED;
 
         sqlx::query(&sql)
             .bind(worker_id)
@@ -694,8 +661,7 @@ impl PgqrsAdmin {
                 message: format!("Invalid duration: {}", e),
             })?;
 
-        let sql = crate::constants::PURGE_OLD_WORKERS
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA);
+        let sql = crate::constants::PURGE_OLD_WORKERS;
 
         let result = sqlx::query(&sql)
             .bind(threshold)

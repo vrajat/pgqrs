@@ -41,6 +41,10 @@ struct Cli {
     #[arg(long, short = 'd')]
     dsn: Option<String>,
 
+    /// Schema name for pgqrs tables and objects (default: public, must exist before install)
+    #[arg(long, short = 's')]
+    schema: Option<String>,
+
     /// Config file path (overrides environment variables and defaults)
     #[arg(long, short = 'c')]
     config: Option<String>,
@@ -63,7 +67,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Install pgqrs schema
+    /// Install pgqrs schema (schema must be pre-created)
     Install,
     /// Uninstall pgqrs schema
     Uninstall,
@@ -285,11 +289,12 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     // Load configuration using the new prioritized loading system
     // Priority order:
     // 1. --dsn CLI argument (if provided)
-    // 2. --config CLI argument (if provided)
-    // 3. PGQRS_CONFIG_FILE environment variable
-    // 4. PGQRS_DSN and other environment variables
-    // 5. Default config files (pgqrs.yaml, pgqrs.yml)
-    let config = Config::load_with_options(cli.dsn, cli.config)
+    // 2. --schema CLI argument (if provided)
+    // 3. --config CLI argument (if provided)
+    // 4. PGQRS_CONFIG_FILE environment variable
+    // 5. PGQRS_DSN, PGQRS_SCHEMA and other environment variables
+    // 6. Default config files (pgqrs.yaml, pgqrs.yml)
+    let config = Config::load_with_schema_options(cli.dsn, cli.schema, cli.config)
         .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
 
     let admin = PgqrsAdmin::new(&config).await?;
@@ -313,13 +318,13 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
         Commands::Uninstall => {
             tracing::info!("Uninstalling pgqrs schema ...");
-            admin.uninstall().await?;
+            admin.uninstall(&config.schema).await?;
             tracing::info!("Uninstall completed successfully");
         }
 
         Commands::Verify => {
             tracing::info!("Verifying pgqrs installation...");
-            admin.verify().await?;
+            admin.verify(&config.schema).await?;
             tracing::info!("Verification completed successfully");
         }
 

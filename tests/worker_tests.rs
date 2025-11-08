@@ -10,13 +10,14 @@ use serial_test::serial;
 mod common;
 
 async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
-    let database_url = common::get_postgres_dsn().await;
-    let admin = PgqrsAdmin::new(&Config::from_dsn(database_url))
-        .await
-        .expect("Failed to create PgqrsAdmin");
+    let database_url = common::get_database_dsn_with_schema("pgqrs_worker_test").await;
+    let admin =
+        PgqrsAdmin::new(&Config::from_dsn_with_schema(database_url, "pgqrs_worker_test").unwrap())
+            .await
+            .expect("Failed to create PgqrsAdmin");
 
     // Clean up any existing workers to ensure test isolation
-    if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs.worker_repository RESTART IDENTITY CASCADE")
+    if let Err(e) = sqlx::query("TRUNCATE TABLE worker_repository RESTART IDENTITY CASCADE")
         .execute(&admin.pool)
         .await
     {
@@ -209,4 +210,56 @@ async fn test_worker_health_check() {
         .await
         .unwrap();
     assert!(healthy_after);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_custom_schema_search_path() {
+    let admin = create_admin().await;
+
+    // Get a connection from the pool to check search_path
+    let mut connection = admin.pool.acquire().await.unwrap();
+    let result = sqlx::query_scalar::<_, String>("SHOW search_path")
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+
+    // Should contain our custom schema
+    assert!(
+        result.contains("pgqrs_worker_test"),
+        "search_path should contain 'pgqrs_worker_test', got: {}",
+        result
+    );
+
+    // Create a queue to verify functionality works in custom schema
+    let queue = admin
+        .create_queue(&"schema_test_queue".to_string(), false)
+        .await
+        .unwrap();
+
+    assert_eq!(queue.queue_name, "schema_test_queue");
+
+    // Register a worker to test worker functionality
+    let worker = admin
+        .register(
+            queue.queue_name.clone(),
+            "schema-test-host".to_string(),
+            5050,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(worker.hostname, "schema-test-host");
+    assert_eq!(worker.port, 5050);
+    assert_eq!(worker.status, WorkerStatus::Ready);
+
+    // Test worker operations work correctly
+    admin.heartbeat(worker.id).await.unwrap();
+    admin.begin_shutdown(worker.id).await.unwrap();
+    admin.mark_stopped(worker.id).await.unwrap();
+
+    // Verify worker status updated
+    let workers = admin.list_queue_workers("schema_test_queue").await.unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].status, WorkerStatus::Stopped);
 }

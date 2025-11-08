@@ -128,6 +128,35 @@ pub async fn get_database_dsn() -> String {
         .expect("Failed to initialize database")
 }
 
+/// Get a database DSN with a specific schema for test isolation
+/// This creates a separate schema within the same database for isolation
+pub async fn get_database_dsn_with_schema(schema: &str) -> String {
+    // Get the base DSN first
+    let base_dsn = get_database_dsn().await;
+
+    // Create a temporary connection to set up the schema
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(30))
+        .connect(&base_dsn)
+        .await
+        .expect("Failed to connect to database");
+
+    // Create the schema if it doesn't exist
+    let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", schema);
+    if let Err(e) = sqlx::query(&create_schema_sql).execute(&pool).await {
+        // Ignore error if schema already exists (concurrent creation)
+        if !e.to_string().contains("already exists") {
+            panic!("Failed to create schema: {:?}", e);
+        }
+    }
+
+    println!("Schema '{}' ensured to exist", schema);
+
+    // Return the same DSN - the schema will be configured via search_path
+    base_dsn
+}
+
 /// Cleanup function called by dtor
 pub async fn cleanup_database() -> Result<(), Box<dyn std::error::Error>> {
     let manager_guard = CONTAINER_MANAGER.read().unwrap();
