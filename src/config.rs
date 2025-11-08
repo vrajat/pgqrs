@@ -38,7 +38,7 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Validates PostgreSQL schema name according to SQL identifier rules
+/// Validates an Identifier such as PostgreSQL schema name according to SQL identifier rules
 ///
 /// Rules from PostgreSQL documentation:
 /// - Must begin with a letter (a-z, A-Z) or underscore (_)
@@ -46,49 +46,49 @@ use std::path::Path;
 /// - Maximum length is 63 bytes (NAMEDATALEN-1)
 ///
 /// # Arguments
-/// * `schema` - The schema name to validate
+/// * `identifier` - The identifier to validate
 ///
 /// # Returns
 /// * `Ok(())` if the schema name is valid
 /// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
-pub fn validate_identifier(schema: &str) -> Result<()> {
-    if schema.is_empty() {
+fn validate_identifier(identifier: &str) -> Result<()> {
+    if identifier.is_empty() {
         return Err(crate::error::PgqrsError::InvalidConfig {
             field: "schema".to_string(),
             message: "Schema name cannot be empty".to_string(),
         });
     }
 
-    if schema.len() > 63 {
+    if identifier.len() > 63 {
         return Err(crate::error::PgqrsError::InvalidConfig {
             field: "schema".to_string(),
             message: format!(
                 "Schema name '{}' exceeds maximum length of 63 bytes",
-                schema
+                identifier
             ),
         });
     }
 
     // Check first character
-    let first_char = schema.chars().next().unwrap();
+    let first_char = identifier.chars().next().unwrap();
     if !first_char.is_ascii_alphabetic() && first_char != '_' {
         return Err(crate::error::PgqrsError::InvalidConfig {
             field: "schema".to_string(),
             message: format!(
                 "Schema name '{}' must start with a letter or underscore",
-                schema
+                identifier
             ),
         });
     }
 
     // Check remaining characters
-    for c in schema.chars() {
+    for c in identifier.chars() {
         if !c.is_ascii_alphanumeric() && c != '_' && c != '$' {
             return Err(crate::error::PgqrsError::InvalidConfig {
                 field: "schema".to_string(),
                 message: format!(
                     "Schema name '{}' contains invalid character '{}'. Only letters, digits, underscores, and dollar signs are allowed",
-                    schema, c
+                    identifier, c
                 ),
             });
         }
