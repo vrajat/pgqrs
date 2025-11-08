@@ -29,9 +29,10 @@ pub async fn setup_database_common(
             if let Err(e) = sqlx::query(&create_schema_sql).execute(&pool).await {
                 // Handle concurrent schema creation
                 let error_string = e.to_string();
-                if !error_string.contains("already exists") 
+                if !error_string.contains("already exists")
                     && !error_string.contains("pg_namespace_nspname_index")
-                    && !error_string.contains("duplicate key value") {
+                    && !error_string.contains("duplicate key value")
+                {
                     return Err(e.into());
                 }
             }

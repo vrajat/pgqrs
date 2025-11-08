@@ -118,7 +118,8 @@ impl DatabaseContainer for ExternalPostgresContainer {
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::cleanup_database_common(dsn, &self.schema, "External PostgreSQL").await
+        super::database_setup::cleanup_database_common(dsn, &self.schema, "External PostgreSQL")
+            .await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
