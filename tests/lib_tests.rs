@@ -28,7 +28,8 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
 async fn verify() {
     let admin = create_admin().await;
     // Verify should succeed (using custom schema "pgqrs_lib_test")
-    assert!(admin.verify().await.is_ok());
+    let result = admin.verify().await;
+    assert!(result.is_ok(), "Verify should succeed: {:?}", result);
 }
 
 #[tokio::test]

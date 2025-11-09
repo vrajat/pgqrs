@@ -333,3 +333,13 @@ pub const DROP_WORKER_REPOSITORY: &str = r#"
 pub const DROP_WORKER_STATUS_ENUM: &str = r#"
     DROP TYPE IF EXISTS worker_status CASCADE;
 "#;
+
+/// Lock queue repository table for exclusive access (create/delete operations)
+pub const LOCK_QUEUE_REPOSITORY_EXCLUSIVE: &str = r#"
+    LOCK TABLE queue_repository IN ACCESS EXCLUSIVE MODE;
+"#;
+
+/// Lock queue repository table for shared access (verify operations)
+pub const LOCK_QUEUE_REPOSITORY_ACCESS_SHARE: &str = r#"
+    LOCK TABLE queue_repository IN ACCESS SHARE MODE;
+"#;

@@ -32,7 +32,8 @@ use crate::constants::{
     CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
     CREATE_WORKERS_INDEX_QUEUE_STATUS, CREATE_WORKERS_TABLE, CREATE_WORKER_STATUS_ENUM,
     DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_REPOSITORY, DROP_QUEUE_STATEMENT,
-    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA, PURGE_ARCHIVE_TABLE,
+    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA,
+    LOCK_QUEUE_REPOSITORY_ACCESS_SHARE, LOCK_QUEUE_REPOSITORY_EXCLUSIVE, PURGE_ARCHIVE_TABLE,
     PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
 };
 use crate::error::{PgqrsError, Result};
@@ -90,46 +91,15 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
-        // Create meta table
-        sqlx::query(CREATE_QUEUE_INFO_TABLE_STATEMENT)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        let statements = vec![
+            CREATE_QUEUE_INFO_TABLE_STATEMENT.to_string(),
+            CREATE_WORKER_STATUS_ENUM.to_string(),
+            CREATE_WORKERS_TABLE.to_string(),
+            CREATE_WORKERS_INDEX_QUEUE_STATUS.to_string(),
+            CREATE_WORKERS_INDEX_HEARTBEAT.to_string(),
+        ];
 
-        // Create worker status enum type
-        sqlx::query(CREATE_WORKER_STATUS_ENUM)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        // Create workers table directly in install
-        sqlx::query(CREATE_WORKERS_TABLE)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        // Create worker indexes
-        sqlx::query(CREATE_WORKERS_INDEX_QUEUE_STATUS)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        sqlx::query(CREATE_WORKERS_INDEX_HEARTBEAT)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(())
+        self.run_statements_in_transaction(statements).await
     }
 
     /// Uninstall pgqrs schema and remove all state from the database.
@@ -147,65 +117,34 @@ impl PgqrsAdmin {
         // First, get list of all queues to drop their tables
         let queues = self.list_queues().await?;
 
+        // Build all DROP statements in the correct order
+        let mut statements = Vec::new();
+
         // Drop all queue tables first (they have foreign keys to worker_repository)
         for queue_info in &queues {
             let queue_name = &queue_info.queue_name;
-
-            // Drop queue table
             let drop_queue_sql = DROP_QUEUE_STATEMENT
                 .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-                .replace("{queue_name}", &format!("\"{}\"", queue_name));
-
-            sqlx::query(&drop_queue_sql)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| PgqrsError::Connection {
-                    message: format!("Failed to drop queue table for '{}': {}", queue_name, e),
-                })?;
+                .replace("{queue_name}", queue_name);
+            statements.push(drop_queue_sql);
         }
 
         // Drop all archive tables
         for queue_info in &queues {
             let queue_name = &queue_info.queue_name;
-
-            // Drop archive table
-            let drop_archive_sql =
-                DROP_ARCHIVE_TABLE.replace("{queue_name}", &format!("\"{}\"", queue_name));
-
-            sqlx::query(&drop_archive_sql)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| PgqrsError::Connection {
-                    message: format!("Failed to drop archive table for '{}': {}", queue_name, e),
-                })?;
+            let drop_archive_sql = DROP_ARCHIVE_TABLE.replace("{queue_name}", queue_name);
+            statements.push(drop_archive_sql);
         }
 
         // Now drop the repository tables (order matters due to dependencies)
-        // Drop queue_repository table (no foreign key dependencies from other tables)
-        sqlx::query(DROP_QUEUE_REPOSITORY)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to drop queue_repository table: {}", e),
-            })?;
-
-        // Drop worker_repository table (no longer referenced by queue tables)
-        sqlx::query(DROP_WORKER_REPOSITORY)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to drop worker_repository table: {}", e),
-            })?;
+        statements.push(DROP_QUEUE_REPOSITORY.to_string());
+        statements.push(DROP_WORKER_REPOSITORY.to_string());
 
         // Drop the enum type last (after all tables that use it)
-        sqlx::query(DROP_WORKER_STATUS_ENUM)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to drop worker_status enum type: {}", e),
-            })?;
+        statements.push(DROP_WORKER_STATUS_ENUM.to_string());
 
-        Ok(())
+        // Execute all statements in a single transaction
+        self.run_statements_in_transaction(statements).await
     }
 
     /// Verify that pgqrs installation is valid and healthy.
@@ -218,6 +157,24 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if installation is valid, error otherwise.
     pub async fn verify(&self) -> Result<()> {
+        // Begin a read-only transaction for all verification queries
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock queue_repository table in ACCESS SHARE mode
+        // This allows other reads but blocks writes, ensuring consistent metadata view
+        sqlx::query(LOCK_QUEUE_REPOSITORY_ACCESS_SHARE)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to acquire lock on queue_repository: {}", e),
+            })?;
+
         // Check if queue_repository table exists
         let queue_repo_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
@@ -225,7 +182,7 @@ impl PgqrsAdmin {
                 WHERE table_name = 'queue_repository'
             )",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
             message: format!("Failed to check queue_repository existence: {}", e),
@@ -244,7 +201,7 @@ impl PgqrsAdmin {
                 WHERE table_name = 'worker_repository'
             )",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
             message: format!("Failed to check worker_repository existence: {}", e),
@@ -257,7 +214,14 @@ impl PgqrsAdmin {
         }
 
         // Get all queues from queue_repository and verify their tables exist
-        let queues = self.list_queues().await?;
+        let queues: Vec<QueueInfo> = sqlx::query_as(
+            "SELECT queue_name, unlogged, created_at FROM queue_repository ORDER BY queue_name",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to list queues: {}", e),
+        })?;
 
         for queue_info in &queues {
             let queue_name = &queue_info.queue_name;
@@ -271,7 +235,7 @@ impl PgqrsAdmin {
                 )",
             )
             .bind(&queue_table_name)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!(
@@ -298,7 +262,7 @@ impl PgqrsAdmin {
                 )",
             )
             .bind(&archive_table_name)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!(
@@ -316,6 +280,11 @@ impl PgqrsAdmin {
                 });
             }
         }
+
+        // Commit the transaction (though it's read-only, this ensures consistency)
+        tx.commit().await.map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to commit transaction: {}", e),
+        })?;
 
         Ok(())
     }
@@ -355,8 +324,10 @@ impl PgqrsAdmin {
         tracing::debug!("Archive index 1: {}", create_archive_index1);
         tracing::debug!("Archive index 2: {}", create_archive_index2);
 
-        // Execute all statements in a transaction (queue table, archive table, archive indexes, metadata)
+        // Execute all statements in a transaction with table-level locking
+        // Lock statement must be first to acquire exclusive access to queue_repository
         self.run_statements_in_transaction(vec![
+            LOCK_QUEUE_REPOSITORY_EXCLUSIVE.to_string(),
             create_statement,
             create_archive_statement,
             create_archive_index1,
@@ -364,6 +335,7 @@ impl PgqrsAdmin {
             insert_meta,
         ])
         .await?;
+
         Ok(Queue::new(self.pool.clone(), name))
     }
 
@@ -405,7 +377,10 @@ impl PgqrsAdmin {
             drop_archive_statement
         );
 
+        // Execute all statements in a transaction with table-level locking
+        // Lock statement must be first to acquire exclusive access to queue_repository
         self.run_statements_in_transaction(vec![
+            LOCK_QUEUE_REPOSITORY_EXCLUSIVE.to_string(),
             drop_statement,
             drop_archive_statement,
             delete_meta,
