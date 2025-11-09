@@ -58,7 +58,7 @@ pub const READ_MESSAGES: &str = r#"
     )
     UPDATE pgqrs_messages t
     SET
-        vt = clock_timestamp() + interval '$3 seconds',
+        vt = clock_timestamp() + make_interval(secs => $3::double precision),
         read_ct = read_ct + 1,
         worker_id = $4
     FROM cte
@@ -83,7 +83,7 @@ pub const DEQUEUE_MESSAGE: &str = r#"
 /// Update message visibility timeout
 pub const UPDATE_MESSAGE_VT: &str = r#"
     UPDATE pgqrs_messages
-    SET vt = vt + interval '$1 seconds'
+    SET vt = vt + make_interval(secs => $1::double precision)
     WHERE id = $2
     RETURNING id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct;
 "#;

@@ -406,3 +406,41 @@ async fn test_custom_schema_search_path() {
         .expect("Failed to purge messages");
     assert!(admin.delete_queue(&queue_name).await.is_ok());
 }
+
+#[tokio::test]
+async fn test_interval_parameter_syntax() {
+    let admin = create_admin().await;
+    let queue_name = "test_interval_queue";
+
+    // Create queue
+    let queue = admin.create_queue(queue_name).await.unwrap();
+
+    // Send a message to test interval functionality
+    let message_payload = json!({"test": "interval_test"});
+    queue.enqueue(&message_payload).await.unwrap();
+
+    // Test reading messages (which uses make_interval in READ_MESSAGES)
+    let messages = queue.read_delay(30, 1).await.unwrap(); // 30 seconds visibility timeout
+    assert_eq!(messages.len(), 1, "Should read one message");
+
+    let message = &messages[0];
+    assert!(message.vt > chrono::Utc::now(), "Message should have future visibility timeout");
+    let original_vt = message.vt;
+
+    // Test extending visibility timeout (which uses make_interval in UPDATE_MESSAGE_VT)
+    let extend_result = queue.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
+    assert!(extend_result, "Should successfully extend visibility timeout");
+
+    // Get the updated message to verify the interval was applied correctly
+    let updated_message = queue.get_message_by_id(message.id).await.unwrap();
+    assert!(updated_message.vt > original_vt, "Extended VT should be later than original");
+
+    // Verify the interval was applied correctly (should be roughly 60 seconds later)
+    let duration_diff = (updated_message.vt - original_vt).num_seconds();
+    assert!(duration_diff >= 59 && duration_diff <= 61,
+           "VT should be extended by approximately 60 seconds, got {} seconds", duration_diff);
+
+    // Cleanup
+    admin.purge_queue(queue_name).await.expect("Failed to purge messages");
+    admin.delete_queue(queue_name).await.expect("Failed to delete queue");
+}
