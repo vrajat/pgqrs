@@ -182,14 +182,14 @@ impl PgqrsAdmin {
             }
         }
 
-        // Category 2: Validate referential integrity using right outer joins
+        // Category 2: Validate referential integrity using left outer joins
 
         // Check that all messages have valid queue_id references
         let orphaned_messages = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM pgqrs_messages m
-             RIGHT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
-             WHERE q.id IS NULL AND m.id IS NOT NULL",
+             LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+             WHERE q.id IS NULL",
         )
         .fetch_one(&mut *tx)
         .await
@@ -210,8 +210,8 @@ impl PgqrsAdmin {
         let orphaned_message_workers = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM pgqrs_messages m
-             RIGHT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
-             WHERE w.id IS NULL AND m.worker_id IS NOT NULL",
+             LEFT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
+             WHERE m.worker_id IS NOT NULL AND w.id IS NULL",
         )
         .fetch_one(&mut *tx)
         .await
@@ -235,8 +235,8 @@ impl PgqrsAdmin {
         let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM pgqrs_archive a
-             RIGHT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
-             WHERE q.id IS NULL AND a.id IS NOT NULL",
+             LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
+             WHERE q.id IS NULL",
         )
         .fetch_one(&mut *tx)
         .await
@@ -257,8 +257,8 @@ impl PgqrsAdmin {
         let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM pgqrs_archive a
-             RIGHT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
-             WHERE w.id IS NULL AND a.worker_id IS NOT NULL",
+             LEFT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
+             WHERE a.worker_id IS NOT NULL AND w.id IS NULL",
         )
         .fetch_one(&mut *tx)
         .await

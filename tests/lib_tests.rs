@@ -444,3 +444,57 @@ async fn test_interval_parameter_syntax() {
     admin.purge_queue(queue_name).await.expect("Failed to purge messages");
     admin.delete_queue(queue_name).await.expect("Failed to delete queue");
 }
+
+#[tokio::test]
+async fn test_referential_integrity_checks() {
+    let admin = create_admin().await;
+    let queue_name = "test_integrity_queue";
+
+    // Create queue and get queue_id
+    let _queue = admin.create_queue(queue_name).await.unwrap();
+    let queue_list = admin.list_queues().await.unwrap();
+    let queue_info = queue_list.iter().find(|q| q.queue_name == queue_name).unwrap();
+    let _queue_id = queue_info.id;
+
+    // Normal state: verify should pass
+    let verify_result = admin.verify().await;
+    assert!(verify_result.is_ok(), "Verify should succeed with valid references");
+
+    // Create an orphaned message by inserting directly with invalid queue_id
+    // This simulates what would happen if referential integrity was broken
+    let orphan_result = sqlx::query(
+        "INSERT INTO pgqrs_messages (queue_id, payload) VALUES ($1, $2)"
+    )
+    .bind(99999i64) // Non-existent queue_id
+    .bind(json!({"test": "orphaned"}))
+    .execute(&admin.pool)
+    .await;
+
+    match orphan_result {
+        Ok(_) => {
+            // If the insert succeeded (no foreign key constraint), verify should now fail
+            let verify_result = admin.verify().await;
+            assert!(verify_result.is_err(), "Verify should fail with orphaned message");
+            assert!(verify_result.unwrap_err().to_string().contains("messages with invalid queue_id references"));
+
+            // Clean up orphaned message
+            sqlx::query("DELETE FROM pgqrs_messages WHERE queue_id = $1")
+                .bind(99999i64)
+                .execute(&admin.pool)
+                .await
+                .expect("Failed to clean up orphaned message");
+        },
+        Err(_) => {
+            // If foreign key constraint prevented the insert, that's also good
+            // (means the schema has proper constraints)
+            println!("Foreign key constraint prevented orphaned message creation - this is correct behavior");
+        }
+    }
+
+    // Verify should pass again after cleanup
+    let verify_result = admin.verify().await;
+    assert!(verify_result.is_ok(), "Verify should succeed after cleanup");
+
+    // Cleanup
+    admin.delete_queue(queue_name).await.expect("Failed to delete queue");
+}
