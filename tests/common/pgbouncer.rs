@@ -242,8 +242,7 @@ impl DatabaseContainer for ExternalPgBouncerContainer {
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer")
-            .await
+        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer").await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {

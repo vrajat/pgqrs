@@ -204,7 +204,7 @@ impl PgqrsAdmin {
             });
         }
 
-                // Lock queue_repository table in ACCESS SHARE mode
+        // Lock queue_repository table in ACCESS SHARE mode
         // This allows other reads but blocks writes, ensuring consistent metadata view
         sqlx::query(LOCK_QUEUE_REPOSITORY_ACCESS_SHARE)
             .execute(&mut *tx)
