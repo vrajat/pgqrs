@@ -17,7 +17,7 @@ async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
             .expect("Failed to create PgqrsAdmin");
 
     // Clean up any existing workers to ensure test isolation
-    if let Err(e) = sqlx::query("TRUNCATE TABLE worker_repository RESTART IDENTITY CASCADE")
+    if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE")
         .execute(&admin.pool)
         .await
     {
@@ -34,7 +34,7 @@ async fn test_worker_registration() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin.create_queue("test_queue", false).await.unwrap();
+    let queue = admin.create_queue("test_queue").await.unwrap();
 
     // Register a worker
     let worker = admin
@@ -59,7 +59,7 @@ async fn test_worker_lifecycle() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin.create_queue("lifecycle_queue", false).await.unwrap();
+    let queue = admin.create_queue("lifecycle_queue").await.unwrap();
 
     // Register a worker
     let worker = admin
@@ -86,7 +86,7 @@ async fn test_worker_message_assignment() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin.create_queue("message_queue", false).await.unwrap();
+    let queue = admin.create_queue("message_queue").await.unwrap();
 
     // Register a worker to verify the worker registration process
     let _worker = admin
@@ -105,11 +105,11 @@ async fn test_worker_message_assignment() {
     // Verify worker can read messages from queue
     assert!(!messages.is_empty());
     for msg in &messages {
-        assert!(msg.msg_id > 0);
+        assert!(msg.id > 0);
     }
 
     // Verify worker can process and delete messages
-    let message_ids: Vec<i64> = messages.iter().map(|m| m.msg_id).collect();
+    let message_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
     queue.delete_batch(message_ids).await.unwrap();
 
     // Verify messages were deleted
@@ -123,8 +123,8 @@ async fn test_admin_worker_management() {
     let admin = create_admin().await;
 
     // Create test queues
-    let queue1 = admin.create_queue("admin_queue1", false).await.unwrap();
-    let queue2 = admin.create_queue("admin_queue2", false).await.unwrap();
+    let queue1 = admin.create_queue("admin_queue1").await.unwrap();
+    let queue2 = admin.create_queue("admin_queue2").await.unwrap();
 
     // Register workers on different queues
     let worker1 = admin
@@ -163,7 +163,7 @@ async fn test_worker_health_check() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin.create_queue("health_queue", false).await.unwrap();
+    let queue = admin.create_queue("health_queue").await.unwrap();
 
     // Register a worker
     let worker = admin
@@ -214,10 +214,7 @@ async fn test_custom_schema_search_path() {
     );
 
     // Create a queue to verify functionality works in custom schema
-    let queue = admin
-        .create_queue("schema_test_queue", false)
-        .await
-        .unwrap();
+    let queue = admin.create_queue("schema_test_queue").await.unwrap();
 
     assert_eq!(queue.queue_name, "schema_test_queue");
 

@@ -18,7 +18,9 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, PENDING_COUNT, QUEUE_PREFIX,
+    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, DELETE_MESSAGE_BATCH,
+    DEQUEUE_MESSAGE, INSERT_MESSAGE, PENDING_COUNT, READ_MESSAGES, SELECT_MESSAGE_BY_ID,
+    UPDATE_MESSAGE_VT,
 };
 use crate::error::Result;
 use crate::types::QueueMessage;
@@ -29,91 +31,31 @@ use sqlx::PgPool;
 ///
 /// A Queue instance provides methods for enqueuing messages, reading messages,
 /// and managing message lifecycle within a specific PostgreSQL-backed queue.
-/// Each Queue corresponds to a table in the database.
+/// Each Queue corresponds to a row in the pgqrs_queues table.
 pub struct Queue {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
+    /// Database ID of the queue from pgqrs_queues table
+    pub queue_id: i64,
     /// Logical name of the queue
     pub queue_name: String,
-    /// Table name in the database for this queue
-    pub table_name: String,
-    /// SQL for inserting a message
-    pub insert_sql: String,
-    /// SQL for selecting a message by ID
-    pub select_by_id_sql: String,
-    /// SQL for reading messages
-    pub read_messages_sql: String,
-    /// SQL for dequeuing a message
-    pub dequeue_sql: String,
-    /// SQL for updating message visibility timeout
-    pub update_vt_sql: String,
-    /// SQL for deleting a batch of messages
-    pub delete_batch_sql: String,
-    /// SQL for archiving a single message
-    pub archive_sql: String,
-    /// SQL for archiving a batch of messages
-    pub archive_batch_sql: String,
-    /// SQL for listing archive messages
-    pub archive_list_sql: String,
-    /// SQL for selecting archived message by ID
-    pub archive_select_by_id_sql: String,
 }
 
 impl Queue {
-    /// Create a new Queue instance for the specified queue name.
+    /// Create a new Queue instance for the specified queue ID and name.
     ///
-    /// This method is internal and sets up all the SQL statements needed
-    /// for queue operations by replacing template placeholders with the
-    /// actual queue name and schema.
+    /// This method creates a Queue instance that operates on the unified
+    /// pgqrs_messages table using the provided queue_id for filtering operations.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
-    /// * `queue_name` - Name of the queue (will be used to form table name)
-    pub(crate) fn new(pool: PgPool, queue_name: &str) -> Self {
-        let table_name = format!("{}_{}", QUEUE_PREFIX, queue_name);
-        let insert_sql = crate::constants::INSERT_MESSAGE
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let select_by_id_sql = crate::constants::SELECT_MESSAGE_BY_ID
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let read_messages_sql = crate::constants::READ_MESSAGES
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let dequeue_sql = crate::constants::DEQUEUE_MESSAGE
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let update_vt_sql = crate::constants::UPDATE_MESSAGE_VT
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let delete_batch_sql = crate::constants::DELETE_MESSAGE_BATCH
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-
-        // Archive SQL statements
-        let archive_sql = ARCHIVE_MESSAGE
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let archive_batch_sql = ARCHIVE_BATCH
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", queue_name);
-        let archive_list_sql = ARCHIVE_LIST.replace("{queue_name}", queue_name);
-        let archive_select_by_id_sql = ARCHIVE_SELECT_BY_ID.replace("{queue_name}", queue_name);
-
+    /// * `queue_id` - Database ID of the queue from pgqrs_queues table
+    /// * `queue_name` - Name of the queue (for display/logging purposes)
+    pub(crate) fn new(pool: PgPool, queue_id: i64, queue_name: &str) -> Self {
         Self {
             pool,
+            queue_id,
             queue_name: queue_name.to_string(),
-            table_name,
-            insert_sql,
-            select_by_id_sql,
-            read_messages_sql,
-            dequeue_sql,
-            update_vt_sql,
-            delete_batch_sql,
-            archive_sql,
-            archive_batch_sql,
-            archive_list_sql,
-            archive_select_by_id_sql,
         }
     }
 
@@ -125,7 +67,7 @@ impl Queue {
     /// # Returns
     /// The message if found, or an error if not found.
     pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        let result = sqlx::query_as::<_, QueueMessage>(&self.select_by_id_sql)
+        let result = sqlx::query_as::<_, QueueMessage>(SELECT_MESSAGE_BY_ID)
             .bind(msg_id)
             .fetch_one(&self.pool)
             .await
@@ -180,11 +122,12 @@ impl Queue {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        let result = sqlx::query_scalar::<_, i64>(&self.insert_sql)
+        let result = sqlx::query_scalar::<_, i64>(INSERT_MESSAGE)
+            .bind(self.queue_id)
+            .bind(payload)
             .bind(0_i32) // read_ct
             .bind(now)
             .bind(vt)
-            .bind(payload)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
@@ -214,11 +157,12 @@ impl Queue {
 
         let mut ids = Vec::with_capacity(payloads.len());
         for payload in payloads {
-            let id = sqlx::query_scalar::<_, i64>(&self.insert_sql)
+            let id = sqlx::query_scalar::<_, i64>(INSERT_MESSAGE)
+                .bind(self.queue_id)
+                .bind(payload)
                 .bind(0_i32) // read_ct
                 .bind(now)
                 .bind(vt)
-                .bind(payload)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(|e| crate::error::PgqrsError::Connection {
@@ -234,18 +178,15 @@ impl Queue {
             })?;
 
         // Fetch all messages in a single query using WHERE msg_id = ANY($1)
-        let sql = format!(
-            "SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM \"{}\" WHERE msg_id = ANY($1)",
-            self.table_name
-        );
-
-        let queue_messages = sqlx::query_as::<_, QueueMessage>(&sql)
-            .bind(&ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        let queue_messages = sqlx::query_as::<_, QueueMessage>(
+            "SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct FROM pgqrs_messages WHERE id = ANY($1)"
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| crate::error::PgqrsError::Connection {
+            message: e.to_string(),
+        })?;
 
         Ok(queue_messages)
     }
@@ -257,11 +198,9 @@ impl Queue {
     pub async fn pending_count(&self) -> Result<i64> {
         use chrono::Utc;
         let now = Utc::now();
-        let sql = PENDING_COUNT
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", &self.queue_name);
 
-        let count = sqlx::query_scalar::<_, i64>(&sql)
+        let count = sqlx::query_scalar::<_, i64>(PENDING_COUNT)
+            .bind(self.queue_id)
             .bind(now)
             .fetch_one(&self.pool)
             .await
@@ -292,13 +231,11 @@ impl Queue {
     /// # Returns
     /// Vector of messages read from the queue.
     pub async fn read_delay(&self, vt: u32, limit: usize) -> Result<Vec<QueueMessage>> {
-        let sql = self
-            .read_messages_sql
-            .clone()
-            .replace("{vt}", &vt.to_string())
-            .replace("{limit}", &limit.to_string());
-
-        let result = sqlx::query_as::<_, QueueMessage>(&sql)
+        let result = sqlx::query_as::<_, QueueMessage>(READ_MESSAGES)
+            .bind(self.queue_id)
+            .bind(limit as i64)
+            .bind(vt as i32)
+            .bind(None::<i64>) // worker_id (will be set by the query)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
@@ -315,13 +252,7 @@ impl Queue {
     /// # Returns
     /// The deleted message, or an error if not found.
     pub async fn dequeue(&self, message_id: i64) -> Result<QueueMessage> {
-        let sql = self
-            .dequeue_sql
-            .clone()
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", &self.queue_name);
-
-        let result = sqlx::query_as::<_, QueueMessage>(&sql)
+        let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGE)
             .bind(message_id)
             .fetch_one(&self.pool)
             .await
@@ -339,9 +270,7 @@ impl Queue {
     /// # Returns
     /// Vector of booleans indicating success for each message (same order as input).
     pub async fn delete_batch(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
-        let sql = self.delete_batch_sql.clone();
-
-        let deleted_ids: Vec<i64> = sqlx::query_scalar(&sql)
+        let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
             .fetch_all(&self.pool)
             .await
@@ -371,8 +300,7 @@ impl Queue {
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
-        let sql = self.update_vt_sql.clone();
-        let updated = sqlx::query(&sql)
+        let updated = sqlx::query(UPDATE_MESSAGE_VT)
             .bind(additional_seconds as i32)
             .bind(message_id)
             .execute(&self.pool)
@@ -394,7 +322,7 @@ impl Queue {
     /// # Returns
     /// True if message was successfully archived, false if message was not found
     pub async fn archive(&self, msg_id: i64) -> Result<bool> {
-        let result: Option<bool> = sqlx::query_scalar(&self.archive_sql)
+        let result: Option<bool> = sqlx::query_scalar(ARCHIVE_MESSAGE)
             .bind(msg_id)
             .fetch_optional(&self.pool)
             .await
@@ -420,7 +348,7 @@ impl Queue {
             return Ok(vec![]);
         }
 
-        let archived_ids: Vec<i64> = sqlx::query_scalar(&self.archive_batch_sql)
+        let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
             .bind(&msg_ids)
             .fetch_all(&self.pool)
             .await
@@ -450,7 +378,8 @@ impl Queue {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<crate::types::ArchivedMessage>> {
-        let messages: Vec<crate::types::ArchivedMessage> = sqlx::query_as(&self.archive_list_sql)
+        let messages: Vec<crate::types::ArchivedMessage> = sqlx::query_as(ARCHIVE_LIST)
+            .bind(self.queue_id)
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
@@ -473,7 +402,7 @@ impl Queue {
         &self,
         msg_id: i64,
     ) -> Result<crate::types::ArchivedMessage> {
-        let message: crate::types::ArchivedMessage = sqlx::query_as(&self.archive_select_by_id_sql)
+        let message: crate::types::ArchivedMessage = sqlx::query_as(ARCHIVE_SELECT_BY_ID)
             .bind(msg_id)
             .fetch_one(&self.pool)
             .await

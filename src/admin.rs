@@ -22,20 +22,11 @@
 //!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //!     let admin = PgqrsAdmin::new(&config).await?;
 //!     admin.install().await?;
-//!     admin.create_queue(&"jobs".to_string(), false).await?;
+//!     admin.create_queue("jobs").await?;
 //!     Ok(())
 //! }
 //! ```
 use crate::config::Config;
-use crate::constants::{
-    CREATE_ARCHIVE_INDEX_ARCHIVED_AT, CREATE_ARCHIVE_INDEX_ENQUEUED_AT, CREATE_ARCHIVE_TABLE,
-    CREATE_QUEUE_INFO_TABLE_STATEMENT, CREATE_QUEUE_STATEMENT, CREATE_WORKERS_INDEX_HEARTBEAT,
-    CREATE_WORKERS_INDEX_QUEUE_STATUS, CREATE_WORKERS_TABLE, CREATE_WORKER_STATUS_ENUM,
-    DELETE_QUEUE_METADATA, DROP_ARCHIVE_TABLE, DROP_QUEUE_REPOSITORY, DROP_QUEUE_STATEMENT,
-    DROP_WORKER_REPOSITORY, DROP_WORKER_STATUS_ENUM, INSERT_QUEUE_METADATA,
-    LOCK_QUEUE_REPOSITORY_ACCESS_SHARE, LOCK_QUEUE_REPOSITORY_EXCLUSIVE, PURGE_ARCHIVE_TABLE,
-    PURGE_QUEUE_STATEMENT, QUEUE_PREFIX,
-};
 use crate::error::{PgqrsError, Result};
 use crate::queue::Queue;
 use crate::types::QueueMetrics;
@@ -92,56 +83,53 @@ impl PgqrsAdmin {
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
         let statements = vec![
-            CREATE_QUEUE_INFO_TABLE_STATEMENT.to_string(),
-            CREATE_WORKER_STATUS_ENUM.to_string(),
-            CREATE_WORKERS_TABLE.to_string(),
-            CREATE_WORKERS_INDEX_QUEUE_STATUS.to_string(),
-            CREATE_WORKERS_INDEX_HEARTBEAT.to_string(),
+            // Create enum types first
+            crate::constants::CREATE_WORKER_STATUS_ENUM.to_string(),
+            // Create repository tables
+            crate::constants::CREATE_QUEUE_INFO_TABLE_STATEMENT.to_string(),
+            crate::constants::CREATE_WORKERS_TABLE.to_string(),
+            // Create unified tables with foreign key dependencies
+            crate::constants::CREATE_PGQRS_MESSAGES_TABLE.to_string(),
+            crate::constants::CREATE_PGQRS_ARCHIVE_TABLE.to_string(),
+            // Create indexes for performance
+            crate::constants::CREATE_WORKERS_INDEX_QUEUE_STATUS.to_string(),
+            crate::constants::CREATE_WORKERS_INDEX_HEARTBEAT.to_string(),
+            // Create individual indexes for messages table
+            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_QUEUE_VT.to_string(),
+            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_WORKER_ID.to_string(),
+            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_PRIORITY.to_string(),
+            // Create individual indexes for archive table
+            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_QUEUE_ID.to_string(),
+            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_ARCHIVED_AT.to_string(),
+            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_ORIGINAL_MSG_ID.to_string(),
         ];
 
         self.run_statements_in_transaction(statements).await
     }
 
-    /// Uninstall pgqrs schema and remove all state from the database.
+    /// Uninstall pgqrs from the database.
     ///
-    /// **Warning**: This will permanently delete all pgqrs data including:
-    /// - All queue tables (q_*)
-    /// - All archive tables (archive_*)
-    /// - Queue repository table
-    /// - Worker repository table
+    /// This method removes all pgqrs infrastructure from the database:
+    /// - Unified messages table (pgqrs_messages)
+    /// - Unified archive table (pgqrs_archive)
+    /// - Queue repository table (pgqrs_queues)
+    /// - Worker repository table (pgqrs_workers)
     /// - Worker status enum type
     ///
     /// # Returns
     /// Ok if uninstallation succeeds, error otherwise.
     pub async fn uninstall(&self) -> Result<()> {
-        // First, get list of all queues to drop their tables
-        let queues = self.list_queues().await?;
-
-        // Build all DROP statements in the correct order
-        let mut statements = Vec::new();
-
-        // Drop all queue tables first (they have foreign keys to worker_repository)
-        for queue_info in &queues {
-            let queue_name = &queue_info.queue_name;
-            let drop_queue_sql = DROP_QUEUE_STATEMENT
-                .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-                .replace("{queue_name}", queue_name);
-            statements.push(drop_queue_sql);
-        }
-
-        // Drop all archive tables
-        for queue_info in &queues {
-            let queue_name = &queue_info.queue_name;
-            let drop_archive_sql = DROP_ARCHIVE_TABLE.replace("{queue_name}", queue_name);
-            statements.push(drop_archive_sql);
-        }
-
-        // Now drop the repository tables (order matters due to dependencies)
-        statements.push(DROP_QUEUE_REPOSITORY.to_string());
-        statements.push(DROP_WORKER_REPOSITORY.to_string());
-
-        // Drop the enum type last (after all tables that use it)
-        statements.push(DROP_WORKER_STATUS_ENUM.to_string());
+        // Build DROP statements in the correct order (considering foreign key dependencies)
+        let statements = vec![
+            // Drop tables with foreign keys first
+            crate::constants::DROP_PGQRS_MESSAGES_TABLE.to_string(),
+            crate::constants::DROP_PGQRS_ARCHIVE_TABLE.to_string(),
+            // Drop repository tables
+            crate::constants::DROP_QUEUE_REPOSITORY.to_string(),
+            crate::constants::DROP_WORKER_REPOSITORY.to_string(),
+            // Drop enum type last
+            crate::constants::DROP_WORKER_STATUS_ENUM.to_string(),
+        ];
 
         // Execute all statements in a single transaction
         self.run_statements_in_transaction(statements).await
@@ -150,9 +138,8 @@ impl PgqrsAdmin {
     /// Verify that pgqrs installation is valid and healthy.
     ///
     /// This method checks that all required infrastructure is in place:
-    /// - QueueRepository table exists
-    /// - WorkerRepository table exists
-    /// - All queues in queue repository have corresponding queue and archive tables
+    /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)
+    /// - Referential integrity is maintained (all foreign keys are valid)
     ///
     /// # Returns
     /// Ok if installation is valid, error otherwise.
@@ -166,122 +153,132 @@ impl PgqrsAdmin {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
-        // Check if queue_repository table exists
-        let queue_repo_exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_name = 'queue_repository'
-            )",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to check queue_repository existence: {}", e),
-        })?;
+        // Category 1: Check existence of all required tables
+        let required_tables = [
+            ("pgqrs_queues", "Queue repository table"),
+            ("pgqrs_workers", "Worker repository table"),
+            ("pgqrs_messages", "Unified messages table"),
+            ("pgqrs_archive", "Unified archive table"),
+        ];
 
-        if !queue_repo_exists {
-            return Err(PgqrsError::Connection {
-                message: "queue_repository table does not exist".to_string(),
-            });
-        }
-
-        // Check if worker_repository table exists
-        let worker_repo_exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_name = 'worker_repository'
-            )",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to check worker_repository existence: {}", e),
-        })?;
-
-        if !worker_repo_exists {
-            return Err(PgqrsError::Connection {
-                message: "worker_repository table does not exist".to_string(),
-            });
-        }
-
-        // Lock queue_repository table in ACCESS SHARE mode
-        // This allows other reads but blocks writes, ensuring consistent metadata view
-        sqlx::query(LOCK_QUEUE_REPOSITORY_ACCESS_SHARE)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to acquire lock on queue_repository: {}", e),
-            })?;
-
-        // Get all queues from queue_repository and verify their tables exist
-        let queues: Vec<QueueInfo> = sqlx::query_as(
-            "SELECT queue_name, unlogged, created_at FROM queue_repository ORDER BY queue_name",
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to list queues: {}", e),
-        })?;
-
-        for queue_info in &queues {
-            let queue_name = &queue_info.queue_name;
-
-            // Check if queue table exists
-            let queue_table_name = format!("{}_{}", QUEUE_PREFIX, queue_name);
-            let queue_table_exists = sqlx::query_scalar::<_, bool>(
+        for (table_name, description) in &required_tables {
+            let table_exists = sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables
                     WHERE table_name = $1
                 )",
             )
-            .bind(&queue_table_name)
+            .bind(table_name)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!(
-                    "Failed to check queue table '{}' existence: {}",
-                    queue_table_name, e
-                ),
+                message: format!("Failed to check {} existence: {}", description, e),
             })?;
 
-            if !queue_table_exists {
+            if !table_exists {
                 return Err(PgqrsError::Connection {
-                    message: format!(
-                        "Queue table '{}' does not exist for queue '{}'",
-                        queue_table_name, queue_name
-                    ),
-                });
-            }
-
-            // Check if archive table exists
-            let archive_table_name = format!("archive_{}", queue_name);
-            let archive_table_exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_name = $1
-                )",
-            )
-            .bind(&archive_table_name)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!(
-                    "Failed to check archive table '{}' existence: {}",
-                    archive_table_name, e
-                ),
-            })?;
-
-            if !archive_table_exists {
-                return Err(PgqrsError::Connection {
-                    message: format!(
-                        "Archive table '{}' does not exist for queue '{}'",
-                        archive_table_name, queue_name
-                    ),
+                    message: format!("{} ('{}') does not exist", description, table_name),
                 });
             }
         }
 
-        // Commit the transaction (though it's read-only, this ensures consistency)
+        // Category 2: Validate referential integrity using right outer joins
+
+        // Check that all messages have valid queue_id references
+        let orphaned_messages = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM pgqrs_messages m
+             RIGHT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+             WHERE q.id IS NULL AND m.id IS NOT NULL",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to check message referential integrity: {}", e),
+        })?;
+
+        if orphaned_messages > 0 {
+            return Err(PgqrsError::Connection {
+                message: format!(
+                    "Found {} messages with invalid queue_id references",
+                    orphaned_messages
+                ),
+            });
+        }
+
+        // Check that all messages with worker_id have valid worker references
+        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM pgqrs_messages m
+             RIGHT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
+             WHERE w.id IS NULL AND m.worker_id IS NOT NULL",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!(
+                "Failed to check message worker referential integrity: {}",
+                e
+            ),
+        })?;
+
+        if orphaned_message_workers > 0 {
+            return Err(PgqrsError::Connection {
+                message: format!(
+                    "Found {} messages with invalid worker_id references",
+                    orphaned_message_workers
+                ),
+            });
+        }
+
+        // Check that all archived messages have valid queue_id references
+        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM pgqrs_archive a
+             RIGHT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
+             WHERE q.id IS NULL AND a.id IS NOT NULL",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to check archive referential integrity: {}", e),
+        })?;
+
+        if orphaned_archive_queues > 0 {
+            return Err(PgqrsError::Connection {
+                message: format!(
+                    "Found {} archived messages with invalid queue_id references",
+                    orphaned_archive_queues
+                ),
+            });
+        }
+
+        // Check that all archived messages with worker_id have valid worker references
+        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM pgqrs_archive a
+             RIGHT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
+             WHERE w.id IS NULL AND a.worker_id IS NOT NULL",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| PgqrsError::Connection {
+            message: format!(
+                "Failed to check archive worker referential integrity: {}",
+                e
+            ),
+        })?;
+
+        if orphaned_archive_workers > 0 {
+            return Err(PgqrsError::Connection {
+                message: format!(
+                    "Found {} archived messages with invalid worker_id references",
+                    orphaned_archive_workers
+                ),
+            });
+        }
+
+        // Commit the transaction (ensures consistency of all checks)
         tx.commit().await.map_err(|e| PgqrsError::Connection {
             message: format!("Failed to commit transaction: {}", e),
         })?;
@@ -291,52 +288,27 @@ impl PgqrsAdmin {
 
     /// Create a new queue in the database.
     ///
+    /// This method creates a new queue by inserting a record into the pgqrs_queues table.
+    /// All messages for this queue will be stored in the unified pgqrs_messages table.
+    ///
     /// # Arguments
     /// * `name` - Name of the queue to create
-    /// * `unlogged` - If true, create an unlogged queue (faster, but less durable)
     ///
     /// # Returns
     /// The created [`Queue`] instance.
-    pub async fn create_queue(&self, name: &str, unlogged: bool) -> Result<Queue> {
-        let create_statement = if unlogged {
-            CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "UNLOGGED")
-        } else {
-            CREATE_QUEUE_STATEMENT.replace("{UNLOGGED}", "")
-        };
-        let create_statement = create_statement
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", name);
+    pub async fn create_queue(&self, name: &str) -> Result<Queue> {
+        // Insert queue metadata and get the generated queue_id
+        let queue_id: i64 = sqlx::query_scalar(crate::constants::INSERT_QUEUE_METADATA)
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to create queue '{}': {}", name, e),
+            })?;
 
-        let insert_meta = INSERT_QUEUE_METADATA
-            .replace("{name}", name)
-            .replace("{unlogged}", if unlogged { "TRUE" } else { "FALSE" });
+        tracing::debug!("Created queue '{}' with id {}", name, queue_id);
 
-        // Create archive table for message archiving
-        let create_archive_statement = CREATE_ARCHIVE_TABLE.replace("{queue_name}", name);
-
-        let create_archive_index1 = CREATE_ARCHIVE_INDEX_ARCHIVED_AT.replace("{queue_name}", name);
-
-        let create_archive_index2 = CREATE_ARCHIVE_INDEX_ENQUEUED_AT.replace("{queue_name}", name);
-
-        tracing::debug!("Queue statement: {}", create_statement);
-        tracing::debug!("Meta statement: {}", insert_meta);
-        tracing::debug!("Archive statement: {}", create_archive_statement);
-        tracing::debug!("Archive index 1: {}", create_archive_index1);
-        tracing::debug!("Archive index 2: {}", create_archive_index2);
-
-        // Execute all statements in a transaction with table-level locking
-        // Lock statement must be first to acquire exclusive access to queue_repository
-        self.run_statements_in_transaction(vec![
-            LOCK_QUEUE_REPOSITORY_EXCLUSIVE.to_string(),
-            create_statement,
-            create_archive_statement,
-            create_archive_index1,
-            create_archive_index2,
-            insert_meta,
-        ])
-        .await?;
-
-        Ok(Queue::new(self.pool.clone(), name))
+        Ok(Queue::new(self.pool.clone(), queue_id, name))
     }
 
     /// List all queues managed by pgqrs.
@@ -353,39 +325,76 @@ impl PgqrsAdmin {
         Ok(results)
     }
 
-    /// Delete a queue and all its messages from the database.
-    /// This also deletes the corresponding archive table.
+    /// Delete a queue from the database.
+    ///
+    /// A queue can only be deleted if there are no references in messages or archive.
+    /// This prevents data orphaning by ensuring referential integrity is maintained.
+    /// The operation runs in a transaction with row-level locking to ensure atomicity
+    /// and prevent concurrent modifications during the deletion process.
     ///
     /// # Arguments
     /// * `name` - Name of the queue to delete
     ///
     /// # Returns
-    /// Ok if deletion succeeds, error otherwise.
+    /// Ok if deletion succeeds, error if queue has messages/archives or other error.
     pub async fn delete_queue(&self, name: &str) -> Result<()> {
-        let drop_statement = DROP_QUEUE_STATEMENT
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", name);
+        // Start a transaction for atomic deletion with row locking
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
 
-        let drop_archive_statement = DROP_ARCHIVE_TABLE.replace("{queue_name}", name);
+        // Lock the queue row for exclusive access and get queue_id
+        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_DELETE)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to lock queue '{}': {}", name, e),
+            })?;
 
-        let delete_meta = DELETE_QUEUE_METADATA.replace("{name}", name);
+        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+            name: name.to_string(),
+        })?;
 
-        tracing::debug!("Executing delete metadata statement: {}", delete_meta);
-        tracing::debug!("Executing drop queue statement: {}", drop_statement);
-        tracing::debug!(
-            "Executing drop archive statement: {}",
-            drop_archive_statement
-        );
+        // Check referential integrity with a single query
+        let total_references: i64 = sqlx::query_scalar(crate::constants::CHECK_QUEUE_REFERENCES)
+            .bind(queue_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to check references for queue '{}': {}", name, e),
+            })?;
 
-        // Execute all statements in a transaction with table-level locking
-        // Lock statement must be first to acquire exclusive access to queue_repository
-        self.run_statements_in_transaction(vec![
-            LOCK_QUEUE_REPOSITORY_EXCLUSIVE.to_string(),
-            drop_statement,
-            drop_archive_statement,
-            delete_meta,
-        ])
-        .await
+        if total_references > 0 {
+            return Err(crate::error::PgqrsError::Connection {
+                message: format!(
+                    "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
+                    name, total_references
+                ),
+            });
+        }
+
+        // Safe to delete - no references exist and we have exclusive lock
+        sqlx::query(crate::constants::DELETE_QUEUE_METADATA)
+            .bind(name)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to delete queue '{}': {}", name, e),
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to commit queue deletion: {}", e),
+            })?;
+
+        tracing::debug!("Successfully deleted queue '{}'", name);
+        Ok(())
     }
 
     /// Purge all messages from a queue, but keep the queue itself.
@@ -398,12 +407,45 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if purge succeeds, error otherwise.
     pub async fn purge_queue(&self, name: &str) -> Result<()> {
-        let purge_statement = PURGE_QUEUE_STATEMENT
-            .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
-            .replace("{queue_name}", name);
-        tracing::debug!("Executing purge queue statement: {}", purge_statement);
-        self.run_statements_in_transaction(vec![purge_statement])
+        // Start a transaction for atomic purge with row locking
+        let mut tx = self
+            .pool
+            .begin()
             .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock the queue row for data modification and get queue_id
+        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_UPDATE)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to lock queue '{}': {}", name, e),
+            })?;
+
+        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+            name: name.to_string(),
+        })?;
+
+        // Purge all messages from the queue
+        sqlx::query(crate::constants::PURGE_QUEUE_MESSAGES_UNIFIED)
+            .bind(queue_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to purge queue '{}': {}", name, e),
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to commit queue purge: {}", e),
+            })?;
+
+        tracing::debug!("Successfully purged queue '{}'", name);
+        Ok(())
     }
 
     /// Purge all archived messages from a queue's archive table.
@@ -415,13 +457,45 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if purge succeeds, error otherwise.
     pub async fn purge_archive(&self, name: &str) -> Result<()> {
-        let purge_archive_statement = PURGE_ARCHIVE_TABLE.replace("{queue_name}", name);
-        tracing::debug!(
-            "Executing purge archive statement: {}",
-            purge_archive_statement
-        );
-        self.run_statements_in_transaction(vec![purge_archive_statement])
+        // Start a transaction for atomic archive purge with row locking
+        let mut tx = self
+            .pool
+            .begin()
             .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock the queue row for data modification and get queue_id
+        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_UPDATE)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to lock queue '{}': {}", name, e),
+            })?;
+
+        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+            name: name.to_string(),
+        })?;
+
+        // Purge all archived messages for the queue
+        sqlx::query(crate::constants::PURGE_ARCHIVE)
+            .bind(queue_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to purge archive for queue '{}': {}", name, e),
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to commit archive purge: {}", e),
+            })?;
+
+        tracing::debug!("Successfully purged archive for queue '{}'", name);
+        Ok(())
     }
 
     /// Get metrics for a specific queue.
@@ -451,7 +525,16 @@ impl PgqrsAdmin {
     /// # Returns
     /// [`Queue`] instance for the queue.
     pub async fn get_queue(&self, name: &str) -> Result<Queue> {
-        Ok(Queue::new(self.pool.clone(), name))
+        // Get queue info to get the queue_id
+        let queue_info: QueueInfo = sqlx::query_as(crate::constants::GET_QUEUE_INFO_BY_NAME)
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_e| PgqrsError::QueueNotFound {
+                name: name.to_string(),
+            })?;
+
+        Ok(Queue::new(self.pool.clone(), queue_info.id, name))
     }
 
     /// Get a [`Queue`] instance for a given queue name.
@@ -462,7 +545,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// [`Queue`] instance for the queue.
     pub async fn get_queue_by_name(&self, queue_name: &str) -> Result<Queue> {
-        let queue_name: String = sqlx::query_scalar(crate::constants::GET_QUEUE_INFO_BY_NAME)
+        let queue_info: QueueInfo = sqlx::query_as(crate::constants::GET_QUEUE_INFO_BY_NAME)
             .bind(queue_name)
             .fetch_one(&self.pool)
             .await
@@ -470,7 +553,11 @@ impl PgqrsAdmin {
                 name: queue_name.to_string(),
             })?;
 
-        Ok(Queue::new(self.pool.clone(), &queue_name))
+        Ok(Queue::new(
+            self.pool.clone(),
+            queue_info.id,
+            &queue_info.queue_name,
+        ))
     }
 
     ///
@@ -530,34 +617,66 @@ impl PgqrsAdmin {
         hostname: String,
         port: i32,
     ) -> Result<WorkerInfo> {
-        let queue = self.get_queue(&queue_name).await?;
+        // Start a transaction for atomic worker registration
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock the queue row for key share and verify queue exists
+        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_KEY_SHARE)
+            .bind(&queue_name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to lock queue '{}': {}", queue_name, e),
+            })?;
+
+        let _queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+            name: queue_name.clone(),
+        })?;
+
         let now = Utc::now();
 
         // Insert the worker into the database and get the generated ID
         let worker_id: i64 = sqlx::query_scalar(crate::constants::INSERT_WORKER)
             .bind(&hostname)
             .bind(port)
-            .bind(&queue.queue_name)
+            .bind(&queue_name)
             .bind(now)
             .bind(now)
             .bind(WorkerStatus::Ready)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to commit worker registration: {}", e),
             })?;
 
         let worker = WorkerInfo {
             id: worker_id,
             hostname: hostname.clone(),
             port,
-            queue_name: queue.queue_name.clone(),
+            queue_name: queue_name.clone(),
             started_at: now,
             heartbeat_at: now,
             shutdown_at: None,
             status: WorkerStatus::Ready,
         };
 
+        tracing::debug!(
+            "Successfully registered worker {} for queue '{}'",
+            worker_id,
+            queue_name
+        );
         Ok(worker)
     }
 
@@ -624,7 +743,7 @@ impl PgqrsAdmin {
         Ok(worker)
     }
 
-    /// Get messages being processed by a worker
+    /// Get messages currently being processed by a worker
     ///
     /// # Arguments
     /// * `worker_id` - ID of the worker
@@ -635,22 +754,17 @@ impl PgqrsAdmin {
         &self,
         worker_id: i64,
     ) -> Result<Vec<crate::types::QueueMessage>> {
-        let worker = self.get_worker_by_id(worker_id).await?;
-        let sql = crate::constants::GET_WORKER_MESSAGES
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", &worker.queue_name);
-
-        let messages = sqlx::query_as::<_, crate::types::QueueMessage>(&sql)
-            .bind(worker_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        let messages =
+            sqlx::query_as::<_, crate::types::QueueMessage>(crate::constants::GET_WORKER_MESSAGES)
+                .bind(worker_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to get messages for worker {}: {}", worker_id, e),
+                })?;
 
         Ok(messages)
     }
-
     /// Get workers for a specific queue
     ///
     /// # Arguments
@@ -681,17 +795,12 @@ impl PgqrsAdmin {
     /// # Errors
     /// Returns `PgqrsError` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
-        let worker = self.get_worker_by_id(worker_id).await?;
-        let sql = crate::constants::RELEASE_WORKER_MESSAGES
-            .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
-            .replace("{queue_name}", &worker.queue_name);
-
-        let result = sqlx::query(&sql)
+        let result = sqlx::query(crate::constants::RELEASE_WORKER_MESSAGES)
             .bind(worker_id)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
+                message: format!("Failed to release messages for worker {}: {}", worker_id, e),
             })?;
 
         Ok(result.rows_affected())

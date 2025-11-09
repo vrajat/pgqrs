@@ -96,9 +96,6 @@ enum QueueCommands {
     Create {
         /// Name of the queue
         name: String,
-        /// Create as UNLOGGED table
-        #[arg(long, default_value = "false")]
-        unlogged: bool,
     },
     /// List all queues
     List,
@@ -364,9 +361,9 @@ async fn handle_queue_commands(
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match action {
-        QueueCommands::Create { name, unlogged } => {
-            tracing::info!("Creating queue '{}' (unlogged: {})...", &name, unlogged);
-            admin.create_queue(&name, unlogged).await?;
+        QueueCommands::Create { name } => {
+            tracing::info!("Creating queue '{}' ...", &name);
+            admin.create_queue(&name).await?;
             tracing::info!("Queue '{}' created successfully", &name);
         }
 

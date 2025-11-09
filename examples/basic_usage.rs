@@ -42,8 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create queues
     println!("Creating queues...");
-    admin.create_queue(&String::from("email"), false).await?;
-    admin.create_queue(&String::from("task"), false).await?;
+    admin.create_queue(&String::from("email")).await?;
+    admin.create_queue(&String::from("task")).await?;
 
     // Send some messages
     println!("Sending messages...");
@@ -113,9 +113,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
-        if let Some(to) = msg.message.get("to") {
-            if let Some(subject) = msg.message.get("subject") {
-                println!("Email ID {}: {} -> {}", msg.msg_id, subject, to);
+        if let Some(to) = msg.payload.get("to") {
+            if let Some(subject) = msg.payload.get("subject") {
+                println!("Email ID {}: {} -> {}", msg.id, subject, to);
             }
         }
         println!("  Enqueued at: {}", msg.enqueued_at);
@@ -126,19 +126,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
-        println!("Task ID {}", msg.msg_id);
+        println!("Task ID {}", msg.id);
     }
 
     if let Some(task_msg) = task_messages.first() {
         // Simulate long processing - extend lock first
         println!(
             "Processing task message {} (extending lock)...",
-            task_msg.msg_id
+            task_msg.id
         );
 
-        let extended = task_queue.extend_visibility(task_msg.msg_id, 30).await?;
+        let extended = task_queue.extend_visibility(task_msg.id, 30).await?;
         if extended {
-            println!("Extended lock for task message {}", task_msg.msg_id);
+            println!("Extended lock for task message {}", task_msg.id);
         }
 
         // Simulate processing time
@@ -146,20 +146,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
-        let archived = task_queue.archive(task_msg.msg_id).await?;
+        let archived = task_queue.archive(task_msg.id).await?;
         if archived {
-            println!("Successfully archived task message {}", task_msg.msg_id);
+            println!("Successfully archived task message {}", task_msg.id);
         } else {
             println!(
                 "Failed to archive task message {} (may not exist)",
-                task_msg.msg_id
+                task_msg.id
             );
         }
     }
 
     // Demonstrate batch archiving for email messages
     println!("Batch archiving email messages...");
-    let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.msg_id).collect();
+    let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.id).collect();
     if !email_msg_ids.is_empty() {
         let archived_ids = email_queue.archive_batch(email_msg_ids.clone()).await?;
         println!(
@@ -189,11 +189,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Traditional deletion (not recommended for data retention):");
 
         // Delete the message completely
-        let deleted = task_queue.delete_batch(vec![remaining_task.msg_id]).await?;
+        let deleted = task_queue.delete_batch(vec![remaining_task.id]).await?;
         if deleted.first().copied().unwrap_or(false) {
-            println!("Deleted task message {}", remaining_task.msg_id);
+            println!("Deleted task message {}", remaining_task.id);
         } else {
-            println!("Failed to delete task message {}", remaining_task.msg_id);
+            println!("Failed to delete task message {}", remaining_task.id);
         }
     }
 

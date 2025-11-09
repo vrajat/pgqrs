@@ -301,8 +301,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin = PgqrsAdmin::new(&config).await?;
 
     // Create queues
-    admin.create_queue("email_queue", false).await?;
-    admin.create_queue("task_queue", false).await?;
+    admin.create_queue("email_queue").await?;
+    admin.create_queue("task_queue").await?;
 
     // Send messages
     let email_payload = json!({

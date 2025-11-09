@@ -3,15 +3,9 @@ use serde_json::json;
 
 // Test-specific constants
 const TEST_QUEUE_LOGGED: &str = "test_create_logged_queue";
-const TEST_QUEUE_UNLOGGED: &str = "test_create_unlogged_queue";
 const TEST_QUEUE_SEND_MESSAGE: &str = "test_send_message";
 const EXPECTED_MESSAGE_COUNT: i64 = 1;
 const READ_MESSAGE_COUNT: usize = 1;
-
-#[derive(sqlx::FromRow)]
-struct RelPersistence {
-    relpersistence: String,
-}
 
 mod common;
 
@@ -33,84 +27,38 @@ async fn verify() {
 }
 
 #[tokio::test]
-async fn test_create_logged_queue() {
+async fn test_create_and_list_queue() {
     let admin = create_admin().await;
     let queue_name = TEST_QUEUE_LOGGED.to_string();
-    let queue = admin.create_queue(&queue_name, false).await;
-    let queue_list = admin.list_queues().await;
-    assert!(queue.is_ok());
-    assert!(queue_list.is_ok());
+
+    // Create queue
+    let queue = admin.create_queue(&queue_name).await;
+    assert!(queue.is_ok(), "Queue creation should succeed");
     let queue = queue.unwrap();
-    let queue_list = queue_list.unwrap();
-    let meta = queue_list
-        .iter()
-        .find(|q| q.queue_name == queue.queue_name)
-        .unwrap();
-    assert!(
-        !meta.unlogged,
-        "MetaResult.unlogged should be false for logged queue"
-    );
 
-    // Check system tables for logged table (using search_path approach)
-    // Query the current schema in search_path instead of hardcoding schema name
-    let sql = format!(
-        "SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}'",
-        queue_name
-    );
-    let pool = &admin.pool;
-    let result = sqlx::query_as::<_, RelPersistence>(&sql)
-        .fetch_all(pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        result[0].relpersistence, "p",
-        "Table should be logged (relpersistence = 'p')"
-    );
-
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
-}
-
-#[tokio::test]
-async fn test_create_unlogged_queue() {
-    let admin = create_admin().await;
-    let queue_name = TEST_QUEUE_UNLOGGED.to_string();
-    let queue = admin.create_queue(&queue_name, true).await;
+    // List queues and verify it appears
     let queue_list = admin.list_queues().await;
-    assert!(queue.is_ok());
-    assert!(queue_list.is_ok());
-    let queue = queue.unwrap();
+    assert!(queue_list.is_ok(), "Queue listing should succeed");
     let queue_list = queue_list.unwrap();
-    let meta = queue_list
-        .iter()
-        .find(|q| q.queue_name == queue.queue_name)
-        .unwrap();
-    assert!(
-        meta.unlogged,
-        "MetaResult.unlogged should be true for unlogged queue"
-    );
 
-    // Check system tables for unlogged table (using search_path approach)
-    let sql = format!(
-        "SELECT relpersistence::TEXT as relpersistence FROM pg_class WHERE relname = 'q_{}'",
-        queue_name
-    );
-    let pool = &admin.pool;
-    let result = sqlx::query_as::<_, RelPersistence>(&sql)
-        .fetch_all(pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        result[0].relpersistence, "u",
-        "Table should be unlogged (relpersistence = 'u')"
-    );
+    let found_queue = queue_list.iter().find(|q| q.queue_name == queue.queue_name);
+    assert!(found_queue.is_some(), "Created queue should appear in list");
 
+    let meta = found_queue.unwrap();
+    assert_eq!(meta.queue_name, queue.queue_name, "Queue name should match");
+    assert!(meta.id > 0, "Queue should have valid ID");
+
+    // Verify the queue has a valid queue_id
+    assert!(queue.queue_id > 0, "Queue should have valid queue_id");
+
+    // Cleanup
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }
 
 #[tokio::test]
 async fn test_send_message() {
     let admin = create_admin().await;
-    let queue = admin.create_queue(TEST_QUEUE_SEND_MESSAGE, false).await;
+    let queue = admin.create_queue(TEST_QUEUE_SEND_MESSAGE).await;
     assert!(queue.is_ok());
     let queue = queue.unwrap();
     let payload = json!({
@@ -122,11 +70,11 @@ async fn test_send_message() {
     assert!(read_messages.is_ok());
     let read_messages = read_messages.unwrap();
     assert_eq!(read_messages.len(), READ_MESSAGE_COUNT);
-    assert!(read_messages[0].message == payload);
-    let dequeued_message = queue.dequeue(read_messages[0].msg_id).await;
+    assert!(read_messages[0].payload == payload);
+    let dequeued_message = queue.dequeue(read_messages[0].id).await;
     assert!(dequeued_message.is_ok());
     let dequeued_message = dequeued_message.unwrap();
-    assert!(dequeued_message.msg_id == read_messages[0].msg_id);
+    assert!(dequeued_message.id == read_messages[0].id);
     assert!(queue.pending_count().await.unwrap() == 0);
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }
@@ -136,7 +84,7 @@ async fn test_archive_single_message() {
     const TEST_QUEUE_ARCHIVE: &str = "test_archive_single";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(TEST_QUEUE_ARCHIVE, false)
+        .create_queue(TEST_QUEUE_ARCHIVE)
         .await
         .expect("Failed to create queue");
 
@@ -146,7 +94,7 @@ async fn test_archive_single_message() {
         .enqueue(&payload)
         .await
         .expect("Failed to enqueue message");
-    let msg_id = message.msg_id;
+    let msg_id = message.id;
 
     // Verify message is in active queue
     assert_eq!(queue.pending_count().await.unwrap(), 1);
@@ -169,7 +117,15 @@ async fn test_archive_single_message() {
         "Archiving already-archived message should return false"
     );
 
-    // Cleanup
+    // Cleanup - purge archive and messages before deleting queue
+    admin
+        .purge_archive(&queue.queue_name)
+        .await
+        .expect("Failed to purge archive");
+    admin
+        .purge_queue(&queue.queue_name)
+        .await
+        .expect("Failed to purge messages");
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }
 
@@ -178,7 +134,7 @@ async fn test_archive_batch_messages() {
     const TEST_QUEUE_BATCH_ARCHIVE: &str = "test_archive_batch";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(TEST_QUEUE_BATCH_ARCHIVE, false)
+        .create_queue(TEST_QUEUE_BATCH_ARCHIVE)
         .await
         .expect("Failed to create queue");
 
@@ -190,7 +146,7 @@ async fn test_archive_batch_messages() {
             .enqueue(&payload)
             .await
             .expect("Failed to enqueue message");
-        msg_ids.push(message.msg_id);
+        msg_ids.push(message.id);
     }
 
     // Verify messages are in active queue
@@ -226,7 +182,15 @@ async fn test_archive_batch_messages() {
     assert!(empty_archive.is_ok());
     assert!(empty_archive.unwrap().is_empty());
 
-    // Cleanup
+    // Cleanup - purge archive and messages before deleting queue
+    admin
+        .purge_archive(&queue.queue_name)
+        .await
+        .expect("Failed to purge archive");
+    admin
+        .purge_queue(&queue.queue_name)
+        .await
+        .expect("Failed to purge messages");
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 }
 
@@ -235,7 +199,7 @@ async fn test_archive_nonexistent_message() {
     const TEST_QUEUE_NONEXISTENT: &str = "test_archive_nonexistent";
     let admin = create_admin().await;
     let queue = admin
-        .create_queue(TEST_QUEUE_NONEXISTENT, false)
+        .create_queue(TEST_QUEUE_NONEXISTENT)
         .await
         .expect("Failed to create queue");
 
@@ -262,7 +226,7 @@ async fn test_archive_table_creation() {
 
     // Create queue (should automatically create archive table)
     let queue = admin
-        .create_queue(TEST_QUEUE_TABLE, false)
+        .create_queue(TEST_QUEUE_TABLE)
         .await
         .expect("Failed to create queue");
 
@@ -274,7 +238,7 @@ async fn test_archive_table_creation() {
     // Test that queue creation includes archive tables automatically
     const TEST_QUEUE_STANDALONE: &str = "test_standalone_archive";
     let queue2 = admin
-        .create_queue(TEST_QUEUE_STANDALONE, false)
+        .create_queue(TEST_QUEUE_STANDALONE)
         .await
         .expect("Failed to create second queue");
 
@@ -293,7 +257,7 @@ async fn test_delete_queue_removes_archive() {
 
     // Create queue and archive a message
     let queue = admin
-        .create_queue(TEST_QUEUE_DELETE, false)
+        .create_queue(TEST_QUEUE_DELETE)
         .await
         .expect("Failed to create queue");
 
@@ -304,7 +268,7 @@ async fn test_delete_queue_removes_archive() {
         .await
         .expect("Failed to enqueue message");
     let archived = queue
-        .archive(message.msg_id)
+        .archive(message.id)
         .await
         .expect("Failed to archive message");
     assert!(archived, "Message should be archived");
@@ -312,12 +276,22 @@ async fn test_delete_queue_removes_archive() {
     // Verify archive has content
     assert_eq!(queue.archive_list(1000, 0).await.unwrap().len(), 1);
 
-    // Delete the queue (should also delete archive table)
+    // Purge archive and messages before deleting queue
+    admin
+        .purge_archive(&queue.queue_name)
+        .await
+        .expect("Failed to purge archive");
+    admin
+        .purge_queue(&queue.queue_name)
+        .await
+        .expect("Failed to purge messages");
+
+    // Delete the queue
     assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
 
     // Try to recreate the queue and verify archive table is fresh
     let new_queue = admin
-        .create_queue(TEST_QUEUE_DELETE, false)
+        .create_queue(TEST_QUEUE_DELETE)
         .await
         .expect("Failed to recreate queue");
 
@@ -335,7 +309,7 @@ async fn test_purge_archive() {
 
     // Create queue and archive some messages
     let queue = admin
-        .create_queue(TEST_QUEUE_PURGE_ARCHIVE, false)
+        .create_queue(TEST_QUEUE_PURGE_ARCHIVE)
         .await
         .expect("Failed to create queue");
 
@@ -347,7 +321,7 @@ async fn test_purge_archive() {
             .await
             .expect("Failed to enqueue message");
         let archived = queue
-            .archive(message.msg_id)
+            .archive(message.id)
             .await
             .expect("Failed to archive message");
         assert!(archived, "Message {} should be archived", i);
@@ -373,7 +347,7 @@ async fn test_custom_schema_search_path() {
 
     // Create a test queue in the custom schema
     let queue_name = "test_search_path_queue".to_string();
-    let queue_result = admin.create_queue(&queue_name, false).await;
+    let queue_result = admin.create_queue(&queue_name).await;
     assert!(queue_result.is_ok(), "Should create queue in custom schema");
 
     // Verify we can find the table in the custom schema by checking the search_path
@@ -392,20 +366,43 @@ async fn test_custom_schema_search_path() {
         search_path
     );
 
-    // Verify the table exists in the correct schema by querying without schema qualification
-    let table_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-    )
-    .bind(format!("q_{}", queue_name))
-    .fetch_one(pool)
-    .await
-    .expect("Should check table existence");
+    // Verify all unified tables exist and are accessible via search_path
+    let tables_to_check = [
+        "pgqrs_queues",
+        "pgqrs_messages",
+        "pgqrs_archive",
+        "pgqrs_workers",
+    ];
 
+    for table_name in &tables_to_check {
+        let table_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+        )
+        .bind(table_name)
+        .fetch_one(pool)
+        .await
+        .expect("Should check table existence");
+
+        assert!(
+            table_exists,
+            "{} table should exist and be findable via search_path",
+            table_name
+        );
+    }
+
+    // Test that queue operations work with unified architecture
+    let queue = queue_result.unwrap();
+    let message_payload = serde_json::json!({"test": "custom_schema"});
+    let send_result = queue.enqueue(&message_payload).await;
     assert!(
-        table_exists,
-        "Queue table should exist and be findable via search_path"
+        send_result.is_ok(),
+        "Should be able to send message to queue in custom schema"
     );
 
-    // Cleanup
+    // Cleanup - purge messages before deleting queue
+    admin
+        .purge_queue(&queue_name)
+        .await
+        .expect("Failed to purge messages");
     assert!(admin.delete_queue(&queue_name).await.is_ok());
 }

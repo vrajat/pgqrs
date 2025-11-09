@@ -27,7 +27,7 @@ async fn test_pgbouncer_happy_path() {
         .expect("Verify should succeed through PgBouncer");
 
     // Create a queue through PgBouncer
-    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY, false).await;
+    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
@@ -64,13 +64,13 @@ async fn test_pgbouncer_happy_path() {
 
     let received_message = &messages[0];
     assert_eq!(
-        received_message.message, test_message,
+        received_message.payload, test_message,
         "Message content should match"
     );
 
     // Dequeue the message through PgBouncer
     queue
-        .dequeue(received_message.msg_id)
+        .dequeue(received_message.id)
         .await
         .expect("Failed to dequeue message through PgBouncer");
 
@@ -100,7 +100,7 @@ async fn test_pgbouncer_queue_list() {
 
     // Create a test queue
     let _queue = admin
-        .create_queue(TEST_QUEUE_PGBOUNCER_LIST, false)
+        .create_queue(TEST_QUEUE_PGBOUNCER_LIST)
         .await
         .expect("Failed to create queue through PgBouncer");
 
@@ -120,7 +120,6 @@ async fn test_pgbouncer_queue_list() {
 
     let queue_info = found_queue.unwrap();
     assert_eq!(queue_info.queue_name, TEST_QUEUE_PGBOUNCER_LIST);
-    assert!(!queue_info.unlogged, "Queue should be logged");
 
     // Cleanup
     admin
