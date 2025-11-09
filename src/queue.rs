@@ -18,8 +18,7 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, PENDING_COUNT,
-    PGQRS_SCHEMA, QUEUE_PREFIX,
+    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, PENDING_COUNT, QUEUE_PREFIX,
 };
 use crate::error::Result;
 use crate::types::QueueMessage;
@@ -71,47 +70,35 @@ impl Queue {
     /// * `pool` - Database connection pool
     /// * `queue_name` - Name of the queue (will be used to form table name)
     pub(crate) fn new(pool: PgPool, queue_name: &str) -> Self {
-        let table_name = format!("{}.{}_{}", PGQRS_SCHEMA, QUEUE_PREFIX, queue_name);
+        let table_name = format!("{}_{}", QUEUE_PREFIX, queue_name);
         let insert_sql = crate::constants::INSERT_MESSAGE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let select_by_id_sql = crate::constants::SELECT_MESSAGE_BY_ID
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let read_messages_sql = crate::constants::READ_MESSAGES
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let dequeue_sql = crate::constants::DEQUEUE_MESSAGE
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let update_vt_sql = crate::constants::UPDATE_MESSAGE_VT
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let delete_batch_sql = crate::constants::DELETE_MESSAGE_BATCH
-            .replace("{PGQRS_SCHEMA}", crate::constants::PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", crate::constants::QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
 
         // Archive SQL statements
         let archive_sql = ARCHIVE_MESSAGE
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
         let archive_batch_sql = ARCHIVE_BATCH
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", queue_name);
-        let archive_list_sql = ARCHIVE_LIST
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
-        let archive_select_by_id_sql = ARCHIVE_SELECT_BY_ID
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
-            .replace("{queue_name}", queue_name);
+        let archive_list_sql = ARCHIVE_LIST.replace("{queue_name}", queue_name);
+        let archive_select_by_id_sql = ARCHIVE_SELECT_BY_ID.replace("{queue_name}", queue_name);
 
         Self {
             pool,
@@ -248,7 +235,7 @@ impl Queue {
 
         // Fetch all messages in a single query using WHERE msg_id = ANY($1)
         let sql = format!(
-            "SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM {} WHERE msg_id = ANY($1)",
+            "SELECT msg_id, read_ct, enqueued_at, vt, message, worker_id FROM \"{}\" WHERE msg_id = ANY($1)",
             self.table_name
         );
 
@@ -271,7 +258,6 @@ impl Queue {
         use chrono::Utc;
         let now = Utc::now();
         let sql = PENDING_COUNT
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", &self.queue_name);
 
@@ -332,7 +318,6 @@ impl Queue {
         let sql = self
             .dequeue_sql
             .clone()
-            .replace("{PGQRS_SCHEMA}", PGQRS_SCHEMA)
             .replace("{QUEUE_PREFIX}", QUEUE_PREFIX)
             .replace("{queue_name}", &self.queue_name);
 

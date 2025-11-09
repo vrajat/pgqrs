@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use pgqrs::admin::PgqrsAdmin;
 use sqlx;
 use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
@@ -12,10 +11,12 @@ pub struct PgBouncerContainer {
     postgres_container: ContainerAsync<Postgres>,
     pgbouncer_container: ContainerAsync<GenericImage>,
     dsn: String,
+    schema: String,
 }
 
 impl PgBouncerContainer {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+        let schema_name = schema.unwrap_or("public").to_string();
         // First start PostgreSQL
         println!("Starting PostgreSQL container for PgBouncer...");
         let postgres_image = Postgres::default()
@@ -51,7 +52,7 @@ impl PgBouncerContainer {
 
         // Get the host IP that Docker containers can reach
         let host_ip = std::process::Command::new("docker")
-            .args(&[
+            .args([
                 "network",
                 "inspect",
                 "bridge",
@@ -152,6 +153,7 @@ impl PgBouncerContainer {
             postgres_container,
             pgbouncer_container,
             dsn,
+            schema: schema_name,
         })
     }
 }
@@ -168,23 +170,11 @@ impl DatabaseContainer for PgBouncerContainer {
     }
 
     async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Setting up admin schema via PgBouncer...");
-
-        // Install schema via PgBouncer
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.install().await?;
-        println!("Admin schema setup complete via PgBouncer");
-
-        Ok(())
+        super::database_setup::setup_database_common(dsn, &self.schema, "PgBouncer").await
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Cleaning up admin schema via PgBouncer...");
-
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall().await?;
-        println!("Admin schema cleanup complete via PgBouncer");
-        Ok(())
+        super::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer").await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -209,6 +199,54 @@ impl DatabaseContainer for PgBouncerContainer {
         }
 
         println!("PgBouncer and PostgreSQL containers stopped");
+        Ok(())
+    }
+}
+
+pub struct ExternalPgBouncerContainer {
+    dsn: String,
+    schema: String,
+}
+
+impl ExternalPgBouncerContainer {
+    pub fn new(dsn: String, schema: Option<&str>) -> Self {
+        let schema_name = schema.unwrap_or("public").to_string();
+        println!(
+            "Using external PgBouncer database: {} with schema: {}",
+            dsn, schema_name
+        );
+        Self {
+            dsn,
+            schema: schema_name,
+        }
+    }
+}
+
+#[async_trait]
+impl DatabaseContainer for ExternalPgBouncerContainer {
+    async fn get_dsn(&self) -> String {
+        self.dsn.clone()
+    }
+
+    fn get_container_id(&self) -> Option<String> {
+        None // External database, no container to manage
+    }
+
+    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
+        crate::common::database_setup::setup_database_common(
+            dsn,
+            &self.schema,
+            "External PgBouncer",
+        )
+        .await
+    }
+
+    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
+        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer").await
+    }
+
+    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("External PgBouncer database, not stopping container");
         Ok(())
     }
 }

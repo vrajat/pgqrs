@@ -78,12 +78,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
-
-      - name: Run PgBouncer tests
-        run: cargo test --verbose --no-fail-fast
-        env:
-          PGQRS_TEST_USE_PGBOUNCER: 1
-          PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:6432/postgres
+          PGBOUNCER_TEST_DSN: postgres://postgres@localhost:6432/postgres
 
   release:
     name: Publish crate (Trusted Publishing)

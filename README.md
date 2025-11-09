@@ -209,14 +209,35 @@ pgqrs ...
 ### Install the pgqrs schema
 
 pgqrs requires a few tables to store metadata. It creates these tables as well as
-queue tables in the schema `pgqrs`.
+queue tables in the specified schema.
 
-Once you have your database configured, install the pgqrs schema:
+**Important**: You must create the schema before running `pgqrs install`.
+
+#### Step 1: Create the schema
+
+Connect to your PostgreSQL database and create the schema:
+
+```sql
+-- For default 'public' schema (no action needed)
+-- For custom schema:
+CREATE SCHEMA IF NOT EXISTS pgqrs;
+```
+
+#### Step 2: Install pgqrs
+
+Once you have your database configured and schema created, install the pgqrs schema:
 
 ```bash
+# Install in default 'public' schema
 pgqrs install
-# Verify the state
+
+# Install in custom schema
+pgqrs --schema pgqrs install
+
+# Verify the installation
 pgqrs verify
+# Or verify custom schema
+pgqrs --schema pgqrs verify
 ```
 
 ### Test queue commands from the CLI
@@ -337,6 +358,9 @@ pgqrs --config "custom-config.yaml" verify
 # Required: Database connection string
 export PGQRS_DSN="postgresql://user:pass@localhost/db"
 
+# Optional: Schema name for pgqrs tables (default: public)
+export PGQRS_SCHEMA="pgqrs"
+
 # Optional: Connection pool settings
 export PGQRS_MAX_CONNECTIONS=32
 export PGQRS_CONNECTION_TIMEOUT=60
@@ -356,6 +380,9 @@ Create a YAML configuration file (default locations: `pgqrs.yaml`, `pgqrs.yml`):
 # Required: Database connection string
 dsn: "postgresql://user:pass@localhost/db"
 
+# Optional: Schema name for pgqrs tables (default: public)
+schema: "pgqrs"
+
 # Optional: Connection pool settings (defaults shown)
 max_connections: 16
 connection_timeout_seconds: 30
@@ -369,8 +396,14 @@ default_max_batch_size: 100
 ```rust
 use pgqrs::config::Config;
 
-// Create from explicit DSN
+// Create from explicit DSN (uses 'public' schema by default)
 let config = Config::from_dsn("postgresql://user:pass@localhost/db");
+
+// Create with custom schema
+let config = Config::from_dsn_with_schema(
+    "postgresql://user:pass@localhost/db",
+    "my_schema"
+)?;
 
 // Load from environment variables
 let config = Config::from_env()?;
@@ -393,6 +426,7 @@ let config = Config::load_with_options(
 | Field | Environment Variable | Description | Default |
 |-------|---------------------|-------------|---------|
 | `dsn` | `PGQRS_DSN` | PostgreSQL connection string | **Required** |
+| `schema` | `PGQRS_SCHEMA` | Schema name for pgqrs tables | `public` |
 | `max_connections` | `PGQRS_MAX_CONNECTIONS` | Maximum database connections | 16 |
 | `connection_timeout_seconds` | `PGQRS_CONNECTION_TIMEOUT` | Connection timeout in seconds | 30 |
 | `default_lock_time_seconds` | `PGQRS_DEFAULT_LOCK_TIME` | Default job lock time | 5 |

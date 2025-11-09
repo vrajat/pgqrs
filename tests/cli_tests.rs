@@ -1,6 +1,15 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
-    rt.block_on(async { common::get_postgres_dsn().await })
+    rt.block_on(async { common::get_postgres_dsn(Some("pgqrs_cli_test")).await })
+}
+
+fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
+    Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args(["--dsn", db_url, "--schema", "pgqrs_cli_test"])
+        .args(args)
+        .output()
+        .expect("Failed to run CLI command")
 }
 
 mod common;
@@ -17,7 +26,15 @@ fn test_cli_create_list_delete_queue() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "create",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -29,7 +46,14 @@ fn test_cli_create_list_delete_queue() {
     // List queues
     let list_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "list"])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "list",
+        ])
         .output()
         .expect("Failed to run CLI list queues");
     assert!(
@@ -47,7 +71,15 @@ fn test_cli_create_list_delete_queue() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "delete",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -59,7 +91,14 @@ fn test_cli_create_list_delete_queue() {
     // List queues again to verify deletion
     let list_output2 = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "list"])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "list",
+        ])
         .output()
         .expect("Failed to run CLI list queues after delete");
     assert!(
@@ -87,6 +126,8 @@ fn test_cli_create_list_delete_unlogged_queue() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "queue",
             "create",
             queue_name,
@@ -103,7 +144,16 @@ fn test_cli_create_list_delete_unlogged_queue() {
     // List queues and check unlogged field
     let list_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "--format", "json", "queue", "list"])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "--format",
+            "json",
+            "queue",
+            "list",
+        ])
         .output()
         .expect("Failed to run CLI list queues");
     assert!(
@@ -139,7 +189,15 @@ fn test_cli_create_list_delete_unlogged_queue() {
     // Delete queue
     let delete_output = std::process::Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "delete",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -158,7 +216,15 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "create",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -170,7 +236,16 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Send message
     let send_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "send", queue_name, payload])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "message",
+            "send",
+            queue_name,
+            payload,
+        ])
         .output()
         .expect("Failed to run CLI send message");
     assert!(
@@ -182,7 +257,15 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Dequeue message
     let dequeue_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "message", "dequeue", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "message",
+            "dequeue",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI dequeue message");
     assert!(
@@ -200,7 +283,15 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "delete",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -219,7 +310,15 @@ fn test_cli_archive_functionality() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "create",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -235,6 +334,8 @@ fn test_cli_archive_functionality() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "message",
             "send",
             queue_name,
@@ -252,7 +353,15 @@ fn test_cli_archive_functionality() {
     let read_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
         .args([
-            "--dsn", &db_url, "message", "read", queue_name, "--count", "1",
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "message",
+            "read",
+            queue_name,
+            "--count",
+            "1",
         ])
         .output()
         .expect("Failed to run CLI read message");
@@ -268,6 +377,8 @@ fn test_cli_archive_functionality() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "message",
             "count",
             queue_name,
@@ -287,6 +398,8 @@ fn test_cli_archive_functionality() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "message",
             "read",
             queue_name,
@@ -305,7 +418,15 @@ fn test_cli_archive_functionality() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "delete",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI delete queue");
     assert!(
@@ -324,7 +445,15 @@ fn test_cli_message_show_archive() {
     // Create queue
     let create_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "create", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "create",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI create queue");
     assert!(
@@ -340,6 +469,8 @@ fn test_cli_message_show_archive() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "message",
             "send",
             queue_name,
@@ -359,6 +490,8 @@ fn test_cli_message_show_archive() {
         .args([
             "--dsn",
             &db_url,
+            "--schema",
+            "pgqrs_cli_test",
             "message",
             "show",
             queue_name,
@@ -378,9 +511,55 @@ fn test_cli_message_show_archive() {
     // Delete queue
     let delete_output = Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", &db_url, "queue", "delete", queue_name])
+        .args([
+            "--dsn",
+            &db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "queue",
+            "delete",
+            queue_name,
+        ])
         .output()
         .expect("Failed to run CLI delete queue");
+    assert!(
+        delete_output.status.success(),
+        "Delete queue failed: {}",
+        String::from_utf8_lossy(&delete_output.stderr)
+    );
+}
+
+#[test]
+fn test_cli_schema_parameter() {
+    // Test that the --schema parameter works correctly
+    let db_url = get_test_db_url();
+    let queue_name = "test_schema_param_queue";
+
+    // Create queue with explicit schema parameter
+    let create_output = run_cli_command(&db_url, &["queue", "create", queue_name]);
+    assert!(
+        create_output.status.success(),
+        "Create queue with schema failed: {}",
+        String::from_utf8_lossy(&create_output.stderr)
+    );
+
+    // List queues with schema parameter to verify it exists
+    let list_output = run_cli_command(&db_url, &["queue", "list"]);
+    assert!(
+        list_output.status.success(),
+        "List queues with schema failed: {}",
+        String::from_utf8_lossy(&list_output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        stdout.contains(queue_name),
+        "Queue not found in schema-specific list: {}",
+        stdout
+    );
+
+    // Cleanup the queue
+    let delete_output = run_cli_command(&db_url, &["queue", "delete", queue_name]);
     assert!(
         delete_output.status.success(),
         "Delete queue failed: {}",

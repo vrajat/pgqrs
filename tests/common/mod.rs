@@ -1,5 +1,6 @@
 pub mod constants;
 pub mod container;
+pub mod database_setup;
 pub mod pgbouncer;
 pub mod postgres;
 
@@ -14,8 +15,14 @@ use ctor::dtor;
 ///
 /// # Returns
 /// The database DSN string that can be used for tests
-pub async fn get_postgres_dsn() -> String {
-    container::get_database_dsn().await
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
+    container::get_postgres_dsn(schema).await
+}
+
+#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
+    container::get_pgbouncer_dsn(schema).await
 }
 
 #[dtor]

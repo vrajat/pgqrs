@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use pgqrs::admin::PgqrsAdmin;
-use sqlx::postgres::PgPoolOptions;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
 
@@ -11,10 +9,11 @@ use super::container::DatabaseContainer;
 pub struct PostgresContainer {
     container: ContainerAsync<Postgres>,
     dsn: String,
+    schema: String,
 }
 
 impl PostgresContainer {
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         println!("Starting PostgreSQL testcontainer...");
 
         let postgres_image = Postgres::default()
@@ -33,10 +32,17 @@ impl PostgresContainer {
             TEST_DB_NAME
         );
 
+        let schema_name = schema.unwrap_or("public").to_string();
+
         println!("PostgreSQL container started");
         println!("Database URL: {}", dsn);
+        println!("Schema: {}", schema_name);
 
-        Ok(Self { container, dsn })
+        Ok(Self {
+            container,
+            dsn,
+            schema: schema_name,
+        })
     }
 }
 
@@ -51,33 +57,11 @@ impl DatabaseContainer for PostgresContainer {
     }
 
     async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        // Test the connection
-        {
-            let pool = PgPoolOptions::new()
-                .max_connections(MAX_CONNECTIONS)
-                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
-                .connect(&dsn)
-                .await?;
-
-            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
-                .fetch_one(&pool)
-                .await?;
-            println!("PostgreSQL connection verified");
-        }
-
-        // Install schema
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.install().await?;
-        println!("PostgreSQL schema installed");
-
-        Ok(())
+        super::database_setup::setup_database_common(dsn, &self.schema, "PostgreSQL").await
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall().await?;
-        println!("PostgreSQL schema uninstalled");
-        Ok(())
+        super::database_setup::cleanup_database_common(dsn, &self.schema, "PostgreSQL").await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -102,12 +86,20 @@ impl DatabaseContainer for PostgresContainer {
 /// External PostgreSQL database implementation
 pub struct ExternalPostgresContainer {
     dsn: String,
+    schema: String,
 }
 
 impl ExternalPostgresContainer {
-    pub fn new(dsn: String) -> Self {
-        println!("Using external PostgreSQL database: {}", dsn);
-        Self { dsn }
+    pub fn new(dsn: String, schema: Option<&str>) -> Self {
+        let schema_name = schema.unwrap_or("public").to_string();
+        println!(
+            "Using external PostgreSQL database: {} with schema: {}",
+            dsn, schema_name
+        );
+        Self {
+            dsn,
+            schema: schema_name,
+        }
     }
 }
 
@@ -122,33 +114,12 @@ impl DatabaseContainer for ExternalPostgresContainer {
     }
 
     async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        // Test the connection
-        {
-            let pool = PgPoolOptions::new()
-                .max_connections(MAX_CONNECTIONS)
-                .acquire_timeout(std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS))
-                .connect(&dsn)
-                .await?;
-
-            let _val: i32 = sqlx::query_scalar(VERIFICATION_QUERY)
-                .fetch_one(&pool)
-                .await?;
-            println!("External PostgreSQL connection verified");
-        }
-
-        // Install schema
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.install().await?;
-        println!("External PostgreSQL schema installed");
-
-        Ok(())
+        super::database_setup::setup_database_common(dsn, &self.schema, "External PostgreSQL").await
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        let admin = PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(dsn)).await?;
-        admin.uninstall().await?;
-        println!("External PostgreSQL schema uninstalled");
-        Ok(())
+        super::database_setup::cleanup_database_common(dsn, &self.schema, "External PostgreSQL")
+            .await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
