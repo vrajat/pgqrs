@@ -236,18 +236,18 @@ impl DatabaseContainer for ExternalPgBouncerContainer {
         crate::common::database_setup::setup_database_common(
             dsn,
             &self.schema,
-            "External PostgreSQL",
+            "External PgBouncer",
         )
         .await
     }
 
     async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PostgreSQL")
+        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer")
             .await
     }
 
     async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("External PostgreSQL database, not stopping container");
+        println!("External PgBouncer database, not stopping container");
         Ok(())
     }
 }

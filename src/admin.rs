@@ -166,15 +166,6 @@ impl PgqrsAdmin {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
-        // Lock queue_repository table in ACCESS SHARE mode
-        // This allows other reads but blocks writes, ensuring consistent metadata view
-        sqlx::query(LOCK_QUEUE_REPOSITORY_ACCESS_SHARE)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to acquire lock on queue_repository: {}", e),
-            })?;
-
         // Check if queue_repository table exists
         let queue_repo_exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
@@ -212,6 +203,15 @@ impl PgqrsAdmin {
                 message: "worker_repository table does not exist".to_string(),
             });
         }
+
+                // Lock queue_repository table in ACCESS SHARE mode
+        // This allows other reads but blocks writes, ensuring consistent metadata view
+        sqlx::query(LOCK_QUEUE_REPOSITORY_ACCESS_SHARE)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to acquire lock on queue_repository: {}", e),
+            })?;
 
         // Get all queues from queue_repository and verify their tables exist
         let queues: Vec<QueueInfo> = sqlx::query_as(
