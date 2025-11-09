@@ -498,3 +498,33 @@ async fn test_referential_integrity_checks() {
     // Cleanup
     admin.delete_queue(queue_name).await.expect("Failed to delete queue");
 }
+
+#[tokio::test]
+async fn test_create_duplicate_queue_error() {
+    let admin = create_admin().await;
+    let queue_name = "test_duplicate_queue";
+
+    // Create queue first time - should succeed
+    let first_result = admin.create_queue(queue_name).await;
+    assert!(first_result.is_ok(), "First queue creation should succeed");
+
+    // Try to create the same queue again - should fail with QueueAlreadyExists error
+    let second_result = admin.create_queue(queue_name).await;
+    assert!(second_result.is_err(), "Second queue creation should fail");
+
+    match second_result {
+        Err(pgqrs::error::PgqrsError::QueueAlreadyExists { name }) => {
+            assert_eq!(name, queue_name, "Error should contain the correct queue name");
+        },
+        Err(other) => panic!("Expected QueueAlreadyExists error, got: {:?}", other),
+        Ok(_) => panic!("Expected error but queue creation succeeded"),
+    }
+
+    // Verify the original queue still exists and works
+    let queues = admin.list_queues().await.unwrap();
+    let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
+    assert!(found_queue.is_some(), "Original queue should still exist");
+
+    // Cleanup
+    admin.delete_queue(queue_name).await.expect("Failed to delete queue");
+}

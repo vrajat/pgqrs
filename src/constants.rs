@@ -179,8 +179,6 @@ pub const RELEASE_WORKER_MESSAGES: &str = r#"
 pub const INSERT_QUEUE_METADATA: &str = r#"
     INSERT INTO pgqrs_queues (queue_name)
     VALUES ($1)
-    ON CONFLICT (queue_name)
-    DO NOTHING
     RETURNING id;
 "#;
 

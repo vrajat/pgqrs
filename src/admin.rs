@@ -302,8 +302,18 @@ impl PgqrsAdmin {
             .bind(name)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to create queue '{}': {}", name, e),
+            .map_err(|e| {
+                // Check if this is a unique constraint violation (queue already exists)
+                if let sqlx::Error::Database(db_err) = &e {
+                    if db_err.code().as_deref() == Some("23505") { // PostgreSQL unique violation code
+                        return crate::error::PgqrsError::QueueAlreadyExists {
+                            name: name.to_string()
+                        };
+                    }
+                }
+                crate::error::PgqrsError::Connection {
+                    message: format!("Failed to create queue '{}': {}", name, e),
+                }
             })?;
 
         tracing::debug!("Created queue '{}' with id {}", name, queue_id);
