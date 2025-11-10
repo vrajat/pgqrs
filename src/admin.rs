@@ -136,7 +136,6 @@ impl PgqrsAdmin {
             // Create individual indexes for messages table
             crate::constants::CREATE_PGQRS_MESSAGES_INDEX_QUEUE_VT.to_string(),
             crate::constants::CREATE_PGQRS_MESSAGES_INDEX_WORKER_ID.to_string(),
-            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_PRIORITY.to_string(),
             // Create individual indexes for archive table
             crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_QUEUE_ID.to_string(),
             crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_ARCHIVED_AT.to_string(),

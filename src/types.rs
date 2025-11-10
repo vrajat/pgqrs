@@ -39,8 +39,6 @@ pub struct QueueMessage {
     pub worker_id: Option<i64>,
     /// The actual message payload (JSON)
     pub payload: serde_json::Value,
-    /// Message priority (higher numbers = higher priority)
-    pub priority: i32,
     /// Visibility timeout (when the message becomes available again)
     pub vt: chrono::DateTime<chrono::Utc>,
     /// Timestamp when the message was created
@@ -113,8 +111,6 @@ pub struct ArchivedMessage {
     pub worker_id: Option<i64>,
     /// The actual message payload (JSON)
     pub payload: serde_json::Value,
-    /// Message priority when it was archived
-    pub priority: i32,
     /// Timestamp when the message was originally created
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
     /// Visibility timeout when the message was archived

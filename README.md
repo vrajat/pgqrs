@@ -250,7 +250,7 @@ or experiments.
 pgqrs queue create test_queue
 
 # Send a message to the queue
-pgqrs message send test_queue '{"message": "Hello, World!", "priority": 1}'
+pgqrs message send test_queue '{"message": "Hello, World!", "timestamp": "2023-01-01T00:00:00Z"}'
 
 # Send a delayed message (available after 30 seconds)
 pgqrs message send test_queue '{"task": "delayed_task"}' --delay 30

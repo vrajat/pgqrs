@@ -541,8 +541,9 @@ async fn handle_message_commands(
         MessageCommands::Archive { queue, id } => {
             let queue_obj = admin.get_queue(&queue).await?;
             tracing::info!("Archiving message {} from queue '{}'...", id, queue);
-            queue_obj.archive(id).await?;
+            let archived_message = queue_obj.archive(id).await?;
             tracing::info!("Message archived successfully");
+            writer.write_item(&archived_message, out)?;
             Ok(())
         }
         MessageCommands::Delete { queue, id } => {
@@ -767,7 +768,7 @@ async fn handle_archive_commands(
 
             tracing::info!("Listing archived messages for queue '{}'...", queue);
             let messages = archive.list(worker, 100, 0).await?;
-
+            tracing::info!("Found {} archived messages", messages.len());
             writer.write_list(&messages, out)?;
 
             Ok(())

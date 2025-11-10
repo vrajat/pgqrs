@@ -22,14 +22,14 @@ use crate::constants::{
     PENDING_COUNT, SELECT_MESSAGE_BY_ID, UPDATE_MESSAGE_VT, VISIBILITY_TIMEOUT,
 };
 use crate::error::Result;
-use crate::types::QueueMessage;
+use crate::types::{ArchivedMessage, QueueMessage};
 use crate::WorkerInfo;
 use chrono::Utc;
 use sqlx::PgPool;
 
 // SQL query constants
 const SELECT_MESSAGES_BY_IDS: &str = r#"
-    SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct
+    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
     FROM pgqrs_messages
     WHERE id = ANY($1)
 "#;
@@ -337,8 +337,8 @@ impl Queue {
     ///
     /// # Returns
     /// True if message was successfully archived, false if message was not found
-    pub async fn archive(&self, msg_id: i64) -> Result<bool> {
-        let result: Option<bool> = sqlx::query_scalar(ARCHIVE_MESSAGE)
+    pub async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
+        let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
             .fetch_optional(&self.pool)
             .await
@@ -346,7 +346,7 @@ impl Queue {
                 message: format!("Failed to archive message {}: {}", msg_id, e),
             })?;
 
-        Ok(result.unwrap_or(false))
+        Ok(result)
     }
 
     /// Archive multiple messages in a single transaction.

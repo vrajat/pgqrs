@@ -41,7 +41,7 @@ pub const INSERT_MESSAGE: &str = r#"
 
 /// Select message by ID from unified messages table
 pub const SELECT_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct
+    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
     FROM pgqrs_messages
     WHERE id = $1;
 "#;
@@ -52,7 +52,7 @@ pub const DEQUEUE_MESSAGES: &str = r#"
         SELECT id
         FROM pgqrs_messages
         WHERE queue_id = $1 AND vt <= clock_timestamp()
-        ORDER BY priority DESC, id ASC
+        ORDER BY vt ASC, id ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
     )
@@ -63,7 +63,7 @@ pub const DEQUEUE_MESSAGES: &str = r#"
         worker_id = $4
     FROM cte
     WHERE t.id = cte.id
-    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.priority, t.vt, t.enqueued_at, t.read_ct;
+    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct;
 "#;
 
 /// Get count of pending messages in queue
@@ -78,14 +78,14 @@ pub const UPDATE_MESSAGE_VT: &str = r#"
     UPDATE pgqrs_messages
     SET vt = vt + make_interval(secs => $1::double precision)
     WHERE id = $2
-    RETURNING id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct;
+    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct;
 "#;
 
 /// Delete batch of messages
 pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages
     WHERE id = ANY($1)
-    RETURNING id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct;
+    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct;
 "#;
 
 /// Purge all messages from a specific queue
@@ -101,15 +101,15 @@ pub const ARCHIVE_MESSAGE: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_messages
         WHERE id = $1
-        RETURNING id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct
+        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct, processing_duration)
+        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, processing_duration)
     SELECT
-        id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct,
+        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct,
         EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
     FROM archived_msg
-    RETURNING (original_msg_id IS NOT NULL);
+    RETURNING id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, processing_duration;
 "#;
 
 /// Archive batch of messages (efficient batch operation)
@@ -117,12 +117,12 @@ pub const ARCHIVE_BATCH: &str = r#"
     WITH archived_msgs AS (
         DELETE FROM pgqrs_messages
         WHERE id = ANY($1)
-        RETURNING id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct
+        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct, processing_duration)
+        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, processing_duration)
     SELECT
-        id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct,
+        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct,
         EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
     FROM archived_msgs
     RETURNING original_msg_id;
@@ -130,7 +130,7 @@ pub const ARCHIVE_BATCH: &str = r#"
 
 /// Select single archived message by original message ID
 pub const ARCHIVE_SELECT_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct, archived_at, processing_duration
+    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, processing_duration
     FROM pgqrs_archive
     WHERE original_msg_id = $1
     ORDER BY archived_at DESC
@@ -141,7 +141,7 @@ pub const ARCHIVE_SELECT_BY_ID: &str = r#"
 
 /// Get messages assigned to a specific worker
 pub const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct
+    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
     FROM pgqrs_messages
     WHERE worker_id = $1
     ORDER BY id;
@@ -246,7 +246,6 @@ pub const CREATE_PGQRS_MESSAGES_TABLE: &str = r#"
         queue_id BIGINT NOT NULL,
         worker_id BIGINT,
         payload JSONB NOT NULL,
-        priority INT DEFAULT 0,
         vt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         read_ct INT DEFAULT 0,
@@ -264,7 +263,6 @@ pub const CREATE_PGQRS_ARCHIVE_TABLE: &str = r#"
         queue_id BIGINT NOT NULL,
         worker_id BIGINT,
         payload JSONB NOT NULL,
-        priority INT DEFAULT 0,
         enqueued_at TIMESTAMP WITH TIME ZONE NOT NULL,
         vt TIMESTAMP WITH TIME ZONE NOT NULL,
         read_ct INT NOT NULL,
@@ -283,10 +281,6 @@ pub const CREATE_PGQRS_MESSAGES_INDEX_QUEUE_VT: &str = r#"
 
 pub const CREATE_PGQRS_MESSAGES_INDEX_WORKER_ID: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_pgqrs_messages_worker_id ON pgqrs_messages (worker_id);
-"#;
-
-pub const CREATE_PGQRS_MESSAGES_INDEX_PRIORITY: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_messages_priority ON pgqrs_messages (queue_id, priority DESC, id ASC);
 "#;
 
 /// Create indexes for unified archive table

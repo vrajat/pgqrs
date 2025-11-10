@@ -53,7 +53,7 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 
 mod common;
 
-use pgqrs::types::{QueueInfo, QueueMessage, WorkerInfo};
+use pgqrs::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo};
 use serde::de::DeserializeOwned;
 use std::process::Command;
 use tokio::runtime::Runtime;
@@ -197,7 +197,7 @@ fn test_cli_archive_functionality() {
     assert!(dequeued_message.vt > chrono::Utc::now());
 
     // Archive the dequeued message
-    run_cli_command_expect_success(
+    let archive: Option<ArchivedMessage> = run_cli_command_json(
         &db_url,
         &[
             "message",
@@ -206,9 +206,14 @@ fn test_cli_archive_functionality() {
             &dequeued_message.id.to_string(),
         ],
     );
+    assert!(
+        archive.is_some(),
+        "Expected archived message to be returned, found None"
+    );
+    let archived_message = archive.unwrap();
+    assert_eq!(archived_message.original_msg_id, dequeued_message.id);
 
-    // Check archived message count (should show any archived messages from processing)
-    let archived_list: Vec<QueueMessage> =
+    let archived_list: Vec<ArchivedMessage> =
         run_cli_command_json(&db_url, &["archive", "list", queue_name]);
     assert!(
         archived_list.len() == 1,

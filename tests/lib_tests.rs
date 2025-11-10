@@ -62,7 +62,7 @@ async fn test_send_message() {
     let worker = admin
         .register(
             TEST_QUEUE_SEND_MESSAGE.to_string(),
-            "http://localhost".to_string(),
+            "http://test_send_message".to_string(),
             3000,
         )
         .await
@@ -120,7 +120,7 @@ async fn test_archive_single_message() {
     let archived_again = queue.archive(msg_id).await;
     assert!(archived_again.is_ok());
     assert!(
-        !archived_again.unwrap(),
+        !archived_again.unwrap().is_some(),
         "Archiving already-archived message should return false"
     );
 
@@ -216,7 +216,7 @@ async fn test_archive_nonexistent_message() {
     let archived = queue.archive(fake_msg_id).await;
     assert!(archived.is_ok());
     assert!(
-        !archived.unwrap(),
+        !archived.unwrap().is_some(),
         "Non-existent message should not be archived"
     );
 
@@ -250,7 +250,7 @@ async fn test_purge_archive() {
             .archive(message.id)
             .await
             .expect("Failed to archive message");
-        assert!(archived, "Message {} should be archived", i);
+        assert!(archived.is_some(), "Message {} should be archived", i);
     }
 
     // Verify archive has 3 messages

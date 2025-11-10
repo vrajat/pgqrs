@@ -57,8 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let task_payload = json!({
         "task_type": "process_image",
-        "image_url": "https://example.com/image.jpg",
-        "priority": 1
+        "image_url": "https://example.com/image.jpg"
     });
 
     let email_queue = admin.get_queue("email_queue").await?;
@@ -160,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
         let archived = task_queue.archive(task_msg.id).await?;
-        if archived {
+        if archived.is_some() {
             println!("Successfully archived task message {}", task_msg.id);
         } else {
             println!(
