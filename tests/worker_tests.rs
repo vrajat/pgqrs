@@ -381,10 +381,7 @@ async fn test_purge_old_workers_respects_references() {
     admin.mark_stopped(worker2.id).await.unwrap();
 
     // Send a message that gets assigned to worker1
-    queue
-        .enqueue(&json!({"test": "purge_data"}))
-        .await
-        .unwrap();
+    queue.enqueue(&json!({"test": "purge_data"})).await.unwrap();
 
     assert!(queue.dequeue(&worker1).await.is_ok());
 

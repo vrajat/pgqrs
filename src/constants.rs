@@ -49,16 +49,16 @@ pub const SELECT_MESSAGE_BY_ID: &str = r#"
 /// Read available messages from queue (with SKIP LOCKED)
 /// Select messages for worker with lock
 pub const DEQUEUE_MESSAGES: &str = r#"
-    UPDATE pgqrs_messages t 
+    UPDATE pgqrs_messages t
     SET worker_id = $4, vt = NOW() + make_interval(secs => $3::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
     FROM (
-        SELECT id 
-        FROM pgqrs_messages 
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL 
+        SELECT id
+        FROM pgqrs_messages
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL
         ORDER BY id ASC
-        LIMIT $2 
+        LIMIT $2
         FOR UPDATE SKIP LOCKED
-    ) selected 
+    ) selected
     WHERE t.id = selected.id
     RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
 "#;
@@ -72,7 +72,7 @@ pub const PENDING_COUNT: &str = r#"
 
 /// Update message visibility timeout (extend lock)
 pub const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages 
+    UPDATE pgqrs_messages
     SET vt = vt + make_interval(secs => $1::double precision)
     WHERE id = $2
     RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at;

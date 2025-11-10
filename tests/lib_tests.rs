@@ -510,42 +510,51 @@ async fn test_queue_deletion_with_references() {
     let queue = admin.create_queue(queue_name).await.unwrap();
     let archive = Archive::new(admin.pool.clone(), queue.queue_id);
     let worker = admin
-        .register(queue_name.to_string(), "http://test_queue_deletion_with_references".to_string(), 3000)
+        .register(
+            queue_name.to_string(),
+            "http://test_queue_deletion_with_references".to_string(),
+            3000,
+        )
         .await
         .expect("Failed to register worker");
     let message_payload = json!({"test": "deletion_test"});
     queue.enqueue(&message_payload).await.unwrap();
 
-    // Try to delete queue with messages - should fail
+    // Try to delete queue with active worker - should fail with worker error
     let delete_result = admin.delete_queue(queue_name).await;
     assert!(
         delete_result.is_err(),
-        "Deleting queue with messages should fail"
+        "Deleting queue with active workers should fail"
     );
+    let error_msg = delete_result.unwrap_err().to_string();
     assert!(
-        delete_result
-            .unwrap_err()
-            .to_string()
-            .contains("references exist"),
-        "Error should mention references exist"
+        error_msg.contains("active worker"),
+        "Error should mention active workers, got: {}",
+        error_msg
     );
 
-    // Archive the message and try again - should still fail due to archive
+    // Archive the message first (while worker is still active)
     let messages = queue.dequeue(&worker).await.unwrap();
     assert_eq!(messages.len(), 1, "Should have one message");
     queue.archive(messages[0].id).await.unwrap();
 
+    // Stop the worker to test reference validation
+    admin
+        .mark_stopped(worker.id)
+        .await
+        .expect("Failed to stop worker");
+
+    // Now try to delete queue with archive - should fail with references error
     let delete_result2 = admin.delete_queue(queue_name).await;
     assert!(
         delete_result2.is_err(),
         "Deleting queue with archived messages should fail"
     );
+    let error_msg2 = delete_result2.unwrap_err().to_string();
     assert!(
-        delete_result2
-            .unwrap_err()
-            .to_string()
-            .contains("references exist"),
-        "Error should mention references exist"
+        error_msg2.contains("references exist"),
+        "Error should mention references exist, got: {}",
+        error_msg2
     );
 
     // Purge archive and try again - should succeed

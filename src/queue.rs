@@ -186,12 +186,12 @@ impl Queue {
 
         // Fetch all messages in a single query using WHERE msg_id = ANY($1)
         let queue_messages = sqlx::query_as::<_, QueueMessage>(SELECT_MESSAGES_BY_IDS)
-        .bind(&ids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: e.to_string(),
-        })?;
+            .bind(&ids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
 
         Ok(queue_messages)
     }

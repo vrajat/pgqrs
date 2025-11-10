@@ -75,6 +75,12 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
     WHERE a.worker_id IS NOT NULL AND w.id IS NULL
 "#;
 
+const CHECK_ACTIVE_WORKERS_FOR_QUEUE: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_workers
+    WHERE queue_name = $1 AND status IN ('ready', 'shutting_down')
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
@@ -201,12 +207,12 @@ impl PgqrsAdmin {
 
         for (table_name, description) in &required_tables {
             let table_exists = sqlx::query_scalar::<_, bool>(CHECK_TABLE_EXISTS)
-            .bind(table_name)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to check {} existence: {}", description, e),
-            })?;
+                .bind(table_name)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to check {} existence: {}", description, e),
+                })?;
 
             if !table_exists {
                 return Err(PgqrsError::Connection {
@@ -219,11 +225,11 @@ impl PgqrsAdmin {
 
         // Check that all messages have valid queue_id references
         let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to check message referential integrity: {}", e),
-        })?;
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to check message referential integrity: {}", e),
+            })?;
 
         if orphaned_messages > 0 {
             return Err(PgqrsError::Connection {
@@ -236,14 +242,14 @@ impl PgqrsAdmin {
 
         // Check that all messages with worker_id have valid worker references
         let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!(
-                "Failed to check message worker referential integrity: {}",
-                e
-            ),
-        })?;
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to check message worker referential integrity: {}",
+                    e
+                ),
+            })?;
 
         if orphaned_message_workers > 0 {
             return Err(PgqrsError::Connection {
@@ -256,11 +262,11 @@ impl PgqrsAdmin {
 
         // Check that all archived messages have valid queue_id references
         let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to check archive referential integrity: {}", e),
-        })?;
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to check archive referential integrity: {}", e),
+            })?;
 
         if orphaned_archive_queues > 0 {
             return Err(PgqrsError::Connection {
@@ -273,14 +279,14 @@ impl PgqrsAdmin {
 
         // Check that all archived messages with worker_id have valid worker references
         let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| PgqrsError::Connection {
-            message: format!(
-                "Failed to check archive worker referential integrity: {}",
-                e
-            ),
-        })?;
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to check archive worker referential integrity: {}",
+                    e
+                ),
+            })?;
 
         if orphaned_archive_workers > 0 {
             return Err(PgqrsError::Connection {
@@ -383,6 +389,24 @@ impl PgqrsAdmin {
         let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
             name: name.to_string(),
         })?;
+
+        // Check for active workers assigned to this queue
+        let active_workers: i64 = sqlx::query_scalar(CHECK_ACTIVE_WORKERS_FOR_QUEUE)
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to check active workers for queue '{}': {}", name, e),
+            })?;
+
+        if active_workers > 0 {
+            return Err(crate::error::PgqrsError::Connection {
+                message: format!(
+                    "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
+                    name, active_workers
+                ),
+            });
+        }
 
         // Check referential integrity with a single query
         let total_references: i64 = sqlx::query_scalar(crate::constants::CHECK_QUEUE_REFERENCES)
