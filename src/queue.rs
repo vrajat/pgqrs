@@ -27,6 +27,13 @@ use crate::WorkerInfo;
 use chrono::Utc;
 use sqlx::PgPool;
 
+// SQL query constants
+const SELECT_MESSAGES_BY_IDS: &str = r#"
+    SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct
+    FROM pgqrs_messages
+    WHERE id = ANY($1)
+"#;
+
 /// Producer and consumer interface for a specific queue.
 ///
 /// A Queue instance provides methods for enqueuing messages, reading messages,
@@ -178,9 +185,7 @@ impl Queue {
             })?;
 
         // Fetch all messages in a single query using WHERE msg_id = ANY($1)
-        let queue_messages = sqlx::query_as::<_, QueueMessage>(
-            "SELECT id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct FROM pgqrs_messages WHERE id = ANY($1)"
-        )
+        let queue_messages = sqlx::query_as::<_, QueueMessage>(SELECT_MESSAGES_BY_IDS)
         .bind(&ids)
         .fetch_all(&self.pool)
         .await

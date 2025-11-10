@@ -36,6 +36,45 @@ use chrono::{Duration, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
+// SQL query constants
+const DELETE_WORKER_BY_ID: &str = "DELETE FROM pgqrs_workers WHERE id = $1";
+
+// Verification queries
+const CHECK_TABLE_EXISTS: &str = r#"
+    SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = $1
+    )
+"#;
+
+const CHECK_ORPHANED_MESSAGES: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_messages m
+    LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+    WHERE q.id IS NULL
+"#;
+
+const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_messages m
+    LEFT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
+    WHERE m.worker_id IS NOT NULL AND w.id IS NULL
+"#;
+
+const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_archive a
+    LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
+    WHERE q.id IS NULL
+"#;
+
+const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_archive a
+    LEFT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
+    WHERE a.worker_id IS NOT NULL AND w.id IS NULL
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
@@ -162,12 +201,7 @@ impl PgqrsAdmin {
         ];
 
         for (table_name, description) in &required_tables {
-            let table_exists = sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_name = $1
-                )",
-            )
+            let table_exists = sqlx::query_scalar::<_, bool>(CHECK_TABLE_EXISTS)
             .bind(table_name)
             .fetch_one(&mut *tx)
             .await
@@ -185,12 +219,7 @@ impl PgqrsAdmin {
         // Category 2: Validate referential integrity using left outer joins
 
         // Check that all messages have valid queue_id references
-        let orphaned_messages = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)
-             FROM pgqrs_messages m
-             LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
-             WHERE q.id IS NULL",
-        )
+        let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
@@ -207,12 +236,7 @@ impl PgqrsAdmin {
         }
 
         // Check that all messages with worker_id have valid worker references
-        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)
-             FROM pgqrs_messages m
-             LEFT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
-             WHERE m.worker_id IS NOT NULL AND w.id IS NULL",
-        )
+        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
@@ -232,12 +256,7 @@ impl PgqrsAdmin {
         }
 
         // Check that all archived messages have valid queue_id references
-        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)
-             FROM pgqrs_archive a
-             LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
-             WHERE q.id IS NULL",
-        )
+        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
@@ -254,12 +273,7 @@ impl PgqrsAdmin {
         }
 
         // Check that all archived messages with worker_id have valid worker references
-        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*)
-             FROM pgqrs_archive a
-             LEFT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
-             WHERE a.worker_id IS NOT NULL AND w.id IS NULL",
-        )
+        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| PgqrsError::Connection {
@@ -888,7 +902,7 @@ impl PgqrsAdmin {
         }
 
         // Worker has no references, safe to delete
-        let result = sqlx::query("DELETE FROM pgqrs_workers WHERE id = $1")
+        let result = sqlx::query(DELETE_WORKER_BY_ID)
             .bind(worker_id)
             .execute(&self.pool)
             .await
