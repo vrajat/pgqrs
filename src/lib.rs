@@ -29,7 +29,7 @@
 //!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //!     let admin = PgqrsAdmin::new(&config).await?;
 //!     admin.install().await?;
-//!     admin.create_queue(&"jobs".to_string(), false).await?;
+//!     admin.create_queue("jobs").await?;
 //!     Ok(())
 //! }
 //! ```
@@ -37,6 +37,7 @@
 //! For more details and advanced usage, see the [README](https://github.com/vrajat/pgqrs/blob/main/README.md) and [examples](https://github.com/vrajat/pgqrs/tree/main/examples).
 
 pub mod admin;
+pub mod archive;
 pub mod config;
 pub mod error;
 pub mod queue;

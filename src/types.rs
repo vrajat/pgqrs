@@ -30,27 +30,33 @@ use tabled::Tabled;
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueMessage {
     /// Unique message ID
-    pub msg_id: i64,
-    /// Number of times this message has been read
-    pub read_ct: i32,
-    /// Timestamp when the message was enqueued
-    pub enqueued_at: chrono::DateTime<chrono::Utc>,
-    /// Visibility timeout (when the message becomes available again)
-    pub vt: chrono::DateTime<chrono::Utc>,
-    /// The actual message payload (JSON)
-    pub message: serde_json::Value,
+    pub id: i64,
+    /// Queue ID this message belongs to
+    pub queue_id: i64,
     /// Worker ID that has this message assigned (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
     pub worker_id: Option<i64>,
+    /// The actual message payload (JSON)
+    pub payload: serde_json::Value,
+    /// Visibility timeout (when the message becomes available again)
+    pub vt: chrono::DateTime<chrono::Utc>,
+    /// Timestamp when the message was created
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Number of times this message has been read
+    pub read_ct: i32,
+    /// Timestamp when the message was dequeued (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for QueueMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "QueueMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, vt: {}, message: {} }}",
-            self.msg_id, self.read_ct, self.enqueued_at, self.vt, self.message
+            "QueueMessage {{ id: {}, queue_id: {}, read_ct: {}, enqueued_at: {}, vt: {}, payload: {} }}",
+            self.id, self.queue_id, self.read_ct, self.enqueued_at, self.vt, self.payload
         )
     }
 }
@@ -76,20 +82,20 @@ pub struct QueueMetrics {
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueInfo {
+    /// Queue ID (primary key)
+    pub id: i64,
     /// Name of the queue
     pub queue_name: String,
     /// Timestamp when the queue was created
     pub created_at: DateTime<Utc>,
-    /// Whether the queue is unlogged (PostgreSQL optimization)
-    pub unlogged: bool,
 }
 
 impl fmt::Display for QueueInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "QueueInfo {{ queue_name: {}, created_at: {}, unlogged: {} }}",
-            self.queue_name, self.created_at, self.unlogged
+            "QueueInfo {{ id: {}, queue_name: {}, created_at: {} }}",
+            self.id, self.queue_name, self.created_at
         )
     }
 }
@@ -97,45 +103,49 @@ impl fmt::Display for QueueInfo {
 /// An archived message with additional tracking information
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct ArchivedMessage {
-    /// Unique message ID
-    pub msg_id: i64,
-    /// Number of times this message has been read
-    pub read_ct: i32,
-    /// Timestamp when the message was enqueued
-    pub enqueued_at: chrono::DateTime<chrono::Utc>,
-    /// Visibility timeout (when the message becomes available again)
-    pub vt: chrono::DateTime<chrono::Utc>,
-    /// The actual message payload (JSON)
-    pub message: serde_json::Value,
-    /// Timestamp when the message was archived
-    #[tabled(skip)]
-    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// How long the message was being processed before archiving (in milliseconds)
+    /// Unique archive entry ID
+    pub id: i64,
+    /// Original message ID from pgqrs_messages table
+    pub original_msg_id: i64,
+    /// Queue ID this message belonged to
+    pub queue_id: i64,
+    /// Worker ID that processed this message (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
-    pub processing_duration: Option<i64>,
+    pub worker_id: Option<i64>,
+    /// The actual message payload (JSON)
+    pub payload: serde_json::Value,
+    /// Timestamp when the message was originally created
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Visibility timeout when the message was archived
+    pub vt: chrono::DateTime<chrono::Utc>,
+    /// Number of times this message was read before archiving
+    pub read_ct: i32,
+    /// Timestamp when the message was archived
+    pub archived_at: chrono::DateTime<chrono::Utc>,
+    /// Timestamp when the message was dequeued from the queue (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for ArchivedMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ArchivedMessage {{ msg_id: {}, read_ct: {}, enqueued_at: {}, archived_at: {:?} }}",
-            self.msg_id, self.read_ct, self.enqueued_at, self.archived_at
+            "ArchivedMessage {{ id: {}, original_msg_id: {}, queue_id: {}, enqueued_at: {}, archived_at: {} }}",
+            self.id, self.original_msg_id, self.queue_id, self.enqueued_at, self.archived_at
         )
     }
 }
 
 impl ArchivedMessage {
-    /// Get the processing duration as a `std::time::Duration`
+    /// Calculate processing duration if both enqueued_at and dequeued_at are available
     pub fn get_processing_duration(&self) -> Option<std::time::Duration> {
-        self.processing_duration
-            .map(|millis| std::time::Duration::from_millis(millis as u64))
-    }
-
-    /// Set the processing duration from a `std::time::Duration`
-    pub fn set_processing_duration(&mut self, duration: std::time::Duration) {
-        self.processing_duration = Some(duration.as_millis() as i64);
+        self.dequeued_at.map(|dequeued| {
+            let duration = dequeued - self.enqueued_at;
+            duration.to_std().unwrap_or_default()
+        })
     }
 }
 

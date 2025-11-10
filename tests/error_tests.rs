@@ -125,7 +125,7 @@ async fn test_nonexistent_schema_operations() {
 
     if let Err(PgqrsError::Connection { message }) = result {
         assert!(
-            message.contains(" relation \"queue_repository\" does not exist"),
+            message.contains("relation \"pgqrs_messages\" does not exist"),
             "Error should mention schema not existing, got: {}",
             message
         );

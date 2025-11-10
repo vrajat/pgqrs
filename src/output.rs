@@ -49,6 +49,24 @@ impl OutputWriter {
             OutputWriter::Json(writer) => writer.write_list(items, out),
         }
     }
+
+    /// Write a single item using the configured output format.
+    ///
+    /// # Arguments
+    /// * `item` - Item to write (must implement Serialize + Tabled)
+    /// * `out` - Output writer destination
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
+    pub fn write_item<T: Serialize + Tabled>(
+        &self,
+        item: &T,
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
+        match self {
+            OutputWriter::Table(writer) => writer.write_item(item, out),
+            OutputWriter::Json(writer) => writer.write_item(item, out),
+        }
+    }
 }
 
 /// Writer for formatting output as human-readable tables
@@ -71,6 +89,21 @@ impl TableOutputWriter {
         writeln!(out, "{}", table)?;
         Ok(())
     }
+
+    /// Write a single item as a formatted table.
+    ///
+    /// # Arguments
+    /// * `item` - A single item to format as a table row
+    /// * `out` - Output writer destination
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
+    pub fn write_item<T: Serialize + Tabled>(
+        &self,
+        items: &T,
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
+        self.write_list(std::slice::from_ref(items), out)
+    }
 }
 
 /// Writer for formatting output as JSON
@@ -90,6 +123,23 @@ impl JsonOutputWriter {
         out: &mut dyn std::io::Write,
     ) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(items)?;
+        writeln!(out, "{}", json)?;
+        Ok(())
+    }
+
+    /// Write a single item as pretty-printed JSON.
+    ///
+    /// # Arguments
+    /// * `items` - Slice containing the single item to serialize as JSON
+    /// * `out` - Output writer destination
+    /// # Returns
+    /// Ok if writing succeeded, error otherwise.
+    pub fn write_item<T: Serialize>(
+        &self,
+        item: &T,
+        out: &mut dyn std::io::Write,
+    ) -> anyhow::Result<()> {
+        let json = serde_json::to_string_pretty(item)?;
         writeln!(out, "{}", json)?;
         Ok(())
     }
@@ -123,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json_writer() {
+    fn test_json_writer_list() {
         let writer = OutputWriter::Json(JsonOutputWriter);
         let mut cursor = std::io::Cursor::new(Vec::new());
         let messages = vec![sample_message()];
@@ -134,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn test_table_writer() {
+    fn test_table_writer_list() {
         let writer = OutputWriter::Table(TableOutputWriter);
         let mut cursor = std::io::Cursor::new(Vec::new());
         let messages = vec![sample_message()];
@@ -172,5 +222,16 @@ mod tests {
             output.contains("-"),
             "Should contain table horizontal lines"
         );
+    }
+
+    #[test]
+    fn test_json_writer_item() {
+        let writer = OutputWriter::Json(JsonOutputWriter);
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let message = sample_message();
+        writer.write_item(&message, &mut cursor).unwrap();
+        let output = String::from_utf8(cursor.into_inner()).unwrap();
+        assert!(output.contains("foo"));
+        assert!(output.contains("msg_id"));
     }
 }

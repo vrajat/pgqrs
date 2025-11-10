@@ -250,7 +250,7 @@ or experiments.
 pgqrs queue create test_queue
 
 # Send a message to the queue
-pgqrs message send test_queue '{"message": "Hello, World!", "priority": 1}'
+pgqrs message send test_queue '{"message": "Hello, World!", "timestamp": "2023-01-01T00:00:00Z"}'
 
 # Send a delayed message (available after 30 seconds)
 pgqrs message send test_queue '{"task": "delayed_task"}' --delay 30
@@ -301,8 +301,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin = PgqrsAdmin::new(&config).await?;
 
     // Create queues
-    admin.create_queue("email_queue", false).await?;
-    admin.create_queue("task_queue", false).await?;
+    admin.create_queue("email_queue").await?;
+    admin.create_queue("task_queue").await?;
 
     // Send messages
     let email_payload = json!({

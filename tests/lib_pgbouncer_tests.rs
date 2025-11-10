@@ -27,7 +27,15 @@ async fn test_pgbouncer_happy_path() {
         .expect("Verify should succeed through PgBouncer");
 
     // Create a queue through PgBouncer
-    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY, false).await;
+    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
+    let worker = admin
+        .register(
+            TEST_QUEUE_PGBOUNCER_HAPPY.to_string(),
+            "http://localhost".to_string(),
+            3000,
+        )
+        .await
+        .expect("Failed to register worker through PgBouncer");
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
@@ -56,7 +64,7 @@ async fn test_pgbouncer_happy_path() {
 
     // Read the message through PgBouncer
     let messages = queue
-        .read(1)
+        .dequeue(&worker)
         .await
         .expect("Failed to read messages through PgBouncer");
 
@@ -64,13 +72,13 @@ async fn test_pgbouncer_happy_path() {
 
     let received_message = &messages[0];
     assert_eq!(
-        received_message.message, test_message,
+        received_message.payload, test_message,
         "Message content should match"
     );
 
     // Dequeue the message through PgBouncer
     queue
-        .dequeue(received_message.msg_id)
+        .delete(received_message.id)
         .await
         .expect("Failed to dequeue message through PgBouncer");
 
@@ -84,6 +92,13 @@ async fn test_pgbouncer_happy_path() {
         pending_count_after, 0,
         "Queue should be empty after dequeuing"
     );
+
+    let _ = admin.begin_shutdown(worker.id).await;
+    let _ = admin.mark_stopped(worker.id).await;
+    admin
+        .delete_worker(worker.id)
+        .await
+        .expect("Failed to delete worker");
 
     // Cleanup: delete the queue through PgBouncer
     admin
@@ -100,7 +115,7 @@ async fn test_pgbouncer_queue_list() {
 
     // Create a test queue
     let _queue = admin
-        .create_queue(TEST_QUEUE_PGBOUNCER_LIST, false)
+        .create_queue(TEST_QUEUE_PGBOUNCER_LIST)
         .await
         .expect("Failed to create queue through PgBouncer");
 
@@ -120,7 +135,6 @@ async fn test_pgbouncer_queue_list() {
 
     let queue_info = found_queue.unwrap();
     assert_eq!(queue_info.queue_name, TEST_QUEUE_PGBOUNCER_LIST);
-    assert!(!queue_info.unlogged, "Queue should be logged");
 
     // Cleanup
     admin

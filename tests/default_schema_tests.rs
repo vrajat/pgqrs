@@ -36,7 +36,7 @@ async fn test_default_schema_backward_compatibility() {
 
     // Test basic queue operations in default schema
     let queue_name = "test_default_schema_queue".to_string();
-    let queue_result = admin.create_queue(&queue_name, false).await;
+    let queue_result = admin.create_queue(&queue_name).await;
     assert!(
         queue_result.is_ok(),
         "Should create queue in default schema"
