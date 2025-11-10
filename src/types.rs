@@ -45,6 +45,10 @@ pub struct QueueMessage {
     pub enqueued_at: chrono::DateTime<chrono::Utc>,
     /// Number of times this message has been read
     pub read_ct: i32,
+    /// Timestamp when the message was dequeued (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for QueueMessage {
@@ -119,10 +123,10 @@ pub struct ArchivedMessage {
     pub read_ct: i32,
     /// Timestamp when the message was archived
     pub archived_at: chrono::DateTime<chrono::Utc>,
-    /// How long the message was being processed before archiving (in milliseconds)
+    /// Timestamp when the message was dequeued from the queue (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
-    pub processing_duration: Option<f64>,
+    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for ArchivedMessage {
@@ -136,15 +140,12 @@ impl fmt::Display for ArchivedMessage {
 }
 
 impl ArchivedMessage {
-    /// Get the processing duration as a `std::time::Duration`
+    /// Calculate processing duration if both enqueued_at and dequeued_at are available
     pub fn get_processing_duration(&self) -> Option<std::time::Duration> {
-        self.processing_duration
-            .map(|millis| std::time::Duration::from_millis(millis as u64))
-    }
-
-    /// Set the processing duration from a `std::time::Duration`
-    pub fn set_processing_duration(&mut self, duration: std::time::Duration) {
-        self.processing_duration = Some(duration.as_millis() as f64);
+        self.dequeued_at.map(|dequeued| {
+            let duration = dequeued - self.enqueued_at;
+            duration.to_std().unwrap_or_default()
+        })
     }
 }
 

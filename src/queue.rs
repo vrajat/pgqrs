@@ -29,7 +29,7 @@ use sqlx::PgPool;
 
 // SQL query constants
 const SELECT_MESSAGES_BY_IDS: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
+    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
     WHERE id = ANY($1)
 "#;

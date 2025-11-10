@@ -24,7 +24,7 @@
 // SQL query constants
 const ARCHIVE_LIST_WITH_WORKER: &str = r#"
 SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
-       read_ct, archived_at, processing_duration
+       read_ct, archived_at, dequeued_at
 FROM pgqrs_archive
 WHERE queue_id = $1 AND worker_id = $2
 ORDER BY archived_at DESC
@@ -33,7 +33,7 @@ LIMIT $3 OFFSET $4
 
 const ARCHIVE_LIST_QUEUE_ONLY: &str = r#"
 SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
-       read_ct, archived_at, processing_duration
+       read_ct, archived_at, dequeued_at
 FROM pgqrs_archive
 WHERE queue_id = $1
 ORDER BY archived_at DESC

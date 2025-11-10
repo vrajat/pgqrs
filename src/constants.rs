@@ -41,29 +41,26 @@ pub const INSERT_MESSAGE: &str = r#"
 
 /// Select message by ID from unified messages table
 pub const SELECT_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
+    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
-    WHERE id = $1;
+    WHERE id = $1
 "#;
 
 /// Read available messages from queue (with SKIP LOCKED)
+/// Select messages for worker with lock
 pub const DEQUEUE_MESSAGES: &str = r#"
-    WITH cte AS (
-        SELECT id
-        FROM pgqrs_messages
-        WHERE queue_id = $1 AND vt <= clock_timestamp()
-        ORDER BY vt ASC, id ASC
-        LIMIT $2
+    UPDATE pgqrs_messages t 
+    SET worker_id = $4, vt = NOW() + make_interval(secs => $3::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
+    FROM (
+        SELECT id 
+        FROM pgqrs_messages 
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL 
+        ORDER BY id ASC
+        LIMIT $2 
         FOR UPDATE SKIP LOCKED
-    )
-    UPDATE pgqrs_messages t
-    SET
-        vt = clock_timestamp() + make_interval(secs => $3::double precision),
-        read_ct = read_ct + 1,
-        worker_id = $4
-    FROM cte
-    WHERE t.id = cte.id
-    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct;
+    ) selected 
+    WHERE t.id = selected.id
+    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
 "#;
 
 /// Get count of pending messages in queue
@@ -73,12 +70,12 @@ pub const PENDING_COUNT: &str = r#"
     WHERE queue_id = $1 AND vt <= $2;
 "#;
 
-/// Update message visibility timeout
+/// Update message visibility timeout (extend lock)
 pub const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
+    UPDATE pgqrs_messages 
     SET vt = vt + make_interval(secs => $1::double precision)
     WHERE id = $2
-    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct;
+    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at;
 "#;
 
 /// Delete batch of messages
@@ -101,15 +98,14 @@ pub const ARCHIVE_MESSAGE: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_messages
         WHERE id = $1
-        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct
+        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, processing_duration)
+        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
     SELECT
-        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct,
-        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
+        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     FROM archived_msg
-    RETURNING id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, processing_duration;
+    RETURNING id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
 "#;
 
 /// Archive batch of messages (efficient batch operation)
@@ -117,24 +113,21 @@ pub const ARCHIVE_BATCH: &str = r#"
     WITH archived_msgs AS (
         DELETE FROM pgqrs_messages
         WHERE id = ANY($1)
-        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct
+        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, processing_duration)
+        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
     SELECT
-        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct,
-        EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000 as processing_duration
+        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     FROM archived_msgs
     RETURNING original_msg_id;
 "#;
 
 /// Select single archived message by original message ID
 pub const ARCHIVE_SELECT_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, processing_duration
+    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
     FROM pgqrs_archive
     WHERE original_msg_id = $1
-    ORDER BY archived_at DESC
-    LIMIT 1;
 "#;
 
 // Worker operations with unified tables
@@ -249,6 +242,7 @@ pub const CREATE_PGQRS_MESSAGES_TABLE: &str = r#"
         vt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         read_ct INT DEFAULT 0,
+        dequeued_at TIMESTAMP WITH TIME ZONE,
 
         CONSTRAINT fk_messages_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
         CONSTRAINT fk_messages_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
@@ -267,7 +261,7 @@ pub const CREATE_PGQRS_ARCHIVE_TABLE: &str = r#"
         vt TIMESTAMP WITH TIME ZONE NOT NULL,
         read_ct INT NOT NULL,
         archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        processing_duration DOUBLE PRECISION,
+        dequeued_at TIMESTAMP WITH TIME ZONE,
 
         CONSTRAINT fk_archive_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
         CONSTRAINT fk_archive_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
