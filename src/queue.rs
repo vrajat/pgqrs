@@ -109,7 +109,7 @@ impl Queue {
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
         let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(delay_seconds as i64);
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
         let id = self.insert_message(payload, now, vt).await?;
         self.get_message_by_id(id).await
     }
@@ -343,7 +343,7 @@ impl Queue {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to archive message {}: {}", msg_id, e),
+                message: format!("Failed to archive message {msg_id}: {e}"),
             })?;
 
         Ok(result)
@@ -369,7 +369,7 @@ impl Queue {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to archive batch messages: {}", e),
+                message: format!("Failed to archive batch messages: {e}"),
             })?;
 
         // For each input id, true if it was archived, false otherwise
