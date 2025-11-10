@@ -305,9 +305,10 @@ impl PgqrsAdmin {
             .map_err(|e| {
                 // Check if this is a unique constraint violation (queue already exists)
                 if let sqlx::Error::Database(db_err) = &e {
-                    if db_err.code().as_deref() == Some("23505") { // PostgreSQL unique violation code
+                    if db_err.code().as_deref() == Some("23505") {
+                        // PostgreSQL unique violation code
                         return crate::error::PgqrsError::QueueAlreadyExists {
-                            name: name.to_string()
+                            name: name.to_string(),
                         };
                     }
                 }
@@ -458,56 +459,6 @@ impl PgqrsAdmin {
         Ok(())
     }
 
-    /// Purge all archived messages from a queue's archive table.
-    /// The queue and archive table structure are preserved.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue whose archive to purge
-    ///
-    /// # Returns
-    /// Ok if purge succeeds, error otherwise.
-    pub async fn purge_archive(&self, name: &str) -> Result<()> {
-        // Start a transaction for atomic archive purge with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
-
-        // Lock the queue row for data modification and get queue_id
-        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_UPDATE)
-            .bind(name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to lock queue '{}': {}", name, e),
-            })?;
-
-        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
-            name: name.to_string(),
-        })?;
-
-        // Purge all archived messages for the queue
-        sqlx::query(crate::constants::PURGE_ARCHIVE)
-            .bind(queue_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to purge archive for queue '{}': {}", name, e),
-            })?;
-
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to commit archive purge: {}", e),
-            })?;
-
-        tracing::debug!("Successfully purged archive for queue '{}'", name);
-        Ok(())
-    }
-
     /// Get metrics for a specific queue.
     ///
     /// # Arguments
@@ -554,7 +505,7 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// [`Queue`] instance for the queue.
-    pub async fn get_queue_by_name(&self, queue_name: &str) -> Result<Queue> {
+    pub async fn get_queue_info(&self, queue_name: &str) -> Result<QueueInfo> {
         let queue_info: QueueInfo = sqlx::query_as(crate::constants::GET_QUEUE_INFO_BY_NAME)
             .bind(queue_name)
             .fetch_one(&self.pool)
@@ -562,12 +513,7 @@ impl PgqrsAdmin {
             .map_err(|_e| PgqrsError::QueueNotFound {
                 name: queue_name.to_string(),
             })?;
-
-        Ok(Queue::new(
-            self.pool.clone(),
-            queue_info.id,
-            &queue_info.queue_name,
-        ))
+        Ok(queue_info)
     }
 
     ///
@@ -893,6 +839,57 @@ impl PgqrsAdmin {
 
         let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
             .bind(threshold)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Check if a worker has any associated messages or archives
+    ///
+    /// # Arguments
+    /// * `worker_id` - ID of the worker to check
+    ///
+    /// # Returns
+    /// Number of associated records (messages + archives)
+    pub async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
+        let row = sqlx::query_scalar::<_, i64>(crate::constants::CHECK_WORKER_REFERENCES)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(row)
+    }
+
+    /// Delete a specific worker if it has no associated messages or archives
+    ///
+    /// # Arguments
+    /// * `worker_id` - ID of the worker to delete
+    ///
+    /// # Returns
+    /// Error if worker has references, otherwise number of workers deleted (0 or 1)
+    pub async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
+        // First check if worker has any references
+        let reference_count = self.check_worker_references(worker_id).await?;
+
+        if reference_count > 0 {
+            return Err(PgqrsError::SchemaValidation {
+                message: format!(
+                    "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
+                    worker_id, reference_count
+                ),
+            });
+        }
+
+        // Worker has no references, safe to delete
+        let result = sqlx::query("DELETE FROM pgqrs_workers WHERE id = $1")
+            .bind(worker_id)
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {

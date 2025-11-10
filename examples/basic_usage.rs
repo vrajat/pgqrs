@@ -16,6 +16,7 @@
 //! ```
 
 use pgqrs::admin::PgqrsAdmin;
+use pgqrs::archive::Archive;
 use pgqrs::config::Config;
 use serde_json::json;
 
@@ -63,6 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let email_queue = admin.get_queue("email_queue").await?;
     let task_queue = admin.get_queue("task_queue").await?;
 
+    let email_archive = Archive::new(admin.pool.clone(), email_queue.queue_id);
+    let task_archive = Archive::new(admin.pool.clone(), task_queue.queue_id);
+
     let email_id = email_queue.enqueue(&email_payload).await?;
     let task_id = task_queue.enqueue(&task_payload).await?;
 
@@ -109,7 +113,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read messages
     println!("Reading messages...");
 
-    let email_messages = email_queue.read_delay(10, 2).await?;
+    // Create a worker.
+    let worker = admin
+        .register(
+            email_queue.queue_name.clone(),
+            "http://localhost".to_string(),
+            3000,
+        )
+        .await?;
+
+    let email_messages = email_queue.dequeue_many_with_delay(&worker, 10, 2).await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -122,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_queue.read_delay(5, 5).await?;
+    let task_messages = task_queue.dequeue_many_with_delay(&worker, 5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
@@ -178,8 +191,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show archive counts
     println!("Archive counts:");
-    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
-    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
+    let email_archive_count = email_archive.count(None).await?;
+    let task_archive_count = task_archive.count(None).await?;
     println!("  email_queue archived: {}", email_archive_count);
     println!("  task_queue archived: {}", task_archive_count);
 
@@ -189,7 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Traditional deletion (not recommended for data retention):");
 
         // Delete the message completely
-        let deleted = task_queue.delete_batch(vec![remaining_task.id]).await?;
+        let deleted = task_queue.delete_many(vec![remaining_task.id]).await?;
         if deleted.first().copied().unwrap_or(false) {
             println!("Deleted task message {}", remaining_task.id);
         } else {
@@ -229,8 +242,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Archive Management Example ---");
 
     // Check archive counts before operations
-    let email_archive_count = email_queue.archive_list(1000, 0).await?.len();
-    let task_archive_count = task_queue.archive_list(1000, 0).await?.len();
+    let email_archive_count = email_archive.count(None).await?;
+    let task_archive_count = task_archive.count(None).await?;
     println!(
         "Archive counts - email: {}, task: {}",
         email_archive_count, task_archive_count
@@ -238,8 +251,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if email_archive_count > 0 {
         println!("Purging email queue archive...");
-        admin.purge_archive("email_queue").await?;
-        let new_count = email_queue.archive_list(1000, 0).await?.len();
+        email_archive.delete(None).await?;
+        let new_count = email_archive.count(None).await?;
         println!("Email archive count after purge: {}", new_count);
     }
 

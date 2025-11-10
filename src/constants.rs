@@ -15,7 +15,7 @@
 //! dynamic SQL statements with proper schema and table names.
 
 /// Default visibility timeout in seconds for locked messages
-pub const VISIBILITY_TIMEOUT: i32 = 5;
+pub const VISIBILITY_TIMEOUT: u32 = 5;
 
 pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
     CREATE TABLE IF NOT EXISTS pgqrs_queues (
@@ -47,7 +47,7 @@ pub const SELECT_MESSAGE_BY_ID: &str = r#"
 "#;
 
 /// Read available messages from queue (with SKIP LOCKED)
-pub const READ_MESSAGES: &str = r#"
+pub const DEQUEUE_MESSAGES: &str = r#"
     WITH cte AS (
         SELECT id
         FROM pgqrs_messages
@@ -71,13 +71,6 @@ pub const PENDING_COUNT: &str = r#"
     SELECT COUNT(*) AS count
     FROM pgqrs_messages
     WHERE queue_id = $1 AND vt <= $2;
-"#;
-
-/// Delete (dequeue) message from unified messages table
-pub const DEQUEUE_MESSAGE: &str = r#"
-    DELETE FROM pgqrs_messages
-    WHERE id = $1
-    RETURNING id, queue_id, worker_id, payload, priority, vt, enqueued_at, read_ct;
 "#;
 
 /// Update message visibility timeout
@@ -135,15 +128,6 @@ pub const ARCHIVE_BATCH: &str = r#"
     RETURNING original_msg_id;
 "#;
 
-/// Select archived messages for a queue
-pub const ARCHIVE_LIST: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct, archived_at, processing_duration
-    FROM pgqrs_archive
-    WHERE queue_id = $1
-    ORDER BY archived_at DESC
-    LIMIT $2 OFFSET $3;
-"#;
-
 /// Select single archived message by original message ID
 pub const ARCHIVE_SELECT_BY_ID: &str = r#"
     SELECT id, original_msg_id, queue_id, worker_id, payload, priority, enqueued_at, vt, read_ct, archived_at, processing_duration
@@ -151,12 +135,6 @@ pub const ARCHIVE_SELECT_BY_ID: &str = r#"
     WHERE original_msg_id = $1
     ORDER BY archived_at DESC
     LIMIT 1;
-"#;
-
-/// Purge archived messages from a specific queue
-pub const PURGE_ARCHIVE: &str = r#"
-    DELETE FROM pgqrs_archive
-    WHERE queue_id = $1;
 "#;
 
 // Worker operations with unified tables
@@ -273,8 +251,8 @@ pub const CREATE_PGQRS_MESSAGES_TABLE: &str = r#"
         enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         read_ct INT DEFAULT 0,
 
-        CONSTRAINT fk_messages_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE,
-        CONSTRAINT fk_messages_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id) ON DELETE SET NULL
+        CONSTRAINT fk_messages_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
+        CONSTRAINT fk_messages_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
     );
 "#;
 
@@ -293,8 +271,8 @@ pub const CREATE_PGQRS_ARCHIVE_TABLE: &str = r#"
         archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         processing_duration DOUBLE PRECISION,
 
-        CONSTRAINT fk_archive_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE,
-        CONSTRAINT fk_archive_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id) ON DELETE SET NULL
+        CONSTRAINT fk_archive_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
+        CONSTRAINT fk_archive_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
     );
 "#;
 
@@ -374,10 +352,28 @@ pub const GET_WORKER_BY_ID: &str = r#"
     WHERE id = $1
 "#;
 
-/// Delete old stopped workers
+/// Check if worker has any associated messages or archives
+pub const CHECK_WORKER_REFERENCES: &str = r#"
+    SELECT COUNT(*) as total_references FROM (
+        SELECT 1 FROM pgqrs_messages WHERE worker_id = $1
+        UNION ALL
+        SELECT 1 FROM pgqrs_archive WHERE worker_id = $1
+    ) refs
+"#;
+
+/// Delete old stopped workers (only those without references)
 pub const PURGE_OLD_WORKERS: &str = r#"
     DELETE FROM pgqrs_workers
-    WHERE status = 'stopped' AND heartbeat_at < $1
+    WHERE status = 'stopped'
+      AND heartbeat_at < $1
+      AND id NOT IN (
+          SELECT DISTINCT worker_id
+          FROM (
+              SELECT worker_id FROM pgqrs_messages WHERE worker_id IS NOT NULL
+              UNION
+              SELECT worker_id FROM pgqrs_archive WHERE worker_id IS NOT NULL
+          ) refs
+      )
 "#;
 
 /// Drop the queue repository table

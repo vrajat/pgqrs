@@ -6,14 +6,55 @@ fn get_test_db_url() -> String {
 fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
     Command::new("cargo")
         .args(["run", "--quiet", "--"])
-        .args(["--dsn", db_url, "--schema", "pgqrs_cli_test"])
+        .args([
+            "--dsn",
+            db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "--format",
+            "json",
+        ])
         .args(args)
         .output()
         .expect("Failed to run CLI command")
 }
 
+/// Run a CLI command and ensure it succeeds, returning the raw output for non-JSON commands
+fn run_cli_command_expect_success(db_url: &str, args: &[&str]) -> std::process::Output {
+    let output = run_cli_command(db_url, args);
+    assert!(
+        output.status.success(),
+        "CLI command failed: {}\nStdout: {}\nStderr: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// Run a CLI command, ensure it succeeds, and deserialize the JSON output to the specified type
+fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
+    let output = run_cli_command_expect_success(db_url, args);
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    println!(
+        "JSON output for command '{}': {}",
+        args.join(" "),
+        output_str
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "Failed to deserialize JSON output from command '{}': {}\nOutput: {}",
+            args.join(" "),
+            e,
+            output_str
+        )
+    })
+}
+
 mod common;
 
+use pgqrs::types::{QueueInfo, QueueMessage, WorkerInfo};
+use serde::de::DeserializeOwned;
 use std::process::Command;
 use tokio::runtime::Runtime;
 
@@ -23,94 +64,35 @@ fn test_cli_create_list_delete_queue() {
     let db_url = get_test_db_url();
     let queue_name = "test_queue_cli";
 
-    // Create queue
-    let create_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "create",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI create queue");
-    assert!(
-        create_output.status.success(),
-        "Create queue failed: {}",
-        String::from_utf8_lossy(&create_output.stderr)
-    );
+    // Create queue - this doesn't return JSON, just success/failure
+    run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
 
-    // List queues
-    let list_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "list",
-        ])
-        .output()
-        .expect("Failed to run CLI list queues");
-    assert!(
-        list_output.status.success(),
-        "List queues failed: {}",
-        String::from_utf8_lossy(&list_output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&list_output.stdout);
-    assert!(
-        stdout.contains(queue_name),
-        "Queue not found in list output: {}",
-        stdout
-    );
+    // List queues - this returns JSON
+    let queues: Vec<QueueInfo> = run_cli_command_json(&db_url, &["queue", "list"]);
+    let created_queue = queues
+        .iter()
+        .find(|q| q.queue_name == queue_name)
+        .expect(&format!(
+            "Queue '{}' not found in list: {:?}",
+            queue_name, queues
+        ));
+    assert_eq!(created_queue.queue_name, queue_name);
 
-    // Delete queue
-    let delete_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "delete",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI delete queue");
-    assert!(
-        delete_output.status.success(),
-        "Delete queue failed: {}",
-        String::from_utf8_lossy(&delete_output.stderr)
-    );
+    let queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "get", queue_name]);
+    assert_eq!(queue.queue_name, queue_name);
+
+    // Delete queue - this doesn't return JSON, just success/failure
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 
     // List queues again to verify deletion
-    let list_output2 = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "list",
-        ])
-        .output()
-        .expect("Failed to run CLI list queues after delete");
+    let queues_after_delete: Vec<QueueInfo> = run_cli_command_json(&db_url, &["queue", "list"]);
     assert!(
-        list_output2.status.success(),
-        "List queues after delete failed: {}",
-        String::from_utf8_lossy(&list_output2.stderr)
-    );
-    let stdout2 = String::from_utf8_lossy(&list_output2.stdout);
-    assert!(
-        !stdout2.contains(queue_name),
-        "Queue still found after deletion: {}",
-        stdout2
+        !queues_after_delete
+            .iter()
+            .any(|q| q.queue_name == queue_name),
+        "Queue '{}' still found after deletion: {:?}",
+        queue_name,
+        queues_after_delete
     );
 }
 
@@ -121,97 +103,51 @@ fn test_cli_create_send_dequeue_delete_queue() {
     let payload = r#"{"hello":"world"}"#;
 
     // Create queue
-    let create_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "create",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI create queue");
-    assert!(
-        create_output.status.success(),
-        "Create queue failed: {}",
-        String::from_utf8_lossy(&create_output.stderr)
-    );
+    let created_queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "create", queue_name]);
+    assert_eq!(created_queue.queue_name, queue_name);
 
     // Send message
-    let send_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "send",
-            queue_name,
-            payload,
-        ])
-        .output()
-        .expect("Failed to run CLI send message");
-    assert!(
-        send_output.status.success(),
-        "Send message failed: {}",
-        String::from_utf8_lossy(&send_output.stderr)
+    let sent_message: QueueMessage =
+        run_cli_command_json(&db_url, &["message", "enqueue", queue_name, payload]);
+    assert_eq!(
+        sent_message.payload,
+        serde_json::from_str::<serde_json::Value>(payload).unwrap()
     );
+
+    // Create worker
+    let created_worker: WorkerInfo = run_cli_command_json(
+        &db_url,
+        &[
+            "worker",
+            "create",
+            queue_name,
+            "test_cli_create_send_dequeue_delete_host",
+            "8080",
+        ],
+    );
+    let worker_id = created_worker.id;
 
     // Dequeue message
-    let dequeue_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "dequeue",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI dequeue message");
-    assert!(
-        dequeue_output.status.success(),
-        "Dequeue message failed: {}",
-        String::from_utf8_lossy(&dequeue_output.stderr)
+    let dequeued_messages: Vec<QueueMessage> = run_cli_command_json(
+        &db_url,
+        &["message", "dequeue", queue_name, &worker_id.to_string()],
     );
-    let stdout = String::from_utf8_lossy(&dequeue_output.stdout);
     assert!(
-        stdout.contains("hello"),
-        "Dequeued message not found in output: {}",
-        stdout
+        dequeued_messages.len() == 1,
+        "Expected 1 dequeued message, found {}",
+        dequeued_messages.len()
     );
+    let dequeued_message = &dequeued_messages[0];
+    assert_eq!(dequeued_message.payload["hello"], "world");
 
-    let purge_queue = run_cli_command(&db_url, &["queue", "purge", queue_name]);
-    assert!(
-        purge_queue.status.success(),
-        "Purge queue failed: {}",
-        String::from_utf8_lossy(&purge_queue.stderr)
-    );
+    // Purge queue
+    run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
+
+    // Delete worker
+    run_cli_command_expect_success(&db_url, &["worker", "delete", &worker_id.to_string()]);
+
     // Delete queue
-    let delete_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "delete",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI delete queue");
-    assert!(
-        delete_output.status.success(),
-        "Delete queue failed: {}",
-        String::from_utf8_lossy(&delete_output.stderr)
-    );
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
 
 #[test]
@@ -221,289 +157,68 @@ fn test_cli_archive_functionality() {
     let queue_name = "test_archive_cli";
 
     // Create queue
-    let create_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
+    let created_queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "create", queue_name]);
+    assert_eq!(created_queue.queue_name, queue_name);
+
+    // Create worker
+    let created_worker: WorkerInfo = run_cli_command_json(
+        &db_url,
+        &[
+            "worker",
             "create",
             queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI create queue");
-    assert!(
-        create_output.status.success(),
-        "Create queue failed: {}",
-        String::from_utf8_lossy(&create_output.stderr)
+            "test_cli_archive_functionality_host",
+            "8080",
+        ],
     );
+    let worker_id = created_worker.id;
 
     // Send a test message
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
-    let send_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
+    let _sent_message: QueueMessage = run_cli_command_json(
+        &db_url,
+        &["message", "enqueue", queue_name, message_payload],
+    );
+
+    // Dequeue the message to simulate processing
+    let dequeued_messages: Vec<QueueMessage> = run_cli_command_json(
+        &db_url,
+        &["message", "dequeue", queue_name, &worker_id.to_string()],
+    );
+    assert_eq!(
+        dequeued_messages.len(),
+        1,
+        "Expected 1 dequeued message, found {}",
+        dequeued_messages.len()
+    );
+    let dequeued_message = &dequeued_messages[0];
+    assert_eq!(dequeued_message.payload["test"], "archive_message");
+
+    assert!(dequeued_message.vt > chrono::Utc::now());
+
+    // Archive the dequeued message
+    run_cli_command_expect_success(
+        &db_url,
+        &[
             "message",
-            "send",
+            "archive",
             queue_name,
-            message_payload,
-        ])
-        .output()
-        .expect("Failed to run CLI send message");
-    assert!(
-        send_output.status.success(),
-        "Send message failed: {}",
-        String::from_utf8_lossy(&send_output.stderr)
+            &dequeued_message.id.to_string(),
+        ],
     );
 
-    // Read the message to get its ID - just verify it exists
-    let read_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "read",
-            queue_name,
-            "--count",
-            "1",
-        ])
-        .output()
-        .expect("Failed to run CLI read message");
+    // Check archived message count (should show any archived messages from processing)
+    let archived_list: Vec<QueueMessage> =
+        run_cli_command_json(&db_url, &["archive", "list", queue_name]);
     assert!(
-        read_output.status.success(),
-        "Read message failed: {}",
-        String::from_utf8_lossy(&read_output.stderr)
+        archived_list.len() == 1,
+        "Expected 1 archived message, found {}",
+        archived_list.len()
     );
 
-    // Check archived message count (should be 0 initially)
-    let count_archive_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "count",
-            queue_name,
-            "--archive",
-        ])
-        .output()
-        .expect("Failed to run CLI count archived messages");
-    assert!(
-        count_archive_output.status.success(),
-        "Count archived messages failed: {}",
-        String::from_utf8_lossy(&count_archive_output.stderr)
-    );
-
-    // Read archived messages (should be empty initially)
-    let read_archive_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "read",
-            queue_name,
-            "--archive",
-            "--count",
-            "10",
-        ])
-        .output()
-        .expect("Failed to run CLI read archived messages");
-    assert!(
-        read_archive_output.status.success(),
-        "Read archived messages failed: {}",
-        String::from_utf8_lossy(&read_archive_output.stderr)
-    );
-
-    let purge_queue = run_cli_command(&db_url, &["queue", "purge", queue_name]);
-    assert!(
-        purge_queue.status.success(),
-        "Purge queue failed: {}",
-        String::from_utf8_lossy(&purge_queue.stderr)
-    );
-
-    let purge_archive = run_cli_command(&db_url, &["queue", "purge-archive", queue_name]);
-    assert!(
-        purge_archive.status.success(),
-        "Purge queue archive failed: {}",
-        String::from_utf8_lossy(&purge_archive.stderr)
-    );
-
-    // Delete queue
-    let delete_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "delete",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI delete queue");
-    assert!(
-        delete_output.status.success(),
-        "Delete queue failed: {}",
-        String::from_utf8_lossy(&delete_output.stderr)
-    );
-}
-
-#[test]
-fn test_cli_message_show_archive() {
-    // Bring up test DB and get DSN
-    let db_url = get_test_db_url();
-    let queue_name = "test_show_archive_cli";
-
-    // Create queue
-    let create_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "create",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI create queue");
-    assert!(
-        create_output.status.success(),
-        "Create queue failed: {}",
-        String::from_utf8_lossy(&create_output.stderr)
-    );
-
-    // Send a test message
-    let message_payload = r#"{"test": "show_archive", "id": 12345}"#;
-    let send_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "send",
-            queue_name,
-            message_payload,
-        ])
-        .output()
-        .expect("Failed to run CLI send message");
-    assert!(
-        send_output.status.success(),
-        "Send message failed: {}",
-        String::from_utf8_lossy(&send_output.stderr)
-    );
-
-    // Try to show an archived message that doesn't exist (should fail gracefully)
-    let show_archive_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "message",
-            "show",
-            queue_name,
-            "999",
-            "--archive",
-        ])
-        .output()
-        .expect("Failed to run CLI show archived message");
-    assert!(
-        show_archive_output.status.success(),
-        "Show archived message command should succeed even if message not found: {}",
-        String::from_utf8_lossy(&show_archive_output.stderr)
-    );
-    // Note: The command succeeds but may not produce output if message not found
-    // This is expected behavior for the archive functionality
-
-    let purge_queue = run_cli_command(&db_url, &["queue", "purge", queue_name]);
-    assert!(
-        purge_queue.status.success(),
-        "Purge queue failed: {}",
-        String::from_utf8_lossy(&purge_queue.stderr)
-    );
-
-    let purge_archive = run_cli_command(&db_url, &["queue", "purge-archive", queue_name]);
-    assert!(
-        purge_archive.status.success(),
-        "Purge queue archive failed: {}",
-        String::from_utf8_lossy(&purge_archive.stderr)
-    );
-
-    // Delete queue
-    let delete_output = Command::new("cargo")
-        .args(["run", "--quiet", "--"])
-        .args([
-            "--dsn",
-            &db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "queue",
-            "delete",
-            queue_name,
-        ])
-        .output()
-        .expect("Failed to run CLI delete queue");
-    assert!(
-        delete_output.status.success(),
-        "Delete queue failed: {}",
-        String::from_utf8_lossy(&delete_output.stderr)
-    );
-}
-
-#[test]
-fn test_cli_schema_parameter() {
-    // Test that the --schema parameter works correctly
-    let db_url = get_test_db_url();
-    let queue_name = "test_schema_param_queue";
-
-    // Create queue with explicit schema parameter
-    let create_output = run_cli_command(&db_url, &["queue", "create", queue_name]);
-    assert!(
-        create_output.status.success(),
-        "Create queue with schema failed: {}",
-        String::from_utf8_lossy(&create_output.stderr)
-    );
-
-    // List queues with schema parameter to verify it exists
-    let list_output = run_cli_command(&db_url, &["queue", "list"]);
-    assert!(
-        list_output.status.success(),
-        "List queues with schema failed: {}",
-        String::from_utf8_lossy(&list_output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&list_output.stdout);
-    assert!(
-        stdout.contains(queue_name),
-        "Queue not found in schema-specific list: {}",
-        stdout
-    );
-
-    // Cleanup the queue
-    let delete_output = run_cli_command(&db_url, &["queue", "delete", queue_name]);
-    assert!(
-        delete_output.status.success(),
-        "Delete queue failed: {}",
-        String::from_utf8_lossy(&delete_output.stderr)
-    );
+    // Clean up
+    run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
+    run_cli_command_expect_success(&db_url, &["archive", "delete", queue_name]);
+    run_cli_command_expect_success(&db_url, &["worker", "delete", &worker_id.to_string()]);
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }

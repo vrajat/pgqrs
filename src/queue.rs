@@ -18,12 +18,12 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_LIST, ARCHIVE_MESSAGE, ARCHIVE_SELECT_BY_ID, DELETE_MESSAGE_BATCH,
-    DEQUEUE_MESSAGE, INSERT_MESSAGE, PENDING_COUNT, READ_MESSAGES, SELECT_MESSAGE_BY_ID,
-    UPDATE_MESSAGE_VT,
+    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES, INSERT_MESSAGE,
+    PENDING_COUNT, SELECT_MESSAGE_BY_ID, UPDATE_MESSAGE_VT, VISIBILITY_TIMEOUT,
 };
 use crate::error::Result;
 use crate::types::QueueMessage;
+use crate::WorkerInfo;
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -217,9 +217,21 @@ impl Queue {
     ///
     /// # Returns
     /// Vector of messages read from the queue.
-    pub async fn read(&self, limit: usize) -> Result<Vec<QueueMessage>> {
-        self.read_delay(crate::constants::VISIBILITY_TIMEOUT as u32, limit)
+    pub async fn dequeue(&self, worker: &WorkerInfo) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many(worker, 1).await
+    }
+
+    pub async fn dequeue_many(
+        &self,
+        worker: &WorkerInfo,
+        limit: usize,
+    ) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(worker, limit, VISIBILITY_TIMEOUT)
             .await
+    }
+
+    pub async fn dequeue_delay(&self, worker: &WorkerInfo, vt: u32) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(worker, 1, vt).await
     }
 
     /// Read up to `limit` messages from the queue, with a custom visibility timeout.
@@ -230,12 +242,17 @@ impl Queue {
     ///
     /// # Returns
     /// Vector of messages read from the queue.
-    pub async fn read_delay(&self, vt: u32, limit: usize) -> Result<Vec<QueueMessage>> {
-        let result = sqlx::query_as::<_, QueueMessage>(READ_MESSAGES)
+    pub async fn dequeue_many_with_delay(
+        &self,
+        worker: &WorkerInfo,
+        limit: usize,
+        vt: u32,
+    ) -> Result<Vec<QueueMessage>> {
+        let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(self.queue_id)
             .bind(limit as i64)
             .bind(vt as i32)
-            .bind(None::<i64>) // worker_id (will be set by the query)
+            .bind(worker.id) // worker_id
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
@@ -244,22 +261,16 @@ impl Queue {
         Ok(result)
     }
 
-    /// Remove a message from the queue (delete it permanently).
-    ///
-    /// # Arguments
-    /// * `message_id` - ID of the message to delete
-    ///
-    /// # Returns
-    /// The deleted message, or an error if not found.
-    pub async fn dequeue(&self, message_id: i64) -> Result<QueueMessage> {
-        let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGE)
-            .bind(message_id)
-            .fetch_one(&self.pool)
+    pub async fn delete(&self, message_id: i64) -> Result<bool> {
+        let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
+            .bind(vec![message_id])
+            .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
                 message: e.to_string(),
             })?;
-        Ok(result)
+
+        Ok(deleted_ids.contains(&message_id))
     }
 
     /// Remove a batch of messages from the queue.
@@ -269,7 +280,7 @@ impl Queue {
     ///
     /// # Returns
     /// Vector of booleans indicating success for each message (same order as input).
-    pub async fn delete_batch(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
+    pub async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
             .fetch_all(&self.pool)
@@ -363,53 +374,5 @@ impl Queue {
             .map(|id| archived_set.contains(&id))
             .collect();
         Ok(result)
-    }
-
-    /// List archived messages from the queue.
-    ///
-    /// # Arguments
-    /// * `limit` - Maximum number of messages to return
-    /// * `offset` - Number of messages to skip
-    ///
-    /// # Returns
-    /// Vector of archived messages
-    pub async fn archive_list(
-        &self,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<crate::types::ArchivedMessage>> {
-        let messages: Vec<crate::types::ArchivedMessage> = sqlx::query_as(ARCHIVE_LIST)
-            .bind(self.queue_id)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to list archive messages: {}", e),
-            })?;
-
-        Ok(messages)
-    }
-
-    /// Get a specific archived message by ID.
-    ///
-    /// # Arguments
-    /// * `msg_id` - ID of the archived message to retrieve
-    ///
-    /// # Returns
-    /// The archived message if found, error otherwise
-    pub async fn get_archived_message_by_id(
-        &self,
-        msg_id: i64,
-    ) -> Result<crate::types::ArchivedMessage> {
-        let message: crate::types::ArchivedMessage = sqlx::query_as(ARCHIVE_SELECT_BY_ID)
-            .bind(msg_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to retrieve archived message {}: {}", msg_id, e),
-            })?;
-
-        Ok(message)
     }
 }
