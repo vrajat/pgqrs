@@ -70,7 +70,7 @@ impl Default for ValidationConfig {
         Self {
             max_payload_size_bytes: 1024 * 1024, // 1MB - reasonable default for most use cases
             max_string_length: 1024,             // 1KB strings max
-            max_object_depth: 10,                // Allow reasonable nesting
+            max_object_depth: 2,                 // Shallow nesting to prevent abuse
             forbidden_keys: vec!["__proto__".to_string(), "constructor".to_string()],
             required_keys: vec![],
             max_enqueue_per_second: Some(1000), // 1K/s default rate limit
@@ -98,9 +98,8 @@ impl ValidationConfig {
             rate_limiter: None,
         };
 
-        // Validate without rate limiting
-        validator.validate_structure(payload, 0)?;
-        validator.validate_content(payload)?;
+        // Single-pass validation without rate limiting
+        validator.validate_single_pass(payload, 0, true)?;
         validator.validate_size(payload)?;
 
         Ok(())
@@ -138,10 +137,9 @@ impl PayloadValidator {
     /// Validate a payload against all configured rules.
     ///
     /// This method performs comprehensive validation including:
-    /// - Rate limiting (if configured) - checked first to prevent CPU abuse
-    /// - Size checks (payload and string lengths)
-    /// - Structure validation (depth limits)
-    /// - Content validation (forbidden/required keys)
+    /// - Quick structure and content validation first (prevent CPU abuse)
+    /// - Rate limiting (after basic validation to prevent resource waste)
+    /// - Size checks (expensive serialization) done last
     ///
     /// # Arguments
     /// * `payload` - JSON payload to validate
@@ -150,7 +148,10 @@ impl PayloadValidator {
     /// * `Ok(())` if the payload passes all validation rules
     /// * `Err(PgqrsError)` if validation fails
     pub fn validate(&self, payload: &serde_json::Value) -> Result<()> {
-        // 1. Rate limit check first (very fast atomic operation) to prevent CPU abuse
+        // 1. Fast structure and content validation first (prevents CPU abuse from malformed payloads)
+        self.validate_single_pass(payload, 0, true)?;
+
+        // 2. Rate limit check (after we know the payload structure is reasonable)
         if let Some(ref limiter) = self.rate_limiter {
             if !limiter.try_acquire() {
                 return Err(crate::error::PgqrsError::RateLimited {
@@ -159,12 +160,8 @@ impl PayloadValidator {
             }
         }
 
-        // 2. Fast size check (serialize once)
+        // 3. Size check last (expensive serialization, only if structure is valid and rate limit passed)
         self.validate_size(payload)?;
-
-        // 3. Structure validation (depth and content)
-        self.validate_structure(payload, 0)?;
-        self.validate_content(payload)?;
 
         Ok(())
     }
@@ -181,7 +178,19 @@ impl PayloadValidator {
     /// * `Ok(())` if all payloads pass validation rules
     /// * `Err(PgqrsError)` if any payload fails validation
     pub fn validate_batch(&self, payloads: &[serde_json::Value]) -> Result<()> {
-        // 1. First check rate limit capacity for entire batch without consuming tokens
+        // 1. First validate all payload structures (fast validation to prevent CPU abuse)
+        for (index, payload) in payloads.iter().enumerate() {
+            self.validate_single_pass(payload, 0, true).map_err(|e| match e {
+                crate::error::PgqrsError::ValidationFailed { reason } => {
+                    crate::error::PgqrsError::ValidationFailed {
+                        reason: format!("Payload at index {}: {}", index, reason),
+                    }
+                }
+                other => other,
+            })?;
+        }
+
+        // 2. Then check rate limit capacity for entire batch (atomic consumption)
         if let Some(ref limiter) = self.rate_limiter {
             if !limiter.try_acquire_multiple(payloads.len() as u32) {
                 return Err(crate::error::PgqrsError::RateLimited {
@@ -190,9 +199,8 @@ impl PayloadValidator {
             }
         }
 
-        // 2. Validate all payloads without consuming additional rate limit tokens
+        // 3. Finally do expensive size validation (only if structure valid and rate limit passed)
         for (index, payload) in payloads.iter().enumerate() {
-            // Validate without rate limiting (already checked above)
             self.validate_size(payload).map_err(|e| match e {
                 crate::error::PgqrsError::PayloadTooLarge {
                     actual_bytes,
@@ -203,24 +211,6 @@ impl PayloadValidator {
                         index, actual_bytes, max_bytes
                     ),
                 },
-                other => other,
-            })?;
-
-            self.validate_structure(payload, 0).map_err(|e| match e {
-                crate::error::PgqrsError::ValidationFailed { reason } => {
-                    crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Payload at index {}: {}", index, reason),
-                    }
-                }
-                other => other,
-            })?;
-
-            self.validate_content(payload).map_err(|e| match e {
-                crate::error::PgqrsError::ValidationFailed { reason } => {
-                    crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Payload at index {}: {}", index, reason),
-                    }
-                }
                 other => other,
             })?;
         }
@@ -243,8 +233,17 @@ impl PayloadValidator {
         Ok(())
     }
 
-    /// Validate the structure of the payload (depth and string lengths).
-    fn validate_structure(&self, payload: &serde_json::Value, depth: usize) -> Result<()> {
+    /// Optimized single-pass validation of structure and content.
+    ///
+    /// This method combines depth checking, string length validation, and forbidden/required
+    /// key checking in a single tree traversal for optimal performance.
+    ///
+    /// # Arguments
+    /// * `payload` - JSON value to validate
+    /// * `depth` - Current nesting depth
+    /// * `is_top_level` - Whether this is the root level (for required key checking)
+    fn validate_single_pass(&self, payload: &serde_json::Value, depth: usize, is_top_level: bool) -> Result<()> {
+        // Check depth limit first
         if depth > self.config.max_object_depth {
             return Err(crate::error::PgqrsError::ValidationFailed {
                 reason: format!(
@@ -256,20 +255,47 @@ impl PayloadValidator {
 
         match payload {
             serde_json::Value::Object(obj) => {
+                // Check forbidden keys at every object level (security fix)
+                if !self.config.forbidden_keys.is_empty() {
+                    for forbidden in &self.config.forbidden_keys {
+                        if obj.contains_key(forbidden) {
+                            return Err(crate::error::PgqrsError::ValidationFailed {
+                                reason: format!("Forbidden key '{}' found in payload", forbidden),
+                            });
+                        }
+                    }
+                }
+
+                // Check required keys only at the top level
+                if is_top_level && !self.config.required_keys.is_empty() {
+                    for required in &self.config.required_keys {
+                        if !obj.contains_key(required) {
+                            return Err(crate::error::PgqrsError::ValidationFailed {
+                                reason: format!("Required key '{}' missing from payload", required),
+                            });
+                        }
+                    }
+                }
+
+                // Check key lengths and recurse into values
                 for (key, value) in obj {
-                    // Check string length
                     if key.len() > self.config.max_string_length {
                         return Err(crate::error::PgqrsError::ValidationFailed {
-                            reason: format!("Key '{}' length exceeds limit", key),
+                            reason: format!(
+                                "Key '{}' length {} exceeds limit {}",
+                                key,
+                                key.len(),
+                                self.config.max_string_length
+                            ),
                         });
                     }
-                    // Recurse into nested objects
-                    self.validate_structure(value, depth + 1)?;
+                    // Recurse into nested structures
+                    self.validate_single_pass(value, depth + 1, false)?;
                 }
             }
             serde_json::Value::Array(arr) => {
                 for item in arr {
-                    self.validate_structure(item, depth + 1)?;
+                    self.validate_single_pass(item, depth + 1, false)?;
                 }
             }
             serde_json::Value::String(s) => {
@@ -284,31 +310,6 @@ impl PayloadValidator {
                 }
             }
             _ => {}
-        }
-
-        Ok(())
-    }
-
-    /// Validate the content of the payload (forbidden/required keys).
-    fn validate_content(&self, payload: &serde_json::Value) -> Result<()> {
-        if let serde_json::Value::Object(obj) = payload {
-            // Check forbidden keys
-            for forbidden in &self.config.forbidden_keys {
-                if obj.contains_key(forbidden) {
-                    return Err(crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Forbidden key '{}' found in payload", forbidden),
-                    });
-                }
-            }
-
-            // Check required keys
-            for required in &self.config.required_keys {
-                if !obj.contains_key(required) {
-                    return Err(crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Required key '{}' missing from payload", required),
-                    });
-                }
-            }
         }
 
         Ok(())
@@ -332,7 +333,7 @@ mod tests {
         let config = ValidationConfig::default();
         assert_eq!(config.max_payload_size_bytes, 1024 * 1024); // 1MB
         assert_eq!(config.max_string_length, 1024);
-        assert_eq!(config.max_object_depth, 10);
+        assert_eq!(config.max_object_depth, 2);
         assert_eq!(config.max_enqueue_per_second, Some(1000));
         assert_eq!(config.max_enqueue_burst, Some(50));
     }
@@ -391,8 +392,17 @@ mod tests {
         let valid_payload = json!({"data": "value"});
         assert!(config.validate_payload(&valid_payload).is_ok());
 
+        // Test top-level forbidden key
         let invalid_payload = json!({"__proto__": "malicious"});
         assert!(config.validate_payload(&invalid_payload).is_err());
+
+        // Test nested forbidden key (security fix)
+        let nested_invalid_payload = json!({"data": {"__proto__": "malicious"}});
+        assert!(config.validate_payload(&nested_invalid_payload).is_err());
+
+        // Test deeply nested forbidden key
+        let deep_nested_invalid = json!({"level1": {"level2": {"__proto__": "malicious"}}});
+        assert!(config.validate_payload(&deep_nested_invalid).is_err());
     }
 
     #[test]
