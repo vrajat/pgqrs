@@ -1,4 +1,4 @@
-use pgqrs::PgqrsAdmin;
+use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, Queue, Table};
 use serde_json::json;
 
 // Test-specific constants
@@ -40,7 +40,8 @@ async fn test_pgbouncer_happy_path() {
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
-    let queue = queue_result.unwrap();
+    let queue_info = queue_result.unwrap();
+    let queue = Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -100,9 +101,13 @@ async fn test_pgbouncer_happy_path() {
         .await
         .expect("Failed to delete worker");
 
+    let queue_info = admin
+        .get_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
+        .await
+        .expect("Failed to get queue info through PgBouncer");
     // Cleanup: delete the queue through PgBouncer
     admin
-        .delete_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
 
@@ -119,9 +124,10 @@ async fn test_pgbouncer_queue_list() {
         .await
         .expect("Failed to create queue through PgBouncer");
 
+    let queue_obj = PgqrsQueues::new(admin.pool.clone());
     // List queues to verify it shows up
-    let queues = admin
-        .list_queues()
+    let queues = queue_obj
+        .list(None)
         .await
         .expect("Failed to list queues through PgBouncer");
 
@@ -138,7 +144,7 @@ async fn test_pgbouncer_queue_list() {
 
     // Cleanup
     admin
-        .delete_queue(TEST_QUEUE_PGBOUNCER_LIST)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
 }

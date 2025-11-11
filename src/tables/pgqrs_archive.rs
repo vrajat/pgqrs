@@ -64,7 +64,7 @@ WHERE queue_id = $1
 
 use crate::constants::ARCHIVE_SELECT_BY_ID;
 use crate::error::Result;
-use crate::types::ArchivedMessage;
+use crate::types::{ArchivedMessage, QueueInfo};
 use sqlx::PgPool;
 
 /// Archive management interface for pgqrs.
@@ -75,7 +75,7 @@ pub struct PgqrsArchive {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
     /// Database ID of the queue from pgqrs_queues table
-    pub queue_id: i64,
+    pub queue_info: QueueInfo,
 }
 
 impl PgqrsArchive {
@@ -83,9 +83,12 @@ impl PgqrsArchive {
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
-    /// * `queue_id` - Database ID of the queue
-    pub fn new(pool: PgPool, queue_id: i64) -> Self {
-        Self { pool, queue_id }
+    /// * `queue_info` - Information about the queue
+    pub fn new(pool: PgPool, queue_info: &QueueInfo) -> Self {
+        Self {
+            pool,
+            queue_info: queue_info.clone(),
+        }
     }
 
     /// List archived messages with optional filtering.
@@ -106,7 +109,7 @@ impl PgqrsArchive {
         let messages: Vec<ArchivedMessage> = match worker_id {
             Some(w) => {
                 sqlx::query_as(ARCHIVE_LIST_WITH_WORKER)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .bind(w)
                     .bind(limit)
                     .bind(offset)
@@ -115,7 +118,7 @@ impl PgqrsArchive {
             }
             None => {
                 sqlx::query_as(ARCHIVE_LIST_QUEUE_ONLY)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .bind(limit)
                     .bind(offset)
                     .fetch_all(&self.pool)
@@ -140,14 +143,14 @@ impl PgqrsArchive {
         let count: i64 = match worker_id {
             Some(w) => {
                 sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .bind(w)
                     .fetch_one(&self.pool)
                     .await
             }
             None => {
                 sqlx::query_scalar(ARCHIVE_COUNT_QUEUE_ONLY)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .fetch_one(&self.pool)
                     .await
             }
@@ -170,14 +173,14 @@ impl PgqrsArchive {
         let result = match worker_id {
             Some(w) => {
                 sqlx::query(ARCHIVE_DELETE_WITH_WORKER)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .bind(w)
                     .execute(&self.pool)
                     .await
             }
             None => {
                 sqlx::query(ARCHIVE_DELETE_QUEUE_ONLY)
-                    .bind(self.queue_id)
+                    .bind(self.queue_info.id)
                     .execute(&self.pool)
                     .await
             }
@@ -206,5 +209,37 @@ impl PgqrsArchive {
             })?;
 
         Ok(message)
+    }
+
+    /// Count all archived messages for a queue using a transaction.
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue ID to count archived messages for
+    /// * `tx` - Database transaction
+    ///
+    /// # Returns
+    /// Number of archived messages for the queue
+    pub async fn count_for_queue_tx<'a, 'b: 'a>(
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
+        const COUNT_ARCHIVE_FOR_QUEUE: &str = r#"
+            SELECT COUNT(*)
+            FROM pgqrs_archive
+            WHERE queue_id = $1
+        "#;
+
+        let count: i64 = sqlx::query_scalar(COUNT_ARCHIVE_FOR_QUEUE)
+            .bind(queue_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!(
+                    "Failed to count archived messages for queue {}: {}",
+                    queue_id, e
+                ),
+            })?;
+
+        Ok(count)
     }
 }

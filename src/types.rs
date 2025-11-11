@@ -80,7 +80,7 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueInfo {
     /// Queue ID (primary key)
     pub id: i64,

@@ -10,7 +10,7 @@ pub mod pgqrs_workers;
 pub mod table;
 
 pub use pgqrs_archive::PgqrsArchive;
-pub use pgqrs_messages::{PgqrsMessages, NewMessage};
-pub use pgqrs_queues::{PgqrsQueues, NewQueue};
-pub use pgqrs_workers::{PgqrsWorkers, NewWorker};
+pub use pgqrs_messages::{NewMessage, PgqrsMessages};
+pub use pgqrs_queues::{NewQueue, PgqrsQueues};
+pub use pgqrs_workers::{NewWorker, PgqrsWorkers};
 pub use table::Table;

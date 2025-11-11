@@ -1,4 +1,4 @@
-use pgqrs::{archive::Archive, PgqrsAdmin};
+use pgqrs::{archive::Archive, tables::pgqrs_queues, PgqrsAdmin, Table};
 use serde_json::json;
 
 // Test-specific constants
@@ -34,31 +34,41 @@ async fn test_create_and_list_queue() {
     // Create queue
     let queue = admin.create_queue(&queue_name).await;
     assert!(queue.is_ok(), "Queue creation should succeed");
-    let queue = queue.unwrap();
+    let queue_info = queue.unwrap();
 
     // List queues and verify it appears
-    let queue_list = admin.list_queues().await;
+    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
+    let queue_list = pgqrs_queues.list(None).await;
     assert!(queue_list.is_ok(), "Queue listing should succeed");
     let queue_list = queue_list.unwrap();
 
-    let found_queue = queue_list.iter().find(|q| q.queue_name == queue.queue_name);
+    let found_queue = queue_list
+        .iter()
+        .find(|q| q.queue_name == queue_info.queue_name);
     assert!(found_queue.is_some(), "Created queue should appear in list");
 
     let meta = found_queue.unwrap();
-    assert_eq!(meta.queue_name, queue.queue_name, "Queue name should match");
+    assert_eq!(
+        meta.queue_name, queue_info.queue_name,
+        "Queue name should match"
+    );
     assert!(meta.id > 0, "Queue should have valid ID");
 
     // Verify the queue has a valid queue_id
-    assert!(queue.queue_id > 0, "Queue should have valid queue_id");
+    assert!(queue_info.id > 0, "Queue should have valid queue_id");
 
     // Cleanup
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
 async fn test_send_message() {
     let admin = create_admin().await;
-    let queue = admin.create_queue(TEST_QUEUE_SEND_MESSAGE).await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_SEND_MESSAGE)
+        .await
+        .expect("Failed to create queue");
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
         .register(
             TEST_QUEUE_SEND_MESSAGE.to_string(),
@@ -68,8 +78,6 @@ async fn test_send_message() {
         .await
         .expect("Failed to register worker");
 
-    assert!(queue.is_ok());
-    let queue = queue.unwrap();
     let payload = json!({
         "k": "v"
     });
@@ -84,18 +92,19 @@ async fn test_send_message() {
     assert!(deleted_message.is_ok());
     assert!(queue.pending_count().await.unwrap() == 0);
     assert!(admin.delete_worker(worker.id).await.is_ok());
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
 async fn test_archive_single_message() {
     const TEST_QUEUE_ARCHIVE: &str = "test_archive_single";
     let admin = create_admin().await;
-    let queue = admin
+    let queue_info = admin
         .create_queue(TEST_QUEUE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let archive = Archive::new(admin.pool.clone(), queue.queue_id);
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let archive = Archive::new(admin.pool.clone(), &queue_info);
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
     let message = queue
@@ -130,21 +139,22 @@ async fn test_archive_single_message() {
         .await
         .expect("Failed to clean up archive");
     admin
-        .purge_queue(&queue.queue_name)
+        .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
 async fn test_archive_batch_messages() {
     const TEST_QUEUE_BATCH_ARCHIVE: &str = "test_archive_batch";
     let admin = create_admin().await;
-    let queue = admin
+    let queue_info = admin
         .create_queue(TEST_QUEUE_BATCH_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let archive = Archive::new(admin.pool.clone(), queue.queue_id);
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let archive = Archive::new(admin.pool.clone(), &queue_info);
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -192,25 +202,26 @@ async fn test_archive_batch_messages() {
 
     // Cleanup - purge archive and messages before deleting queue
     admin
-        .purge_queue(&queue.queue_name)
+        .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
     archive
         .delete(None)
         .await
         .expect("Failed to clean up archive");
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
 async fn test_archive_nonexistent_message() {
     const TEST_QUEUE_NONEXISTENT: &str = "test_archive_nonexistent";
     let admin = create_admin().await;
-    let queue = admin
+    let queue_info = admin
         .create_queue(TEST_QUEUE_NONEXISTENT)
         .await
         .expect("Failed to create queue");
-    let archive = Archive::new(admin.pool.clone(), queue.queue_id);
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let archive = Archive::new(admin.pool.clone(), &queue_info);
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
     let archived = queue.archive(fake_msg_id).await;
@@ -224,7 +235,7 @@ async fn test_archive_nonexistent_message() {
     assert_eq!(archive.count(None).await.unwrap(), 0);
 
     // Cleanup
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
@@ -233,11 +244,12 @@ async fn test_purge_archive() {
     let admin = create_admin().await;
 
     // Create queue and archive some messages
-    let queue = admin
+    let queue_info = admin
         .create_queue(TEST_QUEUE_PURGE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let archive = Archive::new(admin.pool.clone(), queue.queue_id);
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let archive = Archive::new(admin.pool.clone(), &queue_info);
 
     // Archive multiple messages
     for i in 0..3 {
@@ -263,7 +275,7 @@ async fn test_purge_archive() {
     assert_eq!(archive.count(None).await.unwrap(), 0);
 
     // Cleanup
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
@@ -317,7 +329,8 @@ async fn test_custom_schema_search_path() {
     }
 
     // Test that queue operations work with unified architecture
-    let queue = queue_result.unwrap();
+    let queue_info = queue_result.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     let message_payload = serde_json::json!({"test": "custom_schema"});
     let send_result = queue.enqueue(&message_payload).await;
     assert!(
@@ -330,7 +343,7 @@ async fn test_custom_schema_search_path() {
         .purge_queue(&queue_name)
         .await
         .expect("Failed to purge messages");
-    assert!(admin.delete_queue(&queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
@@ -339,7 +352,8 @@ async fn test_interval_parameter_syntax() {
     let queue_name = "test_interval_queue";
 
     // Create queue
-    let queue = admin.create_queue(queue_name).await.unwrap();
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
         .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
         .await
@@ -392,7 +406,7 @@ async fn test_interval_parameter_syntax() {
         .await
         .expect("Failed to delete worker");
     admin
-        .delete_queue(queue_name)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue");
 }
@@ -404,7 +418,8 @@ async fn test_referential_integrity_checks() {
 
     // Create queue and get queue_id
     let _queue = admin.create_queue(queue_name).await.unwrap();
-    let queue_list = admin.list_queues().await.unwrap();
+    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
+    let queue_list = pgqrs_queues.list(None).await.unwrap();
     let queue_info = queue_list
         .iter()
         .find(|q| q.queue_name == queue_name)
@@ -460,7 +475,7 @@ async fn test_referential_integrity_checks() {
 
     // Cleanup
     admin
-        .delete_queue(queue_name)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue");
 }
@@ -490,13 +505,14 @@ async fn test_create_duplicate_queue_error() {
     }
 
     // Verify the original queue still exists and works
-    let queues = admin.list_queues().await.unwrap();
+    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
+    let queues = pgqrs_queues.list(None).await.unwrap();
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Original queue should still exist");
 
     // Cleanup
     admin
-        .delete_queue(queue_name)
+        .delete_queue(&first_result.unwrap())
         .await
         .expect("Failed to delete queue");
 }
@@ -507,8 +523,9 @@ async fn test_queue_deletion_with_references() {
     let queue_name = "test_deletion_refs";
 
     // Create queue and add a message
-    let queue = admin.create_queue(queue_name).await.unwrap();
-    let archive = Archive::new(admin.pool.clone(), queue.queue_id);
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let archive = Archive::new(admin.pool.clone(), &queue_info);
     let worker = admin
         .register(
             queue_name.to_string(),
@@ -521,7 +538,7 @@ async fn test_queue_deletion_with_references() {
     queue.enqueue(&message_payload).await.unwrap();
 
     // Try to delete queue with active worker - should fail with worker error
-    let delete_result = admin.delete_queue(queue_name).await;
+    let delete_result = admin.delete_queue(&queue_info).await;
     assert!(
         delete_result.is_err(),
         "Deleting queue with active workers should fail"
@@ -545,7 +562,7 @@ async fn test_queue_deletion_with_references() {
         .expect("Failed to stop worker");
 
     // Now try to delete queue with archive - should fail with references error
-    let delete_result2 = admin.delete_queue(queue_name).await;
+    let delete_result2 = admin.delete_queue(&queue_info).await;
     assert!(
         delete_result2.is_err(),
         "Deleting queue with archived messages should fail"
@@ -560,14 +577,15 @@ async fn test_queue_deletion_with_references() {
     // Purge archive and try again - should succeed
     archive.delete(None).await.expect("Failed to purge archive");
     assert!(admin.delete_worker(worker.id).await.is_ok());
-    let delete_result3 = admin.delete_queue(queue_name).await;
+    let delete_result3 = admin.delete_queue(&queue_info).await;
     assert!(
         delete_result3.is_ok(),
         "Deleting queue after purge should succeed"
     );
 
     // Verify queue is gone
-    let queues = admin.list_queues().await.unwrap();
+    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
+    let queues = pgqrs_queues.list(None).await.unwrap();
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_none(), "Queue should be deleted");
 }
@@ -584,7 +602,8 @@ async fn test_validation_payload_size_limit() {
     config.validation_config.max_payload_size_bytes = 50; // Very small limit
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin.create_queue("test_validation_size").await.unwrap();
+    let queue_info = admin.create_queue("test_validation_size").await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Small payload should work
     let small_payload = json!({"key": "value"});
@@ -621,10 +640,11 @@ async fn test_validation_forbidden_keys() {
     config.validation_config.forbidden_keys = vec!["secret".to_string(), "__proto__".to_string()];
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin
+    let queue_info = admin
         .create_queue("test_validation_forbidden")
         .await
         .unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Valid payload should work
     let valid_payload = json!({"data": "value"});
@@ -655,10 +675,11 @@ async fn test_validation_required_keys() {
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin
+    let queue_info = admin
         .create_queue("test_validation_required")
         .await
         .unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Valid payload with required key should work
     let valid_payload = json!({"user_id": "123", "data": "value"});
@@ -689,7 +710,8 @@ async fn test_validation_object_depth() {
     config.validation_config.max_object_depth = 2;
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin.create_queue("test_validation_depth").await.unwrap();
+    let queue_info = admin.create_queue("test_validation_depth").await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
@@ -721,7 +743,8 @@ async fn test_batch_validation_atomic_failure() {
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin.create_queue("test_validation_batch").await.unwrap();
+    let queue_info = admin.create_queue("test_validation_batch").await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Mix of valid and invalid payloads
     let payloads = vec![
@@ -760,7 +783,8 @@ async fn test_validation_string_length() {
     config.validation_config.max_string_length = 20;
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin.create_queue("test_validation_strings").await.unwrap();
+    let queue_info = admin.create_queue("test_validation_strings").await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Short string should work
     let valid_payload = json!({"key": "short_value"});
@@ -794,10 +818,11 @@ async fn test_validation_accessor_methods() {
     config.validation_config.max_enqueue_burst = Some(20);
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
-    let queue = admin
+    let queue_info = admin
         .create_queue("test_validation_accessors")
         .await
         .unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Test validation config accessor
     let validation_config = queue.validation_config();

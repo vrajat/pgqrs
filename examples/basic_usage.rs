@@ -60,11 +60,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "image_url": "https://example.com/image.jpg"
     });
 
-    let email_queue = admin.get_queue("email_queue").await?;
-    let task_queue = admin.get_queue("task_queue").await?;
+    let email_queue_info = admin.get_queue("email_queue").await?;
+    let task_queue_info = admin.get_queue("task_queue").await?;
+    let email_queue = pgqrs::Queue::new(admin.pool.clone(), &email_queue_info, &admin.config);
+    let task_queue = pgqrs::Queue::new(admin.pool.clone(), &task_queue_info, &admin.config);
 
-    let email_archive = Archive::new(admin.pool.clone(), email_queue.queue_id);
-    let task_archive = Archive::new(admin.pool.clone(), task_queue.queue_id);
+    let email_archive = Archive::new(admin.pool.clone(), &email_queue_info);
+    let task_archive = Archive::new(admin.pool.clone(), &task_queue_info);
 
     let email_id = email_queue.enqueue(&email_payload).await?;
     let task_id = task_queue.enqueue(&task_payload).await?;
@@ -115,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a worker.
     let worker = admin
         .register(
-            email_queue.queue_name.clone(),
+            email_queue_info.queue_name.clone(),
             "http://localhost".to_string(),
             3000,
         )

@@ -53,6 +53,6 @@ pub use crate::config::Config;
 pub use crate::error::{PgqrsError, Result};
 pub use crate::queue::Queue;
 pub use crate::rate_limit::RateLimitStatus;
-pub use crate::tables::{PgqrsArchive, PgqrsWorkers, Table, NewWorker};
+pub use crate::tables::{NewWorker, PgqrsArchive, PgqrsWorkers, Table};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
 pub use crate::validation::ValidationConfig;

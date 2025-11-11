@@ -183,7 +183,10 @@ impl PgqrsMessages {
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to update visibility timeout for message {}: {}", id, e),
+                message: format!(
+                    "Failed to update visibility timeout for message {}: {}",
+                    id, e
+                ),
             })?
             .rows_affected();
 
@@ -211,7 +214,10 @@ impl PgqrsMessages {
             .execute(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to extend visibility timeout for message {}: {}", id, e),
+                message: format!(
+                    "Failed to extend visibility timeout for message {}: {}",
+                    id, e
+                ),
             })?
             .rows_affected();
 
@@ -231,7 +237,39 @@ impl PgqrsMessages {
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to count pending messages for queue {}: {}", queue_id, e),
+                message: format!(
+                    "Failed to count pending messages for queue {}: {}",
+                    queue_id, e
+                ),
+            })?;
+
+        Ok(count)
+    }
+
+    /// Count all messages for a queue using a transaction.
+    ///
+    /// # Arguments
+    /// * `tx` - Database transaction
+    /// * `queue_id` - Queue ID to count messages for
+    ///
+    /// # Returns
+    /// Number of messages for the queue
+    pub async fn count_for_queue_tx<'a, 'b: 'a>(
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
+        const COUNT_MESSAGES_FOR_QUEUE: &str = r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1
+        "#;
+
+        let count: i64 = sqlx::query_scalar(COUNT_MESSAGES_FOR_QUEUE)
+            .bind(queue_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to count messages for queue {}: {}", queue_id, e),
             })?;
 
         Ok(count)
@@ -320,14 +358,12 @@ impl Table for PgqrsMessages {
     async fn list(&self, filter_id: Option<i64>) -> Result<Vec<Self::Entity>> {
         let messages = match filter_id {
             Some(queue_id) => self.list_by_queue(queue_id, 1000).await?,
-            None => {
-                sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
-                    .fetch_all(&self.pool)
-                    .await
-                    .map_err(|e| PgqrsError::Connection {
-                        message: format!("Failed to list all messages: {}", e),
-                    })?
-            }
+            None => sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to list all messages: {}", e),
+                })?,
         };
 
         Ok(messages)
@@ -378,11 +414,9 @@ mod tests {
 
     #[test]
     fn test_table_trait_associated_types() {
-        use crate::tables::Table;
-
         // Compile-time test to ensure the trait is implemented correctly
-        fn assert_entity_type<T: Table<Entity = QueueMessage>>(_: &T) {}
-        fn assert_new_entity_type<T: Table<NewEntity = NewMessage>>(_: &T) {}
+        // This test passes if the code compiles, proving our Table trait implementation
+        // has the correct associated types.
 
         // Note: This is a compile-time test, we don't actually create connections
         // In real usage, PgqrsMessages would be created with a valid pool

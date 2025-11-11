@@ -19,9 +19,11 @@
 //! pgqrs message send --queue jobs --payload '{"foo": "bar"}'
 //! ```
 use clap::{Parser, Subcommand};
-use pgqrs::admin::PgqrsAdmin;
 use pgqrs::archive::Archive;
 use pgqrs::config::Config;
+use pgqrs::types::QueueInfo;
+use pgqrs::{admin::PgqrsAdmin, tables::PgqrsQueues};
+use pgqrs::{Queue, Table};
 use std::fs::File;
 use std::process;
 
@@ -400,25 +402,26 @@ async fn handle_queue_commands(
         QueueCommands::Create { name } => {
             tracing::info!("Creating queue '{}' ...", &name);
             let queue = admin.create_queue(&name).await?;
-            let queue_info = admin.get_queue_info(&queue.queue_name).await?;
-            writer.write_item(&queue_info, out)?;
+            writer.write_item(&queue, out)?;
         }
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let meta_results = admin.list_queues().await?;
-            writer.write_list(&meta_results, out)?;
+            let queue = PgqrsQueues::new(admin.pool.clone());
+            let queue_list: Vec<QueueInfo> = queue.list(None).await?;
+            writer.write_list(&queue_list, out)?;
         }
 
         QueueCommands::Get { name } => {
             tracing::info!("Getting queue '{}'...", name);
-            let queue_info = admin.get_queue_info(&name).await?;
+            let queue_info = admin.get_queue(&name).await?;
             writer.write_item(&queue_info, out)?;
         }
 
         QueueCommands::Delete { name } => {
             tracing::info!("Deleting queue '{}'...", name);
-            admin.delete_queue(&name).await?;
+            let queue_info = admin.get_queue(&name).await?;
+            admin.delete_queue(&queue_info).await?;
             tracing::info!("Queue '{}' deleted successfully", name);
         }
 
@@ -506,7 +509,8 @@ async fn handle_message_commands(
             payload,
             delay,
         } => {
-            let queue_obj = admin.get_queue(&queue).await?;
+            let queue_info = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue_info, &admin.config);
             tracing::info!("Sending message to queue '{}'...", queue);
             let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
             let msg_id = if let Some(delay_secs) = delay {
@@ -524,7 +528,8 @@ async fn handle_message_commands(
             worker,
             lock_time,
         } => {
-            let queue_obj = admin.get_queue(&queue).await?;
+            let queue = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue, &admin.config);
             let worker_info = admin.get_worker_by_id(worker).await?;
             tracing::info!(
                 "Dequeue message from queue '{}', worker: {})...",
@@ -539,7 +544,8 @@ async fn handle_message_commands(
             Ok(())
         }
         MessageCommands::Archive { queue, id } => {
-            let queue_obj = admin.get_queue(&queue).await?;
+            let queue = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue, &admin.config);
             tracing::info!("Archiving message {} from queue '{}'...", id, queue);
             let archived_message = queue_obj.archive(id).await?;
             tracing::info!("Message archived successfully");
@@ -547,7 +553,8 @@ async fn handle_message_commands(
             Ok(())
         }
         MessageCommands::Delete { queue, id } => {
-            let queue_obj = admin.get_queue(&queue).await?;
+            let queue = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue, &admin.config);
             let msg_id = id.parse::<i64>()?;
             tracing::info!("Deleting message {} from queue '{}'...", msg_id, queue);
             let deleted = queue_obj.delete_many(vec![msg_id]).await?;
@@ -559,8 +566,8 @@ async fn handle_message_commands(
             Ok(())
         }
         MessageCommands::Count { queue } => {
-            let queue_obj = admin.get_queue(&queue).await?;
-
+            let queue = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue, &admin.config);
             tracing::info!("Getting pending message count for queue '{}'...", queue);
             let count = queue_obj.pending_count().await?;
             tracing::info!("Pending messages: {}", count);
@@ -568,7 +575,8 @@ async fn handle_message_commands(
         }
 
         MessageCommands::Get { queue, id } => {
-            let queue_obj = admin.get_queue(&queue).await?;
+            let queue = admin.get_queue(&queue).await?;
+            let queue_obj = Queue::new(admin.pool.clone(), &queue, &admin.config);
             tracing::debug!("Retrieving message {} from queue '{}'...", id, queue);
             let message = queue_obj.get_message_by_id(id).await?;
             writer.write_item(&message, out)?;
@@ -764,7 +772,7 @@ async fn handle_archive_commands(
         ArchiveCommands::List { queue, worker } => {
             // Get the queue object to obtain queue_id
             let queue_obj = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), queue_obj.queue_id);
+            let archive = Archive::new(admin.pool.clone(), &queue_obj);
 
             tracing::info!("Listing archived messages for queue '{}'...", queue);
             let messages = archive.list(worker, 100, 0).await?;
@@ -777,7 +785,7 @@ async fn handle_archive_commands(
         ArchiveCommands::Delete { queue, worker } => {
             // Get the queue object to obtain queue_id
             let queue_obj = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), queue_obj.queue_id);
+            let archive = Archive::new(admin.pool.clone(), &queue_obj);
 
             tracing::info!("Deleting archived messages for queue '{}'...", queue);
             let deleted_count = archive.delete(worker).await?;
@@ -789,7 +797,7 @@ async fn handle_archive_commands(
         ArchiveCommands::Count { queue, worker } => {
             // Get the queue object to obtain queue_id
             let queue_obj = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), queue_obj.queue_id);
+            let archive = Archive::new(admin.pool.clone(), &queue_obj);
 
             tracing::info!("Counting archived messages for queue '{}'...", queue);
             let count = archive.count(worker).await?;

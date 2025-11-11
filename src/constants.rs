@@ -120,11 +120,6 @@ pub const RELEASE_WORKER_MESSAGES: &str = r#"
     WHERE worker_id = $1;
 "#;
 
-pub const DELETE_QUEUE_METADATA: &str = r#"
-        DELETE FROM pgqrs_queues
-        WHERE queue_name = $1;
-"#;
-
 /// Lock queue row for exclusive access during deletion
 pub const LOCK_QUEUE_FOR_DELETE: &str = r#"
     SELECT id FROM pgqrs_queues
@@ -132,25 +127,11 @@ pub const LOCK_QUEUE_FOR_DELETE: &str = r#"
     FOR UPDATE;
 "#;
 
-/// Check referential integrity for queue deletion (single query)
-pub const CHECK_QUEUE_REFERENCES: &str = r#"
-    SELECT
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1) +
-        (SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1) as total_references;
-"#;
-
 /// Lock queue row for data modification operations (purge, etc.)
 pub const LOCK_QUEUE_FOR_UPDATE: &str = r#"
     SELECT id FROM pgqrs_queues
     WHERE queue_name = $1
     FOR NO KEY UPDATE;
-"#;
-
-/// Lock queue row for reading during worker registration
-pub const LOCK_QUEUE_FOR_KEY_SHARE: &str = r#"
-    SELECT id FROM pgqrs_queues
-    WHERE queue_name = $1
-    FOR KEY SHARE;
 "#;
 
 /// Create index on worker table for efficient worker lookups

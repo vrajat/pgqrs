@@ -28,8 +28,7 @@
 //! ```
 use crate::config::Config;
 use crate::error::{PgqrsError, Result};
-use crate::queue::Queue;
-use crate::tables::{PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
+use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, WorkerInfo};
 use chrono::{Duration, Utc};
@@ -73,12 +72,6 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
     FROM pgqrs_archive a
     LEFT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
     WHERE a.worker_id IS NOT NULL AND w.id IS NULL
-"#;
-
-const CHECK_ACTIVE_WORKERS_FOR_QUEUE: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_workers
-    WHERE queue_name = $1 AND status IN ('ready', 'shutting_down')
 "#;
 
 #[derive(Debug)]
@@ -330,7 +323,7 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// The created [`Queue`] instance.
-    pub async fn create_queue(&self, name: &str) -> Result<Queue> {
+    pub async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
         // Create new queue data
         use crate::tables::NewQueue;
         let new_queue = NewQueue {
@@ -338,19 +331,19 @@ impl PgqrsAdmin {
         };
 
         // Use the queues table insert function
-        let queue_info = self.queues.insert(new_queue).await?;
-
-        tracing::debug!("Created queue '{}' with id {}", name, queue_info.id);
-
-        Ok(Queue::new(self.pool.clone(), queue_info.id, name, &self.config))
+        self.queues.insert(new_queue).await
     }
 
-    /// List all queues managed by pgqrs.
+    /// Get a [`Queue`] instance for a given queue name.
+    ///
+    /// # Arguments
+    /// * `name` - Name of the queue
     ///
     /// # Returns
-    /// Vector of [`MetaResult`] describing each queue.
-    pub async fn list_queues(&self) -> Result<Vec<QueueInfo>> {
-        self.queues.list(None).await
+    /// [`Queue`] instance for the queue.
+    pub async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
+        // Get queue info to get the queue_id
+        self.queues.get_by_name(name).await
     }
 
     /// Delete a queue from the database.
@@ -365,7 +358,7 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// Ok if deletion succeeds, error if queue has messages/archives or other error.
-    pub async fn delete_queue(&self, name: &str) -> Result<()> {
+    pub async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
         // Start a transaction for atomic deletion with row locking
         let mut tx = self
             .pool
@@ -377,61 +370,48 @@ impl PgqrsAdmin {
 
         // Lock the queue row for exclusive access and get queue_id
         let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_DELETE)
-            .bind(name)
+            .bind(&queue_info.queue_name)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to lock queue '{}': {}", name, e),
+                message: format!("Failed to lock queue '{}': {}", queue_info.queue_name, e),
             })?;
 
         let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
-            name: name.to_string(),
+            name: queue_info.queue_name.clone(),
         })?;
 
         // Check for active workers assigned to this queue
-        let active_workers: i64 = sqlx::query_scalar(CHECK_ACTIVE_WORKERS_FOR_QUEUE)
-            .bind(name)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to check active workers for queue '{}': {}", name, e),
-            })?;
+        let active_workers = self
+            .workers
+            .count_active_for_queue(&queue_info.queue_name)
+            .await?;
 
         if active_workers > 0 {
             return Err(crate::error::PgqrsError::Connection {
                 message: format!(
                     "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
-                    name, active_workers
+                    queue_info.queue_name, active_workers
                 ),
             });
         }
 
-        // Check referential integrity with a single query
-        let total_references: i64 = sqlx::query_scalar(crate::constants::CHECK_QUEUE_REFERENCES)
-            .bind(queue_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to check references for queue '{}': {}", name, e),
-            })?;
+        // Check referential integrity using table methods
+        let messages_count = PgqrsMessages::count_for_queue_tx(queue_id, &mut tx).await?;
+        let archive_count = PgqrsArchive::count_for_queue_tx(queue_id, &mut tx).await?;
+        let total_references = messages_count + archive_count;
 
         if total_references > 0 {
             return Err(crate::error::PgqrsError::Connection {
                 message: format!(
                     "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
-                    name, total_references
+                    queue_info.queue_name, total_references
                 ),
             });
         }
 
         // Safe to delete - no references exist and we have exclusive lock
-        sqlx::query(crate::constants::DELETE_QUEUE_METADATA)
-            .bind(name)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to delete queue '{}': {}", name, e),
-            })?;
+        PgqrsQueues::delete_by_name_tx(&queue_info.queue_name, &mut tx).await?;
 
         tx.commit()
             .await
@@ -439,7 +419,7 @@ impl PgqrsAdmin {
                 message: format!("Failed to commit queue deletion: {}", e),
             })?;
 
-        tracing::debug!("Successfully deleted queue '{}'", name);
+        tracing::debug!("Successfully deleted queue '{}'", queue_info.queue_name);
         Ok(())
     }
 
@@ -511,36 +491,6 @@ impl PgqrsAdmin {
     /// Vector of [`QueueMetrics`] for all queues.
     pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         todo!("Implement Admin::all_queues_metrics")
-    }
-
-    /// Get a [`Queue`] instance for a given queue name.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue
-    ///
-    /// # Returns
-    /// [`Queue`] instance for the queue.
-    pub async fn get_queue(&self, name: &str) -> Result<Queue> {
-        // Get queue info to get the queue_id
-        let queue_info = self.queues.get_by_name(name).await?;
-
-        Ok(Queue::new(
-            self.pool.clone(),
-            queue_info.id,
-            name,
-            &self.config,
-        ))
-    }
-
-    /// Get a [`Queue`] instance for a given queue name.
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue
-    ///
-    /// # Returns
-    /// [`Queue`] instance for the queue.
-    pub async fn get_queue_info(&self, queue_name: &str) -> Result<QueueInfo> {
-        self.queues.get_by_name(queue_name).await
     }
 
     ///

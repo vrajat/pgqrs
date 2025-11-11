@@ -29,7 +29,8 @@
 //! };
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
-//! let queue = admin.create_queue("my_queue").await?;
+//! let queue_info = admin.create_queue("my_queue").await?;
+//! let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 //!
 //! // This will be validated automatically
 //! let payload = json!({"user_id": "123", "data": "test"});

@@ -86,11 +86,15 @@ async fn test_worker_message_assignment() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue = admin.create_queue("message_queue").await.unwrap();
-
+    let queue_info = admin.create_queue("message_queue").await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     // Register a worker to verify the worker registration process
     let worker = admin
-        .register(queue.queue_name.clone(), "message-host".to_string(), 7070)
+        .register(
+            queue_info.queue_name.clone(),
+            "message-host".to_string(),
+            7070,
+        )
         .await
         .unwrap();
 
@@ -115,7 +119,7 @@ async fn test_worker_message_assignment() {
     // Verify messages were deleted
     assert_eq!(queue.pending_count().await.unwrap(), 0);
     assert!(admin.delete_worker(worker.id).await.is_ok());
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
@@ -251,9 +255,10 @@ async fn test_worker_deletion_with_references() {
 
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_references";
-    let queue = admin.create_queue(queue_name).await.unwrap();
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
-        .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
+        .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
 
@@ -275,11 +280,14 @@ async fn test_worker_deletion_with_references() {
     );
 
     // Verify worker still exists
-    let workers = admin.list_queue_workers(&queue.queue_name).await.unwrap();
+    let workers = admin
+        .list_queue_workers(&queue_info.queue_name)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 1);
     queue.delete(message.id).await.unwrap();
     assert!(admin.delete_worker(worker.id).await.is_ok());
-    assert!(admin.delete_queue(&queue.queue_name).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
 #[tokio::test]
@@ -323,9 +331,10 @@ async fn test_worker_deletion_with_archived_references() {
 
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_archived_references";
-    let queue = admin.create_queue(queue_name).await.unwrap();
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
-        .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
+        .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
 
@@ -364,15 +373,16 @@ async fn test_purge_old_workers_respects_references() {
 
     // Create a test queue
     let queue_name = "test_purge_old_workers_with_references";
-    let queue = admin.create_queue(queue_name).await.unwrap();
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Register two workers
     let worker1 = admin
-        .register(queue.queue_name.clone(), "worker1".to_string(), 8081)
+        .register(queue_info.queue_name.clone(), "worker1".to_string(), 8081)
         .await
         .unwrap();
     let worker2 = admin
-        .register(queue.queue_name.clone(), "worker2".to_string(), 8082)
+        .register(queue_info.queue_name.clone(), "worker2".to_string(), 8082)
         .await
         .unwrap();
 
@@ -406,7 +416,10 @@ async fn test_purge_old_workers_respects_references() {
     );
 
     // Verify only worker1 (with references) remains
-    let workers = admin.list_queue_workers(&queue.queue_name).await.unwrap();
+    let workers = admin
+        .list_queue_workers(&queue_info.queue_name)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].id, worker1.id);
 }

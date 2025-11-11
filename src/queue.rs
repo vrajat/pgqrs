@@ -18,8 +18,7 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES,
-    VISIBILITY_TIMEOUT,
+    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES, VISIBILITY_TIMEOUT,
 };
 use crate::error::Result;
 use crate::tables::{PgqrsMessages, Table};
@@ -37,10 +36,7 @@ use sqlx::PgPool;
 pub struct Queue {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
-    /// Database ID of the queue from pgqrs_queues table
-    pub queue_id: i64,
-    /// Logical name of the queue
-    pub queue_name: String,
+    queue_info: crate::types::QueueInfo,
     /// Configuration for the queue including validation settings
     config: crate::config::Config,
     /// Payload validator for this queue
@@ -60,17 +56,15 @@ impl Queue {
     /// * `queue_id` - Database ID of the queue from pgqrs_queues table
     /// * `queue_name` - Name of the queue (for display/logging purposes)
     /// * `config` - Configuration including validation settings
-    pub(crate) fn new(
+    pub fn new(
         pool: PgPool,
-        queue_id: i64,
-        queue_name: &str,
+        queue_info: &crate::types::QueueInfo,
         config: &crate::config::Config,
     ) -> Self {
         let messages = PgqrsMessages::new(pool.clone());
         Self {
             pool,
-            queue_id,
-            queue_name: queue_name.to_string(),
+            queue_info: queue_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             messages,
@@ -156,7 +150,7 @@ impl Queue {
         use crate::tables::NewMessage;
 
         let new_message = NewMessage {
-            queue_id: self.queue_id,
+            queue_id: self.queue_info.id,
             payload: payload.clone(),
             read_ct: 0,
             enqueued_at: now,
@@ -191,7 +185,10 @@ impl Queue {
         let vt = now + chrono::Duration::seconds(0);
 
         // Use the batch insert method from the messages table
-        let ids = self.messages.batch_insert(self.queue_id, payloads, 0, now, vt).await?;
+        let ids = self
+            .messages
+            .batch_insert(self.queue_info.id, payloads, 0, now, vt)
+            .await?;
 
         // Fetch all messages in a single query
         let queue_messages = self.messages.get_by_ids(&ids).await?;
@@ -204,7 +201,7 @@ impl Queue {
     /// # Returns
     /// Number of pending messages.
     pub async fn pending_count(&self) -> Result<i64> {
-        self.messages.count_pending(self.queue_id).await
+        self.messages.count_pending(self.queue_info.id).await
     }
 
     /// Read up to `limit` messages from the queue, using the default visibility timeout.
@@ -246,7 +243,7 @@ impl Queue {
         vt: u32,
     ) -> Result<Vec<QueueMessage>> {
         let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
-            .bind(self.queue_id)
+            .bind(self.queue_info.id)
             .bind(limit as i64)
             .bind(vt as i32)
             .bind(worker.id) // worker_id
@@ -308,7 +305,10 @@ impl Queue {
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
-        let rows_affected = self.messages.extend_visibility(message_id, additional_seconds).await?;
+        let rows_affected = self
+            .messages
+            .extend_visibility(message_id, additional_seconds)
+            .await?;
         Ok(rows_affected > 0)
     }
 

@@ -191,6 +191,34 @@ impl PgqrsWorkers {
     pub async fn list_all(&self) -> Result<Vec<WorkerInfo>> {
         self.list(None).await
     }
+
+    /// Count active workers for a specific queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - Name of the queue to count workers for
+    ///
+    /// # Returns
+    /// Number of active workers (ready or shutting_down status)
+    pub async fn count_active_for_queue(&self, queue_name: &str) -> Result<i64> {
+        const COUNT_ACTIVE_WORKERS: &str = r#"
+            SELECT COUNT(*)
+            FROM pgqrs_workers
+            WHERE queue_name = $1 AND status IN ('ready', 'shutting_down')
+        "#;
+
+        let count: i64 = sqlx::query_scalar(COUNT_ACTIVE_WORKERS)
+            .bind(queue_name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to count active workers for queue '{}': {}",
+                    queue_name, e
+                ),
+            })?;
+
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
