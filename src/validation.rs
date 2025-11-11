@@ -180,14 +180,15 @@ impl PayloadValidator {
     pub fn validate_batch(&self, payloads: &[serde_json::Value]) -> Result<()> {
         // 1. First validate all payload structures (fast validation to prevent CPU abuse)
         for (index, payload) in payloads.iter().enumerate() {
-            self.validate_single_pass(payload, 0, true).map_err(|e| match e {
-                crate::error::PgqrsError::ValidationFailed { reason } => {
-                    crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Payload at index {}: {}", index, reason),
+            self.validate_single_pass(payload, 0, true)
+                .map_err(|e| match e {
+                    crate::error::PgqrsError::ValidationFailed { reason } => {
+                        crate::error::PgqrsError::ValidationFailed {
+                            reason: format!("Payload at index {}: {}", index, reason),
+                        }
                     }
-                }
-                other => other,
-            })?;
+                    other => other,
+                })?;
         }
 
         // 2. Then check rate limit capacity for entire batch (atomic consumption)
@@ -242,7 +243,12 @@ impl PayloadValidator {
     /// * `payload` - JSON value to validate
     /// * `depth` - Current nesting depth
     /// * `is_top_level` - Whether this is the root level (for required key checking)
-    fn validate_single_pass(&self, payload: &serde_json::Value, depth: usize, is_top_level: bool) -> Result<()> {
+    fn validate_single_pass(
+        &self,
+        payload: &serde_json::Value,
+        depth: usize,
+        is_top_level: bool,
+    ) -> Result<()> {
         // Check depth limit first
         if depth > self.config.max_object_depth {
             return Err(crate::error::PgqrsError::ValidationFailed {

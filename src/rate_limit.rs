@@ -151,7 +151,7 @@ impl TokenBucket {
             .unwrap()
             .as_nanos() as u64;
 
-        let last_refill = self.last_refill.load(Ordering::Relaxed);
+        let last_refill = self.last_refill.load(Ordering::Acquire);
         let elapsed_nanos = now.saturating_sub(last_refill);
         let elapsed_secs = elapsed_nanos as f64 / 1_000_000_000.0;
 
@@ -162,9 +162,13 @@ impl TokenBucket {
             let tokens_to_add = (elapsed_secs * self.max_per_second as f64) as u32;
 
             if tokens_to_add > 0 {
-                // Try to update both tokens and timestamp atomically
+                // Update timestamp first to prevent race conditions
+                // This ensures other threads see the updated time before token changes
+                self.last_refill.store(now, Ordering::Release);
+
+                // Then try to update tokens atomically
                 loop {
-                    let current_tokens = self.tokens.load(Ordering::Relaxed);
+                    let current_tokens = self.tokens.load(Ordering::Acquire);
                     let new_tokens = (current_tokens + tokens_to_add).min(self.burst_capacity);
 
                     // Only update if we would actually add tokens
@@ -172,13 +176,11 @@ impl TokenBucket {
                         match self.tokens.compare_exchange_weak(
                             current_tokens,
                             new_tokens,
-                            Ordering::Relaxed,
+                            Ordering::Release,
                             Ordering::Relaxed,
                         ) {
                             Ok(_) => {
-                                // Successfully updated tokens, now update timestamp
-                                // Update timestamp to prevent race condition
-                                self.last_refill.store(now, Ordering::Relaxed);
+                                // Successfully updated tokens
                                 break;
                             }
                             Err(_) => {
@@ -187,11 +189,13 @@ impl TokenBucket {
                             }
                         }
                     } else {
-                        // No tokens to add, but update timestamp to prevent drift
-                        self.last_refill.store(now, Ordering::Relaxed);
+                        // No tokens to add (already at capacity)
                         break;
                     }
                 }
+            } else {
+                // No tokens to add this cycle, but update timestamp to prevent drift
+                self.last_refill.store(now, Ordering::Relaxed);
             }
         }
     }
