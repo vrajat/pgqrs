@@ -120,7 +120,7 @@ async fn test_archive_single_message() {
     let archived_again = queue.archive(msg_id).await;
     assert!(archived_again.is_ok());
     assert!(
-        !archived_again.unwrap().is_some(),
+        archived_again.unwrap().is_none(),
         "Archiving already-archived message should return false"
     );
 
@@ -216,7 +216,7 @@ async fn test_archive_nonexistent_message() {
     let archived = queue.archive(fake_msg_id).await;
     assert!(archived.is_ok());
     assert!(
-        !archived.unwrap().is_some(),
+        archived.unwrap().is_none(),
         "Non-existent message should not be archived"
     );
 
@@ -377,7 +377,7 @@ async fn test_interval_parameter_syntax() {
     // Verify the interval was applied correctly (should be roughly 60 seconds later)
     let duration_diff = (updated_message.vt - original_vt).num_seconds();
     assert!(
-        duration_diff >= 59 && duration_diff <= 61,
+        (59..=61).contains(&duration_diff),
         "VT should be extended by approximately 60 seconds, got {} seconds",
         duration_diff
     );
@@ -570,4 +570,244 @@ async fn test_queue_deletion_with_references() {
     let queues = admin.list_queues().await.unwrap();
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_none(), "Queue should be deleted");
+}
+
+#[tokio::test]
+async fn test_validation_payload_size_limit() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Set a very small payload size limit for testing
+    config.validation_config.max_payload_size_bytes = 50; // Very small limit
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin.create_queue("test_validation_size").await.unwrap();
+
+    // Small payload should work
+    let small_payload = json!({"key": "value"});
+    let result = queue.enqueue(&small_payload).await;
+    assert!(result.is_ok());
+
+    // Large payload should fail
+    let large_payload = json!({
+        "very_long_key_that_exceeds_our_limit": "very_long_value_that_definitely_exceeds_the_50_byte_limit_we_set_for_testing"
+    });
+    let result = queue.enqueue(&large_payload).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::PayloadTooLarge {
+            actual_bytes,
+            max_bytes,
+        } => {
+            assert!(actual_bytes > 50);
+            assert_eq!(max_bytes, 50);
+        }
+        _ => panic!("Expected PayloadTooLarge error"),
+    }
+}
+
+#[tokio::test]
+async fn test_validation_forbidden_keys() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Add custom forbidden key
+    config.validation_config.forbidden_keys = vec!["secret".to_string(), "__proto__".to_string()];
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin
+        .create_queue("test_validation_forbidden")
+        .await
+        .unwrap();
+
+    // Valid payload should work
+    let valid_payload = json!({"data": "value"});
+    let result = queue.enqueue(&valid_payload).await;
+    assert!(result.is_ok());
+
+    // Forbidden key should fail
+    let forbidden_payload = json!({"secret": "should_not_be_allowed"});
+    let result = queue.enqueue(&forbidden_payload).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::ValidationFailed { reason } => {
+            assert!(reason.contains("Forbidden key 'secret'"));
+        }
+        _ => panic!("Expected ValidationFailed error"),
+    }
+}
+
+#[tokio::test]
+async fn test_validation_required_keys() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Add required key
+    config.validation_config.required_keys = vec!["user_id".to_string()];
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin
+        .create_queue("test_validation_required")
+        .await
+        .unwrap();
+
+    // Valid payload with required key should work
+    let valid_payload = json!({"user_id": "123", "data": "value"});
+    let result = queue.enqueue(&valid_payload).await;
+    assert!(result.is_ok());
+
+    // Missing required key should fail
+    let invalid_payload = json!({"data": "value"});
+    let result = queue.enqueue(&invalid_payload).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::ValidationFailed { reason } => {
+            assert!(reason.contains("Required key 'user_id' missing"));
+        }
+        _ => panic!("Expected ValidationFailed error"),
+    }
+}
+
+#[tokio::test]
+async fn test_validation_object_depth() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Set a shallow depth limit
+    config.validation_config.max_object_depth = 2;
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin.create_queue("test_validation_depth").await.unwrap();
+
+    // Shallow object should work
+    let shallow_payload = json!({"level1": {"level2": "value"}});
+    let result = queue.enqueue(&shallow_payload).await;
+    assert!(result.is_ok());
+
+    // Deep object should fail
+    let deep_payload = json!({"level1": {"level2": {"level3": {"level4": "value"}}}});
+    let result = queue.enqueue(&deep_payload).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::ValidationFailed { reason } => {
+            assert!(reason.contains("Object depth"));
+            assert!(reason.contains("exceeds limit"));
+        }
+        _ => panic!("Expected ValidationFailed error"),
+    }
+}
+
+#[tokio::test]
+async fn test_batch_validation_atomic_failure() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Set required key for testing
+    config.validation_config.required_keys = vec!["user_id".to_string()];
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin.create_queue("test_validation_batch").await.unwrap();
+
+    // Mix of valid and invalid payloads
+    let payloads = vec![
+        json!({"user_id": "123", "data": "valid"}),
+        json!({"data": "invalid - missing user_id"}),
+        json!({"user_id": "456", "data": "valid"}),
+    ];
+
+    // Batch should fail due to invalid payload in the middle
+    let result = queue.batch_enqueue(&payloads).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::ValidationFailed { reason } => {
+            assert!(reason.contains("Payload at index 1"));
+            assert!(reason.contains("user_id"));
+        }
+        _ => panic!("Expected ValidationFailed error with index"),
+    }
+
+    // Verify no messages were enqueued (atomic batch operation)
+    // Try to enqueue a valid message to ensure the queue is working
+    let valid_payload = json!({"user_id": "789", "data": "test"});
+    let result = queue.enqueue(&valid_payload).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_validation_string_length() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Set a small string length limit
+    config.validation_config.max_string_length = 20;
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin.create_queue("test_validation_strings").await.unwrap();
+
+    // Short string should work
+    let valid_payload = json!({"key": "short_value"});
+    let result = queue.enqueue(&valid_payload).await;
+    assert!(result.is_ok());
+
+    // Long string should fail
+    let invalid_payload = json!({"key": "this_is_a_very_long_string_that_exceeds_our_limit"});
+    let result = queue.enqueue(&invalid_payload).await;
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        pgqrs::error::PgqrsError::ValidationFailed { reason } => {
+            assert!(reason.contains("String length"));
+            assert!(reason.contains("exceeds limit"));
+        }
+        _ => panic!("Expected ValidationFailed error for string length"),
+    }
+}
+
+#[tokio::test]
+async fn test_validation_accessor_methods() {
+    let mut config = pgqrs::config::Config::from_dsn_with_schema(
+        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        "pgqrs_lib_test",
+    )
+    .expect("Failed to create config");
+
+    // Configure validation
+    config.validation_config.max_payload_size_bytes = 2048;
+    config.validation_config.max_enqueue_per_second = Some(100);
+    config.validation_config.max_enqueue_burst = Some(20);
+
+    let admin = PgqrsAdmin::new(&config).await.unwrap();
+    let queue = admin
+        .create_queue("test_validation_accessors")
+        .await
+        .unwrap();
+
+    // Test validation config accessor
+    let validation_config = queue.validation_config();
+    assert_eq!(validation_config.max_payload_size_bytes, 2048);
+
+    // Test rate limit status accessor
+    let rate_status = queue.rate_limit_status();
+    assert!(rate_status.is_some());
+    let status = rate_status.unwrap();
+    assert_eq!(status.max_per_second, 100);
+    assert_eq!(status.burst_capacity, 20);
+    assert_eq!(status.available_tokens, 20); // Should start full
 }

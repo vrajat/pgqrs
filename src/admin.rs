@@ -85,6 +85,7 @@ const CHECK_ACTIVE_WORKERS_FOR_QUEUE: &str = r#"
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
     pub pool: PgPool,
+    pub config: Config,
 }
 
 impl PgqrsAdmin {
@@ -113,7 +114,10 @@ impl PgqrsAdmin {
             .map_err(|e| PgqrsError::Connection {
                 message: e.to_string(),
             })?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            config: config.clone(),
+        })
     }
 
     /// Install pgqrs schema and infrastructure in the database.
@@ -338,7 +342,7 @@ impl PgqrsAdmin {
 
         tracing::debug!("Created queue '{}' with id {}", name, queue_id);
 
-        Ok(Queue::new(self.pool.clone(), queue_id, name))
+        Ok(Queue::new(self.pool.clone(), queue_id, name, &self.config))
     }
 
     /// List all queues managed by pgqrs.
@@ -532,7 +536,12 @@ impl PgqrsAdmin {
                 name: name.to_string(),
             })?;
 
-        Ok(Queue::new(self.pool.clone(), queue_info.id, name))
+        Ok(Queue::new(
+            self.pool.clone(),
+            queue_info.id,
+            name,
+            &self.config,
+        ))
     }
 
     /// Get a [`Queue`] instance for a given queue name.
