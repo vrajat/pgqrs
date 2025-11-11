@@ -25,26 +25,8 @@ pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
     );
 "#;
 
-pub const LIST_QUEUE_INFO: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues;
-"#;
-
 // Parameterized SQL for unified pgqrs_messages table operations
-
-/// Insert message into unified messages table
-pub const INSERT_MESSAGE: &str = r#"
-    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id;
-"#;
-
-/// Select message by ID from unified messages table
-pub const SELECT_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
-    FROM pgqrs_messages
-    WHERE id = $1
-"#;
+// Note: Basic CRUD operations moved to tables/pgqrs_messages.rs
 
 /// Read available messages from queue (with SKIP LOCKED)
 /// Select messages for worker with lock
@@ -64,19 +46,10 @@ pub const DEQUEUE_MESSAGES: &str = r#"
 "#;
 
 /// Get count of pending messages in queue
-pub const PENDING_COUNT: &str = r#"
-    SELECT COUNT(*) AS count
-    FROM pgqrs_messages
-    WHERE queue_id = $1 AND vt <= $2;
-"#;
+// Note: Moved to tables/pgqrs_messages.rs as count_pending()
 
 /// Update message visibility timeout (extend lock)
-pub const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = vt + make_interval(secs => $1::double precision)
-    WHERE id = $2
-    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at;
-"#;
+// Note: Moved to tables/pgqrs_messages.rs as extend_visibility()
 
 /// Delete batch of messages
 pub const DELETE_MESSAGE_BATCH: &str = r#"
@@ -145,18 +118,6 @@ pub const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NOW(), worker_id = NULL
     WHERE worker_id = $1;
-"#;
-
-pub const INSERT_QUEUE_METADATA: &str = r#"
-    INSERT INTO pgqrs_queues (queue_name)
-    VALUES ($1)
-    RETURNING id;
-"#;
-
-pub const GET_QUEUE_INFO_BY_NAME: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    WHERE queue_name = $1;
 "#;
 
 pub const DELETE_QUEUE_METADATA: &str = r#"
@@ -290,13 +251,6 @@ pub const CREATE_PGQRS_ARCHIVE_INDEX_ORIGINAL_MSG_ID: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_pgqrs_archive_original_msg_id ON pgqrs_archive (original_msg_id);
 "#;
 
-/// Insert new worker registration
-pub const INSERT_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_name, started_at, heartbeat_at, status)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id
-"#;
-
 /// Update worker heartbeat timestamp
 pub const UPDATE_WORKER_HEARTBEAT: &str = r#"
     UPDATE pgqrs_workers
@@ -315,28 +269,6 @@ pub const UPDATE_WORKER_SHUTDOWN: &str = r#"
 pub const UPDATE_WORKER_STOPPED: &str = r#"
     UPDATE pgqrs_workers
     SET status = 'stopped'
-    WHERE id = $1
-"#;
-
-/// List workers for a specific queue
-pub const LIST_QUEUE_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
-    FROM pgqrs_workers
-    WHERE queue_name = $1
-    ORDER BY started_at DESC
-"#;
-
-/// List all workers in the system
-pub const LIST_ALL_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
-    FROM pgqrs_workers
-    ORDER BY started_at DESC
-"#;
-
-/// Get a specific worker by ID
-pub const GET_WORKER_BY_ID: &str = r#"
-    SELECT id, hostname, port, queue_name, started_at, heartbeat_at, shutdown_at, status
-    FROM pgqrs_workers
     WHERE id = $1
 "#;
 

@@ -18,22 +18,16 @@
 //! // queue.enqueue(...)
 //! ```
 use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES, INSERT_MESSAGE,
-    PENDING_COUNT, SELECT_MESSAGE_BY_ID, UPDATE_MESSAGE_VT, VISIBILITY_TIMEOUT,
+    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES,
+    VISIBILITY_TIMEOUT,
 };
 use crate::error::Result;
+use crate::tables::{PgqrsMessages, Table};
 use crate::types::{ArchivedMessage, QueueMessage};
 use crate::validation::PayloadValidator;
 use crate::WorkerInfo;
 use chrono::Utc;
 use sqlx::PgPool;
-
-// SQL query constants
-const SELECT_MESSAGES_BY_IDS: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
-    FROM pgqrs_messages
-    WHERE id = ANY($1)
-"#;
 
 /// Producer and consumer interface for a specific queue.
 ///
@@ -51,6 +45,8 @@ pub struct Queue {
     config: crate::config::Config,
     /// Payload validator for this queue
     validator: PayloadValidator,
+    /// Messages table operations
+    messages: PgqrsMessages,
 }
 
 impl Queue {
@@ -70,12 +66,14 @@ impl Queue {
         queue_name: &str,
         config: &crate::config::Config,
     ) -> Self {
+        let messages = PgqrsMessages::new(pool.clone());
         Self {
             pool,
             queue_id,
             queue_name: queue_name.to_string(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
+            messages,
         }
     }
 
@@ -87,14 +85,7 @@ impl Queue {
     /// # Returns
     /// The message if found, or an error if not found.
     pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        let result = sqlx::query_as::<_, QueueMessage>(SELECT_MESSAGE_BY_ID)
-            .bind(msg_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-        Ok(result)
+        self.messages.get(msg_id).await
     }
 
     /// Add a single message to the queue.
@@ -162,18 +153,18 @@ impl Queue {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        let result = sqlx::query_scalar::<_, i64>(INSERT_MESSAGE)
-            .bind(self.queue_id)
-            .bind(payload)
-            .bind(0_i32) // read_ct
-            .bind(now)
-            .bind(vt)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-        Ok(result)
+        use crate::tables::NewMessage;
+
+        let new_message = NewMessage {
+            queue_id: self.queue_id,
+            payload: payload.clone(),
+            read_ct: 0,
+            enqueued_at: now,
+            vt,
+        };
+
+        let message = self.messages.insert(new_message).await?;
+        Ok(message.id)
     }
 
     /// Add multiple messages to the queue in a single batch operation.
@@ -199,44 +190,11 @@ impl Queue {
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(0);
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        // Use the batch insert method from the messages table
+        let ids = self.messages.batch_insert(self.queue_id, payloads, 0, now, vt).await?;
 
-        let mut ids = Vec::with_capacity(payloads.len());
-        for payload in payloads {
-            let id = sqlx::query_scalar::<_, i64>(INSERT_MESSAGE)
-                .bind(self.queue_id)
-                .bind(payload)
-                .bind(0_i32) // read_ct
-                .bind(now)
-                .bind(vt)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| crate::error::PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-            ids.push(id);
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        // Fetch all messages in a single query using WHERE msg_id = ANY($1)
-        let queue_messages = sqlx::query_as::<_, QueueMessage>(SELECT_MESSAGES_BY_IDS)
-            .bind(&ids)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
+        // Fetch all messages in a single query
+        let queue_messages = self.messages.get_by_ids(&ids).await?;
 
         Ok(queue_messages)
     }
@@ -246,18 +204,7 @@ impl Queue {
     /// # Returns
     /// Number of pending messages.
     pub async fn pending_count(&self) -> Result<i64> {
-        use chrono::Utc;
-        let now = Utc::now();
-
-        let count = sqlx::query_scalar::<_, i64>(PENDING_COUNT)
-            .bind(self.queue_id)
-            .bind(now)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-        Ok(count)
+        self.messages.count_pending(self.queue_id).await
     }
 
     /// Read up to `limit` messages from the queue, using the default visibility timeout.
@@ -361,15 +308,8 @@ impl Queue {
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
-        let updated = sqlx::query(UPDATE_MESSAGE_VT)
-            .bind(additional_seconds as i32)
-            .bind(message_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-        Ok(updated.rows_affected() > 0)
+        let rows_affected = self.messages.extend_visibility(message_id, additional_seconds).await?;
+        Ok(rows_affected > 0)
     }
 
     /// Archive a single message (PREFERRED over delete for data retention).
