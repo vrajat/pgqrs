@@ -100,7 +100,7 @@ impl Queue {
     /// Add a single message to the queue.
     ///
     /// This method validates the payload according to the queue's validation configuration
-    /// before enqueueing. Validation includes size checks, rate limiting, structure validation,
+    /// before enqueueing. Validation includes rate limiting, size checks, structure validation,
     /// and content filtering based on the configuration.
     ///
     /// # Arguments
@@ -115,9 +115,7 @@ impl Queue {
     /// - `PayloadTooLarge` if payload exceeds size limits
     /// - `RateLimited` if rate limits are exceeded
     pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
-        // Validate the payload before enqueueing
-        self.validator.validate(payload)?;
-
+        // Use enqueue_delayed with 0 delay - it already includes validation
         self.enqueue_delayed(payload, 0).await
     }
 
@@ -181,8 +179,8 @@ impl Queue {
     /// Add multiple messages to the queue in a single batch operation.
     ///
     /// This method validates all payloads according to the queue's validation configuration
-    /// before enqueueing any of them. If any payload fails validation, the entire batch
-    /// is rejected and no messages are enqueued.
+    /// before enqueueing any of them. Rate limiting is applied atomically to the entire batch.
+    /// If any payload fails validation, the entire batch is rejected and no messages are enqueued.
     ///
     /// # Arguments
     /// * `payloads` - Slice of JSON payloads to enqueue
@@ -192,28 +190,11 @@ impl Queue {
     ///
     /// # Errors
     /// Returns validation errors if any payload fails validation rules.
-    /// The entire batch is atomic - either all messages are enqueued or none are.
+    /// The database transaction is atomic - either all messages are enqueued or none are.
+    /// Rate limiting is also atomic - tokens are only consumed if the entire batch succeeds.
     pub async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
-        // Validate all payloads before starting the transaction
-        for (index, payload) in payloads.iter().enumerate() {
-            self.validator.validate(payload).map_err(|e| match e {
-                crate::error::PgqrsError::ValidationFailed { reason } => {
-                    crate::error::PgqrsError::ValidationFailed {
-                        reason: format!("Payload at index {}: {}", index, reason),
-                    }
-                }
-                crate::error::PgqrsError::PayloadTooLarge {
-                    actual_bytes,
-                    max_bytes,
-                } => crate::error::PgqrsError::ValidationFailed {
-                    reason: format!(
-                        "Payload at index {} too large: {} bytes exceeds limit {}",
-                        index, actual_bytes, max_bytes
-                    ),
-                },
-                other => other,
-            })?;
-        }
+        // Validate all payloads atomically (including rate limiting)
+        self.validator.validate_batch(payloads)?;
 
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(0);

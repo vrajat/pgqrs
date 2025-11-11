@@ -83,19 +83,34 @@ impl TokenBucket {
     /// * `true` if a token was successfully acquired
     /// * `false` if no tokens are available (rate limited)
     pub fn try_acquire(&self) -> bool {
+        self.try_acquire_multiple(1)
+    }
+
+    /// Try to acquire multiple tokens atomically (non-blocking).
+    ///
+    /// This method attempts to consume the specified number of tokens from the bucket.
+    /// If insufficient tokens are available, it returns false without consuming any.
+    ///
+    /// # Arguments
+    /// * `count` - Number of tokens to acquire
+    ///
+    /// # Returns
+    /// * `true` if all tokens were successfully acquired
+    /// * `false` if insufficient tokens are available (rate limited)
+    pub fn try_acquire_multiple(&self, count: u32) -> bool {
         self.refill_tokens();
 
         // Try to atomically decrement the token count
         loop {
             let current_tokens = self.tokens.load(Ordering::Relaxed);
-            if current_tokens == 0 {
+            if current_tokens < count {
                 return false;
             }
 
             // Try to decrement atomically
             match self.tokens.compare_exchange_weak(
                 current_tokens,
-                current_tokens - 1,
+                current_tokens - count,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
@@ -113,6 +128,11 @@ impl TokenBucket {
     /// This method calculates how many tokens should be added based on the
     /// time elapsed since the last refill and updates the token count atomically.
     fn refill_tokens(&self) {
+        // Guard against division by zero
+        if self.max_per_second == 0 {
+            return;
+        }
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -144,6 +164,7 @@ impl TokenBucket {
                         ) {
                             Ok(_) => {
                                 // Successfully updated tokens, now update timestamp
+                                // Update timestamp to prevent race condition
                                 self.last_refill.store(now, Ordering::Relaxed);
                                 break;
                             }
@@ -177,16 +198,6 @@ impl TokenBucket {
             max_per_second: self.max_per_second,
             burst_capacity: self.burst_capacity,
         }
-    }
-
-    /// Get the maximum rate (tokens per second).
-    pub fn max_rate(&self) -> u32 {
-        self.max_per_second
-    }
-
-    /// Get the burst capacity.
-    pub fn burst_capacity(&self) -> u32 {
-        self.burst_capacity
     }
 }
 

@@ -41,9 +41,9 @@ pub mod archive;
 pub mod config;
 pub mod error;
 pub mod queue;
-pub mod rate_limit;
+mod rate_limit;
 pub mod types;
-pub mod validation;
+mod validation;
 
 mod constants;
 
