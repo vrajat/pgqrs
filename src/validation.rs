@@ -10,29 +10,32 @@
 //!
 //! ## How
 //!
-//! Create a [`ValidationConfig`] with appropriate limits for your service, then use it
-//! to create a [`PayloadValidator`] that can validate payloads before enqueueing.
+//! Configure validation through the main [`Config`] struct when creating queues.
+//! Validation is automatically applied to all enqueue operations.
 //!
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::validation::{ValidationConfig, PayloadValidator};
+//! use pgqrs::{Config, PgqrsAdmin, ValidationConfig};
 //! use serde_json::json;
 //!
-//! let config = ValidationConfig {
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut config = Config::from_dsn("postgresql://localhost/test");
+//! config.validation_config = ValidationConfig {
 //!     max_payload_size_bytes: 64 * 1024,    // 64KB
 //!     required_keys: vec!["user_id".to_string()],
 //!     max_enqueue_per_second: Some(100),
 //!     ..Default::default()
 //! };
 //!
-//! let validator = PayloadValidator::new(config);
-//! let payload = json!({"user_id": "123", "data": "test"});
+//! let admin = PgqrsAdmin::new(&config).await?;
+//! let queue = admin.create_queue("my_queue").await?;
 //!
-//! match validator.validate(&payload) {
-//!     Ok(()) => println!("Payload is valid"),
-//!     Err(e) => println!("Validation failed: {}", e),
-//! }
+//! // This will be validated automatically
+//! let payload = json!({"user_id": "123", "data": "test"});
+//! let message = queue.enqueue(&payload).await?;
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::error::Result;

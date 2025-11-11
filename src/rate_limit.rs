@@ -10,21 +10,31 @@
 //!
 //! ## How
 //!
-//! Create a [`TokenBucket`] with a rate limit and burst capacity, then call
-//! [`try_acquire`] to check if an operation should be allowed.
+//! Rate limiting is configured through the [`ValidationConfig`] in the main [`Config`] struct.
+//! It's automatically applied to all enqueue operations.
 //!
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::rate_limit::TokenBucket;
+//! use pgqrs::{Config, PgqrsAdmin, ValidationConfig};
 //!
-//! let bucket = TokenBucket::new(100, 10); // 100/second with 10 burst
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut config = Config::from_dsn("postgresql://localhost/test");
+//! config.validation_config.max_enqueue_per_second = Some(100); // 100/second
+//! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
 //!
-//! if bucket.try_acquire() {
-//!     println!("Operation allowed");
-//! } else {
-//!     println!("Rate limited");
+//! let admin = PgqrsAdmin::new(&config).await?;
+//! let queue = admin.create_queue("my_queue").await?;
+//!
+//! // Rate limiting is automatically applied
+//! for i in 0..200 {
+//!     match queue.enqueue(&serde_json::json!({"id": i})).await {
+//!         Ok(_) => println!("Enqueued message {}", i),
+//!         Err(e) => println!("Rate limited: {}", e),
+//!     }
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -54,11 +64,14 @@ impl TokenBucket {
     /// * `burst_capacity` - Maximum number of tokens that can be stored
     ///
     /// # Example
-    /// ```rust
-    /// use pgqrs::rate_limit::TokenBucket;
+    /// ```rust,ignore
+    /// // This is an internal implementation detail.
+    /// // Configure rate limiting through ValidationConfig instead:
+    /// use pgqrs::{Config, ValidationConfig};
     ///
-    /// // Allow 1000 operations per second with bursts up to 50
-    /// let bucket = TokenBucket::new(1000, 50);
+    /// let mut config = Config::from_dsn("postgresql://localhost/test");
+    /// config.validation_config.max_enqueue_per_second = Some(1000);
+    /// config.validation_config.max_enqueue_burst = Some(50);
     /// ```
     pub fn new(max_per_second: u32, burst_capacity: u32) -> Self {
         let now = SystemTime::now()
