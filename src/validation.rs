@@ -55,11 +55,14 @@ pub struct ValidationConfig {
     pub max_string_length: usize,
     /// Maximum depth of nested objects/arrays to prevent JSON bombs.
     ///
-    /// Depth counting starts from 0 for the root object. Examples:
-    /// - Depth 0: `"value"` or `42` (scalar values)
-    /// - Depth 1: `{"key": "value"}` (single-level object)
-    /// - Depth 2: `{"user": {"name": "John"}}` (nested object)
-    /// - Depth 3: `{"user": {"profile": {"theme": "dark"}}}` (three levels)
+    /// The depth limit controls how many levels of nesting are allowed. Each time
+    /// we recurse into an object or array, depth increases by 1. The depth check
+    /// is applied before processing each value, not just at each object level.
+    ///
+    /// Examples with `max_object_depth = 2`:
+    /// - ✅ Allowed: `{"key": "value"}` - value at depth 1
+    /// - ✅ Allowed: `{"outer": {"inner": "value"}}` - value at depth 2
+    /// - ❌ Rejected: `{"l1": {"l2": {"l3": "value"}}}` - value at depth 3
     ///
     /// Default of 5 allows reasonable API nesting while protecting against deeply nested JSON bombs.
     pub max_object_depth: usize,
@@ -176,8 +179,15 @@ impl PayloadValidator {
 
     /// Validate multiple payloads atomically for batch operations.
     ///
-    /// This method validates all payloads and consumes rate limit tokens for the entire
-    /// batch atomically. If any validation fails, no rate limit tokens are consumed.
+    /// This method validates all payloads with atomic rate limit consumption.
+    /// Validation order:
+    /// 1. Structure/content validation for all payloads (fast checks)
+    /// 2. Rate limit tokens consumed atomically for entire batch
+    /// 3. Size validation for all payloads (expensive serialization)
+    ///
+    /// If structure/content validation fails, no tokens are consumed.
+    /// If rate limit is exceeded, no tokens are consumed.
+    /// If size validation fails after rate limit consumption, tokens are lost.
     ///
     /// # Arguments
     /// * `payloads` - Slice of JSON payloads to validate

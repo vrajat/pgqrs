@@ -526,6 +526,7 @@ mod tests {
         env::remove_var(ENV_DEFAULT_BATCH_SIZE);
         env::remove_var(ENV_CONFIG_FILE);
         env::remove_var(ENV_SCHEMA);
+        env::remove_var(ENV_VALIDATION_CONFIG);
     }
 
     #[test]
