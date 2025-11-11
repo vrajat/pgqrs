@@ -23,6 +23,7 @@ use crate::constants::{
 };
 use crate::error::Result;
 use crate::types::{ArchivedMessage, QueueMessage};
+use crate::validation::PayloadValidator;
 use crate::WorkerInfo;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -46,6 +47,10 @@ pub struct Queue {
     pub queue_id: i64,
     /// Logical name of the queue
     pub queue_name: String,
+    /// Configuration for the queue including validation settings
+    config: crate::config::Config,
+    /// Payload validator for this queue
+    validator: PayloadValidator,
 }
 
 impl Queue {
@@ -58,11 +63,19 @@ impl Queue {
     /// * `pool` - Database connection pool
     /// * `queue_id` - Database ID of the queue from pgqrs_queues table
     /// * `queue_name` - Name of the queue (for display/logging purposes)
-    pub(crate) fn new(pool: PgPool, queue_id: i64, queue_name: &str) -> Self {
+    /// * `config` - Configuration including validation settings
+    pub(crate) fn new(
+        pool: PgPool,
+        queue_id: i64,
+        queue_name: &str,
+        config: &crate::config::Config,
+    ) -> Self {
         Self {
             pool,
             queue_id,
             queue_name: queue_name.to_string(),
+            validator: PayloadValidator::new(config.validation_config.clone()),
+            config: config.clone(),
         }
     }
 
@@ -86,28 +99,48 @@ impl Queue {
 
     /// Add a single message to the queue.
     ///
+    /// This method validates the payload according to the queue's validation configuration
+    /// before enqueueing. Validation includes rate limiting, size checks, structure validation,
+    /// and content filtering based on the configuration.
+    ///
     /// # Arguments
     /// * `payload` - JSON payload for the message
     ///
     /// # Returns
-    /// The enqueued message.
+    /// The enqueued message if validation passes.
+    ///
+    /// # Errors
+    /// Returns validation errors if the payload fails validation rules:
+    /// - `ValidationFailed` for structure/content violations
+    /// - `PayloadTooLarge` if payload exceeds size limits
+    /// - `RateLimited` if rate limits are exceeded
     pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
+        // Use enqueue_delayed with 0 delay - it already includes validation
         self.enqueue_delayed(payload, 0).await
     }
 
     /// Schedule a message to be available for consumption after a delay.
+    ///
+    /// This method validates the payload according to the queue's validation configuration
+    /// before enqueueing with a delay.
     ///
     /// # Arguments
     /// * `payload` - JSON payload for the message
     /// * `delay_seconds` - Seconds to delay before message becomes available
     ///
     /// # Returns
-    /// The enqueued message.
+    /// The enqueued message if validation passes.
+    ///
+    /// # Errors
+    /// Returns validation errors if the payload fails validation rules.
     pub async fn enqueue_delayed(
         &self,
         payload: &serde_json::Value,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
+        // Validate the payload before enqueueing
+        self.validator.validate(payload)?;
+
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
         let id = self.insert_message(payload, now, vt).await?;
@@ -145,12 +178,24 @@ impl Queue {
 
     /// Add multiple messages to the queue in a single batch operation.
     ///
+    /// This method validates all payloads according to the queue's validation configuration
+    /// before enqueueing any of them. Rate limiting is applied atomically to the entire batch.
+    /// If any payload fails validation, the entire batch is rejected and no messages are enqueued.
+    ///
     /// # Arguments
     /// * `payloads` - Slice of JSON payloads to enqueue
     ///
     /// # Returns
-    /// Vector of enqueued messages.
+    /// Vector of enqueued messages if all payloads pass validation.
+    ///
+    /// # Errors
+    /// Returns validation errors if any payload fails validation rules.
+    /// The database transaction is atomic - either all messages are enqueued or none are.
+    /// Rate limiting is also atomic - tokens are only consumed if the entire batch succeeds.
     pub async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
+        // Validate all payloads atomically (including rate limiting)
+        self.validator.validate_batch(payloads)?;
+
         let now = Utc::now();
         let vt = now + chrono::Duration::seconds(0);
 
@@ -379,5 +424,21 @@ impl Queue {
             .map(|id| archived_set.contains(&id))
             .collect();
         Ok(result)
+    }
+
+    /// Get the validation configuration for this queue.
+    ///
+    /// # Returns
+    /// Reference to the validation configuration used by this queue.
+    pub fn validation_config(&self) -> &crate::validation::ValidationConfig {
+        &self.config.validation_config
+    }
+
+    /// Get current rate limit status for debugging.
+    ///
+    /// # Returns
+    /// Current rate limiting status if rate limiting is enabled, None otherwise.
+    pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
+        self.validator.rate_limit_status()
     }
 }

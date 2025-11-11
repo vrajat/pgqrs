@@ -84,4 +84,19 @@ pub enum PgqrsError {
     /// Unexpected internal error occurred
     #[error("Internal error: {message}")]
     Internal { message: String },
+
+    /// Payload validation failed
+    #[error("Validation failed: {reason}")]
+    ValidationFailed { reason: String },
+
+    /// Rate limit exceeded
+    #[error("Rate limit exceeded, retry after {retry_after:?}")]
+    RateLimited { retry_after: std::time::Duration },
+
+    /// Payload size exceeded limit
+    #[error("Payload size {actual_bytes} exceeds limit {max_bytes}")]
+    PayloadTooLarge {
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
 }

@@ -105,6 +105,7 @@ const ENV_DEFAULT_LOCK_TIME: &str = "PGQRS_DEFAULT_LOCK_TIME";
 const ENV_DEFAULT_BATCH_SIZE: &str = "PGQRS_DEFAULT_BATCH_SIZE";
 const ENV_CONFIG_FILE: &str = "PGQRS_CONFIG_FILE";
 const ENV_SCHEMA: &str = "PGQRS_SCHEMA";
+const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -137,6 +138,9 @@ pub struct Config {
     /// Maximum number of jobs to fetch in a single batch
     #[serde(default = "default_max_batch_size")]
     pub default_max_batch_size: usize,
+    /// Validation configuration for payload checking and rate limiting
+    #[serde(default)]
+    pub validation_config: crate::validation::ValidationConfig,
 }
 
 // Default functions for serde
@@ -183,6 +187,7 @@ impl Config {
             connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
+            validation_config: Default::default(),
         }
     }
 
@@ -223,6 +228,7 @@ impl Config {
             connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
+            validation_config: Default::default(),
         })
     }
 
@@ -235,6 +241,7 @@ impl Config {
     /// - PGQRS_CONNECTION_TIMEOUT: Connection timeout in seconds (default: 30)
     /// - PGQRS_DEFAULT_LOCK_TIME: Default lock time in seconds (default: 5)
     /// - PGQRS_DEFAULT_BATCH_SIZE: Default batch size (default: 100)
+    /// - PGQRS_VALIDATION_CONFIG: JSON validation configuration (optional)
     pub fn from_env() -> Result<Self> {
         use std::env;
 
@@ -284,6 +291,12 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_BATCH_SIZE);
 
+        // Parse validation config from environment (JSON format)
+        let validation_config = env::var(ENV_VALIDATION_CONFIG)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
         Ok(Self {
             dsn,
             schema,
@@ -291,6 +304,7 @@ impl Config {
             connection_timeout_seconds,
             default_lock_time_seconds,
             default_max_batch_size,
+            validation_config,
         })
     }
 
@@ -512,6 +526,7 @@ mod tests {
         env::remove_var(ENV_DEFAULT_BATCH_SIZE);
         env::remove_var(ENV_CONFIG_FILE);
         env::remove_var(ENV_SCHEMA);
+        env::remove_var(ENV_VALIDATION_CONFIG);
     }
 
     #[test]

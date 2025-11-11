@@ -251,7 +251,7 @@ async fn test_worker_deletion_with_references() {
 
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_references";
-    let queue = admin.create_queue(&queue_name).await.unwrap();
+    let queue = admin.create_queue(queue_name).await.unwrap();
     let worker = admin
         .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
         .await
@@ -323,7 +323,7 @@ async fn test_worker_deletion_with_archived_references() {
 
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_archived_references";
-    let queue = admin.create_queue(&queue_name).await.unwrap();
+    let queue = admin.create_queue(queue_name).await.unwrap();
     let worker = admin
         .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
         .await
@@ -364,7 +364,7 @@ async fn test_purge_old_workers_respects_references() {
 
     // Create a test queue
     let queue_name = "test_purge_old_workers_with_references";
-    let queue = admin.create_queue(&queue_name).await.unwrap();
+    let queue = admin.create_queue(queue_name).await.unwrap();
 
     // Register two workers
     let worker1 = admin

@@ -72,10 +72,7 @@ fn test_cli_create_list_delete_queue() {
     let created_queue = queues
         .iter()
         .find(|q| q.queue_name == queue_name)
-        .expect(&format!(
-            "Queue '{}' not found in list: {:?}",
-            queue_name, queues
-        ));
+        .unwrap_or_else(|| panic!("Queue '{}' not found in list: {:?}", queue_name, queues));
     assert_eq!(created_queue.queue_name, queue_name);
 
     let queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "get", queue_name]);
