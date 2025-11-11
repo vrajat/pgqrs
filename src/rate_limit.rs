@@ -61,7 +61,10 @@ impl TokenBucket {
     ///
     /// # Arguments
     /// * `max_per_second` - Maximum number of tokens to add per second
-    /// * `burst_capacity` - Maximum number of tokens that can be stored
+    /// * `burst_capacity` - Maximum number of tokens that can be stored (must be at least 1)
+    ///
+    /// # Panics
+    /// Panics if `burst_capacity` is 0, which would cause division by zero in rate limit calculations.
     ///
     /// # Example
     /// ```rust,ignore
@@ -74,6 +77,10 @@ impl TokenBucket {
     /// config.validation_config.max_enqueue_burst = Some(50);
     /// ```
     pub fn new(max_per_second: u32, burst_capacity: u32) -> Self {
+        if burst_capacity == 0 {
+            panic!("burst_capacity must be at least 1 to prevent division by zero");
+        }
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -379,5 +386,12 @@ mod tests {
         // Wait and ensure no tokens are refilled
         thread::sleep(Duration::from_millis(100));
         assert_eq!(bucket.status().available_tokens, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "burst_capacity must be at least 1")]
+    fn test_zero_burst_capacity_panics() {
+        // Creating a token bucket with zero burst capacity should panic
+        TokenBucket::new(100, 0);
     }
 }

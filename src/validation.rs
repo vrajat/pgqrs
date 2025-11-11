@@ -53,7 +53,15 @@ pub struct ValidationConfig {
     pub max_payload_size_bytes: usize,
     /// Maximum length for individual string values
     pub max_string_length: usize,
-    /// Maximum depth of nested objects/arrays to prevent JSON bombs
+    /// Maximum depth of nested objects/arrays to prevent JSON bombs.
+    ///
+    /// Depth counting starts from 0 for the root object. Examples:
+    /// - Depth 0: `"value"` or `42` (scalar values)
+    /// - Depth 1: `{"key": "value"}` (single-level object)
+    /// - Depth 2: `{"user": {"name": "John"}}` (nested object)
+    /// - Depth 3: `{"user": {"profile": {"theme": "dark"}}}` (three levels)
+    ///
+    /// Default of 5 allows reasonable API nesting while protecting against deeply nested JSON bombs.
     pub max_object_depth: usize,
     /// List of keys that are forbidden in the payload
     pub forbidden_keys: Vec<String>,
@@ -70,7 +78,7 @@ impl Default for ValidationConfig {
         Self {
             max_payload_size_bytes: 1024 * 1024, // 1MB - reasonable default for most use cases
             max_string_length: 1024,             // 1KB strings max
-            max_object_depth: 2,                 // Shallow nesting to prevent abuse
+            max_object_depth: 5,                 // Allow reasonable nesting depth for most APIs
             forbidden_keys: vec!["__proto__".to_string(), "constructor".to_string()],
             required_keys: vec![],
             max_enqueue_per_second: Some(1000), // 1K/s default rate limit
@@ -339,7 +347,7 @@ mod tests {
         let config = ValidationConfig::default();
         assert_eq!(config.max_payload_size_bytes, 1024 * 1024); // 1MB
         assert_eq!(config.max_string_length, 1024);
-        assert_eq!(config.max_object_depth, 2);
+        assert_eq!(config.max_object_depth, 5);
         assert_eq!(config.max_enqueue_per_second, Some(1000));
         assert_eq!(config.max_enqueue_burst, Some(50));
     }
