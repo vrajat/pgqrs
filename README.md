@@ -352,7 +352,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pgqrs = "0.1.0"
+pgqrs = "0.3.0"
 ```
 
 ### Core APIs
@@ -423,8 +423,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-### Producer/Consumer Usage
 
 ### Producer/Consumer Usage
 
