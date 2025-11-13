@@ -44,7 +44,7 @@ async fn test_default_schema_backward_compatibility() {
 
     // Test queue listing
     let queue_obj = PgqrsQueues::new(admin.pool.clone());
-    let queues = queue_obj.list(None).await.expect("Should list queues");
+    let queues = queue_obj.list().await.expect("Should list queues");
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Should find created queue in list");
 

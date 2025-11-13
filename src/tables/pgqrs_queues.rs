@@ -211,14 +211,11 @@ impl Table for PgqrsQueues {
         Ok(queue)
     }
 
-    /// List queues, optionally filtered.
-    ///
-    /// # Arguments
-    /// * `filter_id` - Optional queue ID to filter by (ignored for this implementation)
+    /// List all queues.
     ///
     /// # Returns
     /// List of all queues ordered by creation time (newest first)
-    async fn list(&self, _filter_id: Option<i64>) -> Result<Vec<Self::Entity>> {
+    async fn list(&self) -> Result<Vec<Self::Entity>> {
         let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
@@ -227,6 +224,45 @@ impl Table for PgqrsQueues {
             })?;
 
         Ok(queues)
+    }
+
+    /// Filter queues by foreign key.
+    ///
+    /// # Arguments
+    /// * `_foreign_key_value` - Ignored (queues have no foreign keys)
+    ///
+    /// # Returns
+    /// Empty vector (queues have no foreign key relationships)
+    async fn filter_by_fk(&self, _foreign_key_value: i64) -> Result<Vec<Self::Entity>> {
+        // Queues don't have foreign keys, so this returns empty
+        Ok(vec![])
+    }
+
+    /// Count all queues.
+    ///
+    /// # Returns
+    /// Total number of queues in the table
+    async fn count(&self) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_queues";
+        let count = sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to count queues: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    /// Count queues by foreign key.
+    ///
+    /// # Arguments
+    /// * `_foreign_key_value` - Ignored (queues have no foreign keys)
+    ///
+    /// # Returns
+    /// Always returns 0 (queues have no foreign key relationships)
+    async fn count_by_fk(&self, _foreign_key_value: i64) -> Result<i64> {
+        // Queues don't have foreign keys, so this always returns 0
+        Ok(0)
     }
 
     /// Delete a queue by ID.

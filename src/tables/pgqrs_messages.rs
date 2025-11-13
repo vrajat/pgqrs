@@ -27,14 +27,13 @@ const LIST_MESSAGES_BY_QUEUE: &str = r#"
     FROM pgqrs_messages
     WHERE queue_id = $1
     ORDER BY enqueued_at DESC
-    LIMIT $2;
+    LIMIT 1000;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
     SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
-    ORDER BY enqueued_at DESC
-    LIMIT 1000;
+    ORDER BY enqueued_at DESC;
 "#;
 
 const DELETE_MESSAGE_BY_ID: &str = r#"
@@ -142,27 +141,6 @@ impl PgqrsMessages {
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!("Failed to get messages by IDs: {}", e),
-            })?;
-
-        Ok(messages)
-    }
-
-    /// List messages for a specific queue.
-    ///
-    /// # Arguments
-    /// * `queue_id` - Queue ID to filter by
-    /// * `limit` - Maximum number of messages to return
-    ///
-    /// # Returns
-    /// Vector of messages ordered by enqueued_at (newest first)
-    pub async fn list_by_queue(&self, queue_id: i64, limit: i64) -> Result<Vec<QueueMessage>> {
-        let messages = sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_QUEUE)
-            .bind(queue_id)
-            .bind(limit)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to list messages for queue {}: {}", queue_id, e),
             })?;
 
         Ok(messages)
@@ -348,25 +326,75 @@ impl Table for PgqrsMessages {
         Ok(message)
     }
 
-    /// List messages, optionally filtered by queue.
-    ///
-    /// # Arguments
-    /// * `filter_id` - Optional queue ID to filter by
+    /// List all messages.
     ///
     /// # Returns
-    /// List of messages (limited to 1000 for performance)
-    async fn list(&self, filter_id: Option<i64>) -> Result<Vec<Self::Entity>> {
-        let messages = match filter_id {
-            Some(queue_id) => self.list_by_queue(queue_id, 1000).await?,
-            None => sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| PgqrsError::Connection {
-                    message: format!("Failed to list all messages: {}", e),
-                })?,
-        };
+    /// List of all messages (limited to 1000 for performance)
+    async fn list(&self) -> Result<Vec<Self::Entity>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to list all messages: {}", e),
+            })?;
 
         Ok(messages)
+    }
+
+    /// Filter messages by queue ID.
+    ///
+    /// # Arguments
+    /// * `foreign_key_value` - Queue ID to filter by
+    ///
+    /// # Returns
+    /// List of messages for the specified queue (limited to 1000 for performance)
+    async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<Self::Entity>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_QUEUE)
+            .bind(foreign_key_value)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to list messages for queue {}: {}",
+                    foreign_key_value, e
+                ),
+            })?;
+
+        Ok(messages)
+    }
+
+    /// Count all messages.
+    ///
+    /// # Returns
+    /// Total number of messages in the table
+    async fn count(&self) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_messages";
+        let count = sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to count messages: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    /// Count messages by queue ID.
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue ID to count messages for
+    ///
+    /// # Returns
+    /// Number of messages in the specified queue
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1";
+        let count = sqlx::query_scalar(query)
+            .bind(queue_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to count messages for queue {}: {}", queue_id, e),
+            })?;
+        Ok(count)
     }
 
     /// Delete a message by ID.

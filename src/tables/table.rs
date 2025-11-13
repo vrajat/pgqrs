@@ -26,7 +26,7 @@ use crate::error::Result;
 /// let new_worker = NewWorker {
 ///     hostname: "worker-1".to_string(),
 ///     port: 8080,
-///     queue_name: "jobs".to_string(),
+///     queue_id: 1,
 /// };
 ///
 /// // Insert returns full WorkerInfo with generated ID and timestamps
@@ -60,14 +60,35 @@ pub trait Table {
     /// The entity with the specified ID
     async fn get(&self, id: i64) -> Result<Self::Entity>;
 
-    /// List records, optionally filtered.
-    ///
-    /// # Arguments
-    /// * `filter_id` - Optional filter parameter (implementation-specific)
+    /// List all records.
     ///
     /// # Returns
-    /// Vector of entities matching the criteria
-    async fn list(&self, filter_id: Option<i64>) -> Result<Vec<Self::Entity>>;
+    /// Vector of all entities in the table
+    async fn list(&self) -> Result<Vec<Self::Entity>>;
+
+    /// Filter records by foreign key.
+    ///
+    /// # Arguments
+    /// * `foreign_key_value` - Value of the foreign key to filter by
+    ///
+    /// # Returns
+    /// Vector of entities matching the foreign key criteria
+    async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<Self::Entity>>;
+
+    /// Count all records in the table.
+    ///
+    /// # Returns
+    /// Total number of records in the table
+    async fn count(&self) -> Result<i64>;
+
+    /// Count records by foreign key.
+    ///
+    /// # Arguments
+    /// * `foreign_key_value` - Value of the foreign key to filter by
+    ///
+    /// # Returns
+    /// Number of records matching the foreign key criteria
+    async fn count_by_fk(&self, foreign_key_value: i64) -> Result<i64>;
 
     /// Delete a record by ID.
     ///

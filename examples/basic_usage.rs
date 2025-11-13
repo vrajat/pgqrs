@@ -16,9 +16,8 @@
 //! ```
 
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::archive::Archive;
 use pgqrs::config::Config;
-use pgqrs::{Consumer, Producer};
+use pgqrs::{Consumer, PgqrsArchive, Producer};
 use serde_json::json;
 
 #[tokio::main]
@@ -68,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &admin.config);
     let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &admin.config);
 
-    let email_archive = Archive::new(admin.pool.clone(), &email_queue_info);
-    let task_archive = Archive::new(admin.pool.clone(), &task_queue_info);
+    let email_archive = PgqrsArchive::new(admin.pool.clone(), &email_queue_info);
+    let task_archive = PgqrsArchive::new(admin.pool.clone(), &task_queue_info);
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;

@@ -96,13 +96,6 @@ pub const ARCHIVE_BATCH: &str = r#"
     RETURNING original_msg_id;
 "#;
 
-/// Select single archived message by original message ID
-pub const ARCHIVE_SELECT_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
-    WHERE original_msg_id = $1
-"#;
-
 // Worker operations with unified tables
 
 /// Get messages assigned to a specific worker
@@ -137,7 +130,7 @@ pub const LOCK_QUEUE_FOR_UPDATE: &str = r#"
 /// Create index on worker table for efficient worker lookups
 pub const CREATE_WORKERS_INDEX_QUEUE_STATUS: &str = r#"
     CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status
-    ON pgqrs_workers(queue_name, status);
+    ON pgqrs_workers(queue_id, status);
 "#;
 
 /// Create index on worker table for heartbeat monitoring
@@ -164,13 +157,14 @@ pub const CREATE_WORKERS_TABLE: &str = r#"
         id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
         hostname TEXT NOT NULL,
         port INTEGER NOT NULL,
-        queue_name TEXT NOT NULL,
+        queue_id BIGINT NOT NULL,
         started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         shutdown_at TIMESTAMP WITH TIME ZONE,
         status worker_status NOT NULL DEFAULT 'ready'::worker_status,
 
-        UNIQUE(hostname, port)
+        UNIQUE(hostname, port),
+        CONSTRAINT fk_workers_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id)
     );
 "#;
 

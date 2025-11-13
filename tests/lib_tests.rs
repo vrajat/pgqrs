@@ -1,4 +1,4 @@
-use pgqrs::{archive::Archive, tables::pgqrs_queues, PgqrsAdmin, Table};
+use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, PgqrsArchive, Table};
 use serde_json::json;
 
 // Test-specific constants
@@ -37,8 +37,8 @@ async fn test_create_and_list_queue() {
     let queue_info = queue.unwrap();
 
     // List queues and verify it appears
-    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
-    let queue_list = pgqrs_queues.list(None).await;
+    let pgqrs_queues = PgqrsQueues::new(admin.pool.clone());
+    let queue_list = pgqrs_queues.list().await;
     assert!(queue_list.is_ok(), "Queue listing should succeed");
     let queue_list = queue_list.unwrap();
 
@@ -106,7 +106,7 @@ async fn test_archive_single_message() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = Archive::new(admin.pool.clone(), &queue_info);
+    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
     let message = producer
@@ -157,7 +157,7 @@ async fn test_archive_batch_messages() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = Archive::new(admin.pool.clone(), &queue_info);
+    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -224,7 +224,7 @@ async fn test_archive_nonexistent_message() {
         .await
         .expect("Failed to create queue");
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = Archive::new(admin.pool.clone(), &queue_info);
+    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
     let archived = consumer.archive(fake_msg_id).await;
@@ -253,7 +253,7 @@ async fn test_purge_archive() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = Archive::new(admin.pool.clone(), &queue_info);
+    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
 
     // Archive multiple messages
     for i in 0..3 {
@@ -426,8 +426,8 @@ async fn test_referential_integrity_checks() {
 
     // Create queue and get queue_id
     let _queue = admin.create_queue(queue_name).await.unwrap();
-    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
-    let queue_list = pgqrs_queues.list(None).await.unwrap();
+    let pgqrs_queues = PgqrsQueues::new(admin.pool.clone());
+    let queue_list = pgqrs_queues.list().await.unwrap();
     let queue_info = queue_list
         .iter()
         .find(|q| q.queue_name == queue_name)
@@ -513,8 +513,8 @@ async fn test_create_duplicate_queue_error() {
     }
 
     // Verify the original queue still exists and works
-    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
-    let queues = pgqrs_queues.list(None).await.unwrap();
+    let pgqrs_queues = PgqrsQueues::new(admin.pool.clone());
+    let queues = pgqrs_queues.list().await.unwrap();
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Original queue should still exist");
 
@@ -534,7 +534,7 @@ async fn test_queue_deletion_with_references() {
     let queue_info = admin.create_queue(queue_name).await.unwrap();
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = Archive::new(admin.pool.clone(), &queue_info);
+    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
     let worker = admin
         .register(
             queue_name.to_string(),
@@ -593,8 +593,8 @@ async fn test_queue_deletion_with_references() {
     );
 
     // Verify queue is gone
-    let pgqrs_queues = pgqrs_queues::PgqrsQueues::new(admin.pool.clone());
-    let queues = pgqrs_queues.list(None).await.unwrap();
+    let pgqrs_queues = PgqrsQueues::new(admin.pool.clone());
+    let queues = pgqrs_queues.list().await.unwrap();
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_none(), "Queue should be deleted");
 }

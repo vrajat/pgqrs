@@ -19,11 +19,10 @@
 //! pgqrs message send --queue jobs --payload '{"foo": "bar"}'
 //! ```
 use clap::{Parser, Subcommand};
-use pgqrs::archive::Archive;
 use pgqrs::config::Config;
 use pgqrs::types::QueueInfo;
 use pgqrs::{admin::PgqrsAdmin, tables::PgqrsQueues};
-use pgqrs::{Consumer, Producer, Table};
+use pgqrs::{Consumer, PgqrsArchive, Producer, Table};
 use std::fs::File;
 use std::process;
 
@@ -408,7 +407,7 @@ async fn handle_queue_commands(
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
             let queue = PgqrsQueues::new(admin.pool.clone());
-            let queue_list: Vec<QueueInfo> = queue.list(None).await?;
+            let queue_list: Vec<QueueInfo> = queue.list().await?;
             writer.write_list(&queue_list, out)?;
         }
 
@@ -772,7 +771,7 @@ async fn handle_archive_commands(
         ArchiveCommands::List { queue, worker } => {
             // Get the queue object to obtain queue_id
             let consumer = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), &consumer);
+            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
 
             tracing::info!("Listing archived messages for queue '{}'...", queue);
             let messages = archive.list(worker, 100, 0).await?;
@@ -785,7 +784,7 @@ async fn handle_archive_commands(
         ArchiveCommands::Delete { queue, worker } => {
             // Get the queue object to obtain queue_id
             let consumer = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), &consumer);
+            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
 
             tracing::info!("Deleting archived messages for queue '{}'...", queue);
             let deleted_count = archive.delete(worker).await?;
@@ -797,7 +796,7 @@ async fn handle_archive_commands(
         ArchiveCommands::Count { queue, worker } => {
             // Get the queue object to obtain queue_id
             let consumer = admin.get_queue(&queue).await?;
-            let archive = Archive::new(admin.pool.clone(), &consumer);
+            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
 
             tracing::info!("Counting archived messages for queue '{}'...", queue);
             let count = archive.count(worker).await?;

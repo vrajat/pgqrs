@@ -382,10 +382,7 @@ impl PgqrsAdmin {
         })?;
 
         // Check for active workers assigned to this queue
-        let active_workers = self
-            .workers
-            .count_active_for_queue(&queue_info.queue_name)
-            .await?;
+        let active_workers = self.workers.count_active_for_queue(queue_info.id).await?;
 
         if active_workers > 0 {
             return Err(crate::error::PgqrsError::Connection {
@@ -550,19 +547,15 @@ impl PgqrsAdmin {
         hostname: String,
         port: i32,
     ) -> Result<WorkerInfo> {
-        // First, verify the queue exists
-        if !self.queues.exists(&queue_name).await? {
-            return Err(crate::error::PgqrsError::QueueNotFound {
-                name: queue_name.clone(),
-            });
-        }
+        // First, verify the queue exists and get its info
+        let queue_info = self.get_queue(&queue_name).await?;
 
         // Create new worker data
         use crate::tables::pgqrs_workers::NewWorker;
         let new_worker = NewWorker {
             hostname: hostname.clone(),
             port,
-            queue_name: queue_name.clone(),
+            queue_id: queue_info.id,
         };
 
         // Use the workers table insert function
@@ -607,7 +600,7 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of all workers in the system
     pub async fn list_all_workers(&self) -> Result<Vec<WorkerInfo>> {
-        self.workers.list_all().await
+        self.workers.list().await
     }
 
     /// Get a specific worker by ID
@@ -654,7 +647,8 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of workers processing the specified queue
     pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<WorkerInfo>> {
-        self.workers.list_by_queue(queue_name).await
+        let queue_info = self.get_queue(queue_name).await?;
+        self.workers.filter_by_fk(queue_info.id).await
     }
 
     /// Release messages from a specific worker (for shutdown)

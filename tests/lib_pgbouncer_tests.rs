@@ -128,7 +128,7 @@ async fn test_pgbouncer_queue_list() {
     let queue_obj = PgqrsQueues::new(admin.pool.clone());
     // List queues to verify it shows up
     let queues = queue_obj
-        .list(None)
+        .list()
         .await
         .expect("Failed to list queues through PgBouncer");
 

@@ -45,7 +45,7 @@ async fn test_worker_registration() {
 
     assert_eq!(worker.hostname, "test-host");
     assert_eq!(worker.port, 8080);
-    assert_eq!(worker.queue_name, "test_queue");
+    assert_eq!(worker.queue_id, queue.id);
     assert_eq!(worker.status, WorkerStatus::Ready);
 
     // Verify worker appears in queue workers list
