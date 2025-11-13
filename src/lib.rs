@@ -8,7 +8,7 @@
 //!
 //! ## How to use pgqrs
 //!
-//! - **Library API**: Integrate with your Rust application to enqueue and process jobs. See [`Queue`] and [`QueueMessage`](crate::types::QueueMessage).
+//! - **Library API**: Integrate with your Rust application to enqueue and process jobs. See [`Consumer`] and [`QueueMessage`](crate::types::QueueMessage).
 //! - **CLI Tools**: Use the CLI to administer, debug, and inspect queues. See the README for CLI usage.
 //!
 //! ## Features
@@ -39,8 +39,9 @@
 pub mod admin;
 pub mod archive;
 pub mod config;
+pub mod consumer;
 pub mod error;
-pub mod queue;
+pub mod producer;
 mod rate_limit;
 pub mod tables;
 pub mod types;
@@ -50,8 +51,9 @@ mod constants;
 
 pub use crate::admin::PgqrsAdmin;
 pub use crate::config::Config;
+pub use crate::consumer::Consumer;
 pub use crate::error::{PgqrsError, Result};
-pub use crate::queue::Queue;
+pub use crate::producer::Producer;
 pub use crate::rate_limit::RateLimitStatus;
 pub use crate::tables::{NewWorker, PgqrsArchive, PgqrsWorkers, Table};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};

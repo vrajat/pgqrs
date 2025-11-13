@@ -1,4 +1,4 @@
-use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, Queue, Table};
+use pgqrs::{tables::PgqrsQueues, Consumer, PgqrsAdmin, Producer, Table};
 use serde_json::json;
 
 // Test-specific constants
@@ -41,7 +41,8 @@ async fn test_pgbouncer_happy_path() {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
     let queue_info = queue_result.unwrap();
-    let queue = Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info);
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -50,13 +51,13 @@ async fn test_pgbouncer_happy_path() {
         "timestamp": "2023-01-01T00:00:00Z"
     });
 
-    queue
+    producer
         .enqueue(&test_message)
         .await
         .expect("Failed to enqueue message through PgBouncer");
 
     // Verify we have a pending message
-    let pending_count = queue
+    let pending_count = consumer
         .pending_count()
         .await
         .expect("Failed to get pending count through PgBouncer");
@@ -64,7 +65,7 @@ async fn test_pgbouncer_happy_path() {
     assert_eq!(pending_count, 1, "Should have exactly one pending message");
 
     // Read the message through PgBouncer
-    let messages = queue
+    let messages = consumer
         .dequeue(&worker)
         .await
         .expect("Failed to read messages through PgBouncer");
@@ -78,13 +79,13 @@ async fn test_pgbouncer_happy_path() {
     );
 
     // Dequeue the message through PgBouncer
-    queue
+    consumer
         .delete(received_message.id)
         .await
         .expect("Failed to dequeue message through PgBouncer");
 
     // Verify the message is gone from the main queue
-    let pending_count_after = queue
+    let pending_count_after = consumer
         .pending_count()
         .await
         .expect("Failed to get pending count after dequeue");

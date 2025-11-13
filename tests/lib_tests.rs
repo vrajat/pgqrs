@@ -68,7 +68,8 @@ async fn test_send_message() {
         .create_queue(TEST_QUEUE_SEND_MESSAGE)
         .await
         .expect("Failed to create queue");
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let worker = admin
         .register(
             TEST_QUEUE_SEND_MESSAGE.to_string(),
@@ -81,16 +82,16 @@ async fn test_send_message() {
     let payload = json!({
         "k": "v"
     });
-    assert!(queue.enqueue(&payload).await.is_ok());
-    assert!(queue.pending_count().await.unwrap() == EXPECTED_MESSAGE_COUNT);
-    let read_messages = queue.dequeue_many(&worker, READ_MESSAGE_COUNT).await;
+    assert!(producer.enqueue(&payload).await.is_ok());
+    assert!(consumer.pending_count().await.unwrap() == EXPECTED_MESSAGE_COUNT);
+    let read_messages = consumer.dequeue_many(&worker, READ_MESSAGE_COUNT).await;
     assert!(read_messages.is_ok());
     let read_messages = read_messages.unwrap();
     assert_eq!(read_messages.len(), READ_MESSAGE_COUNT);
     assert!(read_messages[0].payload == payload);
-    let deleted_message = queue.delete(read_messages[0].id).await;
+    let deleted_message = consumer.delete(read_messages[0].id).await;
     assert!(deleted_message.is_ok());
-    assert!(queue.pending_count().await.unwrap() == 0);
+    assert!(consumer.pending_count().await.unwrap() == 0);
     assert!(admin.delete_worker(worker.id).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
@@ -103,30 +104,31 @@ async fn test_archive_single_message() {
         .create_queue(TEST_QUEUE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let archive = Archive::new(admin.pool.clone(), &queue_info);
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
-    let message = queue
+    let message = producer
         .enqueue(&payload)
         .await
         .expect("Failed to enqueue message");
     let msg_id = message.id;
 
     // Verify message is in active queue
-    assert_eq!(queue.pending_count().await.unwrap(), 1);
+    assert_eq!(consumer.pending_count().await.unwrap(), 1);
     assert_eq!(archive.count(None).await.unwrap(), 0);
 
     // Archive the message
-    let archived = queue.archive(msg_id).await;
+    let archived = consumer.archive(msg_id).await;
     assert!(archived.is_ok());
 
     // Verify message moved from active to archive
-    assert_eq!(queue.pending_count().await.unwrap(), 0);
+    assert_eq!(consumer.pending_count().await.unwrap(), 0);
     assert_eq!(archive.count(None).await.unwrap(), 1);
 
     // Try to archive the same message again (should return false)
-    let archived_again = queue.archive(msg_id).await;
+    let archived_again = consumer.archive(msg_id).await;
     assert!(archived_again.is_ok());
     assert!(
         archived_again.unwrap().is_none(),
@@ -153,14 +155,15 @@ async fn test_archive_batch_messages() {
         .create_queue(TEST_QUEUE_BATCH_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let archive = Archive::new(admin.pool.clone(), &queue_info);
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
     for i in 0..5 {
         let payload = json!({"action": "batch_process", "index": i});
-        let message = queue
+        let message = producer
             .enqueue(&payload)
             .await
             .expect("Failed to enqueue message");
@@ -168,12 +171,12 @@ async fn test_archive_batch_messages() {
     }
 
     // Verify messages are in active queue
-    assert_eq!(queue.pending_count().await.unwrap(), 5);
+    assert_eq!(consumer.pending_count().await.unwrap(), 5);
     assert_eq!(archive.count(None).await.unwrap(), 0);
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
-    let archived_results = queue.archive_batch(batch_to_archive.clone()).await;
+    let archived_results = consumer.archive_batch(batch_to_archive.clone()).await;
     assert!(archived_results.is_ok());
     let archived_results = archived_results.unwrap();
     assert_eq!(
@@ -192,11 +195,11 @@ async fn test_archive_batch_messages() {
     }
 
     // Verify counts after batch archive
-    assert_eq!(queue.pending_count().await.unwrap(), 2);
+    assert_eq!(consumer.pending_count().await.unwrap(), 2);
     assert_eq!(archive.count(None).await.unwrap(), 3);
 
     // Try to archive empty batch (should return empty vec)
-    let empty_archive = queue.archive_batch(vec![]).await;
+    let empty_archive = consumer.archive_batch(vec![]).await;
     assert!(empty_archive.is_ok());
     assert!(empty_archive.unwrap().is_empty());
 
@@ -220,11 +223,11 @@ async fn test_archive_nonexistent_message() {
         .create_queue(TEST_QUEUE_NONEXISTENT)
         .await
         .expect("Failed to create queue");
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let archive = Archive::new(admin.pool.clone(), &queue_info);
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
-    let archived = queue.archive(fake_msg_id).await;
+    let archived = consumer.archive(fake_msg_id).await;
     assert!(archived.is_ok());
     assert!(
         archived.unwrap().is_none(),
@@ -248,17 +251,18 @@ async fn test_purge_archive() {
         .create_queue(TEST_QUEUE_PURGE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let archive = Archive::new(admin.pool.clone(), &queue_info);
 
     // Archive multiple messages
     for i in 0..3 {
         let payload = json!({"action": "test_purge_archive", "index": i});
-        let message = queue
+        let message = producer
             .enqueue(&payload)
             .await
             .expect("Failed to enqueue message");
-        let archived = queue
+        let archived = consumer
             .archive(message.id)
             .await
             .expect("Failed to archive message");
@@ -330,9 +334,9 @@ async fn test_custom_schema_search_path() {
 
     // Test that queue operations work with unified architecture
     let queue_info = queue_result.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let message_payload = serde_json::json!({"test": "custom_schema"});
-    let send_result = queue.enqueue(&message_payload).await;
+    let send_result = producer.enqueue(&message_payload).await;
     assert!(
         send_result.is_ok(),
         "Should be able to send message to queue in custom schema"
@@ -353,7 +357,8 @@ async fn test_interval_parameter_syntax() {
 
     // Create queue
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let worker = admin
         .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
         .await
@@ -361,10 +366,13 @@ async fn test_interval_parameter_syntax() {
 
     // Send a message to test interval functionality
     let message_payload = json!({"test": "interval_test"});
-    queue.enqueue(&message_payload).await.unwrap();
+    producer.enqueue(&message_payload).await.unwrap();
 
     // Test reading messages (which uses make_interval in READ_MESSAGES)
-    let messages = queue.dequeue_many_with_delay(&worker, 30, 1).await.unwrap(); // 30 seconds visibility timeout
+    let messages = consumer
+        .dequeue_many_with_delay(&worker, 30, 1)
+        .await
+        .unwrap(); // 30 seconds visibility timeout
     assert_eq!(messages.len(), 1, "Should read one message");
 
     let message = &messages[0];
@@ -375,14 +383,14 @@ async fn test_interval_parameter_syntax() {
     let original_vt = message.vt;
 
     // Test extending visibility timeout (which uses make_interval in UPDATE_MESSAGE_VT)
-    let extend_result = queue.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
+    let extend_result = producer.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
     assert!(
         extend_result,
         "Should successfully extend visibility timeout"
     );
 
     // Get the updated message to verify the interval was applied correctly
-    let updated_message = queue.get_message_by_id(message.id).await.unwrap();
+    let updated_message = consumer.get_message_by_id(message.id).await.unwrap();
     assert!(
         updated_message.vt > original_vt,
         "Extended VT should be later than original"
@@ -524,7 +532,8 @@ async fn test_queue_deletion_with_references() {
 
     // Create queue and add a message
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
     let archive = Archive::new(admin.pool.clone(), &queue_info);
     let worker = admin
         .register(
@@ -535,7 +544,7 @@ async fn test_queue_deletion_with_references() {
         .await
         .expect("Failed to register worker");
     let message_payload = json!({"test": "deletion_test"});
-    queue.enqueue(&message_payload).await.unwrap();
+    producer.enqueue(&message_payload).await.unwrap();
 
     // Try to delete queue with active worker - should fail with worker error
     let delete_result = admin.delete_queue(&queue_info).await;
@@ -551,9 +560,9 @@ async fn test_queue_deletion_with_references() {
     );
 
     // Archive the message first (while worker is still active)
-    let messages = queue.dequeue(&worker).await.unwrap();
+    let messages = consumer.dequeue(&worker).await.unwrap();
     assert_eq!(messages.len(), 1, "Should have one message");
-    queue.archive(messages[0].id).await.unwrap();
+    consumer.archive(messages[0].id).await.unwrap();
 
     // Stop the worker to test reference validation
     admin
@@ -603,18 +612,18 @@ async fn test_validation_payload_size_limit() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_size").await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Small payload should work
     let small_payload = json!({"key": "value"});
-    let result = queue.enqueue(&small_payload).await;
+    let result = producer.enqueue(&small_payload).await;
     assert!(result.is_ok());
 
     // Large payload should fail
     let large_payload = json!({
         "very_long_key_that_exceeds_our_limit": "very_long_value_that_definitely_exceeds_the_50_byte_limit_we_set_for_testing"
     });
-    let result = queue.enqueue(&large_payload).await;
+    let result = producer.enqueue(&large_payload).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::PayloadTooLarge {
@@ -644,16 +653,16 @@ async fn test_validation_forbidden_keys() {
         .create_queue("test_validation_forbidden")
         .await
         .unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Valid payload should work
     let valid_payload = json!({"data": "value"});
-    let result = queue.enqueue(&valid_payload).await;
+    let result = producer.enqueue(&valid_payload).await;
     assert!(result.is_ok());
 
     // Forbidden key should fail
     let forbidden_payload = json!({"secret": "should_not_be_allowed"});
-    let result = queue.enqueue(&forbidden_payload).await;
+    let result = producer.enqueue(&forbidden_payload).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::ValidationFailed { reason } => {
@@ -679,16 +688,16 @@ async fn test_validation_required_keys() {
         .create_queue("test_validation_required")
         .await
         .unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Valid payload with required key should work
     let valid_payload = json!({"user_id": "123", "data": "value"});
-    let result = queue.enqueue(&valid_payload).await;
+    let result = producer.enqueue(&valid_payload).await;
     assert!(result.is_ok());
 
     // Missing required key should fail
     let invalid_payload = json!({"data": "value"});
-    let result = queue.enqueue(&invalid_payload).await;
+    let result = producer.enqueue(&invalid_payload).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::ValidationFailed { reason } => {
@@ -711,16 +720,16 @@ async fn test_validation_object_depth() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_depth").await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
-    let result = queue.enqueue(&shallow_payload).await;
+    let result = producer.enqueue(&shallow_payload).await;
     assert!(result.is_ok());
 
     // Deep object should fail
     let deep_payload = json!({"level1": {"level2": {"level3": {"level4": "value"}}}});
-    let result = queue.enqueue(&deep_payload).await;
+    let result = producer.enqueue(&deep_payload).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::ValidationFailed { reason } => {
@@ -744,7 +753,7 @@ async fn test_batch_validation_atomic_failure() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_batch").await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Mix of valid and invalid payloads
     let payloads = vec![
@@ -754,7 +763,7 @@ async fn test_batch_validation_atomic_failure() {
     ];
 
     // Batch should fail due to invalid payload in the middle
-    let result = queue.batch_enqueue(&payloads).await;
+    let result = producer.batch_enqueue(&payloads).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::ValidationFailed { reason } => {
@@ -767,7 +776,7 @@ async fn test_batch_validation_atomic_failure() {
     // Verify no messages were enqueued (atomic batch operation)
     // Try to enqueue a valid message to ensure the queue is working
     let valid_payload = json!({"user_id": "789", "data": "test"});
-    let result = queue.enqueue(&valid_payload).await;
+    let result = producer.enqueue(&valid_payload).await;
     assert!(result.is_ok());
 }
 
@@ -784,16 +793,16 @@ async fn test_validation_string_length() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_strings").await.unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Short string should work
     let valid_payload = json!({"key": "short_value"});
-    let result = queue.enqueue(&valid_payload).await;
+    let result = producer.enqueue(&valid_payload).await;
     assert!(result.is_ok());
 
     // Long string should fail
     let invalid_payload = json!({"key": "this_is_a_very_long_string_that_exceeds_our_limit"});
-    let result = queue.enqueue(&invalid_payload).await;
+    let result = producer.enqueue(&invalid_payload).await;
     assert!(result.is_err());
     match result.unwrap_err() {
         pgqrs::error::PgqrsError::ValidationFailed { reason } => {
@@ -822,14 +831,13 @@ async fn test_validation_accessor_methods() {
         .create_queue("test_validation_accessors")
         .await
         .unwrap();
-    let queue = pgqrs::Queue::new(admin.pool.clone(), &queue_info, &admin.config);
-
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     // Test validation config accessor
-    let validation_config = queue.validation_config();
+    let validation_config = producer.validation_config();
     assert_eq!(validation_config.max_payload_size_bytes, 2048);
 
     // Test rate limit status accessor
-    let rate_status = queue.rate_limit_status();
+    let rate_status = producer.rate_limit_status();
     assert!(rate_status.is_some());
     let status = rate_status.unwrap();
     assert_eq!(status.max_per_second, 100);
