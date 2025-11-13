@@ -12,7 +12,7 @@ A PostgreSQL-backed job queue for Rust applications.
 
 ## Architecture
 
-pgqrs is a distributed job queue system built around PostgreSQL. The architecture consists of several components that work together to provide reliable, scalable background job processing.
+pgqrs is a distributed job queue system built around PostgreSQL with a clean separation of concerns. The architecture consists of Producer/Consumer roles and a unified table interface for reliable, scalable background job processing.
 
 ### System Overview
 
@@ -20,14 +20,15 @@ pgqrs is a distributed job queue system built around PostgreSQL. The architectur
 graph TB
     subgraph "Application Layer"
         P["Producer Services<br/>Your Rust Apps"]
-        W["Worker Services<br/>Your Rust Apps"]
+        W["Worker/Consumer Services<br/>Your Rust Apps"]
         A["Admin Server<br/>Optional Monitoring"]
     end
 
     subgraph "pgqrs APIs"
-        PQ["Queue API<br/>enqueue()<br/>batch_enqueue()"]
-        WQ["Queue API<br/>read()<br/>delete_batch()<br/>fail_message()"]
-        AA["PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()"]
+        PROD["Producer API<br/>enqueue()<br/>batch_enqueue()<br/>extend_visibility()"]
+        CONS["Consumer API<br/>dequeue()<br/>archive()<br/>delete()"]
+        TABLES["Table APIs<br/>PgqrsQueues<br/>PgqrsWorkers<br/>PgqrsMessages<br/>PgqrsArchiveTable"]
+        AA["PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()<br/>worker_management()"]
     end
 
     CLI["pgqrs CLI<br/>install<br/>queue create<br/>message send<br/>metrics"]
@@ -38,33 +39,48 @@ graph TB
 
     subgraph "PostgreSQL Database"
         subgraph "pgqrs Schema"
-            QT["Queue Tables<br/>queue_email<br/>queue_tasks<br/>queue_reports"]
-            AT["Archive Tables<br/>archive_email<br/>archive_tasks<br/>archive_reports"]
-            META["Metadata Tables<br/>pgqrs.meta"]
+            QT["pgqrs_queues<br/>Queue definitions"]
+            WT["pgqrs_workers<br/>Worker registrations"]
+            MT["pgqrs_messages<br/>Active messages"]
+            AT["pgqrs_archive<br/>Processed messages"]
+            META["Metadata & Indexes<br/>Foreign keys & constraints"]
         end
     end
 
     %% Connections
-    P --> PQ
-    W --> WQ
+    P --> PROD
+    W --> CONS
     A --> AA
+    A --> TABLES
 
-    PQ --> CP
-    WQ --> CP
+    PROD --> CP
+    CONS --> CP
+    TABLES --> CP
     AA --> CP
     CLI --> CP
 
     CP --> QT
+    CP --> WT
+    CP --> MT
     CP --> AT
     CP --> META
 
     %% Alternative direct connection (without pooler)
-    PQ -.-> QT
-    WQ -.-> QT
-    WQ -.-> AT
+    PROD -.-> QT
+    PROD -.-> MT
+    CONS -.-> MT
+    CONS -.-> AT
+    TABLES -.-> QT
+    TABLES -.-> WT
+    TABLES -.-> MT
+    TABLES -.-> AT
     AA -.-> QT
+    AA -.-> WT
+    AA -.-> MT
     AA -.-> AT
     CLI -.-> QT
+    CLI -.-> WT
+    CLI -.-> MT
     CLI -.-> AT
 
     %% Styling
@@ -74,54 +90,81 @@ graph TB
     classDef optional fill:#fff3e0
 
     class P,W,A userApp
-    class PQ,WQ,AA,CLI pgqrsLib
-    class QT,AT,META database
+    class PROD,CONS,TABLES,AA,CLI pgqrsLib
+    class QT,WT,MT,AT,META database
     class CP optional
 ```
 
 ### Component Details
 
 #### 1. **PostgreSQL Database**
-- **Central storage** for all queue data, archived messages, and metadata
-- **ACID compliance** ensures message durability and exactly-once processing within a visibility timeout.
+- **Central storage** for all queue data with proper relational design
+- **Four core tables** with foreign key relationships:
+  - `pgqrs_queues`: Queue definitions and metadata
+  - `pgqrs_workers`: Worker registrations linked to queues
+  - `pgqrs_messages`: Active messages awaiting processing
+  - `pgqrs_archive`: Processed messages for audit trails
+- **ACID compliance** ensures message durability and exactly-once processing
 - **SKIP LOCKED** feature enables efficient concurrent message processing
-- **Schema isolation** via dedicated `pgqrs` schema
-- **Archive system** maintains processed message history in separate archive tables
+- **Referential integrity** maintains data consistency across tables
 
-#### 2. **Connection Pooler (Optional)**
-- **PgBouncer or pgcat** for connection management and scaling
-- **Connection multiplexing** allows more workers than database connections
-
-#### 3. **Producer Services**
+#### 2. **Producer Services - Message Creation**
 - **Your Rust applications** that create and enqueue jobs
-- **Uses pgqrs library** to interact with queues programmatically
+- **Dedicated Producer API** for message creation operations
 - **Key operations**:
-  - `queue.enqueue(payload)` - Add single job
-  - `queue.batch_enqueue(payloads)` - Add multiple jobs efficiently
-  - `queue.enqueue_delayed(payload, delay)` - Schedule future jobs
+  - `producer.enqueue(payload)` - Add single job to queue
+  - `producer.batch_enqueue(payloads)` - Add multiple jobs efficiently
+  - `producer.enqueue_delayed(payload, delay)` - Schedule future jobs
+  - `producer.extend_visibility(msg_id, duration)` - Extend job processing time
+- **Validation & rate limiting** built-in for message integrity
+- **Queue-specific instances** for type safety and performance
 
-#### 4. **Worker Services**
+#### 3. **Consumer Services - Message Processing**
 - **Your Rust applications** that process jobs from queues
-- **Consumes messages** using pgqrs library APIs
+- **Dedicated Consumer API** for message consumption operations
 - **Key operations**:
-  - `queue.read(batch_size)` - Fetch jobs for processing
-  - `queue.delete_batch(msg_ids)` - Mark jobs as completed
-  - `queue.archive(msg_id)` - Archive processed messages for audit trail
+  - `consumer.dequeue()` - Fetch single job with automatic locking
+  - `consumer.dequeue_batch(size)` - Fetch multiple jobs efficiently
+  - `consumer.archive(msg_id)` - Archive processed message for audit trail
+  - `consumer.delete(msg_id)` - Remove completed message
+  - `consumer.delete_batch(msg_ids)` - Remove multiple completed messages
+- **Automatic visibility timeouts** prevent stuck jobs
+- **Queue-specific instances** for focused processing
 
-#### 5. **Admin Server (Optional)**
+#### 4. **Table APIs - Direct Data Access**
+- **Unified Table trait interface** for consistent CRUD operations
+- **Four table implementations**:
+  - `PgqrsQueues`: Manage queue definitions (`insert`, `get`, `list`, `delete`)
+  - `PgqrsWorkers`: Manage worker registrations with queue relationships
+  - `PgqrsMessages`: Direct message table access (typically used by Producer/Consumer)
+  - `PgqrsArchiveTable`: Archive management with full CRUD support
+- **Common interface methods**:
+  - `count()` - Count total records
+  - `count_by_fk(id)` - Count records by foreign key relationship
+  - `filter_by_fk(id)` - List records by foreign key relationship
+- **Type-safe operations** with proper error handling
+
+#### 5. **Admin Server - System Management**
 - **Your monitoring/admin service** using `PgqrsAdmin` APIs
-- **Operational management** and metrics collection
+- **Cross-cutting concerns** for system health and management
 - **Key operations**:
   - `admin.queue_metrics(name)` - Get queue health metrics
   - `admin.all_queues_metrics()` - System-wide monitoring
   - `admin.create_queue(name)` - Queue lifecycle management
+  - `admin.worker_management()` - Worker registration and health
   - `admin.purge_archive(name)` - Archive cleanup operations
+  - `admin.install()` / `admin.uninstall()` - Schema management
 
-#### 6. **pgqrs CLI**
+#### 6. **Connection Pooler (Optional)**
+- **PgBouncer or pgcat** for connection management and scaling
+- **Connection multiplexing** allows more workers than database connections
+- **Transaction-mode compatibility** for queue operations
+
+#### 7. **pgqrs CLI**
 - **Command-line tool** for administrative operations
 - **Direct database access** for debugging and management
 - **Key commands**:
-  - `pgqrs install` - Set up database schema
+  - `pgqrs install` - Set up database schema with all tables
   - `pgqrs queue create <name>` - Create new queues
   - `pgqrs message send <queue> <payload>` - Manual job creation
   - `pgqrs queue metrics <name>` - Inspect queue health
@@ -129,17 +172,29 @@ graph TB
 
 ### Data Flow
 
-1. **Job Creation**: Producer services use `queue.enqueue()` to add jobs to PostgreSQL
-2. **Job Processing**: Worker services use `queue.read()` to fetch and process jobs
-3. **Job Completion**: Workers call `queue.delete_batch()` to mark jobs as done
-4. **Job Archiving**: Optionally, workers use `queue.archive()` to preserve processed message history
+1. **Job Creation**: Producer services use dedicated `Producer` instances to add jobs to the `pgqrs_messages` table
+2. **Worker Registration**: Worker services register with `pgqrs_workers` table linking to specific queues
+3. **Job Processing**: Consumer services use `Consumer` instances to fetch jobs with automatic locking
+4. **Job Completion**: Consumers mark jobs as completed by deleting from `pgqrs_messages`
+5. **Job Archiving**: Optionally, consumers use `archive()` to move completed jobs to `pgqrs_archive` table
+6. **System Monitoring**: Admin services query across all tables for metrics and health monitoring
+
+### Role Separation Benefits
+
+- **Producer Focus**: Dedicated to message creation, validation, and rate limiting
+- **Consumer Focus**: Optimized for job fetching, processing, and completion
+- **Clear Boundaries**: Producers never read jobs, Consumers never create jobs
+- **Independent Scaling**: Scale producers and consumers independently
+- **Type Safety**: Queue-specific instances prevent cross-queue contamination
 
 ### Scalability Patterns
 
-- **Horizontal Workers**: Run multiple worker instances for increased throughput
-- **Queue Partitioning**: Use multiple queues to distribute load
+- **Horizontal Workers**: Run multiple consumer instances for increased throughput
+- **Producer Scaling**: Scale producer services independently based on job creation load
+- **Queue Partitioning**: Use multiple queues to distribute load and isolate workloads
 - **Connection Pooling**: PgBouncer enables more workers than database connections
 - **Batch Processing**: Process multiple jobs per database transaction for efficiency
+- **Worker Registration**: Track and monitor worker health via `pgqrs_workers` table
 
 ### Deployment Considerations
 
@@ -147,6 +202,34 @@ graph TB
 - **Workers**: Deploy as separate services/containers, scale independently
 - **Producers**: Integrate pgqrs library into existing application services
 - **Admin/CLI**: Use for operational management and debugging
+
+### Architecture Benefits
+
+The current pgqrs architecture provides several key advantages:
+
+#### **Clean Separation of Concerns**
+- **Producers**: Focus solely on message creation, validation, and rate limiting
+- **Consumers**: Optimized for job fetching, processing, and completion tracking
+- **Admin**: System-wide management and monitoring operations
+- **Tables**: Direct database access for advanced use cases
+
+#### **Unified Data Model**
+- **Single schema** with four core tables linked by foreign keys
+- **Referential integrity** prevents orphaned records and data corruption
+- **Consistent interface** via Table trait across all database operations
+- **Predictable scaling** with clear table relationships
+
+#### **Type Safety & Performance**
+- **Queue-specific instances** prevent cross-queue contamination
+- **Compile-time verification** of message types and operations
+- **Optimized queries** with proper indexing and constraints
+- **Connection pooling** support for high-concurrency scenarios
+
+#### **Operational Excellence**
+- **Built-in monitoring** via metrics and admin APIs
+- **Archive system** for compliance and audit requirements
+- **Worker tracking** for health monitoring and load balancing
+- **CLI tools** for debugging and administrative tasks
 
 
 ## Getting Started
@@ -272,11 +355,191 @@ Add to your `Cargo.toml`:
 pgqrs = "0.1.0"
 ```
 
-See `examples/basic_usage.rs` for a full example. Typical usage:
+### Core APIs
+
+pgqrs provides three main API layers for different use cases:
+
+#### 1. **Producer/Consumer APIs** (Recommended)
+High-level, role-specific APIs for most queue operations:
+- **Producer**: Message creation, validation, rate limiting
+- **Consumer**: Message processing, archiving, deletion
+
+#### 2. **Table APIs** (Advanced)
+Low-level, unified CRUD interface for direct database operations:
+- **PgqrsQueues**: Queue management
+- **PgqrsWorkers**: Worker registration and health
+- **PgqrsMessages**: Direct message table access
+- **PgqrsArchiveTable**: Archive management
+
+#### 3. **Admin API** (Management)
+System-wide operations for monitoring and administration:
+- **PgqrsAdmin**: Schema management, metrics, cross-table operations
+
+### Table Trait Interface
+
+All table types implement a unified `Table` trait providing consistent CRUD operations:
+
+```rust
+use pgqrs::tables::{PgqrsQueues, PgqrsWorkers, PgqrsMessages, PgqrsArchiveTable, Table};
+use pgqrs::config::Config;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
+    let admin = PgqrsAdmin::new(&config).await?;
+    let pool = admin.pool.clone();
+
+    // Initialize table interfaces
+    let queues = PgqrsQueues::new(pool.clone());
+    let workers = PgqrsWorkers::new(pool.clone());
+    let messages = PgqrsMessages::new(pool.clone());
+    let archives = PgqrsArchiveTable::new(pool.clone());
+
+    // Unified counting operations across all tables
+    let total_queues = queues.count().await?;
+    let total_workers = workers.count().await?;
+    let total_messages = messages.count().await?;
+    let total_archives = archives.count().await?;
+
+    println!("System totals: {} queues, {} workers, {} messages, {} archived",
+             total_queues, total_workers, total_messages, total_archives);
+
+    // Count by foreign key relationships
+    let queue_id = 1;
+    let queue_workers = workers.count_by_fk(queue_id).await?;
+    let queue_messages = messages.count_by_fk(queue_id).await?;
+    let queue_archives = archives.count_by_fk(queue_id).await?;
+
+    println!("Queue {} has: {} workers, {} pending messages, {} archived messages",
+             queue_id, queue_workers, queue_messages, queue_archives);
+
+    // Filter operations
+    let workers_for_queue = workers.filter_by_fk(queue_id).await?;
+    let messages_for_queue = messages.filter_by_fk(queue_id).await?;
+
+    println!("Found {} workers and {} messages for queue {}",
+             workers_for_queue.len(), messages_for_queue.len(), queue_id);
+
+    Ok(())
+}
+```
+
+### Producer/Consumer Usage
+
+### Producer/Consumer Usage
+
+See `examples/basic_usage.rs` for a full example. The Producer/Consumer APIs provide clean separation of concerns:
+
+#### Producer Example (Message Creation Service)
+```rust
+use pgqrs::admin::PgqrsAdmin;
+use pgqrs::config::Config;
+use pgqrs::Producer;
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load()?;
+    let admin = PgqrsAdmin::new(&config).await?;
+
+    // Get queue information
+    let queue_info = admin.get_queue("email_queue").await?;
+
+    // Create producer for this queue
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &config);
+
+    // Send individual messages
+    let welcome_email = json!({
+        "to": "user@example.com",
+        "template": "welcome",
+        "data": {"name": "John Doe"}
+    });
+    let msg = producer.enqueue(&welcome_email).await?;
+    println!("Enqueued welcome email: {}", msg.id);
+
+    // Send delayed message (newsletter after 7 days)
+    let newsletter = json!({
+        "to": "user@example.com",
+        "template": "weekly_newsletter"
+    });
+    let delayed_msg = producer.enqueue_delayed(&newsletter, std::time::Duration::from_secs(7 * 24 * 3600)).await?;
+    println!("Scheduled newsletter: {}", delayed_msg.id);
+
+    // Batch enqueue for efficiency
+    let batch_emails = vec![
+        json!({"to": "user1@example.com", "template": "promotion"}),
+        json!({"to": "user2@example.com", "template": "promotion"}),
+        json!({"to": "user3@example.com", "template": "promotion"}),
+    ];
+    let batch_msgs = producer.batch_enqueue(batch_emails).await?;
+    println!("Enqueued {} promotional emails", batch_msgs.len());
+
+    Ok(())
+}
+```
+
+#### Consumer Example (Message Processing Service)
+```rust
+use pgqrs::admin::PgqrsAdmin;
+use pgqrs::config::Config;
+use pgqrs::Consumer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load()?;
+    let admin = PgqrsAdmin::new(&config).await?;
+
+    // Get queue information
+    let queue_info = admin.get_queue("email_queue").await?;
+
+    // Create consumer for this queue
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info);
+
+    // Process single message
+    if let Some(message) = consumer.dequeue().await? {
+        println!("Processing email: {}", message.id);
+
+        // Parse and send the email
+        let email_data = &message.payload;
+        // ... send email logic here ...
+
+        // Archive the message for audit trail
+        let archived = consumer.archive(message.id).await?;
+        if archived {
+            println!("Email {} archived successfully", message.id);
+        }
+    }
+
+    // Batch processing for higher throughput
+    let messages = consumer.dequeue_batch(10).await?;
+    if !messages.is_empty() {
+        println!("Processing batch of {} emails", messages.len());
+
+        let mut processed_ids = Vec::new();
+        for message in messages {
+            // Process each email
+            println!("Sending email to: {}", message.payload["to"]);
+            // ... email sending logic ...
+
+            processed_ids.push(message.id);
+        }
+
+        // Delete all processed messages
+        let results = consumer.delete_batch(processed_ids).await?;
+        let success_count = results.iter().filter(|&&success| success).count();
+        println!("Successfully processed {} emails", success_count);
+    }
+
+    Ok(())
+}
+```
+
+#### Full Application Example
 
 ```rust
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
+use pgqrs::{Producer, Consumer};
 use serde_json::json;
 
 #[tokio::main]
@@ -298,43 +561,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Option 4: Create with explicit DSN
     // let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
+    // Set up admin for queue management
     let admin = PgqrsAdmin::new(&config).await?;
 
     // Create queues
     admin.create_queue("email_queue").await?;
     admin.create_queue("task_queue").await?;
 
-    // Send messages
+    // Get queue information for creating producers/consumers
+    let email_queue_info = admin.get_queue("email_queue").await?;
+    let task_queue_info = admin.get_queue("task_queue").await?;
+
+    // Create producers for sending messages
+    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &config);
+    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &config);
+
+    // Create consumers for processing messages
+    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info);
+    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info);
+
+    // Send messages using producers
     let email_payload = json!({
         "to": "user@example.com",
         "subject": "Welcome!",
         "body": "Welcome to our service!"
     });
-    let email_queue = admin.get_queue("email_queue").await?;
-    let email_message = email_queue.enqueue(&email_payload).await?;
-    println!("Sent email message with ID: {}", email_message.msg_id);
+    let email_message = email_producer.enqueue(&email_payload).await?;
+    println!("Sent email message with ID: {}", email_message.id);
 
-    // Read messages
-    let messages = email_queue.read(10).await?;
-    println!("Read {} messages", messages.len());
+    let task_payload = json!({
+        "task_type": "image_resize",
+        "image_url": "https://example.com/image.jpg",
+        "dimensions": {"width": 800, "height": 600}
+    });
+    let task_message = task_producer.enqueue(&task_payload).await?;
+    println!("Sent task message with ID: {}", task_message.id);
 
-    // Process and archive messages
-    if let Some(msg) = messages.first() {
-        // Process the message here...
-        println!("Processing message: {}", msg.msg_id);
+    // Process messages using consumers
+
+    // Process email messages
+    if let Some(email_msg) = email_consumer.dequeue().await? {
+        println!("Processing email message: {}", email_msg.id);
+        // Process the email here...
 
         // Archive the message to maintain audit trail
-        let archived = email_queue.archive(msg.msg_id).await?;
+        let archived = email_consumer.archive(email_msg.id).await?;
         if archived {
-            println!("Archived message {} successfully", msg.msg_id);
+            println!("Archived email message {} successfully", email_msg.id);
         }
-
-        // Or delete the message if archiving is not needed
-        // let deleted = email_queue.delete_batch(vec![msg.msg_id]).await?;
-        // if deleted.first().copied().unwrap_or(false) {
-        //     println!("Deleted message {}", msg.msg_id);
-        // }
     }
+
+    // Process task messages
+    if let Some(task_msg) = task_consumer.dequeue().await? {
+        println!("Processing task message: {}", task_msg.id);
+        // Process the task here...
+
+        // Delete the message when processing is complete (no archive needed)
+        let deleted = task_consumer.delete(task_msg.id).await?;
+        if deleted {
+            println!("Deleted task message {} successfully", task_msg.id);
+        }
+    }
+
+    // Batch processing example
+    let task_messages = task_consumer.dequeue_batch(5).await?;
+    if !task_messages.is_empty() {
+        println!("Processing {} task messages in batch", task_messages.len());
+
+        let msg_ids: Vec<i64> = task_messages.iter().map(|m| m.id).collect();
+        // Process all tasks...
+
+        // Delete all processed messages in batch
+        let deleted_results = task_consumer.delete_batch(msg_ids).await?;
+        let success_count = deleted_results.iter().filter(|&&success| success).count();
+        println!("Successfully deleted {} task messages", success_count);
+    }
+
+    // Admin operations for monitoring
+    let email_metrics = admin.queue_metrics("email_queue").await?;
+    println!("Email queue metrics: {} pending messages", email_metrics.pending_count);
+
+    let all_metrics = admin.all_queues_metrics().await?;
+    println!("Total queues: {}", all_metrics.len());
 
     Ok(())
 }
@@ -495,33 +803,52 @@ pgqrs message read email_queue --archive --count 10
 
 #### Programmatic Archive API
 
-The archive functionality is also available through the Rust API:
+The archive functionality is available through the Consumer API and Table APIs:
 
 ```rust
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
+use pgqrs::{Consumer, tables::{PgqrsArchiveTable, Table}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
     let admin = PgqrsAdmin::new(&config).await?;
-    let queue = admin.get_queue("email_queue").await?;
+    let queue_info = admin.get_queue("email_queue").await?;
 
-    // Archive a message after processing
-    let archived = queue.archive(message_id).await?;
-    if archived {
-        println!("Message {} archived successfully", message_id);
+    // Consumer API for message processing and archiving
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info);
+
+    // Process and archive a message
+    if let Some(message) = consumer.dequeue().await? {
+        // Process the message...
+        println!("Processing message {}", message.id);
+
+        // Archive the message after successful processing
+        let archived = consumer.archive(message.id).await?;
+        if archived {
+            println!("Message {} archived successfully", message.id);
+        }
     }
 
-    // List archived messages with pagination
-    let archived_messages = queue.archive_list(50, 0).await?;
+    // Table API for direct archive operations
+    let archives = PgqrsArchiveTable::new(admin.pool.clone());
+
+    // Count archived messages for the queue
+    let archive_count = archives.count_by_fk(queue_info.id).await?;
+    println!("Queue has {} archived messages", archive_count);
+
+    // List archived messages with Table trait
+    let archived_messages = archives.filter_by_fk(queue_info.id).await?;
     println!("Found {} archived messages", archived_messages.len());
 
     // Get specific archived message by ID
-    let archived_msg = queue.get_archived_message_by_id(message_id).await?;
-    println!("Archived message: {:?}", archived_msg);
+    if let Some(first_archive) = archived_messages.first() {
+        let archived_msg = archives.get(first_archive.id).await?;
+        println!("Archived message details: {:?}", archived_msg);
+    }
 
-    // Purge old archived messages (admin operation)
+    // Admin operations for archive cleanup
     admin.purge_archive("email_queue").await?;
     println!("Archive purged");
 
