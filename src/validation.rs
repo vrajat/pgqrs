@@ -29,11 +29,12 @@
 //! };
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
-//! let queue = admin.create_queue("my_queue").await?;
+//! let queue_info = admin.create_queue("my_queue").await?;
+//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 //!
 //! // This will be validated automatically
 //! let payload = json!({"user_id": "123", "data": "test"});
-//! let message = queue.enqueue(&payload).await?;
+//! let message = producer.enqueue(&payload).await?;
 //! # Ok(())
 //! # }
 //! ```

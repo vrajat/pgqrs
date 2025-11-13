@@ -1,4 +1,4 @@
-use pgqrs::PgqrsAdmin;
+use pgqrs::{tables::PgqrsQueues, Consumer, PgqrsAdmin, Producer, Table};
 use serde_json::json;
 
 // Test-specific constants
@@ -40,7 +40,9 @@ async fn test_pgbouncer_happy_path() {
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
-    let queue = queue_result.unwrap();
+    let queue_info = queue_result.unwrap();
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info);
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -49,13 +51,13 @@ async fn test_pgbouncer_happy_path() {
         "timestamp": "2023-01-01T00:00:00Z"
     });
 
-    queue
+    producer
         .enqueue(&test_message)
         .await
         .expect("Failed to enqueue message through PgBouncer");
 
     // Verify we have a pending message
-    let pending_count = queue
+    let pending_count = consumer
         .pending_count()
         .await
         .expect("Failed to get pending count through PgBouncer");
@@ -63,7 +65,7 @@ async fn test_pgbouncer_happy_path() {
     assert_eq!(pending_count, 1, "Should have exactly one pending message");
 
     // Read the message through PgBouncer
-    let messages = queue
+    let messages = consumer
         .dequeue(&worker)
         .await
         .expect("Failed to read messages through PgBouncer");
@@ -77,13 +79,13 @@ async fn test_pgbouncer_happy_path() {
     );
 
     // Dequeue the message through PgBouncer
-    queue
+    consumer
         .delete(received_message.id)
         .await
         .expect("Failed to dequeue message through PgBouncer");
 
     // Verify the message is gone from the main queue
-    let pending_count_after = queue
+    let pending_count_after = consumer
         .pending_count()
         .await
         .expect("Failed to get pending count after dequeue");
@@ -100,9 +102,13 @@ async fn test_pgbouncer_happy_path() {
         .await
         .expect("Failed to delete worker");
 
+    let queue_info = admin
+        .get_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
+        .await
+        .expect("Failed to get queue info through PgBouncer");
     // Cleanup: delete the queue through PgBouncer
     admin
-        .delete_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
 
@@ -119,9 +125,10 @@ async fn test_pgbouncer_queue_list() {
         .await
         .expect("Failed to create queue through PgBouncer");
 
+    let queue_obj = PgqrsQueues::new(admin.pool.clone());
     // List queues to verify it shows up
-    let queues = admin
-        .list_queues()
+    let queues = queue_obj
+        .list()
         .await
         .expect("Failed to list queues through PgBouncer");
 
@@ -138,7 +145,7 @@ async fn test_pgbouncer_queue_list() {
 
     // Cleanup
     admin
-        .delete_queue(TEST_QUEUE_PGBOUNCER_LIST)
+        .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
 }

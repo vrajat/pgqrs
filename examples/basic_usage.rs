@@ -16,8 +16,8 @@
 //! ```
 
 use pgqrs::admin::PgqrsAdmin;
-use pgqrs::archive::Archive;
 use pgqrs::config::Config;
+use pgqrs::{Consumer, PgqrsArchive, Producer};
 use serde_json::json;
 
 #[tokio::main]
@@ -60,14 +60,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "image_url": "https://example.com/image.jpg"
     });
 
-    let email_queue = admin.get_queue("email_queue").await?;
-    let task_queue = admin.get_queue("task_queue").await?;
+    let email_queue_info = admin.get_queue("email_queue").await?;
+    let task_queue_info = admin.get_queue("task_queue").await?;
+    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info);
+    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info);
+    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &admin.config);
+    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &admin.config);
 
-    let email_archive = Archive::new(admin.pool.clone(), email_queue.queue_id);
-    let task_archive = Archive::new(admin.pool.clone(), task_queue.queue_id);
+    let email_archive = PgqrsArchive::new(admin.pool.clone(), &email_queue_info);
+    let task_archive = PgqrsArchive::new(admin.pool.clone(), &task_queue_info);
 
-    let email_id = email_queue.enqueue(&email_payload).await?;
-    let task_id = task_queue.enqueue(&task_payload).await?;
+    let email_id = email_producer.enqueue(&email_payload).await?;
+    let task_id = task_producer.enqueue(&task_payload).await?;
 
     println!("Sent email message with ID: {}", email_id);
     println!("Sent task message with ID: {}", task_id);
@@ -91,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })),
     ];
 
-    let batch_ids = email_queue.batch_enqueue(&batch_messages).await?;
+    let batch_ids = email_producer.batch_enqueue(&batch_messages).await?;
     println!("Sent batch of {} emails", batch_ids.len());
 
     // Send delayed message
@@ -101,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "due_date": "2024-02-15"
     });
 
-    let delayed_id = task_queue
+    let delayed_id = task_producer
         .enqueue_delayed(
             &delayed_payload,
             300, // 5 minutes delay
@@ -115,13 +119,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a worker.
     let worker = admin
         .register(
-            email_queue.queue_name.clone(),
+            email_queue_info.queue_name.clone(),
             "http://localhost".to_string(),
             3000,
         )
         .await?;
 
-    let email_messages = email_queue.dequeue_many_with_delay(&worker, 10, 2).await?;
+    let email_messages = email_consumer
+        .dequeue_many_with_delay(&worker, 10, 2)
+        .await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -134,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_queue.dequeue_many_with_delay(&worker, 5, 5).await?;
+    let task_messages = task_consumer.dequeue_many_with_delay(&worker, 5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
@@ -148,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_msg.id
         );
 
-        let extended = task_queue.extend_visibility(task_msg.id, 30).await?;
+        let extended = task_producer.extend_visibility(task_msg.id, 30).await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.id);
         }
@@ -158,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
-        let archived = task_queue.archive(task_msg.id).await?;
+        let archived = task_consumer.archive(task_msg.id).await?;
         if archived.is_some() {
             println!("Successfully archived task message {}", task_msg.id);
         } else {
@@ -173,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Batch archiving email messages...");
     let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.id).collect();
     if !email_msg_ids.is_empty() {
-        let archived_ids = email_queue.archive_batch(email_msg_ids.clone()).await?;
+        let archived_ids = email_consumer.archive_batch(email_msg_ids.clone()).await?;
         println!(
             "Successfully archived {} email messages",
             archived_ids.len()
@@ -192,8 +198,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Archive counts:");
     let email_archive_count = email_archive.count(None).await?;
     let task_archive_count = task_archive.count(None).await?;
-    println!("  email_queue archived: {}", email_archive_count);
-    println!("  task_queue archived: {}", task_archive_count);
+    println!("  email_consumer archived: {}", email_archive_count);
+    println!("  task_consumer archived: {}", task_archive_count);
 
     // Example of traditional deletion for comparison
     // Note: Use archiving instead for data retention and audit trails
@@ -201,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Traditional deletion (not recommended for data retention):");
 
         // Delete the message completely
-        let deleted = task_queue.delete_many(vec![remaining_task.id]).await?;
+        let deleted = task_consumer.delete_many(vec![remaining_task.id]).await?;
         if deleted.first().copied().unwrap_or(false) {
             println!("Deleted task message {}", remaining_task.id);
         } else {
@@ -231,11 +237,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show pending count
-    let email_pending = email_queue.pending_count().await?;
-    let task_pending = task_queue.pending_count().await?;
+    let email_pending = email_consumer.pending_count().await?;
+    let task_pending = task_consumer.pending_count().await?;
     println!("\nPending messages:");
-    println!("  email_queue: {}", email_pending);
-    println!("  task_queue: {}", task_pending);
+    println!("  email_consumer: {}", email_pending);
+    println!("  task_consumer: {}", task_pending);
 
     // Demonstrate admin archive management operations
     println!("\n--- Archive Management Example ---");

@@ -80,7 +80,7 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueInfo {
     /// Queue ID (primary key)
     pub id: i64,
@@ -129,6 +129,27 @@ pub struct ArchivedMessage {
     pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Input data for creating a new archived message
+#[derive(Debug)]
+pub struct NewArchivedMessage {
+    /// Original message ID from pgqrs_messages table
+    pub original_msg_id: i64,
+    /// Queue ID this message belonged to
+    pub queue_id: i64,
+    /// Worker ID that processed this message (if any)
+    pub worker_id: Option<i64>,
+    /// The actual message payload (JSON)
+    pub payload: serde_json::Value,
+    /// Timestamp when the message was originally created
+    pub enqueued_at: chrono::DateTime<chrono::Utc>,
+    /// Visibility timeout when the message was archived
+    pub vt: chrono::DateTime<chrono::Utc>,
+    /// Number of times this message was read before archiving
+    pub read_ct: i32,
+    /// Timestamp when the message was dequeued from the queue (if any)
+    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 impl fmt::Display for ArchivedMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -159,7 +180,7 @@ pub struct WorkerInfo {
     /// Port number for the worker
     pub port: i32,
     /// Queue ID this worker is processing
-    pub queue_name: String,
+    pub queue_id: i64,
     /// Timestamp when the worker started
     pub started_at: DateTime<Utc>,
     /// Last heartbeat timestamp
@@ -175,8 +196,8 @@ impl fmt::Display for WorkerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_name: {}, status: {:?} }}",
-            self.id, self.hostname, self.port, self.queue_name, self.status
+            "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
+            self.id, self.hostname, self.port, self.queue_id, self.status
         )
     }
 }

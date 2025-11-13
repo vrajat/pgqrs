@@ -1,4 +1,4 @@
-use pgqrs::PgqrsAdmin;
+use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, Table};
 
 mod common;
 
@@ -43,13 +43,14 @@ async fn test_default_schema_backward_compatibility() {
     );
 
     // Test queue listing
-    let queues = admin.list_queues().await.expect("Should list queues");
+    let queue_obj = PgqrsQueues::new(admin.pool.clone());
+    let queues = queue_obj.list().await.expect("Should list queues");
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Should find created queue in list");
 
     // Cleanup
     assert!(
-        admin.delete_queue(&queue_name).await.is_ok(),
+        admin.delete_queue(&found_queue.unwrap()).await.is_ok(),
         "Should delete queue"
     );
 }

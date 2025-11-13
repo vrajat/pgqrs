@@ -2,292 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## ⚠️ CRITICAL INSTRUCTIONS - READ FIRST ⚠️
-
-### MANDATORY Development Workflow
-**These instructions MUST be followed for every change:**
-
-1. **Git Operations**: Use command line tools ONLY - never use MCP git tools
-2. **Terminal Pager Workaround**: Always pipe git/gh commands with `| cat` to avoid pager issues
-3. **Code Quality**: ALWAYS run `cargo fmt` before committing - this is required
-4. **Testing**: Run `cargo test` to ensure all tests pass before creating PRs
-5. **Conventional Commits**: ALL commit messages MUST follow format: `<type>(<scope>): <description>`
-6. **Branch Naming**: Use kebabCase for branch names based on feature
-7. **SQL Organization**: ALL SQL templates must be in `src/constants.rs` with proper templating
-8. **Error Handling**: Use proper error handling - no `unwrap()` or `expect()` in production code
-
-### Pre-Commit Checklist
-- [ ] `cargo test` passes
-- [ ] `cargo fmt` applied
-- [ ] `cargo clippy` warnings addressed
-- [ ] Conventional commit message format
-- [ ] Tests added for new functionality
-
-## Development Commands
-
-### Git and GitHub Operations
-**IMPORTANT: Use command line tools only - no MCP git tools**
-
-**Note on Terminal Pager Workarounds:**
-Many git and gh commands use pagers (like `less`) which can interfere with terminal automation. Use these patterns to pipe output:
-
-**Basic Git Commands:**
-- `git status` - Check working directory status
-- `git add <file>` or `git add .` - Stage changes for commit
-- `git commit -m "message"` - Commit staged changes with message
-- `git push` - Push commits to remote repository
-- `git pull` - Pull latest changes from remote
-- `git log --oneline | cat` - View commit history (pipe to avoid pager)
-- `git log --oneline -10 | cat` - View last 10 commits
-- `git diff | cat` - View unstaged changes (pipe to avoid pager)
-- `git diff --cached | cat` - View staged changes (pipe to avoid pager)
-- `git branch | cat` - List branches
-- `git branch -r | cat` - List remote branches
-
-**GitHub CLI Commands with Pager Workarounds:**
-- `gh issue list | cat` - List issues without pager
-- `gh issue view <number> | cat` - View issue details
-- `gh pr list | cat` - List pull requests
-- `gh pr view <number> | cat` - View pull request details
-- `gh pr view <number> --comments | cat` - View PR comments
-- `gh api repos/owner/repo/pulls/number/comments | cat` - Get PR comments via API
-- `gh api repos/owner/repo/issues/number | cat` - Get issue details via API
-
-### Building and Testing
-- `cargo build` - Build the project
-- `cargo build --release` - Build optimized release version
-- `cargo test` - Run all tests (unit + integration)
-- `cargo test --lib` - Run library tests only
-- `cargo test --bin pgqrs` - Run CLI tests only
-- `cargo test -- --test-threads=1` - Run tests sequentially (useful for database tests)
-
-### Database Testing
-- Tests use `testcontainers` for isolated PostgreSQL instances
-- Integration tests are in `tests/` directory
-- Use `RUST_LOG=debug` for detailed test output
-- Tests marked with `#[serial_test::serial]` run sequentially to avoid database conflicts
-
-### Code Quality and Linting
-- `cargo clippy` - Run Rust linter
-- `cargo clippy --all-targets --all-features` - Comprehensive linting
-- `cargo fmt` - Format code
-- `cargo fmt --check` - Check formatting without modifying files
-
-### Documentation and Generation
-- `cargo doc` - Generate documentation
-- `cargo doc --open` - Generate and open documentation in browser
-
-### CLI Development
-- `cargo run -- --help` - Show CLI help
-- `cargo run -- install` - Install pgqrs schema
-- `cargo run -- queue create test-queue` - Create a test queue
-- `cargo run -- message send --queue test-queue --payload '{"test": "data"}'` - Send test message
-
-### Benchmarking
-- `cd benchmark && docker-compose up -d` - Start benchmark environment
-- `cd benchmark && ./run_benchmark.sh 40 5 2m` - Run performance benchmarks
-- Results are stored in `benchmark/results/` directory
-
-## Code Architecture
-
-### High-Level Structure
-pgqrs is a PostgreSQL-backed job queue system for Rust applications, providing both a library API and CLI tools. The architecture follows a modular design:
-
-**Core Components:**
-- `src/main.rs` - CLI entry point and command-line interface
-- `src/lib.rs` - Library entry point and public API exports
-- `src/admin.rs` - Administrative operations (install, create queues, metrics)
-- `src/queue.rs` - Core queue operations (enqueue, dequeue, batch operations)
-- `src/config.rs` - Configuration management and database connection setup
-- `src/types.rs` - Data structures and type definitions
-- `src/error.rs` - Error handling and custom error types
-- `src/constants.rs` - System constants and defaults
-
-**CLI Components:**
-- `src/output.rs` - Output formatting (JSON, CSV, YAML, tables)
-- Subcommands organized by domain (install, queue, message, metrics)
-
-**Testing:**
-- `tests/` - Integration tests using testcontainers
-- `tests/common/` - Shared test utilities and helpers
-- Uses PostgreSQL testcontainers for isolated test environments
-
-**Benchmarking:**
-- `benchmark/` - Performance testing suite with Docker Compose
-- `benchmark/locustfile.py` - Load testing scenarios
-- `benchmark/init_tables.sql` - Database schema for benchmarks
-
-### Key Design Patterns
-1. **PostgreSQL-Native**: Leverages PostgreSQL features like `SKIP LOCKED`, NOTIFY/LISTEN, and transactions
-2. **Async/Await**: Built on tokio for async database operations
-3. **Type Safety**: Strong typing for queue messages and configuration
-4. **CLI + Library**: Dual-purpose crate serving both as library and CLI tool
-5. **Testcontainers**: Isolated testing with real PostgreSQL instances
-
-### Configuration Management
-- `Config` struct handles database connection parameters
-- Supports DSN (Data Source Name) format
-- Environment variable support for containerized deployments
-- File-based configuration with YAML/JSON support
-
-### Database Schema
-- Uses configurable schema namespace (default: 'public') to support multi-tenant deployments
-- Queue tables are dynamically created per queue within the specified schema
-- Metadata tables track queue information and statistics
-- SKIP LOCKED pattern for concurrent job processing
-- **IMPORTANT**: Schema must be pre-created before running `pgqrs install`
-
-### Schema Management (Security Update - GitHub Issue #21)
-**As of v0.2.1+, pgqrs uses PostgreSQL search_path instead of string replacement for schema handling:**
-
-1. **Secure Schema Handling**: Uses PostgreSQL's search_path feature instead of SQL string replacement to prevent injection
-2. **Schema Pre-creation Required**: The target schema must exist before running `pgqrs install`
-3. **Configuration Options**:
-   - CLI: `--schema my_schema`
-   - Environment: `PGQRS_SCHEMA=my_schema`
-   - Config file: `schema: "my_schema"`
-   - Programmatic: `Config::from_dsn_with_schema(dsn, "my_schema")`
-4. **Schema Validation**: Validates schema names according to PostgreSQL identifier rules
-5. **Test Isolation**: Each test suite uses isolated schemas for parallel execution
-6. **Backward Compatibility**: Defaults to 'public' schema if not specified
-
-### Error Handling
-- Custom `PgqrsError` enum for domain-specific errors
-- Integration with `anyhow` for error context
-- Database errors are properly wrapped and contextualized
-
-### Dependencies and External Systems
-
-#### Key Dependencies
-- `sqlx` - Database operations (async PostgreSQL driver with compile-time checked queries)
-- `tokio` - Async runtime providing the foundation for all async operations
-- `clap` - CLI argument parsing with derive macros for clean command definition
-- `testcontainers` - Integration testing with isolated Docker-based PostgreSQL instances
-- `serde` - JSON serialization/deserialization for message payloads and configuration
-- `anyhow` - Error handling with context and chaining capabilities
-- `tracing` - Structured logging and instrumentation
-- `uuid` - Message ID generation and queue identification
-
-#### PostgreSQL Version Compatibility
-- **Minimum**: PostgreSQL 13 (required for improved `SKIP LOCKED` performance and reliability)
-- **Tested**: PostgreSQL 13, 14, 15, 16
-- **Key Features Used**:
-  - JSON/JSONB types for flexible message payloads
-  - `FOR UPDATE SKIP LOCKED` for concurrent queue processing without deadlocks
-  - `NOTIFY/LISTEN` for real-time queue event notifications
-  - Transactional DDL for atomic schema operations
-  - Connection pooling and prepared statements for performance
-
-#### External Integration Points
-- **Database Connection**: Supports connection strings, SSL, and connection pooling
-- **Container Orchestration**: Docker Compose for development and benchmarking environments
-- **CI/CD**: GitHub Actions compatibility for automated testing and deployment
-- **Monitoring**: Structured logging output compatible with log aggregation systems
-- **Configuration**: Environment variable and file-based configuration for deployment flexibility
-
-## Development Guidelines
-
-### Code Style and Conventions
-- Follow standard Rust formatting (`cargo fmt`)
-- Use meaningful variable and function names
-- Document public APIs with doc comments
-- Prefer explicit error handling over unwrap/expect
-- Use structured logging with `tracing` crate
-
-### Database Interactions
-- All database operations are async using `sqlx`
-- Use prepared statements for performance and security
-- Wrap operations in transactions where appropriate
-- Handle connection errors gracefully
-- Test with real PostgreSQL instances using testcontainers
-
-### CLI Design Principles
-- Follow conventional CLI patterns with clap
-- Provide meaningful help text and examples
-- Support multiple output formats (JSON, YAML, CSV, table)
-- Use appropriate exit codes for success/failure
-- Include progress indicators for long-running operations
-
-### Testing Strategy
-- Unit tests for business logic
-- Integration tests for database operations
-- Use `testcontainers` for isolated PostgreSQL testing
-- Serial execution for database tests to avoid conflicts
-- Mock external dependencies where appropriate
-
-### Performance Considerations
-- Use connection pooling for production deployments
-- Leverage PostgreSQL's SKIP LOCKED for concurrent processing
-- Batch operations where possible to reduce database round trips
-- Monitor queue depth and processing latencies
-- Consider unlogged tables for high-throughput scenarios
-
-## Project Structure
-
-### Core Library (`src/`)
-```
-src/
-├── lib.rs           # Public API exports
-├── main.rs          # CLI entry point
-├── admin.rs         # Administrative operations
-├── queue.rs         # Queue operations
-├── config.rs        # Configuration management
-├── types.rs         # Data structures
-├── error.rs         # Error definitions
-├── constants.rs     # System constants
-└── output.rs        # CLI output formatting
-```
-
-### Testing (`tests/`)
-```
-tests/
-├── cli_tests.rs     # CLI integration tests
-├── lib_tests.rs     # Library integration tests
-└── common/          # Shared test utilities
-```
-
-### Benchmarking (`benchmark/`)
-```
-benchmark/
-├── docker-compose.yml  # Test environment
-├── locustfile.py      # Load testing scenarios
-├── init_tables.sql    # Benchmark schema
-├── run_benchmark.sh   # Automation script
-└── results/           # Performance data
-```
-
-## Important Implementation Notes
-
-### PostgreSQL Features
-- Uses `FOR UPDATE SKIP LOCKED` for concurrent queue processing
-- Leverages PostgreSQL's JSON/JSONB for flexible message payloads
-- Utilizes database transactions for atomicity
-- Takes advantage of PostgreSQL's NOTIFY/LISTEN for real-time updates
-
-### Queue Operations
-- Enqueue operations insert messages with visibility timeout
-- Dequeue operations use SKIP LOCKED to avoid contention
-- Batch operations optimize for throughput
-- Failed messages can be retried or moved to dead letter queues
-
-### CLI Commands
-- `install/uninstall` - Schema management
-- `queue create/delete/list` - Queue administration
-- `message send/list` - Message operations
-- `metrics` - Performance monitoring
-
-### Configuration
-- Database connections via DSN or individual parameters
-- Support for connection pooling and SSL
-- Environment-specific configuration files
-- Runtime configuration validation
-
-### Error Recovery
-- Automatic retry logic for transient failures
-- Dead letter queue support for failed messages
-- Graceful degradation on database connection issues
-- Comprehensive error logging and monitoring
-
 ## Contribution Guidelines
 
 ### Git Workflow
@@ -344,8 +58,114 @@ Always include:
 4. Add tests for new functionality
 5. Ensure CI passes before requesting review
 
-### Testing Best Practices
+### Git and GitHub Operations
+**IMPORTANT: Use command line tools only - no MCP git tools**
 
+**Note on Terminal Pager Workarounds:**
+Many git and gh commands use pagers (like `less`) which can interfere with terminal automation. Use these patterns to pipe output:
+
+**Basic Git Commands:**
+- `git status` - Check working directory status
+- `git add <file>` or `git add .` - Stage changes for commit
+- `git commit -m "message"` - Commit staged changes with message
+- `git push` - Push commits to remote repository
+- `git pull` - Pull latest changes from remote
+- `git log --oneline | cat` - View commit history (pipe to avoid pager)
+- `git log --oneline -10 | cat` - View last 10 commits
+- `git diff | cat` - View unstaged changes (pipe to avoid pager)
+- `git diff --cached | cat` - View staged changes (pipe to avoid pager)
+- `git branch | cat` - List branches
+- `git branch -r | cat` - List remote branches
+
+**GitHub CLI Commands with Pager Workarounds:**
+- `gh issue list | cat` - List issues without pager
+- `gh issue view <number> | cat` - View issue details
+- `gh pr list | cat` - List pull requests
+- `gh pr view <number> | cat` - View pull request details
+- `gh pr view <number> --comments | cat` - View PR comments
+- `gh api repos/owner/repo/pulls/number/comments | cat` - Get PR comments via API
+- `gh api repos/owner/repo/issues/number | cat` - Get issue details via API
+
+## Development Workflow
+
+### Development Workflow for New Architecture
+
+### Overview
+- Plan and create tasks. Review after every task completion.
+- Read all review comments carefully before making changes
+- Address each concern systematically:
+  - Resource lifecycle management (cleanup, deletion)
+  - API consistency and error handling
+  - Documentation and examples completeness
+- Add tests for any new functionality or bug fixes
+- Update documentation and examples when APIs change
+- Commit with descriptive messages explaining what feedback was addressed
+
+
+### Build
+- `cargo build` - Build the project
+- `cargo build --release` - Build optimized release version
+
+### Test
+- Check if there is a test Postgres container running.
+  - Login should be possible with DSN `postgresql://pgbench:pgbench@127.0.0.1:5432/pgbench`
+  - If there is a container, run tests by setting the env var `PGQRS_TEST_DSN=postgresql://pgbench:pgbench@127.0.0.1:5432/pgbench`
+- `cargo test` - Run all tests (unit + integration)
+- `cargo test --lib` - Run library tests only
+- `cargo test --bin pgqrs` - Run CLI tests only
+- `cargo test -- --test-threads=1` - Run tests sequentially (useful for database tests)
+
+### Database Testing
+- Tests use `testcontainers` for isolated PostgreSQL instances
+- Integration tests are in `tests/` directory
+- Use `RUST_LOG=debug` for detailed test output
+- Tests marked with `#[serial_test::serial]` run sequentially to avoid database conflicts
+
+### Code Quality and Linting
+- `cargo clippy` - Run Rust linter
+- `cargo clippy --all-targets --all-features` - Comprehensive linting
+- `cargo fmt` - Format code
+- `cargo fmt --check` - Check formatting without modifying files
+
+### Documentation and Generation
+- `cargo doc` - Generate documentation
+- `cargo doc --open` - Generate and open documentation in browser
+
+### CLI Development
+- `cargo run -- --help` - Show CLI help
+- `cargo run -- install` - Install pgqrs schema
+- `cargo run -- queue create test-queue` - Create a test queue
+- `cargo run -- message send --queue test-queue --payload '{"test": "data"}'` - Send test message
+
+### Benchmarking
+- `cd benchmark && docker-compose up -d` - Start benchmark environment
+- `cd benchmark && ./run_benchmark.sh 40 5 2m` - Run performance benchmarks
+- Results are stored in `benchmark/results/` directory
+
+## Development Guidelines
+
+### Code Style and Conventions
+- Follow standard Rust formatting (`cargo fmt`)
+- Use meaningful variable and function names
+- Document public APIs with doc comments
+- Prefer explicit error handling over unwrap/expect
+- Use structured logging with `tracing` crate
+
+### Database Interactions
+- All database operations are async using `sqlx`
+- Use prepared statements for performance and security
+- Wrap operations in transactions where appropriate
+- Handle connection errors gracefully
+- Test with real PostgreSQL instances using testcontainers
+
+### CLI Design Principles
+- Follow conventional CLI patterns with clap
+- Provide meaningful help text and examples
+- Support multiple output formats (JSON, YAML, CSV, table)
+- Use appropriate exit codes for success/failure
+- Include progress indicators for long-running operations
+
+### Testing Best Practices
 #### Test Categories
 1. **Unit Tests** (`#[cfg(test)]` in `src/` files)
    - Pure business logic
@@ -353,6 +173,7 @@ Always include:
    - Configuration parsing
 
 2. **Integration Tests** (`tests/` directory)
+   - Use `testcontainers` for isolated PostgreSQL testing
    - Database operations
    - CLI command execution
    - End-to-end workflows
@@ -375,39 +196,263 @@ Always include:
 - Use meaningful test data that reflects real-world scenarios
 - Avoid hardcoded values; use constants or generate test data programmatically
 
-### Handling PR Feedback and CI Issues
+## Code Architecture
 
-#### Common CI Failures and Fixes
-1. **Formatting Issues**
-   - Run `cargo fmt --all` to fix formatting violations
-   - CI uses rustfmt action which checks all files
-   - Ensure consistent formatting before pushing
+### High-Level Structure
+pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean Producer/Consumer architecture and unified table interface. The system provides both a library API and CLI tools with clear separation of concerns.
 
-2. **Clippy Warnings**
-   - Run `cargo clippy --all-targets --all-features` locally
-   - Address all warnings before pushing
-   - Some warnings can be allowed with `#[allow(clippy::lint_name)]` if justified
+**Core Components:**
+- `src/main.rs` - CLI entry point and command-line interface
+- `src/lib.rs` - Library entry point and public API exports
+- `src/admin.rs` - System administration (install, metrics, worker management)
+- `src/producer.rs` - Message creation, validation, and enqueue operations
+- `src/consumer.rs` - Message consumption, processing, and archive operations
+- `src/config.rs` - Configuration management and database connection setup
+- `src/types.rs` - Data structures and type definitions for all entities
+- `src/error.rs` - Error handling and custom error types
+- `src/constants.rs` - SQL queries and system constants
+- `src/validation.rs` - Message payload validation logic
+- `src/rate_limit.rs` - Rate limiting and token bucket implementation
 
-3. **Test Failures**
-   - Run `cargo test` locally before pushing
-   - Check database connectivity for integration test failures
-   - Use `RUST_LOG=debug` for detailed failure output
+**Table Interface (`src/tables/`):**
+- `src/tables/mod.rs` - Module exports and table trait definitions
+- `src/tables/table.rs` - Unified Table trait interface for CRUD operations
+- `src/tables/pgqrs_queues.rs` - Queue management and metadata operations
+- `src/tables/pgqrs_workers.rs` - Worker registration and health tracking
+- `src/tables/pgqrs_messages.rs` - Active message storage and operations
+- `src/tables/pgqrs_archive.rs` - Processed message archival and audit trails
 
-#### Addressing Review Feedback
-- Read all review comments carefully before making changes
-- Address each concern systematically:
-  - Resource lifecycle management (cleanup, deletion)
-  - API consistency and error handling
-  - Documentation and examples completeness
-- Add tests for any new functionality or bug fixes
-- Update documentation and examples when APIs change
-- Commit with descriptive messages explaining what feedback was addressed
+**CLI Components:**
+- `src/output.rs` - Output formatting (JSON, CSV, YAML, tables)
+- Subcommands organized by domain (install, queue, message, metrics, worker)
 
-#### Archive System Development Notes
-- Archive tables follow naming pattern: `archive_{queue_name}`
-- DELETE operations should handle both queue and archive tables
-- PURGE operations can be separate for queue vs archive
-- Always test table creation, deletion, and cleanup operations
-- Consider transaction rollback scenarios for multi-table operations
+**Testing:**
+- `tests/` - Integration tests using testcontainers for all components
+- `tests/common/` - Shared test utilities and helpers
+- Uses PostgreSQL testcontainers for isolated test environments
 
-````
+**Examples and Benchmarking:**
+- `examples/` - Usage examples for different API patterns
+- `benchmark/` - Performance testing suite with Docker Compose
+- `benchmark/locustfile.py` - Load testing scenarios for Producer/Consumer patterns
+
+### Architecture Patterns
+
+#### **Producer/Consumer Separation**
+1. **Producer Role**:
+   - Focused on message creation, validation, and rate limiting
+   - Queue-specific instances for type safety
+   - Built-in payload validation and size limits
+   - Rate limiting to prevent queue overload
+
+2. **Consumer Role**:
+   - Optimized for job fetching with automatic locking
+   - Message processing and completion tracking
+   - Archive operations for audit trails
+   - Batch operations for efficiency
+
+3. **Clear Boundaries**:
+   - Producers never read/consume messages
+   - Consumers never create new messages
+   - Independent scaling and deployment patterns
+
+#### **Unified Table Interface**
+1. **Table Trait**:
+   - Consistent CRUD operations across all tables
+   - Type-safe entity and NewEntity associations
+   - Unified counting and filtering methods
+   - Error handling with contextual messages
+
+2. **Four Core Tables**:
+   - `pgqrs_queues`: Queue definitions and metadata
+   - `pgqrs_workers`: Worker registrations with queue relationships
+   - `pgqrs_messages`: Active messages awaiting processing
+   - `pgqrs_archive`: Processed messages for compliance/audit
+
+3. **Foreign Key Relationships**:
+   - Workers linked to queues via `queue_id`
+   - Messages linked to queues via `queue_id`
+   - Archive entries linked to queues via `queue_id`
+   - Referential integrity enforced at database level
+
+### Key Design Patterns
+1. **PostgreSQL-Native**: Leverages PostgreSQL features like `SKIP LOCKED`, proper foreign keys, and transactions
+2. **Async/Await**: Built on tokio for async database operations across all components
+3. **Type Safety**: Strong typing for all entities with compile-time verification
+4. **Role-Based APIs**: Separate Producer and Consumer APIs prevent cross-concern contamination
+5. **Unified Data Model**: Single schema with proper relational design
+6. **Testcontainers**: Isolated testing with real PostgreSQL instances for all components
+
+### Configuration Management
+- `Config` struct handles database connection parameters and validation settings
+- Supports DSN (Data Source Name) format with schema specification
+- Environment variable support for containerized deployments
+- File-based configuration with YAML/JSON support
+- Rate limiting and payload validation configuration
+
+### Database Schema
+- **Unified schema** with four core tables and proper relationships
+- **Foreign key constraints** ensure data integrity across tables
+- **Indexed columns** for efficient querying and filtering
+- **Worker tracking** enables health monitoring and load balancing
+- **Archive system** provides audit trails and compliance support
+- Uses configurable schema namespace (default: 'public') to support multi-tenant deployments
+- SKIP LOCKED pattern for concurrent job processing without deadlocks
+- **IMPORTANT**: Schema must be pre-created before running `pgqrs install`
+
+### Schema Management (Security Update - GitHub Issue #21)
+**As of v0.2.1+, pgqrs uses PostgreSQL search_path instead of string replacement for schema handling:**
+
+1. **Secure Schema Handling**: Uses PostgreSQL's search_path feature instead of SQL string replacement to prevent injection
+2. **Schema Pre-creation Required**: The target schema must exist before running `pgqrs install`
+3. **Configuration Options**:
+   - CLI: `--schema my_schema`
+   - Environment: `PGQRS_SCHEMA=my_schema`
+   - Config file: `schema: "my_schema"`
+   - Programmatic: `Config::from_dsn_with_schema(dsn, "my_schema")`
+4. **Schema Validation**: Validates schema names according to PostgreSQL identifier rules
+5. **Test Isolation**: Each test suite uses isolated schemas for parallel execution
+6. **Backward Compatibility**: Defaults to 'public' schema if not specified
+
+### Error Handling
+- Custom `PgqrsError` enum for domain-specific errors
+- Integration with `anyhow` for error context
+- Database errors are properly wrapped and contextualized
+
+### Dependencies and External Systems
+
+#### Key Dependencies
+- `sqlx` - Database operations (async PostgreSQL driver with compile-time checked queries)
+- `tokio` - Async runtime providing the foundation for all async operations
+- `clap` - CLI argument parsing with derive macros for clean command definition
+- `testcontainers` - Integration testing with isolated Docker-based PostgreSQL instances
+- `serde` - JSON serialization/deserialization for message payloads and configuration
+- `anyhow` - Error handling with context and chaining capabilities
+- `tracing` - Structured logging and instrumentation
+- `uuid` - Message ID generation and queue identification
+
+#### PostgreSQL Version Compatibility
+- **Minimum**: PostgreSQL 13 (required for improved `SKIP LOCKED` performance and reliability)
+- **Tested**: PostgreSQL 13, 14, 15, 16
+
+#### External Integration Points
+- **Database Connection**: Supports connection strings, SSL, and connection pooling
+- **Container Orchestration**: Docker Compose for development and benchmarking environments
+- **CI/CD**: GitHub Actions compatibility for automated testing and deployment
+- **Monitoring**: Structured logging output compatible with log aggregation systems
+- **Configuration**: Environment variable and file-based configuration for deployment flexibility
+
+## Project Structure
+
+### Core Library (`src/`)
+```
+src/
+├── lib.rs              # Public API exports (Producer, Consumer, Admin, Table trait)
+├── main.rs             # CLI entry point with subcommands
+├── admin.rs            # System administration and cross-table operations
+├── producer.rs         # Message creation, validation, and enqueue operations
+├── consumer.rs         # Message consumption, processing, and completion
+├── config.rs           # Configuration management with validation settings
+├── types.rs            # Entity definitions (QueueInfo, WorkerInfo, QueueMessage, etc.)
+├── error.rs            # Custom error types and handling
+├── constants.rs        # SQL queries and database schema definitions
+├── validation.rs       # Message payload validation logic
+├── rate_limit.rs       # Token bucket rate limiting implementation
+└── output.rs           # CLI output formatting
+```
+
+### Table Interface (`src/tables/`)
+```
+src/tables/
+├── mod.rs              # Module exports and table trait re-exports
+├── table.rs            # Unified Table trait definition (CRUD + counting)
+├── pgqrs_queues.rs     # Queue management (NewQueue -> QueueInfo)
+├── pgqrs_workers.rs    # Worker registration (NewWorker -> WorkerInfo)
+├── pgqrs_messages.rs   # Message operations (NewMessage -> QueueMessage)
+└── pgqrs_archive.rs    # Archive operations (NewArchivedMessage -> ArchivedMessage)
+```
+
+### Testing (`tests/`)
+```
+tests/
+├── cli_tests.rs        # CLI integration tests for all subcommands
+├── lib_tests.rs        # Library integration tests (Producer/Consumer/Admin)
+├── default_schema_tests.rs  # Schema management and backward compatibility
+├── error_tests.rs      # Error handling and validation testing
+├── worker_tests.rs     # Worker registration and lifecycle testing
+├── lib_pgbouncer_tests.rs   # Connection pooler compatibility testing
+└── common/             # Shared test utilities and helpers
+```
+
+### Examples (`examples/`)
+```
+examples/
+├── basic_usage.rs      # Complete Producer/Consumer workflow example
+├── count_methods.rs    # Table trait interface demonstration
+└── (future examples)   # Advanced patterns and use cases
+```
+
+### Benchmarking (`benchmark/`)
+```
+benchmark/
+├── docker-compose.yml  # Test environment with PostgreSQL + monitoring
+├── locustfile.py      # Load testing scenarios for Producer/Consumer patterns
+├── init_tables.sql    # Benchmark schema with all four tables
+├── run_benchmark.sh   # Automation script for performance testing
+├── plot_section*.py   # Performance analysis and visualization scripts
+├── results/           # Performance data and analysis results
+└── scripts/           # Helper scripts for benchmark execution
+```
+
+### Additional Files
+```
+├── Cargo.toml         # Rust package configuration with feature flags
+├── README.md          # User-facing documentation with updated architecture
+├── CLAUDE.md          # Development guidelines and architecture (this file)
+└── crates/            # Future: separate crates for different components
+    └── pgqrs-server/  # Future: optional server component
+```
+
+### API Surface Organization
+
+#### **Public API Exports (`src/lib.rs`)**
+```rust
+// Core role-based APIs
+pub use crate::producer::Producer;
+pub use crate::consumer::Consumer;
+pub use crate::admin::PgqrsAdmin;
+
+// Table interface for advanced use cases
+pub use crate::tables::{Table, PgqrsQueues, PgqrsWorkers, PgqrsMessages, PgqrsArchiveTable};
+pub use crate::tables::{NewQueue, NewWorker, NewMessage}; // NewArchivedMessage available via types
+
+// Configuration and utilities
+pub use crate::config::Config;
+pub use crate::error::{PgqrsError, Result};
+pub use crate::types::{QueueInfo, WorkerInfo, QueueMessage, ArchivedMessage, WorkerStatus};
+```
+
+#### **CLI Command Structure**
+```
+pgqrs
+├── install          # Schema setup with all four tables
+├── uninstall        # Schema cleanup
+├── verify           # Installation verification
+├── queue            # Queue management commands
+│   ├── create       # Create new queues
+│   ├── list         # List all queues with metrics
+│   ├── delete       # Delete queues (with safety checks)
+│   ├── purge        # Remove all messages from queue
+│   └── metrics      # Detailed queue statistics
+├── message          # Message operations
+│   ├── send         # Create messages (Producer operations)
+│   ├── read         # View messages (Consumer preview)
+│   ├── dequeue      # Consume single message
+│   ├── delete       # Remove specific messages
+│   ├── count        # Message counts per queue
+│   └── show         # Message details (including archived)
+└── worker           # Worker management (future expansion)
+    ├── list         # Show registered workers
+    ├── health       # Worker health checks
+    └── purge        # Clean up stale worker registrations
+```

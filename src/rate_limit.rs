@@ -24,11 +24,12 @@
 //! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
-//! let queue = admin.create_queue("my_queue").await?;
+//! let queue_info = admin.create_queue("my_queue").await?;
+//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
 //!
 //! // Rate limiting is automatically applied
 //! for i in 0..200 {
-//!     match queue.enqueue(&serde_json::json!({"id": i})).await {
+//!     match producer.enqueue(&serde_json::json!({"id": i})).await {
 //!         Ok(_) => println!("Enqueued message {}", i),
 //!         Err(e) => println!("Rate limited: {}", e),
 //!     }
