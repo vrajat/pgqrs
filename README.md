@@ -872,6 +872,32 @@ All commands support global flags:
 - `--format <json|table>` — Output format
 - `--out <stdout|file>` — Output destination
 
+## Contributing
+
+### Development
+
+1. Clone the repository
+2. Run tests: `cargo test`
+3. Run with PostgreSQL: Set `PGQRS_TEST_DSN=postgresql://user:pass@localhost:5432/db`
+
+### Releases
+
+This project uses [release-plz](https://release-plz.dev/) for automated releases:
+
+- **Automatic releases**: When changes are merged to `main`, release-plz automatically:
+  - Updates the version in `Cargo.toml` based on conventional commits
+  - Updates the `CHANGELOG.md` 
+  - Creates a Git tag and GitHub release
+  - Publishes to [crates.io](https://crates.io) via trusted publishing
+
+- **Commit format**: Use [conventional commits](https://www.conventionalcommits.org/) for automatic version bumping:
+  - `feat:` for new features (minor version bump)
+  - `fix:` for bug fixes (patch version bump) 
+  - `feat!:` or `BREAKING CHANGE:` for breaking changes (major version bump)
+  - `docs:`, `refactor:`, `perf:`, etc. for other changes
+
+- **Manual releases**: Run the "Release-plz" workflow manually from the GitHub Actions tab
+
 ## License
 
 Licensed under either of:

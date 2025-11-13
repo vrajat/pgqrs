@@ -12,8 +12,9 @@ readme = "README.md"
 
 include = [
     "src/**",
-    "Cargo.toml",
+    "Cargo.toml", 
     "README.md",
+    "CHANGELOG.md",
 ]
 
 [[bin]]
