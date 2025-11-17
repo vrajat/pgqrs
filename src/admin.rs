@@ -322,7 +322,7 @@ impl PgqrsAdmin {
     /// * `name` - Name of the queue to create
     ///
     /// # Returns
-    /// The created [`Queue`] instance.
+    /// The created [`QueueInfo`] instance.
     pub async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
         // Create new queue data
         use crate::tables::NewQueue;
@@ -334,13 +334,13 @@ impl PgqrsAdmin {
         self.queues.insert(new_queue).await
     }
 
-    /// Get a [`Queue`] instance for a given queue name.
+    /// Get a [`QueueInfo`] instance for a given queue name.
     ///
     /// # Arguments
     /// * `name` - Name of the queue
     ///
     /// # Returns
-    /// [`Queue`] instance for the queue.
+    /// [`QueueInfo`] instance for the queue.
     pub async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
         // Get queue info to get the queue_id
         self.queues.get_by_name(name).await

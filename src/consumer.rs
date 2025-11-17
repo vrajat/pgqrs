@@ -1,17 +1,17 @@
 //! Consumer operations and consumer interface for pgqrs.
 //!
 //! This module defines the [`Consumer`] struct, which provides methods for dequeuing, and managing jobs in a PostgreSQL-backed queue.
-//! For message production, use the [`Producer`] struct.
+//! For message production, use the [`crate::producer::Producer`] struct.
 //!
 //! ## What
 //!
 //! - [`Consumer`] is the consumer interface for interacting with a queue: fetching jobs, updating visibility, archiving and deleting messages.
-//! - [`Producer`] handles message production and is defined in the `producer` module.
+//! - [`crate::producer::Producer`] handles message production and is defined in the `producer` module.
 //!
 //! ## How
 //!
 //! Create a [`Consumer`] using the admin API, then use its methods to process jobs.
-//! Create a [`Producer`] for enqueueing messages.
+//! Create a [`crate::producer::Producer`] for enqueueing messages.
 //!
 //! ### Example
 //!

@@ -11,38 +11,69 @@ on:
   workflow_dispatch:
 
 jobs:
-  release-plz:
-    name: Release-plz
+  # release-plz:
+  #   name: Release-plz
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - &checkout
+  #       name: Checkout repository
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
+  #
+  #     - &install
+  #       name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #
+  #     # Generating a GitHub token, so that PRs and tags created by
+  #     # the release-plz-action can trigger actions workflows.
+  #     - name: Generate GitHub token
+  #       uses: actions/create-github-app-token@v2
+  #       id: generate-token
+  #       with:
+  #           # GitHub App ID secret name
+  #           app-id: ${{ secrets.BOT_APP_ID }}
+  #           # GitHub App private key secret name
+  #           private-key: ${{ secrets.BOT_SECRET_KEY }}
+  #
+  #     # Authenticate with crates.io using OIDC (Trusted Publishing)
+  #     - name: Authenticate with crates.io (Trusted Publishing)
+  #       id: auth
+  #       uses: rust-lang/crates-io-auth-action@v1
+  #
+  #     - name: Run release-plz
+  #       uses: MarcoIeni/release-plz-action@v0.5
+  #       env:
+  #         GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+  #         CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  # Create a PR with the new versions and changelog, preparing the next release.
+  # If you want release-plz to only release your packages
+  # and you want to update `Cargo.toml` versions and changelogs by yourself,
+  # remove this job.
+  release-plz-pr:
+    name: Release-plz PR
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      # Used to create and update pull requests.
+      pull-requests: write
+      # Used to push to the pull request branch.
+      contents: write
+
+    # The concurrency block is explained below (after the code block).
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      # Generating a GitHub token, so that PRs and tags created by
-      # the release-plz-action can trigger actions workflows.
-      - name: Generate GitHub token
-        uses: actions/create-github-app-token@v2
-        id: generate-token
-        with:
-            # GitHub App ID secret name
-            app-id: ${{ secrets.BOT_APP_ID }}
-            # GitHub App private key secret name
-            private-key: ${{ secrets.BOT_SECRET_KEY }}
-
-      # Authenticate with crates.io using OIDC (Trusted Publishing)
-      - name: Authenticate with crates.io (Trusted Publishing)
-        id: auth
-        uses: rust-lang/crates-io-auth-action@v1
-
+      # Reuse previous steps via YAML anchors.
+      - *checkout
+      - *install-rust
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@v0.5
+        uses: release-plz/action@v0.5
+        with:
+          # Run `release-plz release-pr` command.
+          command: release-pr
         env:
-          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

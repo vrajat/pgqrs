@@ -6,7 +6,7 @@
 //!
 //! - [`QueueMessage`] represents a job/message in the queue.
 //! - [`QueueMetrics`] provides statistics about a queue.
-//! - [`MetaResult`] describes queue metadata from the database.
+//!
 //!
 //! ## How
 //!

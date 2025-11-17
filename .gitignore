@@ -1,5 +1,8 @@
 /target
+.cache
 .idea
 venv
+.venv
 .DS_Store
 results
+docs/api/
