@@ -1,0 +1,45 @@
+site_name: pgqrs Documentation
+site_description: Documentation for the pgqrs project
+site_author: vrajat
+repo_url: https://github.com/vrajat/pgqrs
+
+theme:
+  name: material
+  palette:
+
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Guides: guides.md
+  - Concepts: concepts.md
+  - Reference: reference.md
+  - Rust API: https://docs.rs/pgqrs/latest/pgqrs/
+  - Contributing: contributing.md
+plugins:
+  - search
+  - social
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format

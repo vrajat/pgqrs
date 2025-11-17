@@ -1,7 +1,6 @@
-
 # pgqrs
 
-A PostgreSQL-backed job queue for Rust applications.
+`pgqrs` is a library-only PostgreSQL-backed job queue for Rust applications.
 
 ## Features
 - **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust applications.
@@ -48,12 +47,3 @@ async fn poll_and_print_jobs(consumer: &Consumer, worker: &WorkerInfo) -> Result
 	}
 }
 ```
-
-## License
-
-Licensed under either of:
-
-- Apache License, Version 2.0
-- MIT license
-
-at your option.
