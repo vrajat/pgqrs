@@ -8,7 +8,7 @@ Thank you for your interest in contributing to pgqrs!
 2. Run tests: `cargo test`
 3. Run with PostgreSQL: Set `PGQRS_TEST_DSN=postgresql://user:pass@localhost:5432/db`
 
---
+---
 
 ## Building and Viewing Documentation (Development Mode)
 

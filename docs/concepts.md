@@ -2,7 +2,7 @@
 
 ## Architecture
 
-pgqrs is a distributed job queue system built around PostgreSQL with a clean separation of concerns. The architecture consists of Producer/Consumer roles and a unified table interface for reliable, scalable background job processing.
+pgqrs is a job queue library built around PostgreSQL with a clean separation of concerns. The architecture consists of Producer, Consumer and Admin roles. System metadata and queue items are stored in tables.
 
 ### System Overview
 
@@ -100,7 +100,7 @@ graph TB
 
 #### 2. **Producer Services - Message Creation**
 - **Your Rust applications** that create and enqueue jobs
-- **Dedicated Producer API** for message creation operations
+- **Producer API** for message creation operations
 - **Key operations**:
 	- `producer.enqueue(payload)` - Add single job to queue
 	- `producer.batch_enqueue(payloads)` - Add multiple jobs efficiently
@@ -111,7 +111,7 @@ graph TB
 
 #### 3. **Consumer Services - Message Processing**
 - **Your Rust applications** that process jobs from queues
-- **Dedicated Consumer API** for message consumption operations
+- **Consumer API** for message consumption operations
 - **Key operations**:
 	- `consumer.dequeue()` - Fetch single job with automatic locking
 	- `consumer.dequeue_batch(size)` - Fetch multiple jobs efficiently
@@ -122,7 +122,7 @@ graph TB
 - **Queue-specific instances** for focused processing
 
 #### 4. **Table APIs - Direct Data Access**
-- **Unified Table trait interface** for consistent CRUD operations
+- **Table trait interface** for consistent CRUD operations
 - **Four table implementations**:
 	- `PgqrsQueues`: Manage queue definitions (`insert`, `get`, `list`, `delete`)
 	- `PgqrsWorkers`: Manage worker registrations with queue relationships
@@ -156,26 +156,17 @@ graph TB
 - **Key commands**:
 	- `pgqrs install` - Set up database schema with all tables
 	- `pgqrs queue create <name>` - Create new queues
-	- `pgqrs message send <queue> <payload>` - Manual job creation
 	- `pgqrs queue metrics <name>` - Inspect queue health
-	- `pgqrs archive list <queue>` - View processed message history
 
 ### Data Flow
 
 1. **Job Creation**: Producer services use dedicated `Producer` instances to add jobs to the `pgqrs_messages` table
 2. **Worker Registration**: Worker services register with `pgqrs_workers` table linking to specific queues
 3. **Job Processing**: Consumer services use `Consumer` instances to fetch jobs with automatic locking
-4. **Job Completion**: Consumers mark jobs as completed by deleting from `pgqrs_messages`
-5. **Job Archiving**: Optionally, consumers use `archive()` to move completed jobs to `pgqrs_archive` table
+4. **Job Archiving**: Consumers mark jobs as completed by using `archive()` to move completed jobs to `pgqrs_archive`.
+5. **Job Deletion**: Optionally, consumers use `delete()` to delete jobs from `pgqrs_messages` table
 6. **System Monitoring**: Admin services query across all tables for metrics and health monitoring
 
-### Role Separation Benefits
-
-- **Producer Focus**: Dedicated to message creation, validation, and rate limiting
-- **Consumer Focus**: Optimized for job fetching, processing, and completion
-- **Clear Boundaries**: Producers never read jobs, Consumers never create jobs
-- **Independent Scaling**: Scale producers and consumers independently
-- **Type Safety**: Queue-specific instances prevent cross-queue contamination
 
 ### Scalability Patterns
 
@@ -192,31 +183,3 @@ graph TB
 - **Workers**: Deploy as separate services/containers, scale independently
 - **Producers**: Integrate pgqrs library into existing application services
 - **Admin/CLI**: Use for operational management and debugging
-
-### Architecture Benefits
-
-The current pgqrs architecture provides several key advantages:
-
-#### **Clean Separation of Concerns**
-- **Producers**: Focus solely on message creation, validation, and rate limiting
-- **Consumers**: Optimized for job fetching, processing, and completion tracking
-- **Admin**: System-wide management and monitoring operations
-- **Tables**: Direct database access for advanced use cases
-
-#### **Unified Data Model**
-- **Single schema** with four core tables linked by foreign keys
-- **Referential integrity** prevents orphaned records and data corruption
-- **Consistent interface** via Table trait across all database operations
-- **Predictable scaling** with clear table relationships
-
-#### **Type Safety & Performance**
-- **Queue-specific instances** prevent cross-queue contamination
-- **Compile-time verification** of message types and operations
-- **Optimized queries** with proper indexing and constraints
-- **Connection pooling** support for high-concurrency scenarios
-
-#### **Operational Excellence**
-- **Built-in monitoring** via metrics and admin APIs
-- **Archive system** for compliance and audit requirements
-- **Worker tracking** for health monitoring and load balancing
-- **CLI tools** for debugging and administrative tasks
