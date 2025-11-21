@@ -39,6 +39,11 @@ const DELETE_WORKER_BY_ID: &str = r#"
     WHERE id = $1
 "#;
 
+const DELETE_WORKERS_BY_QUEUE: &str = r#"
+    DELETE FROM pgqrs_workers
+    WHERE queue_id = $1
+"#;
+
 /// Input data for creating a new worker
 #[derive(Debug)]
 pub struct NewWorker {
@@ -173,11 +178,15 @@ impl Table for PgqrsWorkers {
     }
 
     /// Count workers by queue ID.
-    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+    async fn count_for_fk<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1";
         let row = sqlx::query_scalar(query)
             .bind(queue_id)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!("Failed to count workers for queue {}: {}", queue_id, e),
@@ -202,6 +211,29 @@ impl Table for PgqrsWorkers {
             })?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Delete workers by queue ID within a transaction.
+    ///
+    /// # Arguments
+    /// * `foreign_key_value` - Queue ID to filter by
+    /// * `tx` - Mutable reference to an active SQL transaction
+    /// # Returns
+    /// Number of rows affected
+    async fn delete_by_fk<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<u64> {
+        let rows_affected = sqlx::query(DELETE_WORKERS_BY_QUEUE)
+            .bind(queue_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to delete messages for queue {}: {}", queue_id, e),
+            })?
+            .rows_affected();
+        Ok(rows_affected)
     }
 }
 

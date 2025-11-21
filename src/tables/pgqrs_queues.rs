@@ -260,7 +260,11 @@ impl Table for PgqrsQueues {
     ///
     /// # Returns
     /// Always returns 0 (queues have no foreign key relationships)
-    async fn count_by_fk(&self, _foreign_key_value: i64) -> Result<i64> {
+    async fn count_for_fk<'a, 'b: 'a>(
+        &self,
+        _foreign_key_value: i64,
+        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
         // Queues don't have foreign keys, so this always returns 0
         Ok(0)
     }
@@ -283,6 +287,22 @@ impl Table for PgqrsQueues {
             .rows_affected();
 
         Ok(rows_affected)
+    }
+
+    /// Delete queues by foreign key within a transaction.
+    ///
+    /// # Arguments
+    /// * `_foreign_key_value` - Ignored (queues have no foreign keys)
+    /// * `tx` - Mutable reference to an active SQL transaction
+    /// # Returns
+    /// Always returns 0 (queues have no foreign key relationships)
+    async fn delete_by_fk<'a, 'b: 'a>(
+        &self,
+        _foreign_key_value: i64,
+        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<u64> {
+        // Queues don't have foreign keys, so this always returns 0
+        Ok(0)
     }
 }
 

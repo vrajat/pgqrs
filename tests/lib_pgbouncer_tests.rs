@@ -42,7 +42,7 @@ async fn test_pgbouncer_happy_path() {
     }
     let queue_info = queue_result.unwrap();
     let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info);
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Send a message through PgBouncer
     let test_message = json!({

@@ -35,9 +35,6 @@ use chrono::{Duration, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-// SQL query constants
-const DELETE_WORKER_BY_ID: &str = "DELETE FROM pgqrs_workers WHERE id = $1";
-
 // Verification queries
 const CHECK_TABLE_EXISTS: &str = r#"
     SELECT EXISTS (
@@ -74,6 +71,20 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
     WHERE a.worker_id IS NOT NULL AND w.id IS NULL
 "#;
 
+pub const DLQ_BATCH: &str = r#"
+    WITH archived_msgs AS (
+        DELETE FROM pgqrs_messages
+        WHERE read_ct >= $1
+        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msgs
+    RETURNING original_msg_id;
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 pub struct PgqrsAdmin {
@@ -81,6 +92,7 @@ pub struct PgqrsAdmin {
     pub config: Config,
     pub queues: PgqrsQueues,
     pub messages: PgqrsMessages,
+    pub archive: PgqrsArchive,
     pub workers: PgqrsWorkers,
 }
 
@@ -114,12 +126,14 @@ impl PgqrsAdmin {
         let workers = PgqrsWorkers::new(pool.clone());
         let queues = PgqrsQueues::new(pool.clone());
         let messages = PgqrsMessages::new(pool.clone());
+        let archive = PgqrsArchive::new(pool.clone());
 
         Ok(Self {
             pool,
             config: config.clone(),
             queues,
             messages,
+            archive,
             workers,
         })
     }
@@ -394,8 +408,8 @@ impl PgqrsAdmin {
         }
 
         // Check referential integrity using table methods
-        let messages_count = PgqrsMessages::count_for_queue_tx(queue_id, &mut tx).await?;
-        let archive_count = PgqrsArchive::count_for_queue_tx(queue_id, &mut tx).await?;
+        let messages_count = self.messages.count_for_fk(queue_id, &mut tx).await?;
+        let archive_count = self.archive.count_for_fk(queue_id, &mut tx).await?;
         let total_references = messages_count + archive_count;
 
         if total_references > 0 {
@@ -452,14 +466,9 @@ impl PgqrsAdmin {
             name: name.to_string(),
         })?;
 
-        // Purge all messages from the queue
-        sqlx::query(crate::constants::PURGE_QUEUE_MESSAGES_UNIFIED)
-            .bind(queue_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!("Failed to purge queue '{}': {}", name, e),
-            })?;
+        self.messages.delete_by_fk(queue_id, &mut tx).await?;
+        self.archive.delete_by_fk(queue_id, &mut tx).await?;
+        self.workers.delete_by_fk(queue_id, &mut tx).await?;
 
         tx.commit()
             .await
@@ -469,6 +478,18 @@ impl PgqrsAdmin {
 
         tracing::debug!("Successfully purged queue '{}'", name);
         Ok(())
+    }
+
+    pub async fn dlq(&self) -> Result<Vec<i64>> {
+        let result: Vec<i64> = sqlx::query_scalar(DLQ_BATCH)
+            .bind(self.config.max_read_ct)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to move messages to DLQ: {}", e),
+            })?;
+
+        Ok(result)
     }
 
     /// Get metrics for a specific queue.
@@ -798,16 +819,7 @@ impl PgqrsAdmin {
             });
         }
 
-        // Worker has no references, safe to delete
-        let result = sqlx::query(DELETE_WORKER_BY_ID)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(result.rows_affected())
+        self.workers.delete(worker_id).await
     }
 
     /// Get worker statistics

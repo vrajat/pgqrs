@@ -28,6 +28,22 @@ use crate::validation::PayloadValidator;
 use chrono::Utc;
 use sqlx::PgPool;
 
+/// SQL for replaying a message from the DLQ (archive) back to the active queue
+const REPLAY_FROM_DLQ: &str = r#"
+    WITH archived_msg AS (
+        DELETE FROM pgqrs_archive
+        WHERE id = $1
+          AND worker_id IS NULL
+          AND dequeued_at IS NULL
+        RETURNING original_msg_id, queue_id, payload, enqueued_at, vt, read_ct
+    )
+    INSERT INTO pgqrs_messages
+        (id, queue_id, payload, enqueued_at, vt, read_ct)
+    SELECT original_msg_id, queue_id, payload, enqueued_at, NOW(), read_ct
+    FROM archived_msg
+    RETURNING id, queue_id, payload, enqueued_at, vt, read_ct;
+"#;
+
 /// Producer interface for enqueueing messages to a specific queue.
 ///
 /// A Producer instance provides methods for adding messages to a queue,
@@ -212,6 +228,26 @@ impl Producer {
 
         let message = self.messages.insert(new_message).await?;
         Ok(message.id)
+    }
+
+    // --- DLQ (Dead Letter Queue) Support ---
+
+    /// Replay a failed message from the DLQ (archive) back to the active queue.
+    ///
+    /// # Arguments
+    /// * `archived_msg_id` - The ID of the archived message to replay
+    pub async fn replay_dlq(
+        &self,
+        archived_msg_id: i64,
+    ) -> crate::error::Result<Option<crate::types::QueueMessage>> {
+        let rec = sqlx::query_as(REPLAY_FROM_DLQ)
+            .bind(archived_msg_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to replay message from DLQ: {}", e),
+            })?;
+        Ok(rec)
     }
 
     pub fn validation_config(&self) -> &crate::validation::ValidationConfig {

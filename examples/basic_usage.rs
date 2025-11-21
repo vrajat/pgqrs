@@ -17,7 +17,7 @@
 
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
-use pgqrs::{Consumer, PgqrsArchive, Producer};
+use pgqrs::{Consumer, Producer};
 use serde_json::json;
 
 #[tokio::main]
@@ -62,13 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let email_queue_info = admin.get_queue("email_queue").await?;
     let task_queue_info = admin.get_queue("task_queue").await?;
-    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info);
-    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info);
+    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info, &admin.config);
+    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info, &admin.config);
     let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &admin.config);
     let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &admin.config);
-
-    let email_archive = PgqrsArchive::new(admin.pool.clone(), &email_queue_info);
-    let task_archive = PgqrsArchive::new(admin.pool.clone(), &task_queue_info);
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;
@@ -196,8 +193,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show archive counts
     println!("Archive counts:");
-    let email_archive_count = email_archive.count(None).await?;
-    let task_archive_count = task_archive.count(None).await?;
+    let email_archive_count = email_consumer.archived_count().await?;
+    let task_archive_count = task_consumer.archived_count().await?;
     println!("  email_consumer archived: {}", email_archive_count);
     println!("  task_consumer archived: {}", task_archive_count);
 
@@ -247,19 +244,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Archive Management Example ---");
 
     // Check archive counts before operations
-    let email_archive_count = email_archive.count(None).await?;
-    let task_archive_count = task_archive.count(None).await?;
+    let email_archive_count = email_consumer.archived_count().await?;
+    let task_archive_count = task_consumer.archived_count().await?;
     println!(
         "Archive counts - email: {}, task: {}",
         email_archive_count, task_archive_count
     );
-
-    if email_archive_count > 0 {
-        println!("Purging email queue archive...");
-        email_archive.delete(None).await?;
-        let new_count = email_archive.count(None).await?;
-        println!("Email archive count after purge: {}", new_count);
-    }
 
     // Note about queue deletion behavior
     println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");

@@ -211,7 +211,7 @@ fn test_cli_archive_functionality() {
     assert_eq!(archived_message.original_msg_id, dequeued_message.id);
 
     let archived_list: Vec<ArchivedMessage> =
-        run_cli_command_json(&db_url, &["archive", "list", queue_name]);
+        run_cli_command_json(&db_url, &["archive", "list", "--queue", queue_name]);
     assert!(
         archived_list.len() == 1,
         "Expected 1 archived message, found {}",
@@ -220,7 +220,5 @@ fn test_cli_archive_functionality() {
 
     // Clean up
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
-    run_cli_command_expect_success(&db_url, &["archive", "delete", queue_name]);
-    run_cli_command_expect_success(&db_url, &["worker", "delete", &worker_id.to_string()]);
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
