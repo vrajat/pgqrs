@@ -69,7 +69,7 @@ async fn test_send_message() {
         .await
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
         .register(
             TEST_QUEUE_SEND_MESSAGE.to_string(),
@@ -105,8 +105,8 @@ async fn test_archive_single_message() {
         .await
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
     let message = producer
@@ -117,7 +117,7 @@ async fn test_archive_single_message() {
 
     // Verify message is in active queue
     assert_eq!(consumer.pending_count().await.unwrap(), 1);
-    assert_eq!(archive.count(None).await.unwrap(), 0);
+    assert_eq!(consumer.archived_count().await.unwrap(), 0);
 
     // Archive the message
     let archived = consumer.archive(msg_id).await;
@@ -125,7 +125,7 @@ async fn test_archive_single_message() {
 
     // Verify message moved from active to archive
     assert_eq!(consumer.pending_count().await.unwrap(), 0);
-    assert_eq!(archive.count(None).await.unwrap(), 1);
+    assert_eq!(consumer.archived_count().await.unwrap(), 1);
 
     // Try to archive the same message again (should return false)
     let archived_again = consumer.archive(msg_id).await;
@@ -135,11 +135,6 @@ async fn test_archive_single_message() {
         "Archiving already-archived message should return false"
     );
 
-    // Cleanup - purge archive and messages before deleting queue
-    archive
-        .delete(None)
-        .await
-        .expect("Failed to clean up archive");
     admin
         .purge_queue(&queue_info.queue_name)
         .await
@@ -156,8 +151,7 @@ async fn test_archive_batch_messages() {
         .await
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -172,7 +166,7 @@ async fn test_archive_batch_messages() {
 
     // Verify messages are in active queue
     assert_eq!(consumer.pending_count().await.unwrap(), 5);
-    assert_eq!(archive.count(None).await.unwrap(), 0);
+    assert_eq!(consumer.archived_count().await.unwrap(), 0);
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
@@ -196,7 +190,7 @@ async fn test_archive_batch_messages() {
 
     // Verify counts after batch archive
     assert_eq!(consumer.pending_count().await.unwrap(), 2);
-    assert_eq!(archive.count(None).await.unwrap(), 3);
+    assert_eq!(consumer.archived_count().await.unwrap(), 3);
 
     // Try to archive empty batch (should return empty vec)
     let empty_archive = consumer.archive_batch(vec![]).await;
@@ -208,10 +202,6 @@ async fn test_archive_batch_messages() {
         .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
-    archive
-        .delete(None)
-        .await
-        .expect("Failed to clean up archive");
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -223,8 +213,7 @@ async fn test_archive_nonexistent_message() {
         .create_queue(TEST_QUEUE_NONEXISTENT)
         .await
         .expect("Failed to create queue");
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
     let archived = consumer.archive(fake_msg_id).await;
@@ -235,7 +224,7 @@ async fn test_archive_nonexistent_message() {
     );
 
     // Verify archive count remains zero
-    assert_eq!(archive.count(None).await.unwrap(), 0);
+    assert_eq!(consumer.archived_count().await.unwrap(), 0);
 
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
@@ -252,8 +241,7 @@ async fn test_purge_archive() {
         .await
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
 
     // Archive multiple messages
     for i in 0..3 {
@@ -270,13 +258,16 @@ async fn test_purge_archive() {
     }
 
     // Verify archive has 3 messages
-    assert_eq!(archive.count(None).await.unwrap(), 3);
+    assert_eq!(consumer.archived_count().await.unwrap(), 3);
 
     // Purge archive
-    assert!(archive.delete(None).await.is_ok());
+    admin
+        .purge_queue(&queue_info.queue_name)
+        .await
+        .expect("Failed to purge messages");
 
     // Verify archive is empty
-    assert_eq!(archive.count(None).await.unwrap(), 0);
+    assert_eq!(consumer.archived_count().await.unwrap(), 0);
 
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
@@ -358,7 +349,7 @@ async fn test_interval_parameter_syntax() {
     // Create queue
     let queue_info = admin.create_queue(queue_name).await.unwrap();
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
         .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
         .await
@@ -533,8 +524,7 @@ async fn test_queue_deletion_with_references() {
     // Create queue and add a message
     let queue_info = admin.create_queue(queue_name).await.unwrap();
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info);
-    let archive = PgqrsArchive::new(admin.pool.clone(), &queue_info);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
     let worker = admin
         .register(
             queue_name.to_string(),
@@ -584,7 +574,10 @@ async fn test_queue_deletion_with_references() {
     );
 
     // Purge archive and try again - should succeed
-    archive.delete(None).await.expect("Failed to purge archive");
+    admin
+        .purge_queue(&queue_name)
+        .await
+        .expect("Failed to purge messages");
     assert!(admin.delete_worker(worker.id).await.is_ok());
     let delete_result3 = admin.delete_queue(&queue_info).await;
     assert!(
@@ -843,4 +836,62 @@ async fn test_validation_accessor_methods() {
     assert_eq!(status.max_per_second, 100);
     assert_eq!(status.burst_capacity, 20);
     assert_eq!(status.available_tokens, 20); // Should start full
+}
+
+#[tokio::test]
+async fn test_dlq() {
+    const TEST_QUEUE_DLQ: &str = "test_dlq_queue";
+    let admin = create_admin().await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_DLQ)
+        .await
+        .expect("Failed to create queue");
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+
+    // Send a test message
+    let payload = json!({"task": "process_this"});
+    let message = producer
+        .enqueue(&payload)
+        .await
+        .expect("Failed to enqueue message");
+    let msg_id = message.id;
+
+    // Update read_ct out of band to simulate processing failure
+    sqlx::query("UPDATE pgqrs_messages SET read_ct = read_ct + 5 WHERE id = $1")
+        .bind(msg_id)
+        .execute(&admin.pool)
+        .await
+        .expect("Failed to update read_ct");
+
+    // Move the message to DLQ
+    let dlq_result = admin.dlq().await;
+    assert!(dlq_result.is_ok(), "Should move message to DLQ");
+    let dlq = dlq_result.unwrap();
+    assert!(dlq.len() == 1, "DLQ should contain one message");
+    assert!(dlq[0] == msg_id, "DLQ message ID should match original");
+
+    // Verify message is no longer in active queue and is in DLQ
+    assert_eq!(consumer.pending_count().await.unwrap(), 0);
+
+    let archive = PgqrsArchive::new(admin.pool.clone());
+    assert_eq!(
+        archive.dlq_count(admin.config.max_read_ct).await.unwrap(),
+        1
+    );
+
+    let dlq_messages = archive
+        .list_dlq_messages(admin.config.max_read_ct, 1, 0)
+        .await
+        .unwrap();
+    assert_eq!(dlq_messages.len(), 1, "Should list one DLQ message");
+    assert_eq!(
+        dlq_messages[0].original_msg_id, msg_id,
+        "DLQ message ID should match"
+    );
+    admin
+        .purge_queue(&queue_info.queue_name)
+        .await
+        .expect("Failed to purge messages");
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
 }

@@ -22,22 +22,32 @@
 //! ```
 
 // SQL query constants
+const LIST_DLQ_MESSAGES: &str = r#"
+    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
+           read_ct, archived_at, dequeued_at
+    FROM pgqrs_archive
+    WHERE read_ct >= $1  -- max_attempts
+      AND worker_id IS NULL
+      AND dequeued_at IS NULL
+    ORDER BY archived_at DESC
+    LIMIT $2 OFFSET $3;
+"#;
+
+const COUNT_DLQ_MESSAGES: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_archive
+    WHERE read_ct >= $1  -- max_attempts
+      AND worker_id IS NULL
+      AND dequeued_at IS NULL;
+"#;
+
 const ARCHIVE_LIST_WITH_WORKER: &str = r#"
 SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
        read_ct, archived_at, dequeued_at
 FROM pgqrs_archive
-WHERE queue_id = $1 AND worker_id = $2
+WHERE worker_id = $1
 ORDER BY archived_at DESC
 LIMIT $3 OFFSET $4
-"#;
-
-const ARCHIVE_LIST_QUEUE_ONLY: &str = r#"
-SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
-       read_ct, archived_at, dequeued_at
-FROM pgqrs_archive
-WHERE queue_id = $1
-ORDER BY archived_at DESC
-LIMIT $2 OFFSET $3
 "#;
 
 const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
@@ -46,36 +56,23 @@ FROM pgqrs_archive
 WHERE queue_id = $1 AND worker_id = $2
 "#;
 
-const ARCHIVE_COUNT_QUEUE_ONLY: &str = r#"
-SELECT COUNT(*)
-FROM pgqrs_archive
-WHERE queue_id = $1
-"#;
-
 const ARCHIVE_DELETE_WITH_WORKER: &str = r#"
 DELETE FROM pgqrs_archive
 WHERE queue_id = $1 AND worker_id = $2
 "#;
 
-const ARCHIVE_DELETE_QUEUE_ONLY: &str = r#"
-DELETE FROM pgqrs_archive
-WHERE queue_id = $1
-"#;
-
 use crate::error::Result;
 use crate::tables::table::Table;
-use crate::types::{ArchivedMessage, NewArchivedMessage, QueueInfo};
+use crate::types::{ArchivedMessage, NewArchivedMessage};
 use sqlx::PgPool;
 
-/// Archive management interface for pgqrs.
+/// Archive table CRUD operations for pgqrs.
 ///
-/// A PgqrsArchive instance provides methods for managing archived messages,
-/// including listing, counting, and deleting with optional filtering by worker.
+/// Provides pure CRUD operations on the `pgqrs_archive` table without business logic.
+/// This is separate from the queue-specific PgqrsArchive which provides higher-level operations.
+#[derive(Debug)]
 pub struct PgqrsArchive {
-    /// Connection pool for PostgreSQL
     pub pool: PgPool,
-    /// Database ID of the queue from pgqrs_queues table
-    pub queue_info: QueueInfo,
 }
 
 impl PgqrsArchive {
@@ -83,15 +80,50 @@ impl PgqrsArchive {
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
-    /// * `queue_info` - Information about the queue
-    pub fn new(pool: PgPool, queue_info: &QueueInfo) -> Self {
-        Self {
-            pool,
-            queue_info: queue_info.clone(),
-        }
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
-    /// List archived messages with optional filtering.
+    /// List messages that failed permanently (DLQ filter on archive)
+    ///
+    /// # Arguments
+    /// * `max_attempts` - The maximum number of allowed attempts before a message is considered failed
+    /// * `limit` - Maximum number of messages to return
+    /// * `offset` - Number of messages to skip
+    pub async fn list_dlq_messages(
+        &self,
+        max_attempts: i32,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchivedMessage>> {
+        let messages: Vec<ArchivedMessage> = sqlx::query_as(LIST_DLQ_MESSAGES)
+            .bind(max_attempts)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to list DLQ messages: {}", e),
+            })?;
+        Ok(messages)
+    }
+
+    /// Count messages in DLQ (failed messages in archive)
+    ///
+    /// # Arguments
+    /// * `max_attempts` - The maximum number of allowed attempts before a message is considered failed
+    pub async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(COUNT_DLQ_MESSAGES)
+            .bind(max_attempts)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!("Failed to count DLQ messages: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    /// List archived messages for a worker.
     ///
     /// # Arguments
     /// * `worker_id` - Optional worker ID filter
@@ -100,34 +132,18 @@ impl PgqrsArchive {
     ///
     /// # Returns
     /// Vector of archived messages
-    pub async fn list(
+    pub async fn list_by_worker(
         &self,
-        worker_id: Option<i64>,
+        worker_id: i64,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
-        let messages: Vec<ArchivedMessage> = match worker_id {
-            Some(w) => {
-                sqlx::query_as(ARCHIVE_LIST_WITH_WORKER)
-                    .bind(self.queue_info.id)
-                    .bind(w)
-                    .bind(limit)
-                    .bind(offset)
-                    .fetch_all(&self.pool)
-                    .await
-            }
-            None => {
-                sqlx::query_as(ARCHIVE_LIST_QUEUE_ONLY)
-                    .bind(self.queue_info.id)
-                    .bind(limit)
-                    .bind(offset)
-                    .fetch_all(&self.pool)
-                    .await
-            }
-        }
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: format!("Failed to list archived messages: {}", e),
-        })?;
+        let messages = sqlx::query_as(ARCHIVE_LIST_WITH_WORKER)
+            .bind(worker_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(messages)
     }
@@ -139,26 +155,17 @@ impl PgqrsArchive {
     ///
     /// # Returns
     /// Count of archived messages matching the criteria
-    pub async fn count(&self, worker_id: Option<i64>) -> Result<i64> {
-        let count: i64 = match worker_id {
-            Some(w) => {
-                sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
-                    .bind(self.queue_info.id)
-                    .bind(w)
-                    .fetch_one(&self.pool)
-                    .await
-            }
-            None => {
-                sqlx::query_scalar(ARCHIVE_COUNT_QUEUE_ONLY)
-                    .bind(self.queue_info.id)
-                    .fetch_one(&self.pool)
-                    .await
-            }
-        }
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: format!("Failed to count archived messages: {}", e),
-        })?;
-
+    pub async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!(
+                    "Failed to count archived messages for worker {}: {}",
+                    worker_id, e
+                ),
+            })?;
         Ok(count)
     }
 
@@ -169,59 +176,16 @@ impl PgqrsArchive {
     ///
     /// # Returns
     /// Number of archived messages deleted
-    pub async fn delete(&self, worker_id: Option<i64>) -> Result<u64> {
-        let result = match worker_id {
-            Some(w) => {
-                sqlx::query(ARCHIVE_DELETE_WITH_WORKER)
-                    .bind(self.queue_info.id)
-                    .bind(w)
-                    .execute(&self.pool)
-                    .await
-            }
-            None => {
-                sqlx::query(ARCHIVE_DELETE_QUEUE_ONLY)
-                    .bind(self.queue_info.id)
-                    .execute(&self.pool)
-                    .await
-            }
-        }
-        .map_err(|e| crate::error::PgqrsError::Connection {
-            message: format!("Failed to delete archived messages: {}", e),
-        })?;
-
-        Ok(result.rows_affected())
-    }
-
-    /// Count all archived messages for a queue using a transaction.
-    ///
-    /// # Arguments
-    /// * `queue_id` - Queue ID to count archived messages for
-    /// * `tx` - Database transaction
-    ///
-    /// # Returns
-    /// Number of archived messages for the queue
-    pub async fn count_for_queue_tx<'a, 'b: 'a>(
-        queue_id: i64,
-        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<i64> {
-        const COUNT_ARCHIVE_FOR_QUEUE: &str = r#"
-            SELECT COUNT(*)
-            FROM pgqrs_archive
-            WHERE queue_id = $1
-        "#;
-
-        let count: i64 = sqlx::query_scalar(COUNT_ARCHIVE_FOR_QUEUE)
-            .bind(queue_id)
-            .fetch_one(&mut **tx)
+    pub async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
+        let result = sqlx::query(ARCHIVE_DELETE_WITH_WORKER)
+            .bind(worker_id)
+            .execute(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
-                message: format!(
-                    "Failed to count archived messages for queue {}: {}",
-                    queue_id, e
-                ),
+                message: format!("Failed to delete archived messages: {}", e),
             })?;
 
-        Ok(count)
+        Ok(result.rows_affected())
     }
 }
 
@@ -256,26 +220,12 @@ const DELETE_ARCHIVE_BY_ID: &str = r#"
     WHERE id = $1
 "#;
 
-/// Archive table CRUD operations for pgqrs.
-///
-/// Provides pure CRUD operations on the `pgqrs_archive` table without business logic.
-/// This is separate from the queue-specific PgqrsArchive which provides higher-level operations.
-#[derive(Debug)]
-pub struct PgqrsArchiveTable {
-    pub pool: PgPool,
-}
+const ARCHIVE_PURGE_QUEUE: &str = r#"
+    DELETE FROM pgqrs_archive
+    WHERE queue_id = $1
+"#;
 
-impl PgqrsArchiveTable {
-    /// Create a new PgqrsArchiveTable instance.
-    ///
-    /// # Arguments
-    /// * `pool` - Database connection pool
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-impl Table for PgqrsArchiveTable {
+impl Table for PgqrsArchive {
     type Entity = ArchivedMessage;
     type NewEntity = NewArchivedMessage;
 
@@ -398,11 +348,15 @@ impl Table for PgqrsArchiveTable {
     ///
     /// # Returns
     /// Number of archived messages in the specified queue
-    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+    async fn count_for_fk<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1";
         let count = sqlx::query_scalar(query)
             .bind(queue_id)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {
                 message: format!(
@@ -430,6 +384,32 @@ impl Table for PgqrsArchiveTable {
             })?
             .rows_affected();
 
+        Ok(rows_affected)
+    }
+
+    /// Delete archived messages by queue ID within a transaction.
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue ID to delete archived messages for
+    /// * `tx` - Mutable reference to an active SQL transaction
+    /// # Returns
+    /// Number of rows affected
+    async fn delete_by_fk<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<u64> {
+        let rows_affected = sqlx::query(ARCHIVE_PURGE_QUEUE)
+            .bind(queue_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| crate::error::PgqrsError::Connection {
+                message: format!(
+                    "Failed to delete archived messages for queue {}: {}",
+                    queue_id, e
+                ),
+            })?
+            .rows_affected();
         Ok(rows_affected)
     }
 }
@@ -465,7 +445,7 @@ mod tests {
         // This test ensures the type associations work correctly
         // We can't use dyn Table because async traits aren't object-safe,
         // but we can verify the types compile correctly
-        let _type_check = |table: PgqrsArchiveTable| {
+        let _type_check = |table: PgqrsArchive| {
             // Verify the associated types are correct
             let _entity_check: Option<ArchivedMessage> = None;
             let _new_entity_check: Option<NewArchivedMessage> = None;
@@ -474,7 +454,7 @@ mod tests {
 
         // Just verify we can construct the types
         assert_eq!(
-            std::mem::size_of::<PgqrsArchiveTable>(),
+            std::mem::size_of::<PgqrsArchive>(),
             std::mem::size_of::<PgPool>()
         );
     }

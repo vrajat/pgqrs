@@ -106,6 +106,7 @@ const ENV_DEFAULT_BATCH_SIZE: &str = "PGQRS_DEFAULT_BATCH_SIZE";
 const ENV_CONFIG_FILE: &str = "PGQRS_CONFIG_FILE";
 const ENV_SCHEMA: &str = "PGQRS_SCHEMA";
 const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
+const ENV_MAX_READ_CT: &str = "PGQRS_MAX_READ_CT";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -113,6 +114,7 @@ const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_LOCK_TIME_SECONDS: u32 = 5;
 const DEFAULT_BATCH_SIZE: usize = 100;
 const DEFAULT_SCHEMA: &str = "public";
+const DEFAULT_MAX_READ_CT: i32 = 5;
 
 /// Configuration for pgqrs
 ///
@@ -138,6 +140,9 @@ pub struct Config {
     /// Maximum number of jobs to fetch in a single batch
     #[serde(default = "default_max_batch_size")]
     pub default_max_batch_size: usize,
+    /// Maximum read count for messages before moving to dead-letter queue
+    #[serde(default = "default_max_read_ct")]
+    pub max_read_ct: i32,
     /// Validation configuration for payload checking and rate limiting
     #[serde(default)]
     pub validation_config: crate::validation::ValidationConfig,
@@ -164,6 +169,10 @@ fn default_schema() -> String {
     DEFAULT_SCHEMA.to_string()
 }
 
+fn default_max_read_ct() -> i32 {
+    DEFAULT_MAX_READ_CT
+}
+
 impl Config {
     /// Create a new Config with the provided DSN and default values for other fields.
     ///
@@ -187,6 +196,7 @@ impl Config {
             connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
+            max_read_ct: DEFAULT_MAX_READ_CT,
             validation_config: Default::default(),
         }
     }
@@ -228,6 +238,7 @@ impl Config {
             connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
+            max_read_ct: DEFAULT_MAX_READ_CT,
             validation_config: Default::default(),
         })
     }
@@ -291,6 +302,11 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_BATCH_SIZE);
 
+        let max_read_ct = env::var(ENV_MAX_READ_CT)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MAX_READ_CT);
+
         // Parse validation config from environment (JSON format)
         let validation_config = env::var(ENV_VALIDATION_CONFIG)
             .ok()
@@ -304,6 +320,7 @@ impl Config {
             connection_timeout_seconds,
             default_lock_time_seconds,
             default_max_batch_size,
+            max_read_ct,
             validation_config,
         })
     }

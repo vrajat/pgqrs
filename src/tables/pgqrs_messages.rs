@@ -224,35 +224,6 @@ impl PgqrsMessages {
         Ok(count)
     }
 
-    /// Count all messages for a queue using a transaction.
-    ///
-    /// # Arguments
-    /// * `tx` - Database transaction
-    /// * `queue_id` - Queue ID to count messages for
-    ///
-    /// # Returns
-    /// Number of messages for the queue
-    pub async fn count_for_queue_tx<'a, 'b: 'a>(
-        queue_id: i64,
-        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<i64> {
-        const COUNT_MESSAGES_FOR_QUEUE: &str = r#"
-            SELECT COUNT(*)
-            FROM pgqrs_messages
-            WHERE queue_id = $1
-        "#;
-
-        let count: i64 = sqlx::query_scalar(COUNT_MESSAGES_FOR_QUEUE)
-            .bind(queue_id)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to count messages for queue {}: {}", queue_id, e),
-            })?;
-
-        Ok(count)
-    }
-
     /// Delete multiple messages by IDs.
     ///
     /// # Arguments
@@ -385,14 +356,21 @@ impl Table for PgqrsMessages {
     ///
     /// # Returns
     /// Number of messages in the specified queue
-    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+    async fn count_for_fk<'a, 'b: 'a>(
+        &self,
+        foreign_key_value: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1";
         let count = sqlx::query_scalar(query)
-            .bind(queue_id)
-            .fetch_one(&self.pool)
+            .bind(foreign_key_value)
+            .fetch_one(&mut **tx)
             .await
             .map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to count messages for queue {}: {}", queue_id, e),
+                message: format!(
+                    "Failed to count messages for queue {}: {}",
+                    foreign_key_value, e
+                ),
             })?;
         Ok(count)
     }
@@ -411,6 +389,38 @@ impl Table for PgqrsMessages {
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!("Failed to delete message {}: {}", id, e),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
+    }
+
+    /// Delete messages by queue ID within a transaction.
+    ///
+    /// # Arguments
+    /// * `foreign_key_value` - Queue ID to delete messages for
+    /// * `tx` - Mutable reference to an active SQL transaction
+    /// # Returns
+    /// Number of rows affected
+    async fn delete_by_fk<'a, 'b: 'a>(
+        &self,
+        foreign_key_value: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<u64> {
+        const DELETE_MESSAGES_BY_QUEUE_ID: &str = r#"
+            DELETE FROM pgqrs_messages
+            WHERE queue_id = $1;
+        "#;
+
+        let rows_affected = sqlx::query(DELETE_MESSAGES_BY_QUEUE_ID)
+            .bind(foreign_key_value)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to delete messages for queue {}: {}",
+                    foreign_key_value, e
+                ),
             })?
             .rows_affected();
 

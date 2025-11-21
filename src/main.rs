@@ -174,6 +174,13 @@ enum MessageCommands {
         /// Message ID to show
         id: i64,
     },
+    /// Replay a message from the DLQ (archive) back to the active queue
+    ReplayDlq {
+        /// Name of the queue
+        queue: String,
+        /// Archived message ID to replay
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -245,24 +252,9 @@ enum WorkerCommands {
 enum ArchiveCommands {
     /// List archived messages
     List {
-        queue: String,
-        /// Filter by worker ID
-        #[arg(long, short = 'w')]
-        worker: Option<i64>,
-    },
-    /// Delete archived messages
-    Delete {
-        queue: String,
-        /// Filter by worker ID
-        #[arg(long, short = 'w')]
-        worker: Option<i64>,
-    },
-    /// Count archived messages
-    Count {
-        queue: String,
-        /// Filter by worker ID
-        #[arg(long, short = 'w')]
-        worker: Option<i64>,
+        /// Name of the queue to filter by
+        #[arg(long, short = 'q')]
+        queue: Option<String>,
     },
 }
 
@@ -528,7 +520,7 @@ async fn handle_message_commands(
             lock_time,
         } => {
             let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue);
+            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
             let worker_info = admin.get_worker_by_id(worker).await?;
             tracing::info!(
                 "Dequeue message from queue '{}', worker: {})...",
@@ -544,7 +536,7 @@ async fn handle_message_commands(
         }
         MessageCommands::Archive { queue, id } => {
             let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue);
+            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
             tracing::info!("Archiving message {} from queue '{}'...", id, queue);
             let archived_message = consumer.archive(id).await?;
             tracing::info!("Message archived successfully");
@@ -553,7 +545,7 @@ async fn handle_message_commands(
         }
         MessageCommands::Delete { queue, id } => {
             let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue);
+            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
             let msg_id = id.parse::<i64>()?;
             tracing::info!("Deleting message {} from queue '{}'...", msg_id, queue);
             let deleted = consumer.delete_many(vec![msg_id]).await?;
@@ -566,7 +558,7 @@ async fn handle_message_commands(
         }
         MessageCommands::Count { queue } => {
             let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue);
+            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
             tracing::info!("Getting pending message count for queue '{}'...", queue);
             let count = consumer.pending_count().await?;
             tracing::info!("Pending messages: {}", count);
@@ -575,10 +567,30 @@ async fn handle_message_commands(
 
         MessageCommands::Get { queue, id } => {
             let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue);
+            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
             tracing::debug!("Retrieving message {} from queue '{}'...", id, queue);
             let message = consumer.get_message_by_id(id).await?;
             writer.write_item(&message, out)?;
+            Ok(())
+        }
+
+        MessageCommands::ReplayDlq { queue, id } => {
+            let queue_info = admin.get_queue(&queue).await?;
+            let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+            tracing::info!(
+                "Replaying archived message {} from DLQ for queue '{}'...",
+                id,
+                queue
+            );
+            let replayed = producer.replay_dlq(id).await?;
+            if let Some(msg) = replayed {
+                tracing::info!("Message replayed successfully: id {}", msg.id);
+                writer.write_item(&msg, out)?;
+            } else {
+                tracing::info!(
+                    "No message found to replay (may not be in DLQ or already replayed)"
+                );
+            }
             Ok(())
         }
     }
@@ -768,40 +780,22 @@ async fn handle_archive_commands(
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match action {
-        ArchiveCommands::List { queue, worker } => {
+        ArchiveCommands::List { queue } => {
             // Get the queue object to obtain queue_id
-            let consumer = admin.get_queue(&queue).await?;
-            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
+            let archive = PgqrsArchive::new(admin.pool.clone());
 
-            tracing::info!("Listing archived messages for queue '{}'...", queue);
-            let messages = archive.list(worker, 100, 0).await?;
+            let messages = match queue {
+                Some(queue) => {
+                    tracing::info!("Listing archived messages for queue '{:?}'...", queue);
+                    let queue_obj = admin.queues.get_by_name(&queue).await?;
+                    tracing::info!("Filtering by queue name: {}", queue);
+                    archive.filter_by_fk(queue_obj.id).await?
+                }
+                None => archive.list().await?,
+            };
             tracing::info!("Found {} archived messages", messages.len());
             writer.write_list(&messages, out)?;
 
-            Ok(())
-        }
-
-        ArchiveCommands::Delete { queue, worker } => {
-            // Get the queue object to obtain queue_id
-            let consumer = admin.get_queue(&queue).await?;
-            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
-
-            tracing::info!("Deleting archived messages for queue '{}'...", queue);
-            let deleted_count = archive.delete(worker).await?;
-
-            writeln!(out, "Deleted {} archived messages", deleted_count)?;
-            Ok(())
-        }
-
-        ArchiveCommands::Count { queue, worker } => {
-            // Get the queue object to obtain queue_id
-            let consumer = admin.get_queue(&queue).await?;
-            let archive = PgqrsArchive::new(admin.pool.clone(), &consumer);
-
-            tracing::info!("Counting archived messages for queue '{}'...", queue);
-            let count = archive.count(worker).await?;
-
-            writeln!(out, "Archived messages: {}", count)?;
             Ok(())
         }
     }

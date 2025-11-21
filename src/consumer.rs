@@ -23,14 +23,29 @@
 //! // producer.enqueue(...)
 //! // consumer.dequeue(...)
 //! ```
-use crate::constants::{
-    ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, DEQUEUE_MESSAGES, VISIBILITY_TIMEOUT,
-};
+use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
 use crate::error::Result;
-use crate::tables::{PgqrsMessages, Table};
+use crate::tables::{PgqrsArchive, PgqrsMessages, Table};
 use crate::types::{ArchivedMessage, QueueMessage};
 use crate::WorkerInfo;
 use sqlx::PgPool;
+
+/// Read available messages from queue (with SKIP LOCKED)
+/// Select messages for worker with lock
+pub const DEQUEUE_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages t
+    SET worker_id = $5, vt = NOW() + make_interval(secs => $4::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
+    FROM (
+        SELECT id
+        FROM pgqrs_messages
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL AND read_ct < $3
+        ORDER BY id ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    ) selected
+    WHERE t.id = selected.id
+    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
+"#;
 
 /// Consumer interface for a specific queue.
 ///
@@ -45,6 +60,10 @@ pub struct Consumer {
     queue_info: crate::types::QueueInfo,
     /// Messages table operations
     messages: PgqrsMessages,
+    /// Archive table operations
+    archive: PgqrsArchive,
+    /// Configuration for the queue
+    config: crate::config::Config,
 }
 
 impl Consumer {
@@ -56,12 +75,20 @@ impl Consumer {
     /// # Arguments
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
-    pub fn new(pool: PgPool, queue_info: &crate::types::QueueInfo) -> Self {
+    /// * `config` - Configuration for the queue
+    pub fn new(
+        pool: PgPool,
+        queue_info: &crate::types::QueueInfo,
+        config: &crate::config::Config,
+    ) -> Self {
         let messages = PgqrsMessages::new(pool.clone());
+        let archive = PgqrsArchive::new(pool.clone());
         Self {
             pool,
             queue_info: queue_info.clone(),
             messages,
+            archive,
+            config: config.clone(),
         }
     }
 
@@ -127,6 +154,7 @@ impl Consumer {
         let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(self.queue_info.id)
             .bind(limit as i64)
+            .bind(self.config.max_read_ct)
             .bind(vt as i32)
             .bind(worker.id) // worker_id
             .fetch_all(&self.pool)
@@ -226,5 +254,30 @@ impl Consumer {
             .map(|id| archived_set.contains(&id))
             .collect();
         Ok(result)
+    }
+
+    /// Retrieve a message from the archive by its ID.
+    ///
+    /// This is useful for consumers to fetch specific archived messages.
+    ///
+    /// # Arguments
+    /// * `archived_msg_id` - ID of the archived message to retrieve
+    ///
+    /// # Returns
+    /// The archived message if found, or an error if not found.
+    pub async fn get_archived_message_by_id(
+        &self,
+        archived_msg_id: i64,
+    ) -> Result<ArchivedMessage> {
+        self.archive.get(archived_msg_id).await
+    }
+
+    /// Get the count of archived messages in the archive.
+    ///
+    /// # Returns
+    /// Number of archived messages.
+    pub async fn archived_count(&self) -> Result<i64> {
+        let txn = &mut self.pool.begin().await?;
+        self.archive.count_for_fk(self.queue_info.id, txn).await
     }
 }

@@ -28,23 +28,6 @@ pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
 // Parameterized SQL for unified pgqrs_messages table operations
 // Note: Basic CRUD operations moved to tables/pgqrs_messages.rs
 
-/// Read available messages from queue (with SKIP LOCKED)
-/// Select messages for worker with lock
-pub const DEQUEUE_MESSAGES: &str = r#"
-    UPDATE pgqrs_messages t
-    SET worker_id = $4, vt = NOW() + make_interval(secs => $3::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
-    FROM (
-        SELECT id
-        FROM pgqrs_messages
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL
-        ORDER BY id ASC
-        LIMIT $2
-        FOR UPDATE SKIP LOCKED
-    ) selected
-    WHERE t.id = selected.id
-    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
-"#;
-
 /// Get count of pending messages in queue
 // Note: Moved to tables/pgqrs_messages.rs as count_pending()
 
@@ -56,12 +39,6 @@ pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages
     WHERE id = ANY($1)
     RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct;
-"#;
-
-/// Purge all messages from a specific queue
-pub const PURGE_QUEUE_MESSAGES_UNIFIED: &str = r#"
-    DELETE FROM pgqrs_messages
-    WHERE queue_id = $1;
 "#;
 
 // Parameterized SQL for unified pgqrs_archive table operations
