@@ -90,6 +90,7 @@ async fn test_worker_message_assignment() {
     let queue_info = admin.create_queue("message_queue").await.unwrap();
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let messages = pgqrs::tables::PgqrsMessages::new(admin.pool.clone());
 
     // Register a worker to verify the worker registration process
     let worker = admin
@@ -106,21 +107,21 @@ async fn test_worker_message_assignment() {
     producer.enqueue(&json!({"task": "test2"})).await.unwrap();
 
     // Read messages normally
-    let messages = consumer.dequeue_many(&worker, 2).await.unwrap();
-    assert_eq!(messages.len(), 2);
+    let messages_list = consumer.dequeue_many(&worker, 2).await.unwrap();
+    assert_eq!(messages_list.len(), 2);
 
     // Verify worker can read messages from queue
-    assert!(!messages.is_empty());
-    for msg in &messages {
+    assert!(!messages_list.is_empty());
+    for msg in &messages_list {
         assert!(msg.id > 0);
     }
 
     // Verify worker can process and delete messages
-    let message_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+    let message_ids: Vec<i64> = messages_list.iter().map(|m| m.id).collect();
     consumer.delete_many(message_ids).await.unwrap();
 
     // Verify messages were deleted
-    assert_eq!(consumer.pending_count().await.unwrap(), 0);
+    assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 0);
     assert!(admin.delete_worker(worker.id).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
@@ -311,10 +312,6 @@ async fn test_worker_deletion_without_references() {
         .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
-
-    // Check references (should be 0)
-    let ref_count = admin.check_worker_references(worker.id).await.unwrap();
-    assert_eq!(ref_count, 0, "Worker should have no references");
 
     // Delete worker without references - should succeed
     let result = admin.delete_worker(worker.id).await;

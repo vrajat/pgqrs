@@ -53,7 +53,10 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 
 mod common;
 
-use pgqrs::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo};
+use pgqrs::{
+    types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo},
+    Consumer, Producer, Table,
+};
 use serde::de::DeserializeOwned;
 use std::process::Command;
 use tokio::runtime::Runtime;
@@ -103,9 +106,22 @@ fn test_cli_create_send_dequeue_delete_queue() {
     let created_queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "create", queue_name]);
     assert_eq!(created_queue.queue_name, queue_name);
 
+    let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").unwrap();
+
     // Send message
-    let sent_message: QueueMessage =
-        run_cli_command_json(&db_url, &["message", "enqueue", queue_name, payload]);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let sent_message: QueueMessage = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let producer = Producer::new(
+            pgqrs_admin.pool.clone(),
+            &created_queue,
+            &pgqrs_admin.config,
+        );
+        producer
+            .enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
+            .await
+            .unwrap()
+    });
     assert_eq!(
         sent_message.payload,
         serde_json::from_str::<serde_json::Value>(payload).unwrap()
@@ -116,7 +132,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
         &db_url,
         &[
             "worker",
-            "create",
+            "register",
             queue_name,
             "test_cli_create_send_dequeue_delete_host",
             "8080",
@@ -125,10 +141,16 @@ fn test_cli_create_send_dequeue_delete_queue() {
     let worker_id = created_worker.id;
 
     // Dequeue message
-    let dequeued_messages: Vec<QueueMessage> = run_cli_command_json(
-        &db_url,
-        &["message", "dequeue", queue_name, &worker_id.to_string()],
-    );
+    let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let consumer = Consumer::new(
+            pgqrs_admin.pool.clone(),
+            &created_queue,
+            &pgqrs_admin.config,
+        );
+        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
+        consumer.dequeue(&worker).await.unwrap()
+    });
     assert!(
         dequeued_messages.len() == 1,
         "Expected 1 dequeued message, found {}",
@@ -157,12 +179,14 @@ fn test_cli_archive_functionality() {
     let created_queue: QueueInfo = run_cli_command_json(&db_url, &["queue", "create", queue_name]);
     assert_eq!(created_queue.queue_name, queue_name);
 
+    let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").unwrap();
+
     // Create worker
     let created_worker: WorkerInfo = run_cli_command_json(
         &db_url,
         &[
             "worker",
-            "create",
+            "register",
             queue_name,
             "test_cli_archive_functionality_host",
             "8080",
@@ -172,16 +196,31 @@ fn test_cli_archive_functionality() {
 
     // Send a test message
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
-    let _sent_message: QueueMessage = run_cli_command_json(
-        &db_url,
-        &["message", "enqueue", queue_name, message_payload],
-    );
+    // Send message
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _sent_message: QueueMessage = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let producer = Producer::new(
+            pgqrs_admin.pool.clone(),
+            &created_queue,
+            &pgqrs_admin.config,
+        );
+        producer
+            .enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
+            .await
+            .unwrap()
+    });
 
-    // Dequeue the message to simulate processing
-    let dequeued_messages: Vec<QueueMessage> = run_cli_command_json(
-        &db_url,
-        &["message", "dequeue", queue_name, &worker_id.to_string()],
-    );
+    let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let consumer = Consumer::new(
+            pgqrs_admin.pool.clone(),
+            &created_queue,
+            &pgqrs_admin.config,
+        );
+        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
+        consumer.dequeue(&worker).await.unwrap()
+    });
     assert_eq!(
         dequeued_messages.len(),
         1,
@@ -194,15 +233,16 @@ fn test_cli_archive_functionality() {
     assert!(dequeued_message.vt > chrono::Utc::now());
 
     // Archive the dequeued message
-    let archive: Option<ArchivedMessage> = run_cli_command_json(
-        &db_url,
-        &[
-            "message",
-            "archive",
-            queue_name,
-            &dequeued_message.id.to_string(),
-        ],
-    );
+    let archive: Option<ArchivedMessage> = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let consumer = Consumer::new(
+            pgqrs_admin.pool.clone(),
+            &created_queue,
+            &pgqrs_admin.config,
+        );
+        consumer.archive(dequeued_message.id).await.unwrap()
+    });
+
     assert!(
         archive.is_some(),
         "Expected archived message to be returned, found None"
@@ -210,8 +250,11 @@ fn test_cli_archive_functionality() {
     let archived_message = archive.unwrap();
     assert_eq!(archived_message.original_msg_id, dequeued_message.id);
 
-    let archived_list: Vec<ArchivedMessage> =
-        run_cli_command_json(&db_url, &["archive", "list", "--queue", queue_name]);
+    let archived_list: Vec<ArchivedMessage> = rt.block_on(async {
+        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let pgqrs_archive = pgqrs::tables::PgqrsArchive::new(pgqrs_admin.pool.clone());
+        pgqrs_archive.filter_by_fk(created_queue.id).await.unwrap()
+    });
     assert!(
         archived_list.len() == 1,
         "Expected 1 archived message, found {}",

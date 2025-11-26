@@ -20,9 +20,10 @@
 //! ```
 use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
-use pgqrs::types::QueueInfo;
+use pgqrs::tables::PgqrsMessages;
+use pgqrs::types::{QueueInfo, QueueMessage};
+use pgqrs::Table;
 use pgqrs::{admin::PgqrsAdmin, tables::PgqrsQueues};
-use pgqrs::{Consumer, PgqrsArchive, Producer, Table};
 use std::fs::File;
 use std::process;
 
@@ -68,32 +69,31 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Admin Commands
+    Admin {
+        #[command(subcommand)]
+        admin_command: AdminCommands,
+    },
+    /// Queue Commands
+    Queue {
+        #[command(subcommand)]
+        queue_command: QueueCommands,
+    },
+    /// Worker Commands
+    Worker {
+        #[command(subcommand)]
+        worker_command: WorkerCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommands {
     /// Install pgqrs schema (schema must be pre-created)
     Install,
     /// Uninstall pgqrs schema
     Uninstall,
     /// Verify pgqrs installation
     Verify,
-    /// Queue management commands
-    Queue {
-        #[command(subcommand)]
-        action: QueueCommands,
-    },
-    /// Message management commands
-    Message {
-        #[command(subcommand)]
-        action: MessageCommands,
-    },
-    /// Worker management commands
-    Worker {
-        #[command(subcommand)]
-        action: WorkerCommands,
-    },
-    /// Archive management commands
-    Archive {
-        #[command(subcommand)]
-        action: ArchiveCommands,
-    },
 }
 
 #[derive(Subcommand)]
@@ -110,6 +110,13 @@ enum QueueCommands {
         /// Name of the queue to get
         name: String,
     },
+    /// List messages in queue
+    Messages {
+        /// Name of the queue
+        name: String,
+    },
+    /// Move dead letter queue messages to archive
+    DlqToArchive,
     /// Delete a queue
     Delete {
         /// Name of the queue to delete
@@ -128,65 +135,9 @@ enum QueueCommands {
 }
 
 #[derive(Subcommand)]
-enum MessageCommands {
-    /// Enqueue a message to a queue
-    Enqueue {
-        /// Name of the queue
-        queue: String,
-        /// JSON message payload
-        payload: String,
-        /// Delay in seconds before message becomes available
-        #[arg(long, short = 'd')]
-        delay: Option<u32>,
-    },
-    /// Dequeue a message from a queue
-    Dequeue {
-        /// Name of the queue
-        queue: String,
-        /// Worker ID
-        worker: i64,
-        /// Lock time in seconds
-        lock_time: Option<u32>,
-    },
-    /// Archive a message by ID
-    Archive {
-        /// Name of the queue
-        queue: String,
-        /// Message ID to archive
-        id: i64,
-    },
-    /// Delete a message from the queue
-    Delete {
-        /// Name of the queue
-        queue: String,
-        /// Message ID to delete
-        id: String,
-    },
-    /// Show pending message count
-    Count {
-        /// Name of the queue
-        queue: String,
-    },
-    /// Get message by ID
-    Get {
-        /// Name of the queue
-        queue: String,
-        /// Message ID to show
-        id: i64,
-    },
-    /// Replay a message from the DLQ (archive) back to the active queue
-    ReplayDlq {
-        /// Name of the queue
-        queue: String,
-        /// Archived message ID to replay
-        id: i64,
-    },
-}
-
-#[derive(Subcommand)]
 enum WorkerCommands {
-    /// Create a new worker for a queue
-    Create {
+    /// Register a worker for a queue
+    Register {
         /// Name of the queue
         queue: String,
         /// Worker identifier (e.g., hostname or unique name)
@@ -200,61 +151,46 @@ enum WorkerCommands {
         #[arg(long, short = 'q')]
         queue: Option<String>,
     },
-    /// Get detailed worker information
+    /// Get a worker by ID
     Get {
         /// Worker ID
         id: i64,
     },
-    /// Show worker statistics
-    Stats {
-        /// Name of the queue
-        #[arg(long, short = 'q')]
-        queue: String,
+    /// Get worker messages
+    Messages {
+        /// Worker ID
+        id: i64,
+    },
+    /// Release messages from a worker
+    ReleaseMessage {
+        /// Worker ID
+        id: i64,
+    },
+    /// Begin worker shutdown
+    Shutdown {
+        /// Worker ID
+        id: i64,
     },
     /// Stop a worker (mark as stopped)
     Stop {
         /// Worker ID
         id: i64,
     },
-    /// Show messages assigned to a worker
-    Messages {
-        /// Worker ID
-        id: i64,
-    },
-    /// Release messages from a worker
-    Release {
-        /// Worker ID
-        id: i64,
-    },
-    /// Delete a specific worker (only if no associated messages)
-    Delete {
-        /// Worker ID
-        id: i64,
-    },
-    /// Remove old stopped workers
+    /// Purge old stopped workers
     Purge {
         /// Remove workers older than this duration (e.g., '7d', '24h', '30m')
         #[arg(long, default_value = "7d")]
         older_than: String,
     },
-    /// Check worker health
-    Health {
-        /// Name of the queue
-        #[arg(long, short = 'q')]
-        queue: String,
-        /// Maximum heartbeat age in seconds
-        #[arg(long, default_value = "300")]
-        max_age: u64,
+    /// Delete a worker
+    Delete {
+        /// Worker ID
+        id: i64,
     },
-}
-
-#[derive(Subcommand)]
-enum ArchiveCommands {
-    /// List archived messages
-    List {
-        /// Name of the queue to filter by
-        #[arg(long, short = 'q')]
-        queue: Option<String>,
+    /// Get Worker Stats
+    Stats {
+        /// Name of the queue
+        queue: String,
     },
 }
 
@@ -332,64 +268,56 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     let out: &mut dyn std::io::Write = out_writer.as_mut();
 
     match cli.command {
-        Commands::Install => {
+        Commands::Admin { admin_command } => {
+            handle_admin_commands(&admin, admin_command, writer, out).await?
+        }
+
+        Commands::Worker { worker_command } => {
+            handle_worker_commands(&admin, worker_command, writer, out).await?
+        }
+
+        Commands::Queue { queue_command } => {
+            handle_queue_commands(&admin, queue_command, writer, out).await?
+        }
+    }
+    Ok(())
+}
+
+async fn handle_admin_commands(
+    admin: &PgqrsAdmin,
+    command: AdminCommands,
+    _writer: OutputWriter,
+    _out: &mut dyn std::io::Write,
+) -> anyhow::Result<()> {
+    match command {
+        AdminCommands::Install => {
             tracing::info!("Installing pgqrs schema ...");
             admin.install().await?;
             tracing::info!("Installation completed successfully");
         }
 
-        Commands::Uninstall => {
+        AdminCommands::Uninstall => {
             tracing::info!("Uninstalling pgqrs schema ...");
             admin.uninstall().await?;
             tracing::info!("Uninstall completed successfully");
         }
 
-        Commands::Verify => {
+        AdminCommands::Verify => {
             tracing::info!("Verifying pgqrs installation...");
             admin.verify().await?;
             tracing::info!("Verification completed successfully");
         }
-
-        Commands::Queue { action } => {
-            handle_queue_commands(&admin, action, writer, out).await?;
-        }
-
-        Commands::Message { action } => {
-            handle_message_commands(&admin, action, writer, out).await?;
-        }
-
-        Commands::Worker { action } => {
-            handle_worker_commands(&admin, action, writer, out).await?;
-        }
-
-        Commands::Archive { action } => {
-            handle_archive_commands(&admin, action, writer, out).await?;
-        }
     }
-
     Ok(())
 }
 
-/// Handle queue-related CLI commands.
-///
-/// This function processes all queue management commands including create,
-/// list, delete, purge, and metrics operations.
-///
-/// # Arguments
-/// * `admin` - Admin interface for queue operations
-/// * `action` - Specific queue command to execute
-/// * `writer` - Output formatter for results
-/// * `out` - Output destination for formatted results
-///
-/// # Returns
-/// Ok if command executed successfully, error otherwise.
 async fn handle_queue_commands(
     admin: &PgqrsAdmin,
-    action: QueueCommands,
+    command: QueueCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
-    match action {
+    match command {
         QueueCommands::Create { name } => {
             tracing::info!("Creating queue '{}' ...", &name);
             let queue = admin.create_queue(&name).await?;
@@ -407,6 +335,21 @@ async fn handle_queue_commands(
             tracing::info!("Getting queue '{}'...", name);
             let queue_info = admin.get_queue(&name).await?;
             writer.write_item(&queue_info, out)?;
+        }
+
+        QueueCommands::Messages { name } => {
+            tracing::info!("Listing messages for queue '{}'...", name);
+            let queue_info = admin.get_queue(&name).await?;
+            let messages = PgqrsMessages::new(admin.pool.clone());
+            let messages_list: Vec<QueueMessage> = messages.filter_by_fk(queue_info.id).await?;
+            writer.write_list(&messages_list, out)?;
+        }
+
+        QueueCommands::DlqToArchive {} => {
+            tracing::info!("Moving dead letter queue messages to archive");
+            let moved_ids = admin.dlq().await?;
+            tracing::info!("Moved {} messages from DLQ to archive", moved_ids.len());
+            writer.write_list(&moved_ids, out)?;
         }
 
         QueueCommands::Delete { name } => {
@@ -475,151 +418,16 @@ async fn handle_queue_commands(
     Ok(())
 }
 
-/// Handle message-related CLI commands.
-///
-/// This function processes all message management commands including send,
-/// read, dequeue, delete, and count operations.
-///
-/// # Arguments
-/// * `admin` - Admin interface for accessing queues
-/// * `action` - Specific message command to execute
-/// * `writer` - Output formatter for results
-/// * `out` - Output destination for formatted results
-///
-/// # Returns
-/// Ok if command executed successfully, error otherwise.
-async fn handle_message_commands(
-    admin: &PgqrsAdmin,
-    action: MessageCommands,
-    writer: OutputWriter,
-    out: &mut dyn std::io::Write,
-) -> anyhow::Result<()> {
-    match action {
-        MessageCommands::Enqueue {
-            queue,
-            payload,
-            delay,
-        } => {
-            let queue_info = admin.get_queue(&queue).await?;
-            let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-            tracing::info!("Sending message to queue '{}'...", queue);
-            let payload_json: serde_json::Value = serde_json::from_str(&payload)?;
-            let msg_id = if let Some(delay_secs) = delay {
-                tracing::info!("Sending delayed message (delay: {}s)...", delay_secs);
-                producer.enqueue_delayed(&payload_json, delay_secs).await?
-            } else {
-                producer.enqueue(&payload_json).await?
-            };
-            tracing::info!("Message sent successfully with ID: {}", msg_id);
-            writer.write_item(&msg_id, out)?;
-            Ok(())
-        }
-        MessageCommands::Dequeue {
-            queue,
-            worker,
-            lock_time,
-        } => {
-            let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
-            let worker_info = admin.get_worker_by_id(worker).await?;
-            tracing::info!(
-                "Dequeue message from queue '{}', worker: {})...",
-                queue,
-                worker_info
-            );
-            let messages = match lock_time {
-                Some(lt) => consumer.dequeue_delay(&worker_info, lt).await?,
-                None => consumer.dequeue(&worker_info).await?,
-            };
-            writer.write_list(&messages, out)?;
-            Ok(())
-        }
-        MessageCommands::Archive { queue, id } => {
-            let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
-            tracing::info!("Archiving message {} from queue '{}'...", id, queue);
-            let archived_message = consumer.archive(id).await?;
-            tracing::info!("Message archived successfully");
-            writer.write_item(&archived_message, out)?;
-            Ok(())
-        }
-        MessageCommands::Delete { queue, id } => {
-            let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
-            let msg_id = id.parse::<i64>()?;
-            tracing::info!("Deleting message {} from queue '{}'...", msg_id, queue);
-            let deleted = consumer.delete_many(vec![msg_id]).await?;
-            if deleted.first().copied().unwrap_or(false) {
-                tracing::info!("Message deleted successfully");
-            } else {
-                tracing::info!("Message not found or could not be deleted");
-            }
-            Ok(())
-        }
-        MessageCommands::Count { queue } => {
-            let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
-            tracing::info!("Getting pending message count for queue '{}'...", queue);
-            let count = consumer.pending_count().await?;
-            tracing::info!("Pending messages: {}", count);
-            Ok(())
-        }
-
-        MessageCommands::Get { queue, id } => {
-            let queue = admin.get_queue(&queue).await?;
-            let consumer = Consumer::new(admin.pool.clone(), &queue, &admin.config);
-            tracing::debug!("Retrieving message {} from queue '{}'...", id, queue);
-            let message = consumer.get_message_by_id(id).await?;
-            writer.write_item(&message, out)?;
-            Ok(())
-        }
-
-        MessageCommands::ReplayDlq { queue, id } => {
-            let queue_info = admin.get_queue(&queue).await?;
-            let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-            tracing::info!(
-                "Replaying archived message {} from DLQ for queue '{}'...",
-                id,
-                queue
-            );
-            let replayed = producer.replay_dlq(id).await?;
-            if let Some(msg) = replayed {
-                tracing::info!("Message replayed successfully: id {}", msg.id);
-                writer.write_item(&msg, out)?;
-            } else {
-                tracing::info!(
-                    "No message found to replay (may not be in DLQ or already replayed)"
-                );
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Handle worker-related CLI commands.
-///
-/// This function processes all worker management commands including list,
-/// show, stats, stop, messages, release, purge, and health operations.
-///
-/// # Arguments
-/// * `admin` - Admin interface for worker operations
-/// * `action` - Specific worker command to execute
-/// * `writer` - Output formatter for results
-/// * `out` - Output destination for formatted results
-///
-/// # Returns
-/// Ok if command executed successfully, error otherwise.
 async fn handle_worker_commands(
     admin: &PgqrsAdmin,
-    action: WorkerCommands,
+    command: WorkerCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
-    match action {
-        WorkerCommands::Create { queue, host, port } => {
+    match command {
+        WorkerCommands::Register { queue, host, port } => {
             let worker = admin.register(queue, host, port).await?;
             writer.write_item(&worker, out)?;
-            Ok(())
         }
         WorkerCommands::List { queue } => {
             let workers = match queue {
@@ -634,13 +442,77 @@ async fn handle_worker_commands(
             };
             tracing::info!("Found {} workers", workers.len());
             writer.write_list(&workers, out)?;
-            Ok(())
         }
-
         WorkerCommands::Get { id } => {
             let worker = admin.get_worker_by_id(id).await?;
             writer.write_item(&worker, out)?;
-            Ok(())
+        }
+
+        WorkerCommands::Messages { id } => {
+            // Find the worker and get its messages
+            let worker = admin
+                .get_worker_by_id(id)
+                .await
+                .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
+
+            tracing::info!("Getting messages for worker {}...", id);
+            let messages = admin.get_worker_messages(worker.id).await?;
+            tracing::info!("Found {} messages", messages.len());
+            writer.write_list(&messages, out)?;
+        }
+
+        WorkerCommands::ReleaseMessage { id } => {
+            tracing::info!("Releasing messages from worker {}...", id);
+            let released_count = admin.release_worker_messages(id).await?;
+            tracing::info!("Released {} messages", released_count);
+            writeln!(
+                out,
+                "Released {} messages from worker {}",
+                released_count, id
+            )?;
+        }
+
+        WorkerCommands::Shutdown { id } => {
+            tracing::info!("Stopping worker {}...", id);
+            admin.mark_stopped(id).await?;
+            tracing::info!("Worker stopped successfully");
+        }
+
+        WorkerCommands::Stop { id } => {
+            tracing::info!("Marking worker {} as stopped...", id);
+            admin.mark_stopped(id).await?;
+            tracing::info!("Worker {} marked as stopped", id);
+        }
+
+        WorkerCommands::Purge { older_than } => {
+            // Parse duration string using humantime (supports "7d", "24h", "30m", "1s", etc.)
+            let duration = older_than
+                .parse::<humantime::Duration>()
+                .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e))?
+                .into();
+            tracing::info!("Purging workers older than {:?}...", duration);
+            let purged_count = admin.purge_old_workers(duration).await?;
+            tracing::info!("Purged {} old workers", purged_count);
+            writeln!(out, "Purged {} old workers", purged_count)?;
+        }
+
+        WorkerCommands::Delete { id } => {
+            tracing::info!("Deleting worker {}...", id);
+            match admin.delete_worker(id).await {
+                Ok(deleted_count) => {
+                    if deleted_count > 0 {
+                        tracing::info!("Deleted worker {}", id);
+                        writeln!(out, "Worker {} deleted successfully", id)?;
+                    } else {
+                        tracing::warn!("Worker {} not found", id);
+                        writeln!(out, "Worker {} not found", id)?;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to delete worker {}: {}", id, e);
+                    writeln!(out, "Error: {}", e)?;
+                }
+            }
         }
 
         WorkerCommands::Stats { queue } => {
@@ -669,134 +541,7 @@ async fn handle_worker_commands(
                 "  Newest Heartbeat Age: {:?}",
                 stats.newest_heartbeat_age
             )?;
-            Ok(())
-        }
-
-        WorkerCommands::Stop { id } => {
-            tracing::info!("Stopping worker {}...", id);
-            admin.mark_stopped(id).await?;
-            tracing::info!("Worker stopped successfully");
-            Ok(())
-        }
-
-        WorkerCommands::Messages { id } => {
-            // Find the worker and get its messages
-            let worker = admin
-                .get_worker_by_id(id)
-                .await
-                .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
-
-            tracing::info!("Getting messages for worker {}...", id);
-            let messages = admin.get_worker_messages(worker.id).await?;
-            tracing::info!("Found {} messages", messages.len());
-            writer.write_list(&messages, out)?;
-            Ok(())
-        }
-
-        WorkerCommands::Release { id } => {
-            tracing::info!("Releasing messages from worker {}...", id);
-            let released_count = admin.release_worker_messages(id).await?;
-            tracing::info!("Released {} messages", released_count);
-            writeln!(
-                out,
-                "Released {} messages from worker {}",
-                released_count, id
-            )?;
-            Ok(())
-        }
-
-        WorkerCommands::Delete { id } => {
-            tracing::info!("Deleting worker {}...", id);
-            match admin.delete_worker(id).await {
-                Ok(deleted_count) => {
-                    if deleted_count > 0 {
-                        tracing::info!("Deleted worker {}", id);
-                        writeln!(out, "Worker {} deleted successfully", id)?;
-                    } else {
-                        tracing::warn!("Worker {} not found", id);
-                        writeln!(out, "Worker {} not found", id)?;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to delete worker {}: {}", id, e);
-                    writeln!(out, "Error: {}", e)?;
-                }
-            }
-            Ok(())
-        }
-
-        WorkerCommands::Purge { older_than } => {
-            // Parse duration string using humantime (supports "7d", "24h", "30m", "1s", etc.)
-            let duration = older_than
-                .parse::<humantime::Duration>()
-                .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e))?
-                .into();
-            tracing::info!("Purging workers older than {:?}...", duration);
-            let purged_count = admin.purge_old_workers(duration).await?;
-            tracing::info!("Purged {} old workers", purged_count);
-            writeln!(out, "Purged {} old workers", purged_count)?;
-            Ok(())
-        }
-
-        WorkerCommands::Health { queue, max_age } => {
-            tracing::info!("Checking worker health for queue '{}'...", queue);
-            let workers = admin.list_queue_workers(&queue).await?;
-            // admin.is_healthy expects a chrono::Duration (the same kind produced by
-            // now.signed_duration_since(...)), so create a chrono::Duration here.
-            let max_age_duration = chrono::Duration::seconds(max_age as i64);
-
-            let mut healthy = 0;
-            let mut unhealthy = 0;
-
-            writeln!(out, "Worker Health Report for Queue '{}':", queue)?;
-            for worker in &workers {
-                let is_healthy = admin.is_healthy(worker.id, max_age_duration).await?;
-                if is_healthy {
-                    healthy += 1;
-                } else {
-                    unhealthy += 1;
-                }
-                writeln!(
-                    out,
-                    "  Worker {}: {} ({}:{})",
-                    worker.id,
-                    if is_healthy { "HEALTHY" } else { "UNHEALTHY" },
-                    worker.hostname,
-                    worker.port
-                )?;
-            }
-
-            writeln!(out)?;
-            writeln!(out, "Summary: {} healthy, {} unhealthy", healthy, unhealthy)?;
-            Ok(())
         }
     }
-}
-
-async fn handle_archive_commands(
-    admin: &PgqrsAdmin,
-    action: ArchiveCommands,
-    writer: OutputWriter,
-    out: &mut dyn std::io::Write,
-) -> anyhow::Result<()> {
-    match action {
-        ArchiveCommands::List { queue } => {
-            // Get the queue object to obtain queue_id
-            let archive = PgqrsArchive::new(admin.pool.clone());
-
-            let messages = match queue {
-                Some(queue) => {
-                    tracing::info!("Listing archived messages for queue '{:?}'...", queue);
-                    let queue_obj = admin.queues.get_by_name(&queue).await?;
-                    tracing::info!("Filtering by queue name: {}", queue);
-                    archive.filter_by_fk(queue_obj.id).await?
-                }
-                None => archive.list().await?,
-            };
-            tracing::info!("Found {} archived messages", messages.len());
-            writer.write_list(&messages, out)?;
-
-            Ok(())
-        }
-    }
+    Ok(())
 }

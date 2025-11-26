@@ -25,7 +25,6 @@
 //! ```
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
 use crate::error::Result;
-use crate::tables::{PgqrsArchive, PgqrsMessages, Table};
 use crate::types::{ArchivedMessage, QueueMessage};
 use crate::WorkerInfo;
 use sqlx::PgPool;
@@ -58,10 +57,6 @@ pub struct Consumer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
     queue_info: crate::types::QueueInfo,
-    /// Messages table operations
-    messages: PgqrsMessages,
-    /// Archive table operations
-    archive: PgqrsArchive,
     /// Configuration for the queue
     config: crate::config::Config,
 }
@@ -81,36 +76,11 @@ impl Consumer {
         queue_info: &crate::types::QueueInfo,
         config: &crate::config::Config,
     ) -> Self {
-        let messages = PgqrsMessages::new(pool.clone());
-        let archive = PgqrsArchive::new(pool.clone());
         Self {
             pool,
             queue_info: queue_info.clone(),
-            messages,
-            archive,
             config: config.clone(),
         }
-    }
-
-    /// Retrieve a message by its ID from the queue.
-    ///
-    /// This is useful for consumers to fetch specific messages.
-    ///
-    /// # Arguments
-    /// * `msg_id` - ID of the message to retrieve
-    ///
-    /// # Returns
-    /// The message if found, or an error if not found.
-    pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        self.messages.get(msg_id).await
-    }
-
-    /// Get the count of pending (not locked) messages in the queue.
-    ///
-    /// # Returns
-    /// Number of pending messages.
-    pub async fn pending_count(&self) -> Result<i64> {
-        self.messages.count_pending(self.queue_info.id).await
     }
 
     /// Read up to `limit` messages from the queue, using the default visibility timeout.
@@ -254,30 +224,5 @@ impl Consumer {
             .map(|id| archived_set.contains(&id))
             .collect();
         Ok(result)
-    }
-
-    /// Retrieve a message from the archive by its ID.
-    ///
-    /// This is useful for consumers to fetch specific archived messages.
-    ///
-    /// # Arguments
-    /// * `archived_msg_id` - ID of the archived message to retrieve
-    ///
-    /// # Returns
-    /// The archived message if found, or an error if not found.
-    pub async fn get_archived_message_by_id(
-        &self,
-        archived_msg_id: i64,
-    ) -> Result<ArchivedMessage> {
-        self.archive.get(archived_msg_id).await
-    }
-
-    /// Get the count of archived messages in the archive.
-    ///
-    /// # Returns
-    /// Number of archived messages.
-    pub async fn archived_count(&self) -> Result<i64> {
-        let txn = &mut self.pool.begin().await?;
-        self.archive.count_for_fk(self.queue_info.id, txn).await
     }
 }

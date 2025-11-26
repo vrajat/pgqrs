@@ -17,7 +17,8 @@
 
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
-use pgqrs::{Consumer, Producer};
+use pgqrs::tables::PgqrsMessages;
+use pgqrs::{Consumer, PgqrsArchive, Producer, Table};
 use serde_json::json;
 
 #[tokio::main]
@@ -192,11 +193,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show archive counts
-    println!("Archive counts:");
-    let email_archive_count = email_consumer.archived_count().await?;
-    let task_archive_count = task_consumer.archived_count().await?;
-    println!("  email_consumer archived: {}", email_archive_count);
-    println!("  task_consumer archived: {}", task_archive_count);
+    {
+        let tx = &mut admin.pool.begin().await?;
+        println!("Archive counts:");
+        let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
+        let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
+        let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
+        println!("  email_consumer archived: {}", email_archive_count);
+        println!("  task_consumer archived: {}", task_archive_count);
+    }
 
     // Example of traditional deletion for comparison
     // Note: Use archiving instead for data retention and audit trails
@@ -234,8 +239,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show pending count
-    let email_pending = email_consumer.pending_count().await?;
-    let task_pending = task_consumer.pending_count().await?;
+    let messages = PgqrsMessages::new(admin.pool.clone());
+    let email_pending = messages.count_pending(email_id.id).await?;
+    let task_pending = messages.count_pending(task_id.id).await?;
     println!("\nPending messages:");
     println!("  email_consumer: {}", email_pending);
     println!("  task_consumer: {}", task_pending);
@@ -244,12 +250,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Archive Management Example ---");
 
     // Check archive counts before operations
-    let email_archive_count = email_consumer.archived_count().await?;
-    let task_archive_count = task_consumer.archived_count().await?;
-    println!(
-        "Archive counts - email: {}, task: {}",
-        email_archive_count, task_archive_count
-    );
+    {
+        let tx = &mut admin.pool.begin().await?;
+        let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
+        let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
+        let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
+        println!(
+            "Archive counts - email: {}, task: {}",
+            email_archive_count, task_archive_count
+        );
+    }
 
     // Note about queue deletion behavior
     println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");

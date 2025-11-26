@@ -89,7 +89,7 @@ impl Producer {
     ///
     /// # Returns
     /// The message if found, or an error if not found.
-    pub async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
+    async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
         self.messages.get(msg_id).await
     }
 

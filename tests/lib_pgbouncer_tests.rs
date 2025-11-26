@@ -1,4 +1,7 @@
-use pgqrs::{tables::PgqrsQueues, Consumer, PgqrsAdmin, Producer, Table};
+use pgqrs::{
+    tables::{PgqrsMessages, PgqrsQueues},
+    Consumer, PgqrsAdmin, Producer, Table,
+};
 use serde_json::json;
 
 // Test-specific constants
@@ -43,6 +46,7 @@ async fn test_pgbouncer_happy_path() {
     let queue_info = queue_result.unwrap();
     let producer = Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -57,22 +61,22 @@ async fn test_pgbouncer_happy_path() {
         .expect("Failed to enqueue message through PgBouncer");
 
     // Verify we have a pending message
-    let pending_count = consumer
-        .pending_count()
+    let pending_count = messages
+        .count_pending(queue_info.id)
         .await
         .expect("Failed to get pending count through PgBouncer");
 
     assert_eq!(pending_count, 1, "Should have exactly one pending message");
 
     // Read the message through PgBouncer
-    let messages = consumer
+    let messages_list = consumer
         .dequeue(&worker)
         .await
         .expect("Failed to read messages through PgBouncer");
 
-    assert_eq!(messages.len(), 1, "Should receive exactly one message");
+    assert_eq!(messages_list.len(), 1, "Should receive exactly one message");
 
-    let received_message = &messages[0];
+    let received_message = &messages_list[0];
     assert_eq!(
         received_message.payload, test_message,
         "Message content should match"
@@ -85,8 +89,8 @@ async fn test_pgbouncer_happy_path() {
         .expect("Failed to dequeue message through PgBouncer");
 
     // Verify the message is gone from the main queue
-    let pending_count_after = consumer
-        .pending_count()
+    let pending_count_after = messages
+        .count_pending(queue_info.id)
         .await
         .expect("Failed to get pending count after dequeue");
 
