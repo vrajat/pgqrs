@@ -124,7 +124,7 @@ async fn test_archive_single_message() {
     assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 1);
     assert_eq!(
         pgqrs_archive
-            .count_for_fk(msg_id, &mut admin.pool.begin().await.unwrap())
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
             .await
             .unwrap(),
         0

@@ -127,6 +127,17 @@ fn test_cli_create_send_dequeue_delete_queue() {
         serde_json::from_str::<serde_json::Value>(payload).unwrap()
     );
 
+    let messages: Vec<QueueMessage> = run_cli_command_json(&db_url, &["queue", "messages", queue_name]);
+    assert!(
+        messages.len() == 1,
+        "Expected 1 message in queue, found {}",
+        messages.len()
+    );
+    let message_in_queue = &messages[0];
+    assert_eq!(message_in_queue.id, sent_message.id);
+    assert_eq!(message_in_queue.payload, sent_message.payload);
+    assert_eq!(message_in_queue.queue_id, created_queue.id);
+
     // Create worker
     let created_worker: WorkerInfo = run_cli_command_json(
         &db_url,

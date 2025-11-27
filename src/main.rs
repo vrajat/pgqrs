@@ -116,7 +116,7 @@ enum QueueCommands {
         name: String,
     },
     /// Move dead letter queue messages to archive
-    DlqToArchive,
+    ArchiveDlq,
     /// Delete a queue
     Delete {
         /// Name of the queue to delete
@@ -162,7 +162,7 @@ enum WorkerCommands {
         id: i64,
     },
     /// Release messages from a worker
-    ReleaseMessage {
+    ReleaseMessages {
         /// Worker ID
         id: i64,
     },
@@ -345,7 +345,7 @@ async fn handle_queue_commands(
             writer.write_list(&messages_list, out)?;
         }
 
-        QueueCommands::DlqToArchive {} => {
+        QueueCommands::ArchiveDlq {} => {
             tracing::info!("Moving dead letter queue messages to archive");
             let moved_ids = admin.dlq().await?;
             tracing::info!("Moved {} messages from DLQ to archive", moved_ids.len());
@@ -461,7 +461,7 @@ async fn handle_worker_commands(
             writer.write_list(&messages, out)?;
         }
 
-        WorkerCommands::ReleaseMessage { id } => {
+        WorkerCommands::ReleaseMessages { id } => {
             tracing::info!("Releasing messages from worker {}...", id);
             let released_count = admin.release_worker_messages(id).await?;
             tracing::info!("Released {} messages", released_count);
@@ -474,7 +474,7 @@ async fn handle_worker_commands(
 
         WorkerCommands::Shutdown { id } => {
             tracing::info!("Stopping worker {}...", id);
-            admin.mark_stopped(id).await?;
+            admin.begin_shutdown(id).await?;
             tracing::info!("Worker stopped successfully");
         }
 
