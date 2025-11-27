@@ -127,7 +127,8 @@ fn test_cli_create_send_dequeue_delete_queue() {
         serde_json::from_str::<serde_json::Value>(payload).unwrap()
     );
 
-    let messages: Vec<QueueMessage> = run_cli_command_json(&db_url, &["queue", "messages", queue_name]);
+    let messages: Vec<QueueMessage> =
+        run_cli_command_json(&db_url, &["queue", "messages", queue_name]);
     assert!(
         messages.len() == 1,
         "Expected 1 message in queue, found {}",
