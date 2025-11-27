@@ -1,4 +1,7 @@
-use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, PgqrsArchive, Table};
+use pgqrs::{
+    tables::{PgqrsMessages, PgqrsQueues},
+    PgqrsAdmin, PgqrsArchive, Table,
+};
 use serde_json::json;
 
 // Test-specific constants
@@ -78,12 +81,13 @@ async fn test_send_message() {
         )
         .await
         .expect("Failed to register worker");
+    let messages = PgqrsMessages::new(admin.pool.clone());
 
     let payload = json!({
         "k": "v"
     });
     assert!(producer.enqueue(&payload).await.is_ok());
-    assert!(consumer.pending_count().await.unwrap() == EXPECTED_MESSAGE_COUNT);
+    assert!(messages.count_pending(queue_info.id).await.unwrap() == EXPECTED_MESSAGE_COUNT);
     let read_messages = consumer.dequeue_many(&worker, READ_MESSAGE_COUNT).await;
     assert!(read_messages.is_ok());
     let read_messages = read_messages.unwrap();
@@ -91,7 +95,7 @@ async fn test_send_message() {
     assert!(read_messages[0].payload == payload);
     let deleted_message = consumer.delete(read_messages[0].id).await;
     assert!(deleted_message.is_ok());
-    assert!(consumer.pending_count().await.unwrap() == 0);
+    assert!(messages.count_pending(queue_info.id).await.unwrap() == 0);
     assert!(admin.delete_worker(worker.id).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
@@ -106,7 +110,8 @@ async fn test_archive_single_message() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
-
+    let messages = PgqrsMessages::new(admin.pool.clone());
+    let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
     let message = producer
@@ -116,16 +121,28 @@ async fn test_archive_single_message() {
     let msg_id = message.id;
 
     // Verify message is in active queue
-    assert_eq!(consumer.pending_count().await.unwrap(), 1);
-    assert_eq!(consumer.archived_count().await.unwrap(), 0);
+    assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 1);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        0
+    );
 
     // Archive the message
     let archived = consumer.archive(msg_id).await;
     assert!(archived.is_ok());
 
     // Verify message moved from active to archive
-    assert_eq!(consumer.pending_count().await.unwrap(), 0);
-    assert_eq!(consumer.archived_count().await.unwrap(), 1);
+    assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 0);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        1
+    );
 
     // Try to archive the same message again (should return false)
     let archived_again = consumer.archive(msg_id).await;
@@ -152,6 +169,8 @@ async fn test_archive_batch_messages() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let messages = PgqrsMessages::new(admin.pool.clone());
+    let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -165,8 +184,14 @@ async fn test_archive_batch_messages() {
     }
 
     // Verify messages are in active queue
-    assert_eq!(consumer.pending_count().await.unwrap(), 5);
-    assert_eq!(consumer.archived_count().await.unwrap(), 0);
+    assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 5);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        0
+    );
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
@@ -189,8 +214,14 @@ async fn test_archive_batch_messages() {
     }
 
     // Verify counts after batch archive
-    assert_eq!(consumer.pending_count().await.unwrap(), 2);
-    assert_eq!(consumer.archived_count().await.unwrap(), 3);
+    assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 2);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        3
+    );
 
     // Try to archive empty batch (should return empty vec)
     let empty_archive = consumer.archive_batch(vec![]).await;
@@ -224,7 +255,14 @@ async fn test_archive_nonexistent_message() {
     );
 
     // Verify archive count remains zero
-    assert_eq!(consumer.archived_count().await.unwrap(), 0);
+    let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        0
+    );
 
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
@@ -242,7 +280,7 @@ async fn test_purge_archive() {
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
     let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
-
+    let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Archive multiple messages
     for i in 0..3 {
         let payload = json!({"action": "test_purge_archive", "index": i});
@@ -258,7 +296,13 @@ async fn test_purge_archive() {
     }
 
     // Verify archive has 3 messages
-    assert_eq!(consumer.archived_count().await.unwrap(), 3);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        3
+    );
 
     // Purge archive
     admin
@@ -267,7 +311,13 @@ async fn test_purge_archive() {
         .expect("Failed to purge messages");
 
     // Verify archive is empty
-    assert_eq!(consumer.archived_count().await.unwrap(), 0);
+    assert_eq!(
+        pgqrs_archive
+            .count_for_fk(queue_info.id, &mut admin.pool.begin().await.unwrap())
+            .await
+            .unwrap(),
+        0
+    );
 
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
@@ -354,6 +404,7 @@ async fn test_interval_parameter_syntax() {
         .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
         .await
         .expect("Failed to register worker");
+    let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message to test interval functionality
     let message_payload = json!({"test": "interval_test"});
@@ -381,7 +432,7 @@ async fn test_interval_parameter_syntax() {
     );
 
     // Get the updated message to verify the interval was applied correctly
-    let updated_message = consumer.get_message_by_id(message.id).await.unwrap();
+    let updated_message = pgqrs_messages.get(message.id).await.unwrap();
     assert!(
         updated_message.vt > original_vt,
         "Extended VT should be later than original"
@@ -847,7 +898,7 @@ async fn test_dlq() {
         .await
         .expect("Failed to create queue");
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &admin.config);
+    let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a test message
     let payload = json!({"task": "process_this"});
@@ -872,7 +923,10 @@ async fn test_dlq() {
     assert!(dlq[0] == msg_id, "DLQ message ID should match original");
 
     // Verify message is no longer in active queue and is in DLQ
-    assert_eq!(consumer.pending_count().await.unwrap(), 0);
+    assert_eq!(
+        pgqrs_messages.count_pending(queue_info.id).await.unwrap(),
+        0
+    );
 
     let archive = PgqrsArchive::new(admin.pool.clone());
     assert_eq!(

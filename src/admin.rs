@@ -787,7 +787,7 @@ impl PgqrsAdmin {
     ///
     /// # Returns
     /// Number of associated records (messages + archives)
-    pub async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
+    async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
         let row = sqlx::query_scalar::<_, i64>(crate::constants::CHECK_WORKER_REFERENCES)
             .bind(worker_id)
             .fetch_one(&self.pool)
