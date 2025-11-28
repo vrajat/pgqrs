@@ -90,8 +90,6 @@ enum Commands {
 enum AdminCommands {
     /// Install pgqrs schema (schema must be pre-created)
     Install,
-    /// Uninstall pgqrs schema
-    Uninstall,
     /// Verify pgqrs installation
     Verify,
 }
@@ -294,12 +292,6 @@ async fn handle_admin_commands(
             tracing::info!("Installing pgqrs schema ...");
             admin.install().await?;
             tracing::info!("Installation completed successfully");
-        }
-
-        AdminCommands::Uninstall => {
-            tracing::info!("Uninstalling pgqrs schema ...");
-            admin.uninstall().await?;
-            tracing::info!("Uninstall completed successfully");
         }
 
         AdminCommands::Verify => {

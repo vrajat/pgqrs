@@ -195,8 +195,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("- This enables consistent counting operations across all tables");
     println!("- Archive table is now included with full CRUD + count support");
 
-    // Clean up
-    admin.uninstall().await?;
-
     Ok(())
 }

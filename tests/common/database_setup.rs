@@ -65,13 +65,14 @@ pub async fn cleanup_database_common(
         pgqrs::config::Config::from_dsn_with_schema(dsn, schema)?
     };
     let admin = PgqrsAdmin::new(&config).await?;
-    admin.uninstall().await?;
+    // Drop custom schema if not using 'public'
     if schema != "public" {
         let drop_schema_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
         sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
-        println!("{} schema uninstalled from '{}'", connection_type, schema);
-    } else {
-        println!("{} schema uninstalled from '{}'", connection_type, schema);
+        println!(
+            "{} schema '{}' dropped successfully",
+            connection_type, schema
+        );
     }
     Ok(())
 }

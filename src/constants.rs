@@ -17,14 +17,6 @@
 /// Default visibility timeout in seconds for locked messages
 pub const VISIBILITY_TIMEOUT: u32 = 5;
 
-pub const CREATE_QUEUE_INFO_TABLE_STATEMENT: &str = r#"
-    CREATE TABLE IF NOT EXISTS pgqrs_queues (
-        id BIGSERIAL PRIMARY KEY,
-        queue_name VARCHAR UNIQUE NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
-    );
-"#;
-
 // Parameterized SQL for unified pgqrs_messages table operations
 // Note: Basic CRUD operations moved to tables/pgqrs_messages.rs
 
@@ -104,104 +96,7 @@ pub const LOCK_QUEUE_FOR_UPDATE: &str = r#"
     FOR NO KEY UPDATE;
 "#;
 
-/// Create index on worker table for efficient worker lookups
-pub const CREATE_WORKERS_INDEX_QUEUE_STATUS: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_queue_status
-    ON pgqrs_workers(queue_id, status);
-"#;
-
-/// Create index on worker table for heartbeat monitoring
-pub const CREATE_WORKERS_INDEX_HEARTBEAT: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_workers_heartbeat
-    ON pgqrs_workers(heartbeat_at);
-"#;
-
 // Worker Management SQL Templates
-
-/// Create worker status enum type
-pub const CREATE_WORKER_STATUS_ENUM: &str = r#"
-    DO $$
-    BEGIN
-        CREATE TYPE worker_status AS ENUM ('ready', 'shutting_down', 'stopped');
-    EXCEPTION
-        WHEN duplicate_object THEN null;
-    END $$;
-"#;
-
-/// Create workers table
-pub const CREATE_WORKERS_TABLE: &str = r#"
-    CREATE TABLE IF NOT EXISTS pgqrs_workers (
-        id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-        hostname TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        queue_id BIGINT NOT NULL,
-        started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        heartbeat_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        shutdown_at TIMESTAMP WITH TIME ZONE,
-        status worker_status NOT NULL DEFAULT 'ready'::worker_status,
-
-        UNIQUE(hostname, port),
-        CONSTRAINT fk_workers_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id)
-    );
-"#;
-
-/// Create unified messages table
-pub const CREATE_PGQRS_MESSAGES_TABLE: &str = r#"
-    CREATE TABLE IF NOT EXISTS pgqrs_messages (
-        id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-        queue_id BIGINT NOT NULL,
-        worker_id BIGINT,
-        payload JSONB NOT NULL,
-        vt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        enqueued_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        read_ct INT DEFAULT 0,
-        dequeued_at TIMESTAMP WITH TIME ZONE,
-
-        CONSTRAINT fk_messages_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
-        CONSTRAINT fk_messages_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
-    );
-"#;
-
-/// Create unified archive table
-pub const CREATE_PGQRS_ARCHIVE_TABLE: &str = r#"
-    CREATE TABLE IF NOT EXISTS pgqrs_archive (
-        id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-        original_msg_id BIGINT NOT NULL,
-        queue_id BIGINT NOT NULL,
-        worker_id BIGINT,
-        payload JSONB NOT NULL,
-        enqueued_at TIMESTAMP WITH TIME ZONE NOT NULL,
-        vt TIMESTAMP WITH TIME ZONE NOT NULL,
-        read_ct INT NOT NULL,
-        archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        dequeued_at TIMESTAMP WITH TIME ZONE,
-
-        CONSTRAINT fk_archive_queue_id FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id),
-        CONSTRAINT fk_archive_worker_id FOREIGN KEY (worker_id) REFERENCES pgqrs_workers(id)
-    );
-"#;
-
-/// Create indexes for unified messages table
-pub const CREATE_PGQRS_MESSAGES_INDEX_QUEUE_VT: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_messages_queue_vt ON pgqrs_messages (queue_id, vt);
-"#;
-
-pub const CREATE_PGQRS_MESSAGES_INDEX_WORKER_ID: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_messages_worker_id ON pgqrs_messages (worker_id);
-"#;
-
-/// Create indexes for unified archive table
-pub const CREATE_PGQRS_ARCHIVE_INDEX_QUEUE_ID: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_archive_queue_id ON pgqrs_archive (queue_id);
-"#;
-
-pub const CREATE_PGQRS_ARCHIVE_INDEX_ARCHIVED_AT: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_archive_archived_at ON pgqrs_archive (archived_at);
-"#;
-
-pub const CREATE_PGQRS_ARCHIVE_INDEX_ORIGINAL_MSG_ID: &str = r#"
-    CREATE INDEX IF NOT EXISTS idx_pgqrs_archive_original_msg_id ON pgqrs_archive (original_msg_id);
-"#;
 
 /// Update worker heartbeat timestamp
 pub const UPDATE_WORKER_HEARTBEAT: &str = r#"
@@ -246,29 +141,4 @@ pub const PURGE_OLD_WORKERS: &str = r#"
               SELECT worker_id FROM pgqrs_archive WHERE worker_id IS NOT NULL
           ) refs
       )
-"#;
-
-/// Drop the queue repository table
-pub const DROP_QUEUE_REPOSITORY: &str = r#"
-    DROP TABLE IF EXISTS pgqrs_queues CASCADE;
-"#;
-
-/// Drop the worker repository table
-pub const DROP_WORKER_REPOSITORY: &str = r#"
-    DROP TABLE IF EXISTS pgqrs_workers CASCADE;
-"#;
-
-/// Drop the unified messages table
-pub const DROP_PGQRS_MESSAGES_TABLE: &str = r#"
-    DROP TABLE IF EXISTS pgqrs_messages CASCADE;
-"#;
-
-/// Drop the unified archive table
-pub const DROP_PGQRS_ARCHIVE_TABLE: &str = r#"
-    DROP TABLE IF EXISTS pgqrs_archive CASCADE;
-"#;
-
-/// Drop the worker status enum type
-pub const DROP_WORKER_STATUS_ENUM: &str = r#"
-    DROP TYPE IF EXISTS worker_status CASCADE;
 "#;
