@@ -33,10 +33,6 @@ pub struct QueueMessage {
     pub id: i64,
     /// Queue ID this message belongs to
     pub queue_id: i64,
-    /// Worker ID that has this message assigned (if any)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[tabled(skip)]
-    pub worker_id: Option<i64>,
     /// The actual message payload (JSON)
     pub payload: serde_json::Value,
     /// Visibility timeout (when the message becomes available again)
@@ -49,6 +45,14 @@ pub struct QueueMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
     pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Worker ID that produced this message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub producer_worker_id: Option<i64>,
+    /// Worker ID that consumed this message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub consumer_worker_id: Option<i64>,
 }
 
 impl fmt::Display for QueueMessage {
@@ -109,10 +113,14 @@ pub struct ArchivedMessage {
     pub original_msg_id: i64,
     /// Queue ID this message belonged to
     pub queue_id: i64,
-    /// Worker ID that processed this message (if any)
+    /// Worker ID that produced this message
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
-    pub worker_id: Option<i64>,
+    pub producer_worker_id: Option<i64>,
+    /// Worker ID that consumed this message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub consumer_worker_id: Option<i64>,
     /// The actual message payload (JSON)
     pub payload: serde_json::Value,
     /// Timestamp when the message was originally created
@@ -136,8 +144,10 @@ pub struct NewArchivedMessage {
     pub original_msg_id: i64,
     /// Queue ID this message belonged to
     pub queue_id: i64,
-    /// Worker ID that processed this message (if any)
-    pub worker_id: Option<i64>,
+    /// Worker ID that produced this message
+    pub producer_worker_id: Option<i64>,
+    /// Worker ID that consumed this message
+    pub consumer_worker_id: Option<i64>,
     /// The actual message payload (JSON)
     pub payload: serde_json::Value,
     /// Timestamp when the message was originally created

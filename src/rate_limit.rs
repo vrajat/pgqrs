@@ -25,7 +25,8 @@
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
-//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &admin.config);
+//! let worker_info = admin.register("my_queue".to_string(), "localhost".to_string(), 8080).await?;
+//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker_info, &admin.config);
 //!
 //! // Rate limiting is automatically applied
 //! for i in 0..200 {

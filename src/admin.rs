@@ -56,8 +56,10 @@ const CHECK_ORPHANED_MESSAGES: &str = r#"
 const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
     SELECT COUNT(*)
     FROM pgqrs_messages m
-    LEFT OUTER JOIN pgqrs_workers w ON m.worker_id = w.id
-    WHERE m.worker_id IS NOT NULL AND w.id IS NULL
+    LEFT OUTER JOIN pgqrs_workers pw ON m.producer_worker_id = pw.id
+    LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
+    WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+       OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
 "#;
 
 const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
@@ -70,20 +72,22 @@ const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
 const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
     SELECT COUNT(*)
     FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_workers w ON a.worker_id = w.id
-    WHERE a.worker_id IS NOT NULL AND w.id IS NULL
+    LEFT OUTER JOIN pgqrs_workers pw ON a.producer_worker_id = pw.id
+    LEFT OUTER JOIN pgqrs_workers cw ON a.consumer_worker_id = cw.id
+    WHERE (a.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+       OR (a.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
 "#;
 
 pub const DLQ_BATCH: &str = r#"
     WITH archived_msgs AS (
         DELETE FROM pgqrs_messages
         WHERE read_ct >= $1
-        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
     SELECT
-        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     FROM archived_msgs
     RETURNING original_msg_id;
 "#;
@@ -223,7 +227,7 @@ impl PgqrsAdmin {
             });
         }
 
-        // Check that all messages with worker_id have valid worker references
+        // Check that all messages with producer_worker_id or consumer_worker_id have valid worker references
         let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
             .fetch_one(&mut *tx)
             .await
@@ -237,7 +241,7 @@ impl PgqrsAdmin {
         if orphaned_message_workers > 0 {
             return Err(PgqrsError::Connection {
                 message: format!(
-                    "Found {} messages with invalid worker_id references",
+                    "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_message_workers
                 ),
             });
@@ -260,7 +264,7 @@ impl PgqrsAdmin {
             });
         }
 
-        // Check that all archived messages with worker_id have valid worker references
+        // Check that all archived messages with producer_worker_id or consumer_worker_id have valid worker references
         let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
             .fetch_one(&mut *tx)
             .await
@@ -274,7 +278,7 @@ impl PgqrsAdmin {
         if orphaned_archive_workers > 0 {
             return Err(PgqrsError::Connection {
                 message: format!(
-                    "Found {} archived messages with invalid worker_id references",
+                    "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_archive_workers
                 ),
             });

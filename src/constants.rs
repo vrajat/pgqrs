@@ -30,7 +30,7 @@ pub const VISIBILITY_TIMEOUT: u32 = 5;
 pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages
     WHERE id = ANY($1)
-    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct;
+    RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct;
 "#;
 
 // Parameterized SQL for unified pgqrs_archive table operations
@@ -40,14 +40,14 @@ pub const ARCHIVE_MESSAGE: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_messages
         WHERE id = $1
-        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
     SELECT
-        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     FROM archived_msg
-    RETURNING id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
+    RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
 "#;
 
 /// Archive batch of messages (efficient batch operation)
@@ -55,12 +55,12 @@ pub const ARCHIVE_BATCH: &str = r#"
     WITH archived_msgs AS (
         DELETE FROM pgqrs_messages
         WHERE id = ANY($1)
-        RETURNING id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
     SELECT
-        id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     FROM archived_msgs
     RETURNING original_msg_id;
 "#;
@@ -69,17 +69,17 @@ pub const ARCHIVE_BATCH: &str = r#"
 
 /// Get messages assigned to a specific worker
 pub const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct
     FROM pgqrs_messages
-    WHERE worker_id = $1
+    WHERE consumer_worker_id = $1
     ORDER BY id;
 "#;
 
 /// Release messages assigned to a worker (set worker_id to NULL and reset vt)
 pub const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
-    SET vt = NOW(), worker_id = NULL
-    WHERE worker_id = $1;
+    SET vt = NOW(), consumer_worker_id = NULL
+    WHERE consumer_worker_id = $1;
 "#;
 
 /// Lock queue row for exclusive access during deletion
@@ -122,9 +122,9 @@ pub const UPDATE_WORKER_STOPPED: &str = r#"
 /// Check if worker has any associated messages or archives
 pub const CHECK_WORKER_REFERENCES: &str = r#"
     SELECT COUNT(*) as total_references FROM (
-        SELECT 1 FROM pgqrs_messages WHERE worker_id = $1
+        SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = $1 OR consumer_worker_id = $1
         UNION ALL
-        SELECT 1 FROM pgqrs_archive WHERE worker_id = $1
+        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = $1 OR consumer_worker_id = $1
     ) refs
 "#;
 
@@ -136,9 +136,13 @@ pub const PURGE_OLD_WORKERS: &str = r#"
       AND id NOT IN (
           SELECT DISTINCT worker_id
           FROM (
-              SELECT worker_id FROM pgqrs_messages WHERE worker_id IS NOT NULL
+              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
               UNION
-              SELECT worker_id FROM pgqrs_archive WHERE worker_id IS NOT NULL
+              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+              UNION
+              SELECT producer_worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
           ) refs
       )
 "#;

@@ -54,8 +54,7 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 mod common;
 
 use pgqrs::{
-    types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo},
-    Consumer, Producer, Table,
+    Consumer, Producer, Table, types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo}
 };
 use serde::de::DeserializeOwned;
 use std::process::Command;
@@ -112,9 +111,18 @@ fn test_cli_create_send_dequeue_delete_queue() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let sent_message: QueueMessage = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let worker = pgqrs_admin
+            .register(
+                queue_name.to_string(),
+                "test_cli_create_send_dequeue_delete_host".to_string(),
+                8080,
+            )
+            .await
+            .unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
+            &worker,
             &pgqrs_admin.config,
         );
         producer
@@ -126,6 +134,8 @@ fn test_cli_create_send_dequeue_delete_queue() {
         sent_message.payload,
         serde_json::from_str::<serde_json::Value>(payload).unwrap()
     );
+    assert!(sent_message.producer_worker_id.is_some());
+    let producer_worker_id = sent_message.producer_worker_id.unwrap();
 
     let messages: Vec<QueueMessage> =
         run_cli_command_json(&db_url, &["queue", "messages", queue_name]);
@@ -140,28 +150,29 @@ fn test_cli_create_send_dequeue_delete_queue() {
     assert_eq!(message_in_queue.queue_id, created_queue.id);
 
     // Create worker
-    let created_worker: WorkerInfo = run_cli_command_json(
+    let consumer_worker: WorkerInfo = run_cli_command_json(
         &db_url,
         &[
             "worker",
             "register",
             queue_name,
             "test_cli_create_send_dequeue_delete_host",
-            "8080",
+            "8081",
         ],
     );
-    let worker_id = created_worker.id;
+    let consumer_worker_id = consumer_worker.id;
 
     // Dequeue message
     let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let worker = pgqrs_admin.get_worker_by_id(consumer_worker_id).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
+            &worker,
             &pgqrs_admin.config,
         );
-        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
-        consumer.dequeue(&worker).await.unwrap()
+        consumer.dequeue().await.unwrap()
     });
     assert!(
         dequeued_messages.len() == 1,
@@ -175,7 +186,10 @@ fn test_cli_create_send_dequeue_delete_queue() {
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
 
     // Delete worker
-    run_cli_command_expect_success(&db_url, &["worker", "delete", &worker_id.to_string()]);
+    run_cli_command_expect_success(&db_url, &["worker", "delete", &producer_worker_id.to_string()]);
+
+        // Delete worker
+    run_cli_command_expect_success(&db_url, &["worker", "delete", &consumer_worker_id.to_string()]);
 
     // Delete queue
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
@@ -212,9 +226,11 @@ fn test_cli_archive_functionality() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _sent_message: QueueMessage = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
+            &worker,
             &pgqrs_admin.config,
         );
         producer
@@ -225,13 +241,14 @@ fn test_cli_archive_functionality() {
 
     let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
+            &worker,
             &pgqrs_admin.config,
         );
-        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
-        consumer.dequeue(&worker).await.unwrap()
+        consumer.dequeue().await.unwrap()
     });
     assert_eq!(
         dequeued_messages.len(),
@@ -247,9 +264,11 @@ fn test_cli_archive_functionality() {
     // Archive the dequeued message
     let archive: Option<ArchivedMessage> = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
+            &worker,
             &pgqrs_admin.config,
         );
         consumer.archive(dequeued_message.id).await.unwrap()

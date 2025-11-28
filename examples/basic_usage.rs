@@ -63,10 +63,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let email_queue_info = admin.get_queue("email_queue").await?;
     let task_queue_info = admin.get_queue("task_queue").await?;
-    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info, &admin.config);
-    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info, &admin.config);
-    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &admin.config);
-    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &admin.config);
+    // Register workers for each queue
+    let email_producer = admin
+        .register(
+            email_queue_info.queue_name.clone(),
+            "http://localhost".to_string(),
+            3000,
+        )
+        .await?;
+    let task_producer = admin
+        .register(
+            task_queue_info.queue_name.clone(),
+            "http://localhost".to_string(),
+            3001,
+        )
+        .await?;
+
+    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info, &email_producer, &admin.config);
+    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info, &task_producer, &admin.config);
+    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &email_producer, &admin.config);
+    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &task_producer, &admin.config);
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;
@@ -115,16 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading messages...");
 
     // Create a worker.
-    let worker = admin
-        .register(
-            email_queue_info.queue_name.clone(),
-            "http://localhost".to_string(),
-            3000,
-        )
-        .await?;
-
     let email_messages = email_consumer
-        .dequeue_many_with_delay(&worker, 10, 2)
+        .dequeue_many_with_delay(10, 2)
         .await?;
     println!("Read {} newsletter messages", email_messages.len());
 
@@ -138,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_consumer.dequeue_many_with_delay(&worker, 5, 5).await?;
+    let task_messages = task_consumer.dequeue_many_with_delay(5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {

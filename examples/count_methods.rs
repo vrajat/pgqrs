@@ -77,6 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             read_ct: 0,
             enqueued_at: now,
             vt: now,
+            producer_worker_id: Some(worker1.id),
+            consumer_worker_id: None,
         })
         .await?;
 
@@ -87,6 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             read_ct: 0,
             enqueued_at: now,
             vt: now,
+            producer_worker_id: Some(worker1.id),
+            consumer_worker_id: None,
         })
         .await?;
 
@@ -97,6 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             read_ct: 0,
             enqueued_at: now,
             vt: now,
+            producer_worker_id: None,
+            consumer_worker_id: None,
         })
         .await?;
 
@@ -105,7 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert(pgqrs::types::NewArchivedMessage {
             original_msg_id: 100, // Simulated original message ID
             queue_id: queue1.id,
-            worker_id: Some(worker1.id),
+            producer_worker_id: Some(worker1.id),
+            consumer_worker_id: Some(worker1.id),
             payload: json!({"task": "completed_task_1"}),
             enqueued_at: now,
             vt: now,
@@ -118,7 +125,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert(pgqrs::types::NewArchivedMessage {
             original_msg_id: 101,
             queue_id: queue2.id,
-            worker_id: None,
+            producer_worker_id: None,
+            consumer_worker_id: None,
             payload: json!({"task": "completed_task_2"}),
             enqueued_at: now,
             vt: now,

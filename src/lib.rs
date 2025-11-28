@@ -25,13 +25,13 @@
 //!
 //! ### Consumer
 //! ```rust
-//! use pgqrs::{Consumer, WorkerInfo};
+//! use pgqrs::Consumer;
 //! use std::time::Duration;
 //!
 //! /// Poll for jobs from the queue and print them as they arrive
-//! async fn poll_and_print_jobs(consumer: &Consumer, worker: &WorkerInfo) -> Result<(), Box<dyn std::error::Error>> {
+//! async fn poll_and_print_jobs(consumer: &Consumer) -> Result<(), Box<dyn std::error::Error>> {
 //!     loop {
-//!         let messages = consumer.dequeue(worker).await?;
+//!         let messages = consumer.dequeue().await?;
 //!         if messages.is_empty() {
 //!             // No job found, wait before polling again
 //!             tokio::time::sleep(Duration::from_secs(2)).await;
