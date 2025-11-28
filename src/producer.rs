@@ -85,10 +85,7 @@ impl Producer {
             "Worker must be registered for this queue"
         );
         assert!(
-            matches!(
-                worker_info.status,
-                crate::types::WorkerStatus::Ready
-            ),
+            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
             "Worker must be active"
         );
         Self {
