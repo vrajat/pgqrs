@@ -79,10 +79,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info, &email_producer, &admin.config);
-    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info, &task_producer, &admin.config);
-    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &email_producer, &admin.config);
-    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &task_producer, &admin.config);
+    let email_consumer = Consumer::new(
+        admin.pool.clone(),
+        &email_queue_info,
+        &email_producer,
+        &admin.config,
+    );
+    let task_consumer = Consumer::new(
+        admin.pool.clone(),
+        &task_queue_info,
+        &task_producer,
+        &admin.config,
+    );
+    let email_producer = Producer::new(
+        admin.pool.clone(),
+        &email_queue_info,
+        &email_producer,
+        &admin.config,
+    );
+    let task_producer = Producer::new(
+        admin.pool.clone(),
+        &task_queue_info,
+        &task_producer,
+        &admin.config,
+    );
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;
@@ -131,9 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading messages...");
 
     // Create a worker.
-    let email_messages = email_consumer
-        .dequeue_many_with_delay(10, 2)
-        .await?;
+    let email_messages = email_consumer.dequeue_many_with_delay(10, 2).await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {

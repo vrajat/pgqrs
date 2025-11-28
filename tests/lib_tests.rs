@@ -288,7 +288,10 @@ async fn test_archive_nonexistent_message() {
         0
     );
 
-    admin.delete_worker(worker.id).await.expect("Failed to delete worker");
+    admin
+        .delete_worker(worker.id)
+        .await
+        .expect("Failed to delete worker");
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
@@ -452,10 +455,7 @@ async fn test_interval_parameter_syntax() {
     producer.enqueue(&message_payload).await.unwrap();
 
     // Test reading messages (which uses make_interval in READ_MESSAGES)
-    let messages = consumer
-        .dequeue_many_with_delay(30, 1)
-        .await
-        .unwrap(); // 30 seconds visibility timeout
+    let messages = consumer.dequeue_many_with_delay(30, 1).await.unwrap(); // 30 seconds visibility timeout
     assert_eq!(messages.len(), 1, "Should read one message");
 
     let message = &messages[0];

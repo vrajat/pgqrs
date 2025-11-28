@@ -88,7 +88,7 @@ async fn test_worker_message_assignment() {
 
     // Create a test queue
     let queue_info = admin.create_queue("message_queue").await.unwrap();
-    
+
     // Register a worker to verify the worker registration process
     let worker = admin
         .register(
@@ -98,7 +98,7 @@ async fn test_worker_message_assignment() {
         )
         .await
         .unwrap();
-    
+
     let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
     let messages = pgqrs::tables::PgqrsMessages::new(admin.pool.clone());
@@ -261,12 +261,12 @@ async fn test_worker_deletion_with_references() {
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    
+
     let worker = admin
         .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
-    
+
     let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
 
@@ -336,12 +336,12 @@ async fn test_worker_deletion_with_archived_references() {
     // Create a test queue and register a worker
     let queue_name = "test_worker_deletion_with_archived_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    
+
     let worker = admin
         .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
         .await
         .unwrap();
-    
+
     let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
 
@@ -381,7 +381,7 @@ async fn test_purge_old_workers_respects_references() {
     // Create a test queue
     let queue_name = "test_purge_old_workers_with_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    
+
     // Register two workers
     let worker1 = admin
         .register(queue_info.queue_name.clone(), "worker1".to_string(), 8081)
@@ -391,7 +391,7 @@ async fn test_purge_old_workers_respects_references() {
         .register(queue_info.queue_name.clone(), "worker2".to_string(), 8082)
         .await
         .unwrap();
-    
+
     let producer = Producer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config);
     let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config);
 

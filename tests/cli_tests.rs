@@ -54,7 +54,8 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 mod common;
 
 use pgqrs::{
-    Consumer, Producer, Table, types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo}
+    types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo},
+    Consumer, Producer, Table,
 };
 use serde::de::DeserializeOwned;
 use std::process::Command;
@@ -165,7 +166,10 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Dequeue message
     let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin.get_worker_by_id(consumer_worker_id).await.unwrap();
+        let worker = pgqrs_admin
+            .get_worker_by_id(consumer_worker_id)
+            .await
+            .unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
@@ -186,10 +190,16 @@ fn test_cli_create_send_dequeue_delete_queue() {
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
 
     // Delete worker
-    run_cli_command_expect_success(&db_url, &["worker", "delete", &producer_worker_id.to_string()]);
+    run_cli_command_expect_success(
+        &db_url,
+        &["worker", "delete", &producer_worker_id.to_string()],
+    );
 
-        // Delete worker
-    run_cli_command_expect_success(&db_url, &["worker", "delete", &consumer_worker_id.to_string()]);
+    // Delete worker
+    run_cli_command_expect_success(
+        &db_url,
+        &["worker", "delete", &consumer_worker_id.to_string()],
+    );
 
     // Delete queue
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);

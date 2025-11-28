@@ -79,8 +79,14 @@ impl Consumer {
         config: &crate::config::Config,
     ) -> Self {
         // Validate worker is active and matches queue
-        assert_eq!(worker_info.queue_id, queue_info.id, "Worker must be registered for this queue");
-        assert!(matches!(worker_info.status, crate::types::WorkerStatus::Ready), "Worker must be active");
+        assert_eq!(
+            worker_info.queue_id, queue_info.id,
+            "Worker must be registered for this queue"
+        );
+        assert!(
+            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
+            "Worker must be active"
+        );
         Self {
             pool,
             queue_info: queue_info.clone(),
@@ -101,7 +107,8 @@ impl Consumer {
     }
 
     pub async fn dequeue_many(&self, limit: usize) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many_with_delay(limit, VISIBILITY_TIMEOUT).await
+        self.dequeue_many_with_delay(limit, VISIBILITY_TIMEOUT)
+            .await
     }
 
     pub async fn dequeue_delay(&self, vt: u32) -> Result<Vec<QueueMessage>> {
@@ -116,7 +123,11 @@ impl Consumer {
     ///
     /// # Returns
     /// Vector of messages read from the queue.
-    pub async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
+    pub async fn dequeue_many_with_delay(
+        &self,
+        limit: usize,
+        vt: u32,
+    ) -> Result<Vec<QueueMessage>> {
         let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(self.queue_info.id)
             .bind(limit as i64)

@@ -72,11 +72,25 @@ impl Producer {
     /// * `queue_info` - Queue information including ID and name
     /// * `worker_info` - Worker information for this producer
     /// * `config` - Configuration including validation settings
-    pub fn new(pool: PgPool, queue_info: &QueueInfo, worker_info: &crate::types::WorkerInfo, config: &crate::config::Config) -> Self {
+    pub fn new(
+        pool: PgPool,
+        queue_info: &QueueInfo,
+        worker_info: &crate::types::WorkerInfo,
+        config: &crate::config::Config,
+    ) -> Self {
         let messages = PgqrsMessages::new(pool.clone());
         // Validate worker is active and matches queue
-        assert_eq!(worker_info.queue_id, queue_info.id, "Worker must be registered for this queue");
-        assert!(matches!(worker_info.status, crate::types::WorkerStatus::Ready | crate::types::WorkerStatus::ShuttingDown), "Worker must be active");
+        assert_eq!(
+            worker_info.queue_id, queue_info.id,
+            "Worker must be registered for this queue"
+        );
+        assert!(
+            matches!(
+                worker_info.status,
+                crate::types::WorkerStatus::Ready | crate::types::WorkerStatus::ShuttingDown
+            ),
+            "Worker must be active"
+        );
         Self {
             pool,
             queue_info: queue_info.clone(),
