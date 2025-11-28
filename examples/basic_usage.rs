@@ -61,17 +61,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "image_url": "https://example.com/image.jpg"
     });
 
-    let email_queue_info = admin.get_queue("email_queue").await?;
-    let task_queue_info = admin.get_queue("task_queue").await?;
+    let email_queue_info = admin.get_queue("email").await?;
+    let task_queue_info = admin.get_queue("task").await?;
     // Register workers for each queue
-    let email_producer = admin
+    let email_producing_worker = admin
         .register(
             email_queue_info.queue_name.clone(),
             "http://localhost".to_string(),
             3000,
         )
         .await?;
-    let task_producer = admin
+    let task_producing_worker = admin
         .register(
             task_queue_info.queue_name.clone(),
             "http://localhost".to_string(),
@@ -82,25 +82,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let email_consumer = Consumer::new(
         admin.pool.clone(),
         &email_queue_info,
-        &email_producer,
+        &email_producing_worker,
         &admin.config,
     );
     let task_consumer = Consumer::new(
         admin.pool.clone(),
         &task_queue_info,
-        &task_producer,
+        &task_producing_worker,
         &admin.config,
     );
     let email_producer = Producer::new(
         admin.pool.clone(),
         &email_queue_info,
-        &email_producer,
+        &email_producing_worker,
         &admin.config,
     );
     let task_producer = Producer::new(
         admin.pool.clone(),
         &task_queue_info,
-        &task_producer,
+        &task_producing_worker,
         &admin.config,
     );
 

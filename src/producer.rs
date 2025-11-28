@@ -87,7 +87,7 @@ impl Producer {
         assert!(
             matches!(
                 worker_info.status,
-                crate::types::WorkerStatus::Ready | crate::types::WorkerStatus::ShuttingDown
+                crate::types::WorkerStatus::Ready
             ),
             "Worker must be active"
         );

@@ -189,13 +189,12 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Purge queue
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
 
-    // Delete worker
+    // Delete workers
     run_cli_command_expect_success(
         &db_url,
         &["worker", "delete", &producer_worker_id.to_string()],
     );
 
-    // Delete worker
     run_cli_command_expect_success(
         &db_url,
         &["worker", "delete", &consumer_worker_id.to_string()],
