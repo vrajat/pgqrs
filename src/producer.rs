@@ -54,6 +54,8 @@ pub struct Producer {
     pub pool: PgPool,
     /// Queue information including ID and name
     queue_info: QueueInfo,
+    /// Worker information for this producer
+    worker_info: crate::types::WorkerInfo,
     /// Configuration for the queue including validation settings
     config: crate::config::Config,
     /// Payload validator for this queue
@@ -63,17 +65,33 @@ pub struct Producer {
 }
 
 impl Producer {
-    /// Create a new Producer instance for the specified queue.
+    /// Create a new Producer instance for the specified queue and worker.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
+    /// * `worker_info` - Worker information for this producer
     /// * `config` - Configuration including validation settings
-    pub fn new(pool: PgPool, queue_info: &QueueInfo, config: &crate::config::Config) -> Self {
+    pub fn new(
+        pool: PgPool,
+        queue_info: &QueueInfo,
+        worker_info: &crate::types::WorkerInfo,
+        config: &crate::config::Config,
+    ) -> Self {
         let messages = PgqrsMessages::new(pool.clone());
+        // Validate worker is active and matches queue
+        assert_eq!(
+            worker_info.queue_id, queue_info.id,
+            "Worker must be registered for this queue"
+        );
+        assert!(
+            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
+            "Worker must be active"
+        );
         Self {
             pool,
             queue_info: queue_info.clone(),
+            worker_info: worker_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             messages,
@@ -169,7 +187,15 @@ impl Producer {
         // Use the batch insert method from the messages table
         let ids = self
             .messages
-            .batch_insert(self.queue_info.id, payloads, 0, now, vt)
+            .batch_insert(
+                self.queue_info.id,
+                payloads,
+                0,
+                now,
+                vt,
+                Some(self.worker_info.id),
+                None,
+            )
             .await?;
 
         // Fetch all messages in a single query
@@ -224,13 +250,13 @@ impl Producer {
             read_ct: 0,
             enqueued_at: now,
             vt,
+            producer_worker_id: Some(self.worker_info.id),
+            consumer_worker_id: None,
         };
 
         let message = self.messages.insert(new_message).await?;
         Ok(message.id)
     }
-
-    // --- DLQ (Dead Letter Queue) Support ---
 
     /// Replay a failed message from the DLQ (archive) back to the active queue.
     ///

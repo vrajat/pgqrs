@@ -26,24 +26,23 @@
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
 use crate::error::Result;
 use crate::types::{ArchivedMessage, QueueMessage};
-use crate::WorkerInfo;
 use sqlx::PgPool;
 
 /// Read available messages from queue (with SKIP LOCKED)
 /// Select messages for worker with lock
 pub const DEQUEUE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages t
-    SET worker_id = $5, vt = NOW() + make_interval(secs => $4::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
+    SET consumer_worker_id = $5, vt = NOW() + make_interval(secs => $4::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
     FROM (
         SELECT id
         FROM pgqrs_messages
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL AND read_ct < $3
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND read_ct < $3
         ORDER BY id ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
     ) selected
     WHERE t.id = selected.id
-    RETURNING t.id, t.queue_id, t.worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
+    RETURNING t.id, t.queue_id, t.producer_worker_id, t.consumer_worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
 "#;
 
 /// Consumer interface for a specific queue.
@@ -59,6 +58,8 @@ pub struct Consumer {
     queue_info: crate::types::QueueInfo,
     /// Configuration for the queue
     config: crate::config::Config,
+    /// Worker information for this consumer
+    worker_info: crate::types::WorkerInfo,
 }
 
 impl Consumer {
@@ -74,11 +75,22 @@ impl Consumer {
     pub fn new(
         pool: PgPool,
         queue_info: &crate::types::QueueInfo,
+        worker_info: &crate::types::WorkerInfo,
         config: &crate::config::Config,
     ) -> Self {
+        // Validate worker is active and matches queue
+        assert_eq!(
+            worker_info.queue_id, queue_info.id,
+            "Worker must be registered for this queue"
+        );
+        assert!(
+            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
+            "Worker must be active"
+        );
         Self {
             pool,
             queue_info: queue_info.clone(),
+            worker_info: worker_info.clone(),
             config: config.clone(),
         }
     }
@@ -90,21 +102,17 @@ impl Consumer {
     ///
     /// # Returns
     /// Vector of messages read from the queue.
-    pub async fn dequeue(&self, worker: &WorkerInfo) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many(worker, 1).await
+    pub async fn dequeue(&self) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many(1).await
     }
 
-    pub async fn dequeue_many(
-        &self,
-        worker: &WorkerInfo,
-        limit: usize,
-    ) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many_with_delay(worker, limit, VISIBILITY_TIMEOUT)
+    pub async fn dequeue_many(&self, limit: usize) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(limit, VISIBILITY_TIMEOUT)
             .await
     }
 
-    pub async fn dequeue_delay(&self, worker: &WorkerInfo, vt: u32) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many_with_delay(worker, 1, vt).await
+    pub async fn dequeue_delay(&self, vt: u32) -> Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(1, vt).await
     }
 
     /// Read up to `limit` messages from the queue, with a custom visibility timeout.
@@ -117,7 +125,6 @@ impl Consumer {
     /// Vector of messages read from the queue.
     pub async fn dequeue_many_with_delay(
         &self,
-        worker: &WorkerInfo,
         limit: usize,
         vt: u32,
     ) -> Result<Vec<QueueMessage>> {
@@ -126,7 +133,7 @@ impl Consumer {
             .bind(limit as i64)
             .bind(self.config.max_read_ct)
             .bind(vt as i32)
-            .bind(worker.id) // worker_id
+            .bind(self.worker_info.id) // worker_id
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::PgqrsError::Connection {

@@ -23,11 +23,11 @@
 
 // SQL query constants
 const LIST_DLQ_MESSAGES: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
+    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
            read_ct, archived_at, dequeued_at
     FROM pgqrs_archive
     WHERE read_ct >= $1  -- max_attempts
-      AND worker_id IS NULL
+      AND consumer_worker_id IS NULL
       AND dequeued_at IS NULL
     ORDER BY archived_at DESC
     LIMIT $2 OFFSET $3;
@@ -37,17 +37,17 @@ const COUNT_DLQ_MESSAGES: &str = r#"
     SELECT COUNT(*)
     FROM pgqrs_archive
     WHERE read_ct >= $1  -- max_attempts
-      AND worker_id IS NULL
+      AND consumer_worker_id IS NULL
       AND dequeued_at IS NULL;
 "#;
 
 const ARCHIVE_LIST_WITH_WORKER: &str = r#"
-SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt,
+SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
        read_ct, archived_at, dequeued_at
 FROM pgqrs_archive
-WHERE worker_id = $1
+WHERE consumer_worker_id = $1
 ORDER BY archived_at DESC
-LIMIT $3 OFFSET $4
+LIMIT $2 OFFSET $3
 "#;
 
 const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
@@ -191,25 +191,25 @@ impl PgqrsArchive {
 
 // SQL constants for Table trait implementation
 const INSERT_ARCHIVE: &str = r#"
-    INSERT INTO pgqrs_archive (original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING id
 "#;
 
 const GET_ARCHIVE_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
     FROM pgqrs_archive
     WHERE id = $1
 "#;
 
 const LIST_ALL_ARCHIVE: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
     FROM pgqrs_archive
     ORDER BY archived_at DESC
 "#;
 
 const LIST_ARCHIVE_BY_QUEUE: &str = r#"
-    SELECT id, original_msg_id, queue_id, worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
     FROM pgqrs_archive
     WHERE queue_id = $1
     ORDER BY archived_at DESC
@@ -244,7 +244,8 @@ impl Table for PgqrsArchive {
         let archive_id: i64 = sqlx::query_scalar(INSERT_ARCHIVE)
             .bind(data.original_msg_id)
             .bind(data.queue_id)
-            .bind(data.worker_id)
+            .bind(data.producer_worker_id)
+            .bind(data.consumer_worker_id)
             .bind(data.payload.clone())
             .bind(data.enqueued_at)
             .bind(data.vt)
@@ -260,7 +261,8 @@ impl Table for PgqrsArchive {
             id: archive_id,
             original_msg_id: data.original_msg_id,
             queue_id: data.queue_id,
-            worker_id: data.worker_id,
+            producer_worker_id: data.producer_worker_id,
+            consumer_worker_id: data.consumer_worker_id,
             payload: data.payload,
             enqueued_at: data.enqueued_at,
             vt: data.vt,
@@ -426,7 +428,8 @@ mod tests {
         let new_archive = NewArchivedMessage {
             original_msg_id: 123,
             queue_id: 1,
-            worker_id: Some(456),
+            producer_worker_id: Some(456),
+            consumer_worker_id: Some(789),
             payload: json!({"test": "data"}),
             enqueued_at: Utc::now(),
             vt: Utc::now(),
@@ -436,7 +439,8 @@ mod tests {
 
         assert_eq!(new_archive.original_msg_id, 123);
         assert_eq!(new_archive.queue_id, 1);
-        assert_eq!(new_archive.worker_id, Some(456));
+        assert_eq!(new_archive.producer_worker_id, Some(456));
+        assert_eq!(new_archive.consumer_worker_id, Some(789));
         assert_eq!(new_archive.read_ct, 3);
     }
 

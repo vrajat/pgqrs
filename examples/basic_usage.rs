@@ -61,12 +61,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "image_url": "https://example.com/image.jpg"
     });
 
-    let email_queue_info = admin.get_queue("email_queue").await?;
-    let task_queue_info = admin.get_queue("task_queue").await?;
-    let email_consumer = Consumer::new(admin.pool.clone(), &email_queue_info, &admin.config);
-    let task_consumer = Consumer::new(admin.pool.clone(), &task_queue_info, &admin.config);
-    let email_producer = Producer::new(admin.pool.clone(), &email_queue_info, &admin.config);
-    let task_producer = Producer::new(admin.pool.clone(), &task_queue_info, &admin.config);
+    let email_queue_info = admin.get_queue("email").await?;
+    let task_queue_info = admin.get_queue("task").await?;
+    // Register workers for each queue
+    let email_producing_worker = admin
+        .register(
+            email_queue_info.queue_name.clone(),
+            "http://localhost".to_string(),
+            3000,
+        )
+        .await?;
+    let task_producing_worker = admin
+        .register(
+            task_queue_info.queue_name.clone(),
+            "http://localhost".to_string(),
+            3001,
+        )
+        .await?;
+
+    let email_consumer = Consumer::new(
+        admin.pool.clone(),
+        &email_queue_info,
+        &email_producing_worker,
+        &admin.config,
+    );
+    let task_consumer = Consumer::new(
+        admin.pool.clone(),
+        &task_queue_info,
+        &task_producing_worker,
+        &admin.config,
+    );
+    let email_producer = Producer::new(
+        admin.pool.clone(),
+        &email_queue_info,
+        &email_producing_worker,
+        &admin.config,
+    );
+    let task_producer = Producer::new(
+        admin.pool.clone(),
+        &task_queue_info,
+        &task_producing_worker,
+        &admin.config,
+    );
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;
@@ -115,17 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading messages...");
 
     // Create a worker.
-    let worker = admin
-        .register(
-            email_queue_info.queue_name.clone(),
-            "http://localhost".to_string(),
-            3000,
-        )
-        .await?;
-
-    let email_messages = email_consumer
-        .dequeue_many_with_delay(&worker, 10, 2)
-        .await?;
+    let email_messages = email_consumer.dequeue_many_with_delay(10, 2).await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -138,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_consumer.dequeue_many_with_delay(&worker, 5, 5).await?;
+    let task_messages = task_consumer.dequeue_many_with_delay(5, 5).await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {

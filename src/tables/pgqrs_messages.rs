@@ -11,19 +11,19 @@ use sqlx::PgPool;
 
 // SQL constants for message table operations
 const INSERT_MESSAGE: &str = r#"
-    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at;
+    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
 "#;
 
 const GET_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
     WHERE id = $1;
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
     WHERE queue_id = $1
     ORDER BY enqueued_at DESC
@@ -31,7 +31,7 @@ const LIST_MESSAGES_BY_QUEUE: &str = r#"
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
     ORDER BY enqueued_at DESC;
 "#;
@@ -42,13 +42,13 @@ const DELETE_MESSAGE_BY_ID: &str = r#"
 "#;
 
 const BATCH_INSERT_MESSAGES: &str = r#"
-    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt)
-    SELECT $1, unnest($2::jsonb[]), $3, $4, $5
+    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
+    SELECT $1, unnest($2::jsonb[]), $3, $4, $5, $6, $7
     RETURNING id;
 "#;
 
 const GET_MESSAGES_BY_IDS: &str = r#"
-    SELECT id, queue_id, worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
     WHERE id = ANY($1)
     ORDER BY id;
@@ -63,7 +63,7 @@ const UPDATE_MESSAGE_VT: &str = r#"
 const COUNT_PENDING_MESSAGES: &str = r#"
     SELECT COUNT(*)
     FROM pgqrs_messages
-    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND worker_id IS NULL;
+    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL;
 "#;
 
 /// Input data for creating a new message
@@ -74,6 +74,8 @@ pub struct NewMessage {
     pub read_ct: i32,
     pub enqueued_at: DateTime<Utc>,
     pub vt: DateTime<Utc>,
+    pub producer_worker_id: Option<i64>,
+    pub consumer_worker_id: Option<i64>,
 }
 
 /// Messages table CRUD operations for pgqrs.
@@ -111,6 +113,8 @@ impl PgqrsMessages {
         read_ct: i32,
         enqueued_at: DateTime<Utc>,
         vt: DateTime<Utc>,
+        producer_worker_id: Option<i64>,
+        consumer_worker_id: Option<i64>,
     ) -> Result<Vec<i64>> {
         let ids: Vec<i64> = sqlx::query_scalar(BATCH_INSERT_MESSAGES)
             .bind(queue_id)
@@ -118,6 +122,8 @@ impl PgqrsMessages {
             .bind(read_ct)
             .bind(enqueued_at)
             .bind(vt)
+            .bind(producer_worker_id)
+            .bind(consumer_worker_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -269,6 +275,8 @@ impl Table for PgqrsMessages {
             .bind(data.read_ct)
             .bind(data.enqueued_at)
             .bind(data.vt)
+            .bind(data.producer_worker_id)
+            .bind(data.consumer_worker_id)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -442,12 +450,16 @@ mod tests {
             read_ct: 0,
             enqueued_at: now,
             vt: now,
+            producer_worker_id: Some(1),
+            consumer_worker_id: None,
         };
 
         // Test that the NewMessage struct can be created
         assert_eq!(new_message.queue_id, 1);
         assert_eq!(new_message.read_ct, 0);
         assert_eq!(new_message.payload["test"], "data");
+        assert_eq!(new_message.producer_worker_id, Some(1));
+        assert_eq!(new_message.consumer_worker_id, None);
     }
 
     #[test]
