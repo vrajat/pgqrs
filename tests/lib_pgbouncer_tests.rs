@@ -44,8 +44,8 @@ async fn test_pgbouncer_happy_path() {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
     let queue_info = queue_result.unwrap();
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message through PgBouncer

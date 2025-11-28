@@ -84,25 +84,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &email_queue_info,
         &email_producing_worker,
         &admin.config,
-    );
+    )
+    .unwrap();
     let task_consumer = Consumer::new(
         admin.pool.clone(),
         &task_queue_info,
         &task_producing_worker,
         &admin.config,
-    );
+    )
+    .unwrap();
     let email_producer = Producer::new(
         admin.pool.clone(),
         &email_queue_info,
         &email_producing_worker,
         &admin.config,
-    );
+    )
+    .unwrap();
     let task_producer = Producer::new(
         admin.pool.clone(),
         &task_queue_info,
         &task_producing_worker,
         &admin.config,
-    );
+    )
+    .unwrap();
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;

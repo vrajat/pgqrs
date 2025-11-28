@@ -140,9 +140,9 @@ pub const PURGE_OLD_WORKERS: &str = r#"
               UNION
               SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
               UNION
-              SELECT producer_worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
               UNION
-              SELECT consumer_worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
+              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
           ) refs
       )
 "#;

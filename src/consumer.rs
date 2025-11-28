@@ -26,6 +26,7 @@
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
 use crate::error::Result;
 use crate::types::{ArchivedMessage, QueueMessage};
+use crate::PgqrsError;
 use sqlx::PgPool;
 
 /// Read available messages from queue (with SKIP LOCKED)
@@ -77,22 +78,24 @@ impl Consumer {
         queue_info: &crate::types::QueueInfo,
         worker_info: &crate::types::WorkerInfo,
         config: &crate::config::Config,
-    ) -> Self {
+    ) -> Result<Self> {
         // Validate worker is active and matches queue
-        assert_eq!(
-            worker_info.queue_id, queue_info.id,
-            "Worker must be registered for this queue"
-        );
-        assert!(
-            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
-            "Worker must be active"
-        );
-        Self {
+        if worker_info.queue_id != queue_info.id {
+            return Err(PgqrsError::ValidationFailed {
+                reason: "Worker must be registered for this queue".to_string(),
+            });
+        }
+        if !matches!(worker_info.status, crate::types::WorkerStatus::Ready) {
+            return Err(PgqrsError::ValidationFailed {
+                reason: "Worker must be active".to_string(),
+            });
+        }
+        Ok(Self {
             pool,
             queue_info: queue_info.clone(),
             worker_info: worker_info.clone(),
             config: config.clone(),
-        }
+        })
     }
 
     /// Read up to `limit` messages from the queue, using the default visibility timeout.

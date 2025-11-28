@@ -25,6 +25,7 @@ use crate::error::Result;
 use crate::tables::{PgqrsMessages, Table};
 use crate::types::{QueueInfo, QueueMessage};
 use crate::validation::PayloadValidator;
+use crate::PgqrsError;
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -77,25 +78,27 @@ impl Producer {
         queue_info: &QueueInfo,
         worker_info: &crate::types::WorkerInfo,
         config: &crate::config::Config,
-    ) -> Self {
-        let messages = PgqrsMessages::new(pool.clone());
+    ) -> Result<Self> {
         // Validate worker is active and matches queue
-        assert_eq!(
-            worker_info.queue_id, queue_info.id,
-            "Worker must be registered for this queue"
-        );
-        assert!(
-            matches!(worker_info.status, crate::types::WorkerStatus::Ready),
-            "Worker must be active"
-        );
-        Self {
+        if worker_info.queue_id != queue_info.id {
+            return Err(PgqrsError::ValidationFailed {
+                reason: "Worker must be registered for this queue".to_string(),
+            });
+        }
+        if !matches!(worker_info.status, crate::types::WorkerStatus::Ready) {
+            return Err(PgqrsError::ValidationFailed {
+                reason: "Worker must be active".to_string(),
+            });
+        }
+        let messages = PgqrsMessages::new(pool.clone());
+        Ok(Self {
             pool,
             queue_info: queue_info.clone(),
             worker_info: worker_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             messages,
-        }
+        })
     }
 
     /// Retrieve a message by its ID from the queue.

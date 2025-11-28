@@ -125,7 +125,8 @@ fn test_cli_create_send_dequeue_delete_queue() {
             &created_queue,
             &worker,
             &pgqrs_admin.config,
-        );
+        )
+        .unwrap();
         producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
             .await
@@ -175,7 +176,8 @@ fn test_cli_create_send_dequeue_delete_queue() {
             &created_queue,
             &worker,
             &pgqrs_admin.config,
-        );
+        )
+        .unwrap();
         consumer.dequeue().await.unwrap()
     });
     assert!(
@@ -241,7 +243,8 @@ fn test_cli_archive_functionality() {
             &created_queue,
             &worker,
             &pgqrs_admin.config,
-        );
+        )
+        .unwrap();
         producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
             .await
@@ -256,7 +259,8 @@ fn test_cli_archive_functionality() {
             &created_queue,
             &worker,
             &pgqrs_admin.config,
-        );
+        )
+        .unwrap();
         consumer.dequeue().await.unwrap()
     });
     assert_eq!(
@@ -279,7 +283,8 @@ fn test_cli_archive_functionality() {
             &created_queue,
             &worker,
             &pgqrs_admin.config,
-        );
+        )
+        .unwrap();
         consumer.archive(dequeued_message.id).await.unwrap()
     });
 

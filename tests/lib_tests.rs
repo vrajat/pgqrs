@@ -79,8 +79,10 @@ async fn test_send_message() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let messages = PgqrsMessages::new(admin.pool.clone());
 
     let payload = json!({
@@ -116,8 +118,10 @@ async fn test_archive_single_message() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let messages = PgqrsMessages::new(admin.pool.clone());
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Send a test message
@@ -183,8 +187,10 @@ async fn test_archive_batch_messages() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let messages = PgqrsMessages::new(admin.pool.clone());
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
 
@@ -268,7 +274,8 @@ async fn test_archive_nonexistent_message() {
         )
         .await
         .expect("Failed to register worker");
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
     let archived = consumer.archive(fake_msg_id).await;
@@ -314,8 +321,10 @@ async fn test_purge_archive() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Archive multiple messages
     for i in 0..3 {
@@ -419,7 +428,8 @@ async fn test_custom_schema_search_path() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let message_payload = serde_json::json!({"test": "custom_schema"});
     let send_result = producer.enqueue(&message_payload).await;
     assert!(
@@ -446,8 +456,10 @@ async fn test_interval_parameter_syntax() {
         .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message to test interval functionality
@@ -623,8 +635,10 @@ async fn test_queue_deletion_with_references() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let consumer =
+        pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let message_payload = json!({"test": "deletion_test"});
     producer.enqueue(&message_payload).await.unwrap();
 
@@ -705,7 +719,8 @@ async fn test_validation_payload_size_limit() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Small payload should work
     let small_payload = json!({"key": "value"});
@@ -754,7 +769,8 @@ async fn test_validation_forbidden_keys() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Valid payload should work
     let valid_payload = json!({"data": "value"});
@@ -797,7 +813,8 @@ async fn test_validation_required_keys() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Valid payload with required key should work
     let valid_payload = json!({"user_id": "123", "data": "value"});
@@ -837,7 +854,8 @@ async fn test_validation_object_depth() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
@@ -878,7 +896,8 @@ async fn test_batch_validation_atomic_failure() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Mix of valid and invalid payloads
     let payloads = vec![
@@ -926,7 +945,8 @@ async fn test_validation_string_length() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
 
     // Short string should work
     let valid_payload = json!({"key": "short_value"});
@@ -972,7 +992,8 @@ async fn test_validation_accessor_methods() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     // Test validation config accessor
     let validation_config = producer.validation_config();
     assert_eq!(validation_config.max_payload_size_bytes, 2048);
@@ -1002,7 +1023,8 @@ async fn test_dlq() {
         )
         .await
         .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config);
+    let producer =
+        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
     let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a test message
