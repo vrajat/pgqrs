@@ -32,8 +32,11 @@ use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Tabl
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, WorkerInfo};
 use chrono::{Duration, Utc};
+use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 // Verification queries
 const CHECK_TABLE_EXISTS: &str = r#"
@@ -149,56 +152,14 @@ impl PgqrsAdmin {
     /// # Returns
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
-        let statements = vec![
-            // Create enum types first
-            crate::constants::CREATE_WORKER_STATUS_ENUM.to_string(),
-            // Create repository tables
-            crate::constants::CREATE_QUEUE_INFO_TABLE_STATEMENT.to_string(),
-            crate::constants::CREATE_WORKERS_TABLE.to_string(),
-            // Create unified tables with foreign key dependencies
-            crate::constants::CREATE_PGQRS_MESSAGES_TABLE.to_string(),
-            crate::constants::CREATE_PGQRS_ARCHIVE_TABLE.to_string(),
-            // Create indexes for performance
-            crate::constants::CREATE_WORKERS_INDEX_QUEUE_STATUS.to_string(),
-            crate::constants::CREATE_WORKERS_INDEX_HEARTBEAT.to_string(),
-            // Create individual indexes for messages table
-            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_QUEUE_VT.to_string(),
-            crate::constants::CREATE_PGQRS_MESSAGES_INDEX_WORKER_ID.to_string(),
-            // Create individual indexes for archive table
-            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_QUEUE_ID.to_string(),
-            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_ARCHIVED_AT.to_string(),
-            crate::constants::CREATE_PGQRS_ARCHIVE_INDEX_ORIGINAL_MSG_ID.to_string(),
-        ];
-
-        self.run_statements_in_transaction(statements).await
-    }
-
-    /// Uninstall pgqrs from the database.
-    ///
-    /// This method removes all pgqrs infrastructure from the database:
-    /// - Unified messages table (pgqrs_messages)
-    /// - Unified archive table (pgqrs_archive)
-    /// - Queue repository table (pgqrs_queues)
-    /// - Worker repository table (pgqrs_workers)
-    /// - Worker status enum type
-    ///
-    /// # Returns
-    /// Ok if uninstallation succeeds, error otherwise.
-    pub async fn uninstall(&self) -> Result<()> {
-        // Build DROP statements in the correct order (considering foreign key dependencies)
-        let statements = vec![
-            // Drop tables with foreign keys first
-            crate::constants::DROP_PGQRS_MESSAGES_TABLE.to_string(),
-            crate::constants::DROP_PGQRS_ARCHIVE_TABLE.to_string(),
-            // Drop repository tables
-            crate::constants::DROP_QUEUE_REPOSITORY.to_string(),
-            crate::constants::DROP_WORKER_REPOSITORY.to_string(),
-            // Drop enum type last
-            crate::constants::DROP_WORKER_STATUS_ENUM.to_string(),
-        ];
-
-        // Execute all statements in a single transaction
-        self.run_statements_in_transaction(statements).await
+        // Run migrations using sqlx
+        MIGRATOR
+            .run(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Migration failed: {}", e),
+            })?;
+        Ok(())
     }
 
     /// Verify that pgqrs installation is valid and healthy.
@@ -509,44 +470,6 @@ impl PgqrsAdmin {
     /// Vector of [`QueueMetrics`] for all queues.
     pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         todo!("Implement Admin::all_queues_metrics")
-    }
-
-    ///
-    ///
-    ///
-    /// Execute multiple SQL statements in a single transaction.
-    ///
-    /// This method ensures that either all statements succeed or all are rolled back,
-    /// providing atomicity for operations that require multiple SQL commands.
-    ///
-    /// # Arguments
-    /// * `statements` - Vector of SQL statements to execute
-    ///
-    /// # Returns
-    /// Ok if all statements executed successfully, error otherwise.
-    async fn run_statements_in_transaction(&self, statements: Vec<String>) -> Result<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        for stmt in &statements {
-            sqlx::query(stmt)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| PgqrsError::Connection {
-                    message: e.to_string(),
-                })?;
-        }
-
-        tx.commit().await.map_err(|e| PgqrsError::Connection {
-            message: e.to_string(),
-        })?;
-
-        Ok(())
     }
 
     /// Create and register a new worker for a queue
