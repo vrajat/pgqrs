@@ -70,8 +70,8 @@ pub struct Producer {
 impl Producer {
     /// Create a new Producer instance for the specified queue and worker.
     ///
-    /// This method creates a Producer instance synchronously. For async initialization,
-    /// use `new_async`.
+    /// This method creates a Producer instance asynchronously. You must `.await` the result.
+    ///
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
