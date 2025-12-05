@@ -126,6 +126,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
             &worker,
             &pgqrs_admin.config,
         )
+        .await
         .unwrap();
         producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
@@ -177,6 +178,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
             &worker,
             &pgqrs_admin.config,
         )
+        .await
         .unwrap();
         consumer.dequeue().await.unwrap()
     });
@@ -244,6 +246,7 @@ fn test_cli_archive_functionality() {
             &worker,
             &pgqrs_admin.config,
         )
+        .await
         .unwrap();
         producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
@@ -260,6 +263,7 @@ fn test_cli_archive_functionality() {
             &worker,
             &pgqrs_admin.config,
         )
+        .await
         .unwrap();
         consumer.dequeue().await.unwrap()
     });
@@ -284,6 +288,7 @@ fn test_cli_archive_functionality() {
             &worker,
             &pgqrs_admin.config,
         )
+        .await
         .unwrap();
         consumer.archive(dequeued_message.id).await.unwrap()
     });

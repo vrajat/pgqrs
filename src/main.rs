@@ -337,7 +337,7 @@ async fn handle_queue_commands(
             writer.write_list(&messages_list, out)?;
         }
 
-        QueueCommands::ArchiveDlq {} => {
+        QueueCommands::ArchiveDlq => {
             tracing::info!("Moving dead letter queue messages to archive");
             let moved_ids = admin.dlq().await?;
             tracing::info!("Moved {} messages from DLQ to archive", moved_ids.len());

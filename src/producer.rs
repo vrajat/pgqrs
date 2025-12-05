@@ -25,7 +25,7 @@ use crate::error::Result;
 use crate::tables::{PgqrsMessages, Table};
 use crate::types::{QueueInfo, QueueMessage};
 use crate::validation::PayloadValidator;
-use crate::PgqrsError;
+use crate::{admin::PgqrsAdmin, PgqrsError};
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -63,17 +63,22 @@ pub struct Producer {
     validator: PayloadValidator,
     /// Messages table operations
     messages: PgqrsMessages,
+    /// Admin interface for worker management
+    admin: PgqrsAdmin,
 }
 
 impl Producer {
     /// Create a new Producer instance for the specified queue and worker.
+    ///
+    /// This method creates a Producer instance asynchronously. You must `.await` the result.
+    ///
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
     /// * `worker_info` - Worker information for this producer
     /// * `config` - Configuration including validation settings
-    pub fn new(
+    pub async fn new(
         pool: PgPool,
         queue_info: &QueueInfo,
         worker_info: &crate::types::WorkerInfo,
@@ -91,6 +96,7 @@ impl Producer {
             });
         }
         let messages = PgqrsMessages::new(pool.clone());
+        let admin = PgqrsAdmin::new(config).await?;
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
@@ -98,6 +104,7 @@ impl Producer {
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             messages,
+            admin,
         })
     }
 
@@ -193,11 +200,13 @@ impl Producer {
             .batch_insert(
                 self.queue_info.id,
                 payloads,
-                0,
-                now,
-                vt,
-                Some(self.worker_info.id),
-                None,
+                crate::tables::pgqrs_messages::BatchInsertParams {
+                    read_ct: 0,
+                    enqueued_at: now,
+                    vt,
+                    producer_worker_id: Some(self.worker_info.id),
+                    consumer_worker_id: None,
+                },
             )
             .await?;
 
@@ -285,5 +294,22 @@ impl Producer {
 
     pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
         self.validator.rate_limit_status()
+    }
+
+    /// Gracefully shutdown this producer.
+    ///
+    /// Transitions the worker status from Ready to ShuttingDown, then to Stopped.
+    /// Producer shutdown is straightforward since producers don't hold message locks.
+    ///
+    /// The shutdown process consists of two steps:
+    /// 1. `begin_shutdown()` - Sets status to ShuttingDown and records shutdown timestamp
+    /// 2. `mark_stopped()` - Sets status to Stopped (final state)
+    ///
+    /// # Returns
+    /// Ok if shutdown completes successfully
+    pub async fn shutdown(&self) -> Result<()> {
+        self.admin.begin_shutdown(self.worker_info.id).await?;
+        self.admin.mark_stopped(self.worker_info.id).await?;
+        Ok(())
     }
 }

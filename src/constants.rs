@@ -22,10 +22,8 @@ pub const VISIBILITY_TIMEOUT: u32 = 5;
 
 /// Get count of pending messages in queue
 // Note: Moved to tables/pgqrs_messages.rs as count_pending()
-
 /// Update message visibility timeout (extend lock)
 // Note: Moved to tables/pgqrs_messages.rs as extend_visibility()
-
 /// Delete batch of messages
 pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages
@@ -69,7 +67,7 @@ pub const ARCHIVE_BATCH: &str = r#"
 
 /// Get messages assigned to a specific worker
 pub const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
     WHERE consumer_worker_id = $1
     ORDER BY id;

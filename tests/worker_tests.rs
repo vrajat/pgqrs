@@ -99,9 +99,12 @@ async fn test_worker_message_assignment() {
         .await
         .unwrap();
 
-    let producer =
-        pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
     let messages = pgqrs::tables::PgqrsMessages::new(admin.pool.clone());
 
     // Add some messages to the queue
@@ -268,8 +271,12 @@ async fn test_worker_deletion_with_references() {
         .await
         .unwrap();
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
 
     let message = producer.enqueue(&json!({"test": "data"})).await.unwrap();
 
@@ -343,8 +350,12 @@ async fn test_worker_deletion_with_archived_references() {
         .await
         .unwrap();
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config).unwrap();
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
 
     // Send and process a message (this should create archived reference)
     let message = producer
@@ -393,8 +404,12 @@ async fn test_purge_old_workers_respects_references() {
         .await
         .unwrap();
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config).unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config).unwrap();
+    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config)
+        .await
+        .unwrap();
+    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config)
+        .await
+        .unwrap();
 
     // Stop both workers
     admin.mark_stopped(worker1.id).await.unwrap();

@@ -85,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &email_producing_worker,
         &admin.config,
     )
+    .await
     .unwrap();
     let task_consumer = Consumer::new(
         admin.pool.clone(),
@@ -92,6 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &task_producing_worker,
         &admin.config,
     )
+    .await
     .unwrap();
     let email_producer = Producer::new(
         admin.pool.clone(),
@@ -99,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &email_producing_worker,
         &admin.config,
     )
+    .await
     .unwrap();
     let task_producer = Producer::new(
         admin.pool.clone(),
@@ -106,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &task_producing_worker,
         &admin.config,
     )
+    .await
     .unwrap();
 
     let email_id = email_producer.enqueue(&email_payload).await?;
