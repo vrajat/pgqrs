@@ -25,7 +25,7 @@ use crate::error::Result;
 use crate::tables::{PgqrsMessages, Table};
 use crate::types::{QueueInfo, QueueMessage};
 use crate::validation::PayloadValidator;
-use crate::PgqrsError;
+use crate::{admin::PgqrsAdmin, PgqrsError};
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -63,17 +63,22 @@ pub struct Producer {
     validator: PayloadValidator,
     /// Messages table operations
     messages: PgqrsMessages,
+    /// Admin interface for worker management
+    admin: PgqrsAdmin,
 }
 
 impl Producer {
     /// Create a new Producer instance for the specified queue and worker.
+    ///
+    /// This method creates a Producer instance synchronously. For async initialization,
+    /// use `new_async`.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
     /// * `worker_info` - Worker information for this producer
     /// * `config` - Configuration including validation settings
-    pub fn new(
+    pub async fn new(
         pool: PgPool,
         queue_info: &QueueInfo,
         worker_info: &crate::types::WorkerInfo,
@@ -91,6 +96,7 @@ impl Producer {
             });
         }
         let messages = PgqrsMessages::new(pool.clone());
+        let admin = PgqrsAdmin::new(config).await?;
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
@@ -98,6 +104,7 @@ impl Producer {
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             messages,
+            admin,
         })
     }
 
@@ -285,5 +292,18 @@ impl Producer {
 
     pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
         self.validator.rate_limit_status()
+    }
+
+    /// Gracefully shutdown this producer.
+    ///
+    /// Transitions the worker status from Ready to ShuttingDown, then to Stopped.
+    /// Producer shutdown is straightforward since producers don't hold message locks.
+    ///
+    /// # Returns
+    /// Ok if shutdown completes successfully
+    pub async fn shutdown(&self) -> Result<()> {
+        self.admin.begin_shutdown(self.worker_info.id).await?;
+        self.admin.mark_stopped(self.worker_info.id).await?;
+        Ok(())
     }
 }

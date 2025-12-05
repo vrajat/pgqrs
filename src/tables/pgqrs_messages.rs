@@ -60,12 +60,6 @@ const UPDATE_MESSAGE_VT: &str = r#"
     WHERE id = $1;
 "#;
 
-const COUNT_PENDING_MESSAGES: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_messages
-    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL;
-"#;
-
 /// Input data for creating a new message
 #[derive(Debug)]
 pub struct NewMessage {
@@ -208,6 +202,102 @@ impl PgqrsMessages {
         Ok(rows_affected)
     }
 
+    /// Extend visibility timeout for multiple messages in a batch.
+    ///
+    /// Only extends messages owned by the specified worker to prevent unauthorized access.
+    ///
+    /// # Arguments
+    /// * `message_ids` - Vector of message IDs to extend
+    /// * `worker_id` - Worker ID that must own the messages
+    /// * `additional_seconds` - Additional seconds to add to current vt
+    ///
+    /// # Returns
+    /// Vector of booleans indicating success for each message (same order as input)
+    pub async fn extend_visibility_batch(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<Vec<bool>> {
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        const EXTEND_BATCH_VT: &str = r#"
+            UPDATE pgqrs_messages
+            SET vt = vt + make_interval(secs => $3::double precision)
+            WHERE id = ANY($1) AND consumer_worker_id = $2
+            RETURNING id;
+        "#;
+
+        let extended_ids: Vec<i64> = sqlx::query_scalar(EXTEND_BATCH_VT)
+            .bind(message_ids)
+            .bind(worker_id)
+            .bind(additional_seconds as i32)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to extend visibility timeout for batch messages: {}",
+                    e
+                ),
+            })?;
+
+        // For each input id, true if it was extended, false otherwise
+        let extended_set: std::collections::HashSet<i64> = extended_ids.into_iter().collect();
+        let result = message_ids
+            .iter()
+            .map(|id| extended_set.contains(id))
+            .collect();
+
+        Ok(result)
+    }
+
+    /// Release specific messages by IDs, making them available for other workers.
+    ///
+    /// Only releases messages owned by the specified worker to prevent unauthorized access.
+    ///
+    /// # Arguments
+    /// * `message_ids` - Vector of message IDs to release
+    /// * `worker_id` - Worker ID that must own the messages
+    ///
+    /// # Returns
+    /// Vector of booleans indicating success for each message (same order as input)
+    pub async fn release_messages_by_ids(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+    ) -> Result<Vec<bool>> {
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        const RELEASE_SPECIFIC_MESSAGES: &str = r#"
+            UPDATE pgqrs_messages
+            SET vt = NOW(), consumer_worker_id = NULL
+            WHERE id = ANY($1) AND consumer_worker_id = $2
+            RETURNING id;
+        "#;
+
+        let released_ids: Vec<i64> = sqlx::query_scalar(RELEASE_SPECIFIC_MESSAGES)
+            .bind(message_ids)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to release specific messages: {}", e),
+            })?;
+
+        // For each input id, true if it was released, false otherwise
+        let released_set: std::collections::HashSet<i64> = released_ids.into_iter().collect();
+        let result = message_ids
+            .iter()
+            .map(|id| released_set.contains(id))
+            .collect();
+
+        Ok(result)
+    }
+
     /// Count pending messages in a queue.
     ///
     /// # Arguments
@@ -216,8 +306,43 @@ impl PgqrsMessages {
     /// # Returns
     /// Number of pending (available for dequeue) messages
     pub async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(COUNT_PENDING_MESSAGES)
-            .bind(queue_id)
+        self.count_pending_filtered(queue_id, None).await
+    }
+
+    /// Count pending messages in a queue with optional worker filter.
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue ID to count messages for
+    /// * `worker_id` - Optional worker ID to filter messages by (messages locked by this worker)
+    ///
+    /// # Returns
+    /// Number of pending (available for dequeue) messages
+    pub async fn count_pending_filtered(
+        &self,
+        queue_id: i64,
+        worker_id: Option<i64>,
+    ) -> Result<i64> {
+        let mut query = r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL
+        "#
+        .to_string();
+
+        let mut param_count = 1;
+
+        if worker_id.is_some() {
+            param_count += 1;
+            query.push_str(&format!(" AND consumer_worker_id = ${}", param_count));
+        }
+
+        let mut sql_query = sqlx::query_scalar::<_, i64>(&query).bind(queue_id);
+
+        if let Some(wid) = worker_id {
+            sql_query = sql_query.bind(wid);
+        }
+
+        let count = sql_query
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {

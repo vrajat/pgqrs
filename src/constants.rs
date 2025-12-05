@@ -22,10 +22,8 @@ pub const VISIBILITY_TIMEOUT: u32 = 5;
 
 /// Get count of pending messages in queue
 // Note: Moved to tables/pgqrs_messages.rs as count_pending()
-
 /// Update message visibility timeout (extend lock)
 // Note: Moved to tables/pgqrs_messages.rs as extend_visibility()
-
 /// Delete batch of messages
 pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages

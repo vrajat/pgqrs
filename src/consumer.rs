@@ -25,8 +25,9 @@
 //! ```
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
 use crate::error::Result;
+use crate::tables::PgqrsMessages;
 use crate::types::{ArchivedMessage, QueueMessage};
-use crate::PgqrsError;
+use crate::{admin::PgqrsAdmin, PgqrsError};
 use sqlx::PgPool;
 
 /// Read available messages from queue (with SKIP LOCKED)
@@ -61,6 +62,8 @@ pub struct Consumer {
     config: crate::config::Config,
     /// Worker information for this consumer
     worker_info: crate::types::WorkerInfo,
+    /// Admin interface for worker management
+    admin: PgqrsAdmin,
 }
 
 impl Consumer {
@@ -73,7 +76,7 @@ impl Consumer {
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
     /// * `config` - Configuration for the queue
-    pub fn new(
+    pub async fn new(
         pool: PgPool,
         queue_info: &crate::types::QueueInfo,
         worker_info: &crate::types::WorkerInfo,
@@ -90,11 +93,13 @@ impl Consumer {
                 reason: "Worker must be active".to_string(),
             });
         }
+        let admin = PgqrsAdmin::new(config).await?;
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
             worker_info: worker_info.clone(),
             config: config.clone(),
+            admin,
         })
     }
 
@@ -234,5 +239,44 @@ impl Consumer {
             .map(|id| archived_set.contains(&id))
             .collect();
         Ok(result)
+    }
+
+    /// Gracefully shutdown this consumer.
+    ///
+    /// Releases messages that are held by this consumer but haven't started processing,
+    /// then transitions the worker status from Ready to ShuttingDown, then to Stopped.
+    ///
+    /// # Arguments
+    /// * `in_progress_ids` - Message IDs that are currently being processed and should NOT be released
+    ///
+    /// # Returns
+    /// Ok if shutdown completes successfully
+    pub async fn shutdown(&self, in_progress_ids: Vec<i64>) -> Result<()> {
+        // Get all messages currently held by this worker
+        let worker_messages = self.admin.get_worker_messages(self.worker_info.id).await?;
+
+        // Extract IDs of messages held by this worker
+        let held_message_ids: Vec<i64> = worker_messages.iter().map(|msg| msg.id).collect();
+
+        // Filter out messages that are currently in progress
+        let in_progress_set: std::collections::HashSet<i64> = in_progress_ids.into_iter().collect();
+        let messages_to_release: Vec<i64> = held_message_ids
+            .into_iter()
+            .filter(|id| !in_progress_set.contains(id))
+            .collect();
+
+        // Release messages that haven't started processing
+        if !messages_to_release.is_empty() {
+            let messages = PgqrsMessages::new(self.pool.clone());
+            messages
+                .release_messages_by_ids(&messages_to_release, self.worker_info.id)
+                .await?;
+        }
+
+        // Transition worker status
+        self.admin.begin_shutdown(self.worker_info.id).await?;
+        self.admin.mark_stopped(self.worker_info.id).await?;
+
+        Ok(())
     }
 }
