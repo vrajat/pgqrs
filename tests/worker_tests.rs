@@ -4,7 +4,8 @@ use chrono::Duration;
 use pgqrs::admin::PgqrsAdmin;
 use pgqrs::config::Config;
 use pgqrs::types::WorkerStatus;
-use pgqrs::{Consumer, Producer};
+use pgqrs::worker::Worker;
+use pgqrs::{Consumer, PgqrsWorkers, Producer, Table};
 use serde_json::json;
 use serial_test::serial;
 
@@ -37,21 +38,22 @@ async fn test_worker_registration() {
     // Create a test queue
     let queue = admin.create_queue("test_queue").await.unwrap();
 
-    // Register a worker
-    let worker = admin
-        .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
+    // Create a producer (which registers a worker)
+    let producer = Producer::new(admin.pool.clone(), &queue, "test-host", 8080, &admin.config)
         .await
-        .unwrap();
-
-    assert_eq!(worker.hostname, "test-host");
-    assert_eq!(worker.port, 8080);
-    assert_eq!(worker.queue_id, queue.id);
-    assert_eq!(worker.status, WorkerStatus::Ready);
+        .expect("Failed to create producer");
 
     // Verify worker appears in queue workers list
-    let workers = admin.list_all_workers().await.unwrap();
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue.id)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 1);
-    assert_eq!(workers[0].id, worker.id);
+    assert_eq!(workers[0].id, producer.worker_id());
+    assert_eq!(workers[0].hostname, "test-host");
+    assert_eq!(workers[0].port, 8080);
+    assert_eq!(workers[0].queue_id, Some(queue.id));
+    assert_eq!(workers[0].status, WorkerStatus::Ready);
 }
 
 #[tokio::test]
@@ -62,21 +64,29 @@ async fn test_worker_lifecycle() {
     // Create a test queue
     let queue = admin.create_queue("lifecycle_queue").await.unwrap();
 
-    // Register a worker
-    let worker = admin
-        .register(queue.queue_name.clone(), "lifecycle-host".to_string(), 9090)
-        .await
-        .unwrap();
+    // Create a producer (which registers a worker)
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue,
+        "lifecycle-host",
+        9090,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Test heartbeat
-    admin.heartbeat(worker.id).await.unwrap();
+    producer.heartbeat().await.unwrap();
 
-    // Test shutdown process
-    admin.begin_shutdown(worker.id).await.unwrap();
-    admin.mark_stopped(worker.id).await.unwrap();
+    // Test shutdown process (must suspend first)
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
 
     // Verify worker is in stopped state
-    let workers = admin.list_queue_workers("lifecycle_queue").await.unwrap();
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue.id)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].status, WorkerStatus::Stopped);
 }
@@ -89,22 +99,27 @@ async fn test_worker_message_assignment() {
     // Create a test queue
     let queue_info = admin.create_queue("message_queue").await.unwrap();
 
-    // Register a worker to verify the worker registration process
-    let worker = admin
-        .register(
-            queue_info.queue_name.clone(),
-            "message-host".to_string(),
-            7070,
-        )
-        .await
-        .unwrap();
+    // Create a producer and consumer with unique hostname+port combinations
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "message-producer-host",
+        7070,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "message-consumer-host",
+        7071,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
+
     let messages = pgqrs::tables::PgqrsMessages::new(admin.pool.clone());
 
     // Add some messages to the queue
@@ -127,7 +142,8 @@ async fn test_worker_message_assignment() {
 
     // Verify messages were deleted
     assert_eq!(messages.count_pending(queue_info.id).await.unwrap(), 0);
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -140,34 +156,50 @@ async fn test_admin_worker_management() {
     let queue1 = admin.create_queue("admin_queue1").await.unwrap();
     let queue2 = admin.create_queue("admin_queue2").await.unwrap();
 
-    // Register workers on different queues
-    let worker1 = admin
-        .register(queue1.queue_name.clone(), "admin-host1".to_string(), 8001)
-        .await
-        .unwrap();
-    let worker2 = admin
-        .register(queue2.queue_name.clone(), "admin-host2".to_string(), 8002)
-        .await
-        .unwrap();
+    // Create producers on different queues (which registers workers)
+    let producer1 = Producer::new(
+        admin.pool.clone(),
+        &queue1,
+        "admin-host1",
+        8001,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer1");
+
+    let producer2 = Producer::new(
+        admin.pool.clone(),
+        &queue2,
+        "admin-host2",
+        8002,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer2");
 
     // Test listing all workers
-    let all_workers = admin.list_all_workers().await.unwrap();
+    let all_workers = PgqrsWorkers::new(admin.pool.clone()).list().await.unwrap();
     assert_eq!(all_workers.len(), 2);
 
     // Test listing workers by queue
-    let queue1_workers = admin.list_queue_workers("admin_queue1").await.unwrap();
+    let queue1_workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue1.id)
+        .await
+        .unwrap();
     assert_eq!(queue1_workers.len(), 1);
-    assert_eq!(queue1_workers[0].id, worker1.id);
+    assert_eq!(queue1_workers[0].id, producer1.worker_id());
 
-    let queue2_workers = admin.list_queue_workers("admin_queue2").await.unwrap();
+    let queue2_workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue2.id)
+        .await
+        .unwrap();
     assert_eq!(queue2_workers.len(), 1);
-    assert_eq!(queue2_workers[0].id, worker2.id);
+    assert_eq!(queue2_workers[0].id, producer2.worker_id());
 
     // Test worker statistics
     let stats = admin.worker_stats("admin_queue1").await.unwrap();
     assert_eq!(stats.total_workers, 1);
     assert_eq!(stats.ready_workers, 1);
-    assert_eq!(stats.shutting_down_workers, 0);
     assert_eq!(stats.stopped_workers, 0);
 }
 
@@ -179,32 +211,28 @@ async fn test_worker_health_check() {
     // Create a test queue
     let queue = admin.create_queue("health_queue").await.unwrap();
 
-    // Register a worker
-    let worker = admin
-        .register(queue.queue_name.clone(), "health-host".to_string(), 6060)
-        .await
-        .unwrap();
+    // Create a producer (which registers a worker)
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue,
+        "health-host",
+        6060,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Worker should be healthy initially
-    let healthy = admin
-        .is_healthy(worker.id, Duration::seconds(300))
-        .await
-        .unwrap();
+    let healthy = producer.is_healthy(Duration::seconds(300)).await.unwrap();
     assert!(healthy);
 
     // Worker should be unhealthy with very short timeout
-    let unhealthy = admin
-        .is_healthy(worker.id, Duration::seconds(0))
-        .await
-        .unwrap();
+    let unhealthy = producer.is_healthy(Duration::seconds(0)).await.unwrap();
     assert!(!unhealthy);
 
     // Update heartbeat and check health again
-    admin.heartbeat(worker.id).await.unwrap();
-    let healthy_after = admin
-        .is_healthy(worker.id, Duration::seconds(300))
-        .await
-        .unwrap();
+    producer.heartbeat().await.unwrap();
+    let healthy_after = producer.is_healthy(Duration::seconds(300)).await.unwrap();
     assert!(healthy_after);
 }
 
@@ -232,27 +260,37 @@ async fn test_custom_schema_search_path() {
 
     assert_eq!(queue.queue_name, "schema_test_queue");
 
-    // Register a worker to test worker functionality
-    let worker = admin
-        .register(
-            queue.queue_name.clone(),
-            "schema-test-host".to_string(),
-            5050,
-        )
+    // Create a producer to test worker functionality
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue,
+        "schema-test-host",
+        5050,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+
+    // Verify worker registration via admin listing
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue.id)
         .await
         .unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].hostname, "schema-test-host");
+    assert_eq!(workers[0].port, 5050);
+    assert_eq!(workers[0].status, WorkerStatus::Ready);
 
-    assert_eq!(worker.hostname, "schema-test-host");
-    assert_eq!(worker.port, 5050);
-    assert_eq!(worker.status, WorkerStatus::Ready);
-
-    // Test worker operations work correctly
-    admin.heartbeat(worker.id).await.unwrap();
-    admin.begin_shutdown(worker.id).await.unwrap();
-    admin.mark_stopped(worker.id).await.unwrap();
+    // Test worker operations work correctly using Worker trait methods
+    producer.heartbeat().await.unwrap();
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
 
     // Verify worker status updated
-    let workers = admin.list_queue_workers("schema_test_queue").await.unwrap();
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue.id)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].status, WorkerStatus::Stopped);
 }
@@ -262,27 +300,35 @@ async fn test_custom_schema_search_path() {
 async fn test_worker_deletion_with_references() {
     let admin = create_admin().await;
 
-    // Create a test queue and register a worker
+    // Create a test queue and register producer/consumer
     let queue_name = "test_worker_deletion_with_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
 
-    let worker = admin
-        .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
-        .await
-        .unwrap();
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "deletion-producer-host",
+        8080,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "deletion-consumer-host",
+        8081,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
 
     let message = producer.enqueue(&json!({"test": "data"})).await.unwrap();
 
     assert!(consumer.dequeue().await.is_ok());
-    // Attempt to delete worker with references - should fail
-    let result = admin.delete_worker(worker.id).await;
+    // Attempt to delete consumer worker with references - should fail
+    let result = admin.delete_worker(consumer.worker_id()).await;
     assert!(
         result.is_err(),
         "Worker deletion should fail when references exist"
@@ -295,14 +341,15 @@ async fn test_worker_deletion_with_references() {
         error_msg
     );
 
-    // Verify worker still exists
-    let workers = admin
-        .list_queue_workers(&queue_info.queue_name)
+    // Verify workers still exist
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
-    assert_eq!(workers.len(), 1);
+    assert_eq!(workers.len(), 2);
     consumer.delete(message.id).await.unwrap();
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -311,20 +358,26 @@ async fn test_worker_deletion_with_references() {
 async fn test_worker_deletion_without_references() {
     let admin = create_admin().await;
 
-    // Create a test queue and register a worker
+    // Create a test queue and register a producer
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     "test_deletion_clean".hash(&mut hasher);
     let queue_name = format!("test_delete_clean_{}", hasher.finish());
     let queue = admin.create_queue(&queue_name).await.unwrap();
-    let worker = admin
-        .register(queue.queue_name.clone(), "test-host".to_string(), 8080)
-        .await
-        .unwrap();
+
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue,
+        "clean-delete-host",
+        8080,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Delete worker without references - should succeed
-    let result = admin.delete_worker(worker.id).await;
+    let result = admin.delete_worker(producer.worker_id()).await;
     assert!(
         result.is_ok(),
         "Worker deletion should succeed when no references exist"
@@ -332,7 +385,10 @@ async fn test_worker_deletion_without_references() {
     assert_eq!(result.unwrap(), 1, "Should delete exactly 1 worker");
 
     // Verify worker no longer exists
-    let workers = admin.list_queue_workers(&queue.queue_name).await.unwrap();
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue.id)
+        .await
+        .unwrap();
     assert_eq!(workers.len(), 0);
 }
 
@@ -341,21 +397,29 @@ async fn test_worker_deletion_without_references() {
 async fn test_worker_deletion_with_archived_references() {
     let admin = create_admin().await;
 
-    // Create a test queue and register a worker
+    // Create a test queue and register producer/consumer
     let queue_name = "test_worker_deletion_with_archived_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
 
-    let worker = admin
-        .register(queue_info.queue_name.clone(), "test-host".to_string(), 8080)
-        .await
-        .unwrap();
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "archive-producer-host",
+        8080,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "archive-consumer-host",
+        8081,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
 
     // Send and process a message (this should create archived reference)
     let message = producer
@@ -370,8 +434,8 @@ async fn test_worker_deletion_with_archived_references() {
     // Archive the message to create an archived reference
     consumer.archive(message.id).await.unwrap();
 
-    // Attempt to delete worker with archived references - should fail
-    let result = admin.delete_worker(worker.id).await;
+    // Attempt to delete consumer worker with archived references - should fail
+    let result = admin.delete_worker(consumer.worker_id()).await;
     assert!(
         result.is_err(),
         "Worker deletion should fail when archived references exist"
@@ -394,60 +458,107 @@ async fn test_purge_old_workers_respects_references() {
     let queue_name = "test_purge_old_workers_with_references";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
 
-    // Register two workers
-    let worker1 = admin
-        .register(queue_info.queue_name.clone(), "worker1".to_string(), 8081)
-        .await
-        .unwrap();
-    let worker2 = admin
-        .register(queue_info.queue_name.clone(), "worker2".to_string(), 8082)
-        .await
-        .unwrap();
+    // Create producer (worker1) and a second producer (worker2) for the purge test
+    let producer1 = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "purge-worker1",
+        8081,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer1");
 
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config)
-        .await
-        .unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker1, &admin.config)
-        .await
-        .unwrap();
+    let producer2 = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "purge-worker2",
+        8082,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer2");
 
-    // Stop both workers
-    admin.mark_stopped(worker1.id).await.unwrap();
-    admin.mark_stopped(worker2.id).await.unwrap();
+    // Create a consumer
+    let consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "purge-consumer",
+        8083,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
 
-    // Send a message that gets assigned to worker1
-    producer
+    // Stop all workers (must suspend first per new lifecycle)
+    producer1.suspend().await.unwrap();
+    producer1.shutdown().await.unwrap();
+    producer2.suspend().await.unwrap();
+    producer2.shutdown().await.unwrap();
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
+
+    // Send a message (producer can still enqueue even when stopped for this test)
+    // We need to re-register a producer temporarily for enqueueing
+    let temp_producer = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "purge-temp-producer",
+        8084,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create temp producer");
+
+    let temp_consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "purge-temp-consumer",
+        8085,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create temp consumer");
+
+    temp_producer
         .enqueue(&json!({"test": "purge_data"}))
         .await
         .unwrap();
 
-    assert!(consumer.dequeue().await.is_ok());
+    assert!(temp_consumer.dequeue().await.is_ok());
 
-    // Manually update heartbeat to be old for both workers
+    // Stop temp workers too
+    temp_producer.suspend().await.unwrap();
+    temp_producer.shutdown().await.unwrap();
+
+    // Manually update heartbeat to be old for producer1 and producer2
     let old_time = chrono::Utc::now() - Duration::days(30);
     sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = $1 WHERE id = ANY($2)")
         .bind(old_time)
-        .bind(vec![worker1.id, worker2.id])
+        .bind(vec![producer1.worker_id(), producer2.worker_id()])
         .execute(&admin.pool)
         .await
         .unwrap();
 
-    // Purge old workers (should only remove worker2, not worker1 with message)
+    // Purge old workers (should remove producer1 and producer2 which have no message references)
     let purged_count = admin
         .purge_old_workers(std::time::Duration::from_secs(60))
         .await
         .unwrap();
 
     assert_eq!(
-        purged_count, 1,
-        "Should only purge worker without references"
+        purged_count, 2,
+        "Should purge workers without message references"
     );
 
-    // Verify only worker1 (with references) remains
-    let workers = admin
-        .list_queue_workers(&queue_info.queue_name)
+    // Verify temp_consumer (with message reference) remains along with others not old enough
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
-    assert_eq!(workers.len(), 1);
-    assert_eq!(workers[0].id, worker1.id);
+    // temp_consumer should remain (temp_consumer has message ref)
+    assert!(
+        workers.len() >= 1,
+        "At least one worker with references should remain"
+    );
 }

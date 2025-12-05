@@ -189,8 +189,10 @@ pub struct WorkerInfo {
     pub hostname: String,
     /// Port number for the worker
     pub port: i32,
-    /// Queue ID this worker is processing
-    pub queue_id: i64,
+    /// Queue ID this worker is processing (None for Admin workers)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub queue_id: Option<i64>,
     /// Timestamp when the worker started
     pub started_at: DateTime<Utc>,
     /// Last heartbeat timestamp
@@ -204,11 +206,18 @@ pub struct WorkerInfo {
 
 impl fmt::Display for WorkerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
-            self.id, self.hostname, self.port, self.queue_id, self.status
-        )
+        match self.queue_id {
+            Some(queue_id) => write!(
+                f,
+                "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
+                self.id, self.hostname, self.port, queue_id, self.status
+            ),
+            None => write!(
+                f,
+                "WorkerInfo {{ id: {}, hostname: {}, port: {}, queue_id: None, status: {:?} }}",
+                self.id, self.hostname, self.port, self.status
+            ),
+        }
     }
 }
 
@@ -218,8 +227,8 @@ impl fmt::Display for WorkerInfo {
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,
-    /// Worker is shutting down gracefully
-    ShuttingDown,
+    /// Worker is suspended (not accepting new work, can be resumed or shut down)
+    Suspended,
     /// Worker has stopped
     Stopped,
 }
@@ -228,7 +237,7 @@ impl fmt::Display for WorkerStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WorkerStatus::Ready => write!(f, "ready"),
-            WorkerStatus::ShuttingDown => write!(f, "shutting_down"),
+            WorkerStatus::Suspended => write!(f, "suspended"),
             WorkerStatus::Stopped => write!(f, "stopped"),
         }
     }
@@ -241,8 +250,8 @@ pub struct WorkerStats {
     pub total_workers: u32,
     /// Number of ready workers
     pub ready_workers: u32,
-    /// Number of workers shutting down
-    pub shutting_down_workers: u32,
+    /// Number of suspended workers
+    pub suspended_workers: u32,
     /// Number of stopped workers
     pub stopped_workers: u32,
     /// Average messages per worker
@@ -257,8 +266,8 @@ impl fmt::Display for WorkerStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WorkerStats {{ total: {}, ready: {}, shutting_down: {}, stopped: {}, avg_messages: {:.2} }}",
-            self.total_workers, self.ready_workers, self.shutting_down_workers,
+            "WorkerStats {{ total: {}, ready: {}, suspended: {}, stopped: {}, avg_messages: {:.2} }}",
+            self.total_workers, self.ready_workers, self.suspended_workers,
             self.stopped_workers, self.average_messages_per_worker
         )
     }

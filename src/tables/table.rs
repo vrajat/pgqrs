@@ -26,7 +26,7 @@ use crate::error::Result;
 /// let new_worker = NewWorker {
 ///     hostname: "worker-1".to_string(),
 ///     port: 8080,
-///     queue_id: 1,
+///     queue_id: Some(1),  // None for Admin workers
 /// };
 ///
 /// // Insert returns full WorkerInfo with generated ID and timestamps

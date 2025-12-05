@@ -99,4 +99,24 @@ pub enum PgqrsError {
         actual_bytes: usize,
         max_bytes: usize,
     },
+
+    /// Invalid worker state transition
+    #[error("Invalid state transition from {from} to {to}: {reason}")]
+    InvalidStateTransition {
+        from: String,
+        to: String,
+        reason: String,
+    },
+
+    /// Worker has pending messages that prevent state transition
+    #[error("Worker has {count} pending messages: {reason}")]
+    WorkerHasPendingMessages { count: u64, reason: String },
+
+    /// Invalid worker type for operation
+    #[error("Invalid worker type: {message}")]
+    InvalidWorkerType { message: String },
+
+    /// Worker not found
+    #[error("Worker with id '{id}' not found")]
+    WorkerNotFound { id: i64 },
 }

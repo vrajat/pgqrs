@@ -63,54 +63,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let email_queue_info = admin.get_queue("email").await?;
     let task_queue_info = admin.get_queue("task").await?;
-    // Register workers for each queue
-    let email_producing_worker = admin
-        .register(
-            email_queue_info.queue_name.clone(),
-            "http://localhost".to_string(),
-            3000,
-        )
-        .await?;
-    let task_producing_worker = admin
-        .register(
-            task_queue_info.queue_name.clone(),
-            "http://localhost".to_string(),
-            3001,
-        )
-        .await?;
+
+    // Create producers and consumers for each queue
+    // Producer and Consumer now handle their own worker registration
+    let email_producer = Producer::new(
+        admin.pool.clone(),
+        &email_queue_info,
+        "localhost",
+        3000,
+        &admin.config,
+    )
+    .await?;
+
+    let task_producer = Producer::new(
+        admin.pool.clone(),
+        &task_queue_info,
+        "localhost",
+        3001,
+        &admin.config,
+    )
+    .await?;
 
     let email_consumer = Consumer::new(
         admin.pool.clone(),
         &email_queue_info,
-        &email_producing_worker,
+        "localhost",
+        3002,
         &admin.config,
     )
-    .await
-    .unwrap();
+    .await?;
+
     let task_consumer = Consumer::new(
         admin.pool.clone(),
         &task_queue_info,
-        &task_producing_worker,
+        "localhost",
+        3003,
         &admin.config,
     )
-    .await
-    .unwrap();
-    let email_producer = Producer::new(
-        admin.pool.clone(),
-        &email_queue_info,
-        &email_producing_worker,
-        &admin.config,
-    )
-    .await
-    .unwrap();
-    let task_producer = Producer::new(
-        admin.pool.clone(),
-        &task_queue_info,
-        &task_producing_worker,
-        &admin.config,
-    )
-    .await
-    .unwrap();
+    .await?;
 
     let email_id = email_producer.enqueue(&email_payload).await?;
     let task_id = task_producer.enqueue(&task_payload).await?;

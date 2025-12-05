@@ -54,7 +54,8 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 mod common;
 
 use pgqrs::{
-    types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo},
+    types::{ArchivedMessage, QueueInfo, QueueMessage},
+    worker::Worker,
     Consumer, Producer, Table,
 };
 use serde::de::DeserializeOwned;
@@ -108,37 +109,30 @@ fn test_cli_create_send_dequeue_delete_queue() {
 
     let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").unwrap();
 
-    // Send message
+    // Send message using a Producer
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let sent_message: QueueMessage = rt.block_on(async {
+    let (sent_message, producer_worker_id): (QueueMessage, i64) = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin
-            .register(
-                queue_name.to_string(),
-                "test_cli_create_send_dequeue_delete_host".to_string(),
-                8080,
-            )
-            .await
-            .unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
-            &worker,
+            "test_cli_create_send_dequeue_delete_producer_host",
+            8080,
             &pgqrs_admin.config,
         )
         .await
-        .unwrap();
-        producer
+        .expect("Failed to create producer");
+        let msg = producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
             .await
-            .unwrap()
+            .unwrap();
+        (msg, producer.worker_id())
     });
     assert_eq!(
         sent_message.payload,
         serde_json::from_str::<serde_json::Value>(payload).unwrap()
     );
     assert!(sent_message.producer_worker_id.is_some());
-    let producer_worker_id = sent_message.producer_worker_id.unwrap();
 
     let messages: Vec<QueueMessage> =
         run_cli_command_json(&db_url, &["queue", "messages", queue_name]);
@@ -152,35 +146,20 @@ fn test_cli_create_send_dequeue_delete_queue() {
     assert_eq!(message_in_queue.payload, sent_message.payload);
     assert_eq!(message_in_queue.queue_id, created_queue.id);
 
-    // Create worker
-    let consumer_worker: WorkerInfo = run_cli_command_json(
-        &db_url,
-        &[
-            "worker",
-            "register",
-            queue_name,
-            "test_cli_create_send_dequeue_delete_host",
-            "8081",
-        ],
-    );
-    let consumer_worker_id = consumer_worker.id;
-
-    // Dequeue message
-    let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
+    // Dequeue message using a Consumer
+    let (dequeued_messages, consumer_worker_id): (Vec<QueueMessage>, i64) = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin
-            .get_worker_by_id(consumer_worker_id)
-            .await
-            .unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
-            &worker,
+            "test_cli_create_send_dequeue_delete_consumer_host",
+            8081,
             &pgqrs_admin.config,
         )
         .await
-        .unwrap();
-        consumer.dequeue().await.unwrap()
+        .expect("Failed to create consumer");
+        let msgs = consumer.dequeue().await.unwrap();
+        (msgs, consumer.worker_id())
     });
     assert!(
         dequeued_messages.len() == 1,
@@ -220,52 +199,40 @@ fn test_cli_archive_functionality() {
 
     let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").unwrap();
 
-    // Create worker
-    let created_worker: WorkerInfo = run_cli_command_json(
-        &db_url,
-        &[
-            "worker",
-            "register",
-            queue_name,
-            "test_cli_archive_functionality_host",
-            "8080",
-        ],
-    );
-    let worker_id = created_worker.id;
-
-    // Send a test message
+    // Send a test message using a Producer
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
-    // Send message
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _sent_message: QueueMessage = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
-            &worker,
+            "test_cli_archive_functionality_producer_host",
+            8080,
             &pgqrs_admin.config,
         )
         .await
-        .unwrap();
+        .expect("Failed to create producer");
         producer
             .enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
             .await
             .unwrap()
     });
 
-    let dequeued_messages: Vec<QueueMessage> = rt.block_on(async {
+    // Dequeue and archive using a Consumer
+    let (dequeued_messages, consumer): (Vec<QueueMessage>, Consumer) = rt.block_on(async {
         let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
-            &worker,
+            "test_cli_archive_functionality_consumer_host",
+            8081,
             &pgqrs_admin.config,
         )
         .await
-        .unwrap();
-        consumer.dequeue().await.unwrap()
+        .expect("Failed to create consumer");
+        let msgs = consumer.dequeue().await.unwrap();
+        (msgs, consumer)
     });
     assert_eq!(
         dequeued_messages.len(),
@@ -278,20 +245,9 @@ fn test_cli_archive_functionality() {
 
     assert!(dequeued_message.vt > chrono::Utc::now());
 
-    // Archive the dequeued message
-    let archive: Option<ArchivedMessage> = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let worker = pgqrs_admin.get_worker_by_id(worker_id).await.unwrap();
-        let consumer = Consumer::new(
-            pgqrs_admin.pool.clone(),
-            &created_queue,
-            &worker,
-            &pgqrs_admin.config,
-        )
-        .await
-        .unwrap();
-        consumer.archive(dequeued_message.id).await.unwrap()
-    });
+    // Archive the dequeued message using the same consumer
+    let archive: Option<ArchivedMessage> =
+        rt.block_on(async { consumer.archive(dequeued_message.id).await.unwrap() });
 
     assert!(
         archive.is_some(),

@@ -96,27 +96,6 @@ pub const LOCK_QUEUE_FOR_UPDATE: &str = r#"
 
 // Worker Management SQL Templates
 
-/// Update worker heartbeat timestamp
-pub const UPDATE_WORKER_HEARTBEAT: &str = r#"
-    UPDATE pgqrs_workers
-    SET heartbeat_at = $1
-    WHERE id = $2
-"#;
-
-/// Update worker status to shutting down
-pub const UPDATE_WORKER_SHUTDOWN: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'shutting_down', shutdown_at = $1
-    WHERE id = $2
-"#;
-
-/// Update worker status to stopped
-pub const UPDATE_WORKER_STOPPED: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'stopped'
-    WHERE id = $1
-"#;
-
 /// Check if worker has any associated messages or archives
 pub const CHECK_WORKER_REFERENCES: &str = r#"
     SELECT COUNT(*) as total_references FROM (

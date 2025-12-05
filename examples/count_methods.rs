@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert(NewWorker {
             hostname: "worker-1".to_string(),
             port: 8080,
-            queue_id: queue1.id,
+            queue_id: Some(queue1.id),
         })
         .await?;
 
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert(NewWorker {
             hostname: "worker-2".to_string(),
             port: 8081,
-            queue_id: queue1.id,
+            queue_id: Some(queue1.id),
         })
         .await?;
 
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert(NewWorker {
             hostname: "worker-3".to_string(),
             port: 8082,
-            queue_id: queue2.id,
+            queue_id: Some(queue2.id),
         })
         .await?;
 
