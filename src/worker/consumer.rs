@@ -7,10 +7,11 @@
 //!
 //! - [`Consumer`] is the consumer interface for interacting with a queue: fetching jobs, updating visibility, archiving and deleting messages.
 //! - [`crate::producer::Producer`] handles message production and is defined in the `producer` module.
+//! - Implements the [`Worker`] trait for lifecycle management
 //!
 //! ## How
 //!
-//! Create a [`Consumer`] using the admin API, then use its methods to process jobs.
+//! Create a [`Consumer`] using `Consumer::register()` which handles worker registration automatically.
 //! Create a [`crate::producer::Producer`] for enqueueing messages.
 //!
 //! ### Example
@@ -18,16 +19,17 @@
 //! ```rust
 //! use pgqrs::consumer::Consumer;
 //! use pgqrs::producer::Producer;
-//! // let consumer = ...
-//! // let producer = ...
+//! // let consumer = Consumer::register(pool, &queue_info, "localhost", 8080, &config).await?;
+//! // let producer = Producer::register(pool, &queue_info, "localhost", 8081, &config).await?;
 //! // producer.enqueue(...)
 //! // consumer.dequeue(...)
 //! ```
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
-use crate::error::Result;
+use crate::error::{PgqrsError, Result};
 use crate::tables::PgqrsMessages;
-use crate::types::{ArchivedMessage, QueueMessage};
-use crate::{admin::PgqrsAdmin, PgqrsError};
+use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
+use crate::worker::{Worker, WorkerLifecycle};
+use async_trait::async_trait;
 use sqlx::PgPool;
 
 /// Read available messages from queue (with SKIP LOCKED)
@@ -54,6 +56,8 @@ pub const DEQUEUE_MESSAGES: &str = r#"
 /// Each Consumer corresponds to a row in the pgqrs_queues table.
 ///
 /// For message production, use the Producer struct.
+///
+/// Implements the [`Worker`] trait for lifecycle management.
 pub struct Consumer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
@@ -62,44 +66,34 @@ pub struct Consumer {
     config: crate::config::Config,
     /// Worker information for this consumer
     worker_info: crate::types::WorkerInfo,
-    /// Admin interface for worker management
-    admin: PgqrsAdmin,
+    /// Worker lifecycle manager
+    lifecycle: WorkerLifecycle,
 }
 
 impl Consumer {
-    /// Create a new Consumer instance for the specified queue.
-    ///
-    /// This method creates a Consumer instance that operates on the unified
-    /// pgqrs_messages table using the provided queue_info for filtering operations.
-    ///
-    /// # Arguments
-    /// * `pool` - Database connection pool
-    /// * `queue_info` - Queue information including ID and name
-    /// * `config` - Configuration for the queue
     pub async fn new(
         pool: PgPool,
         queue_info: &crate::types::QueueInfo,
-        worker_info: &crate::types::WorkerInfo,
+        hostname: &str,
+        port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
-        // Validate worker is active and matches queue
-        if worker_info.queue_id != queue_info.id {
-            return Err(PgqrsError::ValidationFailed {
-                reason: "Worker must be registered for this queue".to_string(),
-            });
-        }
-        if !matches!(worker_info.status, crate::types::WorkerStatus::Ready) {
-            return Err(PgqrsError::ValidationFailed {
-                reason: "Worker must be active".to_string(),
-            });
-        }
-        let admin = PgqrsAdmin::new(config).await?;
+        let lifecycle = WorkerLifecycle::new(pool.clone());
+        let worker_info = lifecycle.register(queue_info, hostname, port).await?;
+        tracing::debug!(
+            "Registered consumer worker {} ({}:{}) for queue '{}'",
+            worker_info.id,
+            hostname,
+            port,
+            queue_info.queue_name
+        );
+
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
-            worker_info: worker_info.clone(),
+            worker_info,
             config: config.clone(),
-            admin,
+            lifecycle,
         })
     }
 
@@ -241,49 +235,85 @@ impl Consumer {
         Ok(result)
     }
 
-    /// Gracefully shutdown this consumer.
+    /// Release messages currently held by this consumer.
     ///
-    /// Releases messages that are held by this consumer but haven't started processing,
-    /// then transitions the worker status from Ready to ShuttingDown, then to Stopped.
-    ///
-    /// The shutdown process:
-    /// 1. Identifies all messages currently held by this worker
-    /// 2. Releases messages that are NOT in the `in_progress_ids` list (these are messages
-    ///    that were dequeued but haven't started processing yet)
-    /// 3. Messages in `in_progress_ids` are left alone to allow current processing to complete
-    /// 4. Transitions worker status: Ready → ShuttingDown → Stopped
+    /// This makes the messages available for other consumers to pick up.
     ///
     /// # Arguments
-    /// * `in_progress_ids` - Message IDs that are currently being processed and should NOT be released
+    /// * `message_ids` - Message IDs to release. Only messages held by this consumer will be released.
+    ///
+    /// # Returns
+    /// Number of messages released.
+    pub async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
+        let messages = PgqrsMessages::new(self.pool.clone());
+        let results = messages
+            .release_messages_by_ids(message_ids, self.worker_info.id)
+            .await?;
+        // Count how many were successfully released
+        Ok(results.into_iter().filter(|&released| released).count() as u64)
+    }
+}
+
+#[async_trait]
+impl Worker for Consumer {
+    fn worker_id(&self) -> i64 {
+        self.worker_info.id
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.lifecycle.heartbeat(self.worker_info.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.lifecycle
+            .is_healthy(self.worker_info.id, max_age)
+            .await
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.lifecycle.get_status(self.worker_info.id).await
+    }
+
+    /// Suspend this consumer (transition from Ready to Suspended).
+    ///
+    /// # Preconditions
+    /// - Consumer must be in `Ready` state
+    ///
+    /// # Returns
+    /// Ok if suspension succeeds, error if consumer is in wrong state.
+    async fn suspend(&self) -> Result<()> {
+        self.lifecycle.suspend(self.worker_info.id).await
+    }
+
+    /// Resume this consumer (transition from Suspended to Ready).
+    async fn resume(&self) -> Result<()> {
+        self.lifecycle.resume(self.worker_info.id).await
+    }
+
+    /// Gracefully shutdown this consumer.
+    ///
+    /// # Preconditions
+    /// - Consumer must be in Suspended state
+    /// - Consumer must have no pending (held) messages
+    ///
+    /// Use `release_messages()` to release held messages before calling `shutdown()`.
     ///
     /// # Returns
     /// Ok if shutdown completes successfully
-    pub async fn shutdown(&self, in_progress_ids: Vec<i64>) -> Result<()> {
-        // Get all messages currently held by this worker
-        let worker_messages = self.admin.get_worker_messages(self.worker_info.id).await?;
+    async fn shutdown(&self) -> Result<()> {
+        // Check if consumer has pending messages
+        let pending_count = self
+            .lifecycle
+            .count_pending_messages(self.worker_info.id)
+            .await?;
 
-        // Extract IDs of messages held by this worker
-        let held_message_ids: Vec<i64> = worker_messages.iter().map(|msg| msg.id).collect();
-
-        // Filter out messages that are currently in progress
-        let in_progress_set: std::collections::HashSet<i64> = in_progress_ids.into_iter().collect();
-        let messages_to_release: Vec<i64> = held_message_ids
-            .into_iter()
-            .filter(|id| !in_progress_set.contains(id))
-            .collect();
-
-        // Release messages that haven't started processing
-        if !messages_to_release.is_empty() {
-            let messages = PgqrsMessages::new(self.pool.clone());
-            messages
-                .release_messages_by_ids(&messages_to_release, self.worker_info.id)
-                .await?;
+        if pending_count > 0 {
+            return Err(PgqrsError::WorkerHasPendingMessages {
+                count: pending_count as u64,
+                reason: "Consumer must release all messages before shutdown".to_string(),
+            });
         }
 
-        // Transition worker status
-        self.admin.begin_shutdown(self.worker_info.id).await?;
-        self.admin.mark_stopped(self.worker_info.id).await?;
-
-        Ok(())
+        self.lifecycle.shutdown(self.worker_info.id).await
     }
 }

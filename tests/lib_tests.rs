@@ -1,6 +1,7 @@
 use pgqrs::{
     tables::{PgqrsMessages, PgqrsQueues},
-    PgqrsAdmin, PgqrsArchive, Table,
+    worker::Worker,
+    PgqrsAdmin, PgqrsArchive, PgqrsWorkers, Table,
 };
 use serde_json::json;
 
@@ -71,20 +72,24 @@ async fn test_send_message() {
         .create_queue(TEST_QUEUE_SEND_MESSAGE)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_SEND_MESSAGE.to_string(),
-            "http://test_send_message".to_string(),
-            3000,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_send_message_producer",
+        3000,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_send_message_consumer",
+        3001,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let messages = PgqrsMessages::new(admin.pool.clone());
 
     let payload = json!({
@@ -100,7 +105,8 @@ async fn test_send_message() {
     let deleted_message = consumer.delete(read_messages[0].id).await;
     assert!(deleted_message.is_ok());
     assert!(messages.count_pending(queue_info.id).await.unwrap() == 0);
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -112,20 +118,24 @@ async fn test_archive_single_message() {
         .create_queue(TEST_QUEUE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_ARCHIVE.to_string(),
-            "http://test_archive".to_string(),
-            3001,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_archive_single_producer",
+        3100,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_archive_single_consumer",
+        3101,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let messages = PgqrsMessages::new(admin.pool.clone());
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Send a test message
@@ -172,6 +182,8 @@ async fn test_archive_single_message() {
         .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -183,20 +195,24 @@ async fn test_archive_batch_messages() {
         .create_queue(TEST_QUEUE_BATCH_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_BATCH_ARCHIVE.to_string(),
-            "http://test_archive_batch".to_string(),
-            3002,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_archive_batch_producer",
+        3102,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_archive_batch_consumer",
+        3103,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let messages = PgqrsMessages::new(admin.pool.clone());
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
 
@@ -261,6 +277,8 @@ async fn test_archive_batch_messages() {
         .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -272,17 +290,15 @@ async fn test_archive_nonexistent_message() {
         .create_queue(TEST_QUEUE_NONEXISTENT)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_NONEXISTENT.to_string(),
-            "http://test_archive_nonexistent".to_string(),
-            3003,
-        )
-        .await
-        .expect("Failed to register worker");
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_archive_nonexistent_consumer",
+        3104,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
     let archived = consumer.archive(fake_msg_id).await;
@@ -302,10 +318,7 @@ async fn test_archive_nonexistent_message() {
         0
     );
 
-    admin
-        .delete_worker(worker.id)
-        .await
-        .expect("Failed to delete worker");
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     // Cleanup
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
@@ -320,20 +333,24 @@ async fn test_purge_archive() {
         .create_queue(TEST_QUEUE_PURGE_ARCHIVE)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_PURGE_ARCHIVE.to_string(),
-            "http://test_purge_archive".to_string(),
-            3004,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_purge_archive_producer",
+        3105,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to new producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_purge_archive_consumer",
+        3106,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
     // Archive multiple messages
     for i in 0..3 {
@@ -374,6 +391,8 @@ async fn test_purge_archive() {
     );
 
     // Cleanup
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -429,17 +448,15 @@ async fn test_custom_schema_search_path() {
 
     // Test that queue operations work with unified architecture
     let queue_info = queue_result.unwrap();
-    let worker = admin
-        .register(
-            queue_name.clone(),
-            "http://test_custom_schema".to_string(),
-            3005,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_custom_schema_producer",
+        3107,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
     let message_payload = serde_json::json!({"test": "custom_schema"});
     let send_result = producer.enqueue(&message_payload).await;
     assert!(
@@ -452,6 +469,7 @@ async fn test_custom_schema_search_path() {
         .purge_queue(&queue_name)
         .await
         .expect("Failed to purge messages");
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -462,16 +480,24 @@ async fn test_interval_parameter_syntax() {
 
     // Create queue
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    let worker = admin
-        .register(queue_name.to_string(), "http://localhost".to_string(), 3000)
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_interval_producer",
+        3108,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_interval_consumer",
+        3109,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message to test interval functionality
@@ -517,9 +543,13 @@ async fn test_interval_parameter_syntax() {
         .await
         .expect("Failed to purge messages");
     admin
-        .delete_worker(worker.id)
+        .delete_worker(producer.worker_id())
         .await
-        .expect("Failed to delete worker");
+        .expect("Failed to delete producer worker");
+    admin
+        .delete_worker(consumer.worker_id())
+        .await
+        .expect("Failed to delete consumer worker");
     admin
         .delete_queue(&queue_info)
         .await
@@ -639,20 +669,24 @@ async fn test_queue_deletion_with_references() {
 
     // Create queue and add a message
     let queue_info = admin.create_queue(queue_name).await.unwrap();
-    let worker = admin
-        .register(
-            queue_name.to_string(),
-            "http://test_queue_deletion_with_references".to_string(),
-            3000,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_deletion_refs_producer",
+        3110,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_deletion_refs_consumer",
+        3111,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let message_payload = json!({"test": "deletion_test"});
     producer.enqueue(&message_payload).await.unwrap();
 
@@ -674,11 +708,23 @@ async fn test_queue_deletion_with_references() {
     assert_eq!(messages.len(), 1, "Should have one message");
     consumer.archive(messages[0].id).await.unwrap();
 
-    // Stop the worker to test reference validation
-    admin
-        .mark_stopped(worker.id)
+    // Stop the workers to test reference validation (must suspend first)
+    producer
+        .suspend()
         .await
-        .expect("Failed to stop worker");
+        .expect("Failed to suspend producer worker");
+    producer
+        .shutdown()
+        .await
+        .expect("Failed to stop producer worker");
+    consumer
+        .suspend()
+        .await
+        .expect("Failed to suspend consumer worker");
+    consumer
+        .shutdown()
+        .await
+        .expect("Failed to stop consumer worker");
 
     // Now try to delete queue with archive - should fail with references error
     let delete_result2 = admin.delete_queue(&queue_info).await;
@@ -698,7 +744,8 @@ async fn test_queue_deletion_with_references() {
         .purge_queue(&queue_name)
         .await
         .expect("Failed to purge messages");
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     let delete_result3 = admin.delete_queue(&queue_info).await;
     assert!(
         delete_result3.is_ok(),
@@ -725,17 +772,15 @@ async fn test_validation_payload_size_limit() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_size").await.unwrap();
-    let worker = admin
-        .register(
-            "test_validation_size".to_string(),
-            "http://test_validation_size".to_string(),
-            3006,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_size_producer",
+        3112,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Small payload should work
     let small_payload = json!({"key": "value"});
@@ -776,17 +821,15 @@ async fn test_validation_forbidden_keys() {
         .create_queue("test_validation_forbidden")
         .await
         .unwrap();
-    let worker = admin
-        .register(
-            "test_validation_forbidden".to_string(),
-            "http://test_validation_forbidden".to_string(),
-            3007,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_forbidden_producer",
+        3113,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Valid payload should work
     let valid_payload = json!({"data": "value"});
@@ -821,17 +864,15 @@ async fn test_validation_required_keys() {
         .create_queue("test_validation_required")
         .await
         .unwrap();
-    let worker = admin
-        .register(
-            "test_validation_required".to_string(),
-            "http://test_validation_required".to_string(),
-            3008,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_required_producer",
+        3114,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Valid payload with required key should work
     let valid_payload = json!({"user_id": "123", "data": "value"});
@@ -863,17 +904,15 @@ async fn test_validation_object_depth() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_depth").await.unwrap();
-    let worker = admin
-        .register(
-            "test_validation_depth".to_string(),
-            "http://test_validation_depth".to_string(),
-            3009,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_depth_producer",
+        3115,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
@@ -906,17 +945,15 @@ async fn test_batch_validation_atomic_failure() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_batch").await.unwrap();
-    let worker = admin
-        .register(
-            "test_validation_batch".to_string(),
-            "http://test_validation_batch".to_string(),
-            3010,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_batch_producer",
+        3116,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Mix of valid and invalid payloads
     let payloads = vec![
@@ -956,17 +993,15 @@ async fn test_validation_string_length() {
 
     let admin = PgqrsAdmin::new(&config).await.unwrap();
     let queue_info = admin.create_queue("test_validation_strings").await.unwrap();
-    let worker = admin
-        .register(
-            "test_validation_strings".to_string(),
-            "http://test_validation_strings".to_string(),
-            3011,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_strings_producer",
+        3117,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Short string should work
     let valid_payload = json!({"key": "short_value"});
@@ -1004,17 +1039,15 @@ async fn test_validation_accessor_methods() {
         .create_queue("test_validation_accessors")
         .await
         .unwrap();
-    let worker = admin
-        .register(
-            "test_validation_accessors".to_string(),
-            "http://test_validation_accessors".to_string(),
-            3012,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_validation_accessors_producer",
+        3118,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
     // Test validation config accessor
     let validation_config = producer.validation_config();
     assert_eq!(validation_config.max_payload_size_bytes, 2048);
@@ -1036,17 +1069,15 @@ async fn test_dlq() {
         .create_queue(TEST_QUEUE_DLQ)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_DLQ.to_string(),
-            "http://test_dlq".to_string(),
-            3013,
-        )
-        .await
-        .expect("Failed to register worker");
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_dlq_producer",
+        3119,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
     let pgqrs_messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a test message
@@ -1096,6 +1127,7 @@ async fn test_dlq() {
         .purge_queue(&queue_info.queue_name)
         .await
         .expect("Failed to purge messages");
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -1107,34 +1139,39 @@ async fn test_producer_shutdown() {
         .create_queue(TEST_QUEUE_PRODUCER_SHUTDOWN)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_PRODUCER_SHUTDOWN.to_string(),
-            "http://test_producer_shutdown".to_string(),
-            3014,
-        )
-        .await
-        .expect("Failed to register worker");
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_producer_shutdown_producer",
+        3120,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
 
     // Verify worker starts in Ready state
-    let workers = admin
-        .list_queue_workers(TEST_QUEUE_PRODUCER_SHUTDOWN)
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Ready);
 
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    // First suspend the producer (new lifecycle requirement)
+    let suspend_result = producer.suspend().await;
+    assert!(suspend_result.is_ok(), "Producer suspend should succeed");
 
-    // Shutdown the producer
+    // Verify worker is now suspended
+    let status = producer.status().await.unwrap();
+    assert_eq!(status, pgqrs::types::WorkerStatus::Suspended);
+
+    // Shutdown the producer (must be suspended first)
     let shutdown_result = producer.shutdown().await;
     assert!(shutdown_result.is_ok(), "Producer shutdown should succeed");
 
     // Verify worker transitioned through states correctly
-    let workers_after = admin
-        .list_queue_workers(TEST_QUEUE_PRODUCER_SHUTDOWN)
+    let workers_after = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
     assert_eq!(workers_after.len(), 1);
@@ -1147,7 +1184,7 @@ async fn test_producer_shutdown() {
     );
 
     // Cleanup
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -1159,36 +1196,38 @@ async fn test_consumer_shutdown_no_messages() {
         .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY.to_string(),
-            "http://test_consumer_shutdown_empty".to_string(),
-            3015,
-        )
-        .await
-        .expect("Failed to register worker");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_consumer_shutdown_empty_consumer",
+        3121,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
 
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-
-    // Shutdown consumer with no messages (empty in_progress_ids)
-    let shutdown_result = consumer.shutdown(vec![]).await;
+    // First suspend the consumer (new lifecycle requirement)
+    // Consumer can suspend when it has no pending messages
+    let suspend_result = consumer.suspend().await;
     assert!(
-        shutdown_result.is_ok(),
-        "Consumer shutdown with no messages should succeed"
+        suspend_result.is_ok(),
+        "Consumer suspend with no messages should succeed"
     );
 
+    // Shutdown consumer (must be suspended first)
+    let shutdown_result = consumer.shutdown().await;
+    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
+
     // Verify worker status
-    let workers = admin
-        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
 
     // Cleanup
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -1200,21 +1239,24 @@ async fn test_consumer_shutdown_with_held_messages() {
         .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_CONSUMER_SHUTDOWN_HELD.to_string(),
-            "http://test_consumer_shutdown_held".to_string(),
-            3016,
-        )
-        .await
-        .expect("Failed to register worker");
-
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_consumer_shutdown_held_producer",
+        3122,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_consumer_shutdown_held_consumer",
+        3123,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let messages_table = PgqrsMessages::new(admin.pool.clone());
 
     // Send multiple messages
@@ -1230,38 +1272,66 @@ async fn test_consumer_shutdown_with_held_messages() {
     assert_eq!(dequeued.len(), 3);
 
     // Verify all messages are held by worker
-    let worker_messages = admin.get_worker_messages(worker.id).await.unwrap();
-    assert_eq!(worker_messages.len(), 3);
-
-    // Shutdown consumer, keeping msg2 "in progress" (should not be released)
-    let shutdown_result = consumer.shutdown(vec![msg2.id]).await;
-    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
-
-    // Verify worker status
-    let workers = admin
-        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
+    let worker_messages = admin
+        .get_worker_messages(consumer.worker_id())
         .await
         .unwrap();
-    assert_eq!(workers.len(), 1);
+    assert_eq!(worker_messages.len(), 3);
+
+    let _suspend_result = consumer.suspend().await.unwrap();
+    // Consumer cannot shutdown while holding messages
+    let shutdown_result = consumer.shutdown().await;
+    assert!(
+        shutdown_result.is_err(),
+        "Consumer shutdown should fail when holding messages"
+    );
+
+    // Check the error is WorkerHasPendingMessages
+    match shutdown_result {
+        Err(pgqrs::PgqrsError::WorkerHasPendingMessages { count, .. }) => {
+            assert_eq!(count, 3, "Should report 3 pending messages");
+        }
+        _ => panic!("Expected WorkerHasPendingMessages error"),
+    }
+
+    // Release messages using the new release_messages method
+    let released = consumer
+        .release_messages(&[msg1.id, msg3.id])
+        .await
+        .unwrap();
+    assert_eq!(released, 2, "Should release 2 messages");
+
+    // Still can't shutdown - msg2 is still held
+    let shutdown_result = consumer.shutdown().await;
+    assert!(
+        shutdown_result.is_err(),
+        "Consumer shutdown should fail when still holding messages"
+    );
+
+    // Release the last message
+    let released = consumer.release_messages(&[msg2.id]).await.unwrap();
+    assert_eq!(released, 1, "Should release 1 message");
+
+    // Now shutdown should succeed
+    let shutdown_result = consumer.shutdown().await;
+    assert!(
+        shutdown_result.is_ok(),
+        "Consumer shutdown should succeed after releasing all messages"
+    );
+
+    // Verify worker status
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
+        .await
+        .unwrap();
+    assert_eq!(workers.len(), 2);
     assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
 
-    // Verify messages: msg2 should still be held, msg1 and msg3 should be released
-    let worker_messages_after = admin.get_worker_messages(worker.id).await.unwrap();
-    assert_eq!(
-        worker_messages_after.len(),
-        1,
-        "Only in-progress message should remain held"
-    );
-    assert_eq!(
-        worker_messages_after[0].id, msg2.id,
-        "In-progress message should still be held"
-    );
-
-    // Verify released messages are back in pending state
+    // Verify all messages are back in pending state
     let pending_count = messages_table.count_pending(queue_info.id).await.unwrap();
     assert_eq!(
-        pending_count, 2,
-        "Two messages should be back in pending state"
+        pending_count, 3,
+        "All messages should be back in pending state"
     );
 
     // Cleanup - delete remaining messages and worker
@@ -1269,7 +1339,8 @@ async fn test_consumer_shutdown_with_held_messages() {
         .delete_many(vec![msg1.id, msg2.id, msg3.id])
         .await
         .unwrap();
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
 
@@ -1281,29 +1352,32 @@ async fn test_consumer_shutdown_all_messages_released() {
         .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
         .await
         .expect("Failed to create queue");
-    let worker = admin
-        .register(
-            TEST_QUEUE_CONSUMER_SHUTDOWN_ALL.to_string(),
-            "http://test_consumer_shutdown_all".to_string(),
-            3017,
-        )
-        .await
-        .expect("Failed to register worker");
-
-    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = pgqrs::Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_consumer_shutdown_all_producer",
+        3124,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer");
+    let consumer = pgqrs::Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "test_consumer_shutdown_all_consumer",
+        3125,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer");
     let messages_table = PgqrsMessages::new(admin.pool.clone());
 
     // Send and dequeue messages
-    producer
+    let msg1 = producer
         .enqueue(&json!({"task": "release_me"}))
         .await
         .unwrap();
-    producer
+    let msg2 = producer
         .enqueue(&json!({"task": "release_me_too"}))
         .await
         .unwrap();
@@ -1311,8 +1385,19 @@ async fn test_consumer_shutdown_all_messages_released() {
     let dequeued = consumer.dequeue_many(2).await.unwrap();
     assert_eq!(dequeued.len(), 2);
 
-    // Shutdown consumer with empty in_progress_ids (release all)
-    let shutdown_result = consumer.shutdown(vec![]).await;
+    // Release all messages before suspend
+    let released = consumer
+        .release_messages(&[msg1.id, msg2.id])
+        .await
+        .unwrap();
+    assert_eq!(released, 2, "Should release 2 messages");
+
+    // Now we can suspend
+    let suspend_result = consumer.suspend().await;
+    assert!(suspend_result.is_ok(), "Consumer suspend should succeed");
+
+    // Shutdown consumer
+    let shutdown_result = consumer.shutdown().await;
     assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
 
     // Verify all messages are released back to pending
@@ -1323,7 +1408,10 @@ async fn test_consumer_shutdown_all_messages_released() {
     );
 
     // Verify no messages are held by worker
-    let worker_messages = admin.get_worker_messages(worker.id).await.unwrap();
+    let worker_messages = admin
+        .get_worker_messages(consumer.worker_id())
+        .await
+        .unwrap();
     assert_eq!(
         worker_messages.len(),
         0,
@@ -1331,11 +1419,11 @@ async fn test_consumer_shutdown_all_messages_released() {
     );
 
     // Verify worker status
-    let workers = admin
-        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
+    let workers = PgqrsWorkers::new(admin.pool.clone())
+        .filter_by_fk(queue_info.id)
         .await
         .unwrap();
-    assert_eq!(workers.len(), 1);
+    assert_eq!(workers.len(), 2);
     assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
 
     // Cleanup
@@ -1343,6 +1431,7 @@ async fn test_consumer_shutdown_all_messages_released() {
         .purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
         .await
         .unwrap();
-    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
+    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }

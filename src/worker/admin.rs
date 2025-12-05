@@ -6,6 +6,7 @@
 //!
 //! - [`PgqrsAdmin`] allows you to create, delete, purge, and list queues, as well as install and uninstall the schema.
 //! - Provides metrics and access to individual queues.
+//! - Implements the [`Worker`] trait for lifecycle management.
 //!
 //! ## How
 //!
@@ -30,8 +31,9 @@ use crate::config::Config;
 use crate::error::{PgqrsError, Result};
 use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
 use crate::types::QueueMetrics;
-use crate::types::{QueueInfo, WorkerInfo};
-use chrono::{Duration, Utc};
+use crate::types::{QueueInfo, WorkerInfo, WorkerStatus};
+use crate::worker::{Worker, WorkerLifecycle};
+use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -94,6 +96,9 @@ pub const DLQ_BATCH: &str = r#"
 
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
+///
+/// Implements the [`Worker`] trait for lifecycle management.
+/// Call `register()` after `install()` to register Admin as a worker.
 pub struct PgqrsAdmin {
     pub pool: PgPool,
     pub config: Config,
@@ -101,10 +106,16 @@ pub struct PgqrsAdmin {
     pub messages: PgqrsMessages,
     pub archive: PgqrsArchive,
     pub workers: PgqrsWorkers,
+    /// Worker info for this Admin instance (set after calling register())
+    worker_info: Option<WorkerInfo>,
+    /// Worker lifecycle manager
+    lifecycle: WorkerLifecycle,
 }
 
 impl PgqrsAdmin {
     /// Create a new admin interface for managing pgqrs infrastructure.
+    ///
+    /// Call `register()` after `install()` to register this Admin as a worker.
     ///
     /// # Arguments
     /// * `config` - Configuration for database connection and queue options
@@ -134,6 +145,7 @@ impl PgqrsAdmin {
         let queues = PgqrsQueues::new(pool.clone());
         let messages = PgqrsMessages::new(pool.clone());
         let archive = PgqrsArchive::new(pool.clone());
+        let lifecycle = WorkerLifecycle::new(pool.clone());
 
         Ok(Self {
             pool,
@@ -142,7 +154,47 @@ impl PgqrsAdmin {
             messages,
             archive,
             workers,
+            worker_info: None,
+            lifecycle,
         })
+    }
+
+    /// Register this Admin instance as a worker.
+    ///
+    /// Register this Admin as a worker in the database.
+    ///
+    /// Call this after `install()` to register the Admin as a worker.
+    /// This enables the Worker trait methods (suspend, resume, shutdown).
+    ///
+    /// # Arguments
+    /// * `hostname` - Hostname identifier for this admin instance
+    /// * `port` - Port identifier for this admin instance
+    ///
+    /// # Returns
+    /// The WorkerInfo for this Admin.
+    pub async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
+        if let Some(ref worker_info) = self.worker_info {
+            return Ok(worker_info.clone());
+        }
+
+        use crate::tables::pgqrs_workers::NewWorker;
+        let new_worker = NewWorker {
+            hostname: hostname.clone(),
+            port,
+            queue_id: None,
+        };
+
+        let worker_info = self.workers.insert(new_worker).await?;
+
+        tracing::debug!(
+            "Registered Admin as worker {} (hostname: {}, port: {})",
+            worker_info.id,
+            hostname,
+            port
+        );
+
+        self.worker_info = Some(worker_info.clone());
+        Ok(worker_info)
     }
 
     /// Install pgqrs schema and infrastructure in the database.
@@ -476,106 +528,33 @@ impl PgqrsAdmin {
         todo!("Implement Admin::all_queues_metrics")
     }
 
-    /// Create and register a new worker for a queue
-    ///
-    /// # Arguments
-    /// * `queue` - The queue this worker will process
-    /// * `hostname` - Hostname where the worker is running
-    /// * `port` - Port number for the worker
-    ///
-    /// # Returns
-    /// A new `Worker` instance registered in the database
-    ///
-    /// # Errors
-    /// Returns `PgqrsError` if database operations fail or if hostname+port
-    /// combination is already registered by another active worker
-    pub async fn register(
-        &self,
-        queue_name: String,
-        hostname: String,
-        port: i32,
-    ) -> Result<WorkerInfo> {
-        // First, verify the queue exists and get its info
-        let queue_info = self.get_queue(&queue_name).await?;
-
-        // Create new worker data
-        use crate::tables::pgqrs_workers::NewWorker;
-        let new_worker = NewWorker {
-            hostname: hostname.clone(),
-            port,
-            queue_id: queue_info.id,
-        };
-
-        // Use the workers table insert function
-        let worker = self.workers.insert(new_worker).await?;
-
-        tracing::debug!(
-            "Successfully registered worker {} for queue '{}'",
-            worker.id,
-            queue_name
-        );
-        Ok(worker)
-    }
-
-    /// Update this worker's heartbeat timestamp
-    ///
-    /// Should be called periodically to indicate the worker is still alive
-    ///
-    /// # Arguments
-    /// * `queue` - The queue connection for database access
-    ///
-    /// # Errors
-    /// Returns `PgqrsError` if the database update fails
-    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
-        let now = Utc::now();
-
-        let sql = crate::constants::UPDATE_WORKER_HEARTBEAT;
-
-        sqlx::query(sql)
-            .bind(now)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Get all workers across all queues
-    ///
-    /// # Returns
-    /// Vector of all workers in the system
-    pub async fn list_all_workers(&self) -> Result<Vec<WorkerInfo>> {
-        self.workers.list().await
-    }
-
-    /// Get a specific worker by ID
-    ///
-    /// # Arguments
-    /// * `worker_id` - ID of the worker to retrieve
-    ///
-    /// # Returns
-    /// The worker with the specified ID, or error if not found
-    ///
-    /// # Errors
-    /// Returns `PgqrsError` if database query fails or worker not found
-    pub async fn get_worker_by_id(&self, worker_id: i64) -> Result<WorkerInfo> {
-        self.workers.get(worker_id).await
-    }
-
     /// Get messages currently being processed by a worker
+    ///
+    /// Only valid for queue workers (producers/consumers), not admin workers.
     ///
     /// # Arguments
     /// * `worker_id` - ID of the worker
     ///
     /// # Returns
     /// Vector of messages being processed by the worker
+    ///
+    /// # Errors
+    /// Returns `PgqrsError::InvalidWorkerType` if called on an admin worker
     pub async fn get_worker_messages(
         &self,
         worker_id: i64,
     ) -> Result<Vec<crate::types::QueueMessage>> {
+        // First validate the worker is not an admin (admin workers have queue_id = None)
+        let worker = self.workers.get(worker_id).await?;
+        if worker.queue_id.is_none() {
+            return Err(PgqrsError::InvalidWorkerType {
+                message: format!(
+                    "Cannot get messages for admin worker {}. Admin workers do not process messages.",
+                    worker_id
+                ),
+            });
+        }
+
         let messages =
             sqlx::query_as::<_, crate::types::QueueMessage>(crate::constants::GET_WORKER_MESSAGES)
                 .bind(worker_id)
@@ -587,19 +566,10 @@ impl PgqrsAdmin {
 
         Ok(messages)
     }
-    /// Get workers for a specific queue
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue
-    ///
-    /// # Returns
-    /// Vector of workers processing the specified queue
-    pub async fn list_queue_workers(&self, queue_name: &str) -> Result<Vec<WorkerInfo>> {
-        let queue_info = self.get_queue(queue_name).await?;
-        self.workers.filter_by_fk(queue_info.id).await
-    }
 
     /// Release messages from a specific worker (for shutdown)
+    ///
+    /// Only valid for queue workers (producers/consumers), not admin workers.
     ///
     /// # Arguments
     /// * `worker_id` - The worker whose messages should be released
@@ -608,8 +578,20 @@ impl PgqrsAdmin {
     /// Number of messages released
     ///
     /// # Errors
+    /// Returns `PgqrsError::InvalidWorkerType` if called on an admin worker
     /// Returns `PgqrsError` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
+        // Validate the worker is not an admin
+        let worker = self.workers.get(worker_id).await?;
+        if worker.queue_id.is_none() {
+            return Err(PgqrsError::InvalidWorkerType {
+                message: format!(
+                    "Cannot release messages for admin worker {}. Admin workers do not hold messages.",
+                    worker_id
+                ),
+            });
+        }
+
         let result = sqlx::query(crate::constants::RELEASE_WORKER_MESSAGES)
             .bind(worker_id)
             .execute(&self.pool)
@@ -619,74 +601,6 @@ impl PgqrsAdmin {
             })?;
 
         Ok(result.rows_affected())
-    }
-
-    /// Mark this worker as shutting down gracefully
-    ///
-    /// This signals that the worker is beginning shutdown process
-    /// and should not receive new message assignments
-    ///
-    /// # Arguments
-    /// * `worker_id` - ID of the worker to begin shutting down
-    ///
-    /// # Returns
-    /// Ok if the status update succeeds
-    ///
-    /// # Errors
-    /// Returns `PgqrsError::Connection` if the database update fails
-    pub async fn begin_shutdown(&self, worker_id: i64) -> Result<()> {
-        let now = Utc::now();
-
-        sqlx::query(crate::constants::UPDATE_WORKER_SHUTDOWN)
-            .bind(now)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Mark a worker as stopped (final shutdown state).
-    ///
-    /// Sets the worker status to Stopped. This is the final step in worker lifecycle
-    /// and indicates the worker has completely shut down and released all resources.
-    ///
-    /// # Arguments
-    /// * `worker_id` - ID of the worker to mark as stopped
-    ///
-    /// # Returns
-    /// Ok if the status update succeeds
-    ///
-    /// # Errors
-    /// Returns `PgqrsError::Connection` if the database update fails
-    pub async fn mark_stopped(&self, worker_id: i64) -> Result<()> {
-        sqlx::query(crate::constants::UPDATE_WORKER_STOPPED)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(())
-    }
-
-    /// Check if this worker is healthy based on heartbeat age
-    ///
-    /// # Arguments
-    /// * `max_age` - Maximum allowed age for the last heartbeat
-    ///
-    /// # Returns
-    /// `true` if the worker's last heartbeat is within the max_age threshold
-    pub async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> Result<bool> {
-        let now = Utc::now();
-        let worker = self.get_worker_by_id(worker_id).await?;
-        let heartbeat_age = now.signed_duration_since(worker.heartbeat_at);
-
-        Ok(heartbeat_age <= max_age)
     }
 
     /// Remove stopped workers older than specified duration
@@ -764,20 +678,21 @@ impl PgqrsAdmin {
     /// # Returns
     /// Worker statistics for the queue
     pub async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
-        let workers = self.list_queue_workers(queue_name).await?;
+        let queue_id = self.queues.get_by_name(queue_name).await?.id;
+        let workers = self.workers.filter_by_fk(queue_id).await?;
 
         let total_workers = workers.len() as u32;
         let ready_workers = workers
             .iter()
             .filter(|w| w.status == crate::types::WorkerStatus::Ready)
             .count() as u32;
-        let shutting_down_workers = workers
-            .iter()
-            .filter(|w| w.status == crate::types::WorkerStatus::ShuttingDown)
-            .count() as u32;
         let stopped_workers = workers
             .iter()
             .filter(|w| w.status == crate::types::WorkerStatus::Stopped)
+            .count() as u32;
+        let suspended_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Suspended)
             .count() as u32;
 
         // Get message counts per worker
@@ -814,11 +729,68 @@ impl PgqrsAdmin {
         Ok(crate::types::WorkerStats {
             total_workers,
             ready_workers,
-            shutting_down_workers,
+            suspended_workers,
             stopped_workers,
             average_messages_per_worker,
             oldest_worker_age,
             newest_heartbeat_age,
         })
+    }
+}
+
+#[async_trait]
+impl Worker for PgqrsAdmin {
+    fn worker_id(&self) -> i64 {
+        self.worker_info
+            .as_ref()
+            .expect("Admin must be registered before using Worker methods. Call register() first.")
+            .id
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        let worker_id = self.worker_id();
+        self.lifecycle.heartbeat(worker_id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.lifecycle.is_healthy(self.worker_id(), max_age).await
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        let worker_id = self.worker_id();
+        self.lifecycle.get_status(worker_id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        let worker_id = self.worker_id();
+        self.lifecycle.suspend(worker_id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        let worker_id = self.worker_id();
+        self.lifecycle.resume(worker_id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        let worker_id = self.worker_id();
+        self.lifecycle.shutdown(worker_id).await
+    }
+}
+
+impl PgqrsAdmin {
+    /// Delete this admin worker from the database.
+    ///
+    /// Admin workers can delete themselves since they don't hold messages.
+    /// The admin must be stopped before calling this method.
+    ///
+    /// # Returns
+    /// Ok if deletion succeeds
+    ///
+    /// # Errors
+    /// Returns `PgqrsError` if the admin is not registered or deletion fails
+    pub async fn delete_self(&self) -> Result<()> {
+        let worker_id = self.worker_id();
+        self.workers.delete(worker_id).await?;
+        Ok(())
     }
 }

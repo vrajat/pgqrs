@@ -1,5 +1,6 @@
 use pgqrs::{
     tables::{PgqrsMessages, PgqrsQueues},
+    worker::Worker,
     Consumer, PgqrsAdmin, Producer, Table,
 };
 use serde_json::json;
@@ -31,25 +32,29 @@ async fn test_pgbouncer_happy_path() {
 
     // Create a queue through PgBouncer
     let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
-    let worker = admin
-        .register(
-            TEST_QUEUE_PGBOUNCER_HAPPY.to_string(),
-            "http://localhost".to_string(),
-            3000,
-        )
-        .await
-        .expect("Failed to register worker through PgBouncer");
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
     let queue_info = queue_result.unwrap();
-    let producer = Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
-    let consumer = Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
-        .await
-        .unwrap();
+    let producer = Producer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "pgbouncer_test_producer",
+        3000,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create producer through PgBouncer");
+    let consumer = Consumer::new(
+        admin.pool.clone(),
+        &queue_info,
+        "pgbouncer_test_consumer",
+        3001,
+        &admin.config,
+    )
+    .await
+    .expect("Failed to create consumer through PgBouncer");
     let messages = PgqrsMessages::new(admin.pool.clone());
 
     // Send a message through PgBouncer
@@ -103,12 +108,19 @@ async fn test_pgbouncer_happy_path() {
         "Queue should be empty after dequeuing"
     );
 
-    let _ = admin.begin_shutdown(worker.id).await;
-    let _ = admin.mark_stopped(worker.id).await;
+    let _ = producer.suspend().await;
+    let _ = producer.shutdown().await;
     admin
-        .delete_worker(worker.id)
+        .delete_worker(producer.worker_id())
         .await
-        .expect("Failed to delete worker");
+        .expect("Failed to delete producer worker");
+
+    let _ = consumer.suspend().await;
+    let _ = consumer.shutdown().await;
+    admin
+        .delete_worker(consumer.worker_id())
+        .await
+        .expect("Failed to delete consumer worker");
 
     let queue_info = admin
         .get_queue(TEST_QUEUE_PGBOUNCER_HAPPY)

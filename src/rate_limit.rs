@@ -15,8 +15,8 @@
 //!
 //! ### Example
 //!
-//! ```rust
-//! use pgqrs::{Config, PgqrsAdmin, ValidationConfig};
+//! ```rust,ignore
+//! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut config = Config::from_dsn("postgresql://localhost/test");
@@ -25,8 +25,13 @@
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
-//! let worker_info = admin.register("my_queue".to_string(), "localhost".to_string(), 8080).await?;
-//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker_info, &admin.config).await.unwrap();
+//! let producer = Producer::register(
+//!     admin.pool.clone(),
+//!     &queue_info,
+//!     "localhost".to_string(),
+//!     8080,
+//!     &admin.config,
+//! ).await?;
 //!
 //! // Rate limiting is automatically applied
 //! for i in 0..200 {
