@@ -67,7 +67,7 @@ pub const ARCHIVE_BATCH: &str = r#"
 
 /// Get messages assigned to a specific worker
 pub const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
     WHERE consumer_worker_id = $1
     ORDER BY id;

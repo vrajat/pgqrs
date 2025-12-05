@@ -1098,3 +1098,251 @@ async fn test_dlq() {
         .expect("Failed to purge messages");
     assert!(admin.delete_queue(&queue_info).await.is_ok());
 }
+
+#[tokio::test]
+async fn test_producer_shutdown() {
+    const TEST_QUEUE_PRODUCER_SHUTDOWN: &str = "test_producer_shutdown";
+    let admin = create_admin().await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_PRODUCER_SHUTDOWN)
+        .await
+        .expect("Failed to create queue");
+    let worker = admin
+        .register(
+            TEST_QUEUE_PRODUCER_SHUTDOWN.to_string(),
+            "http://test_producer_shutdown".to_string(),
+            3014,
+        )
+        .await
+        .expect("Failed to register worker");
+
+    // Verify worker starts in Ready state
+    let workers = admin
+        .list_queue_workers(TEST_QUEUE_PRODUCER_SHUTDOWN)
+        .await
+        .unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Ready);
+
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+
+    // Shutdown the producer
+    let shutdown_result = producer.shutdown().await;
+    assert!(shutdown_result.is_ok(), "Producer shutdown should succeed");
+
+    // Verify worker transitioned through states correctly
+    let workers_after = admin
+        .list_queue_workers(TEST_QUEUE_PRODUCER_SHUTDOWN)
+        .await
+        .unwrap();
+    assert_eq!(workers_after.len(), 1);
+    assert_eq!(workers_after[0].status, pgqrs::types::WorkerStatus::Stopped);
+
+    // Verify shutdown timestamp was set
+    assert!(
+        workers_after[0].shutdown_at.is_some(),
+        "Shutdown timestamp should be set"
+    );
+
+    // Cleanup
+    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_consumer_shutdown_no_messages() {
+    const TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY: &str = "test_consumer_shutdown_empty";
+    let admin = create_admin().await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
+        .await
+        .expect("Failed to create queue");
+    let worker = admin
+        .register(
+            TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY.to_string(),
+            "http://test_consumer_shutdown_empty".to_string(),
+            3015,
+        )
+        .await
+        .expect("Failed to register worker");
+
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+
+    // Shutdown consumer with no messages (empty in_progress_ids)
+    let shutdown_result = consumer.shutdown(vec![]).await;
+    assert!(
+        shutdown_result.is_ok(),
+        "Consumer shutdown with no messages should succeed"
+    );
+
+    // Verify worker status
+    let workers = admin
+        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
+        .await
+        .unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
+
+    // Cleanup
+    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_consumer_shutdown_with_held_messages() {
+    const TEST_QUEUE_CONSUMER_SHUTDOWN_HELD: &str = "test_consumer_shutdown_held";
+    let admin = create_admin().await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
+        .await
+        .expect("Failed to create queue");
+    let worker = admin
+        .register(
+            TEST_QUEUE_CONSUMER_SHUTDOWN_HELD.to_string(),
+            "http://test_consumer_shutdown_held".to_string(),
+            3016,
+        )
+        .await
+        .expect("Failed to register worker");
+
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let messages_table = PgqrsMessages::new(admin.pool.clone());
+
+    // Send multiple messages
+    let msg1 = producer.enqueue(&json!({"task": "held"})).await.unwrap();
+    let msg2 = producer
+        .enqueue(&json!({"task": "in_progress"}))
+        .await
+        .unwrap();
+    let msg3 = producer.enqueue(&json!({"task": "held"})).await.unwrap();
+
+    // Dequeue messages (they become held by the worker)
+    let dequeued = consumer.dequeue_many(3).await.unwrap();
+    assert_eq!(dequeued.len(), 3);
+
+    // Verify all messages are held by worker
+    let worker_messages = admin.get_worker_messages(worker.id).await.unwrap();
+    assert_eq!(worker_messages.len(), 3);
+
+    // Shutdown consumer, keeping msg2 "in progress" (should not be released)
+    let shutdown_result = consumer.shutdown(vec![msg2.id]).await;
+    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
+
+    // Verify worker status
+    let workers = admin
+        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
+        .await
+        .unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
+
+    // Verify messages: msg2 should still be held, msg1 and msg3 should be released
+    let worker_messages_after = admin.get_worker_messages(worker.id).await.unwrap();
+    assert_eq!(
+        worker_messages_after.len(),
+        1,
+        "Only in-progress message should remain held"
+    );
+    assert_eq!(
+        worker_messages_after[0].id, msg2.id,
+        "In-progress message should still be held"
+    );
+
+    // Verify released messages are back in pending state
+    let pending_count = messages_table.count_pending(queue_info.id).await.unwrap();
+    assert_eq!(
+        pending_count, 2,
+        "Two messages should be back in pending state"
+    );
+
+    // Cleanup - delete remaining messages and worker
+    consumer
+        .delete_many(vec![msg1.id, msg2.id, msg3.id])
+        .await
+        .unwrap();
+    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
+}
+
+#[tokio::test]
+async fn test_consumer_shutdown_all_messages_released() {
+    const TEST_QUEUE_CONSUMER_SHUTDOWN_ALL: &str = "test_consumer_shutdown_all";
+    let admin = create_admin().await;
+    let queue_info = admin
+        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
+        .await
+        .expect("Failed to create queue");
+    let worker = admin
+        .register(
+            TEST_QUEUE_CONSUMER_SHUTDOWN_ALL.to_string(),
+            "http://test_consumer_shutdown_all".to_string(),
+            3017,
+        )
+        .await
+        .expect("Failed to register worker");
+
+    let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let consumer = pgqrs::Consumer::new(admin.pool.clone(), &queue_info, &worker, &admin.config)
+        .await
+        .unwrap();
+    let messages_table = PgqrsMessages::new(admin.pool.clone());
+
+    // Send and dequeue messages
+    producer
+        .enqueue(&json!({"task": "release_me"}))
+        .await
+        .unwrap();
+    producer
+        .enqueue(&json!({"task": "release_me_too"}))
+        .await
+        .unwrap();
+
+    let dequeued = consumer.dequeue_many(2).await.unwrap();
+    assert_eq!(dequeued.len(), 2);
+
+    // Shutdown consumer with empty in_progress_ids (release all)
+    let shutdown_result = consumer.shutdown(vec![]).await;
+    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
+
+    // Verify all messages are released back to pending
+    let pending_count = messages_table.count_pending(queue_info.id).await.unwrap();
+    assert_eq!(
+        pending_count, 2,
+        "All messages should be back in pending state"
+    );
+
+    // Verify no messages are held by worker
+    let worker_messages = admin.get_worker_messages(worker.id).await.unwrap();
+    assert_eq!(
+        worker_messages.len(),
+        0,
+        "No messages should be held by worker"
+    );
+
+    // Verify worker status
+    let workers = admin
+        .list_queue_workers(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
+        .await
+        .unwrap();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
+
+    // Cleanup
+    admin
+        .purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
+        .await
+        .unwrap();
+    assert!(admin.delete_worker(worker.id).await.is_ok());
+    assert!(admin.delete_queue(&queue_info).await.is_ok());
+}

@@ -627,10 +627,13 @@ impl PgqrsAdmin {
     /// and should not receive new message assignments
     ///
     /// # Arguments
-    /// * `queue` - The queue connection for database access
+    /// * `worker_id` - ID of the worker to begin shutting down
+    ///
+    /// # Returns
+    /// Ok if the status update succeeds
     ///
     /// # Errors
-    /// Returns `PgqrsError` if the database update fails
+    /// Returns `PgqrsError::Connection` if the database update fails
     pub async fn begin_shutdown(&self, worker_id: i64) -> Result<()> {
         let now = Utc::now();
 
@@ -646,15 +649,19 @@ impl PgqrsAdmin {
         Ok(())
     }
 
-    /// Mark this worker as stopped (final state)
+    /// Mark a worker as stopped (final shutdown state).
     ///
-    /// This is the final step in worker lifecycle
+    /// Sets the worker status to Stopped. This is the final step in worker lifecycle
+    /// and indicates the worker has completely shut down and released all resources.
     ///
     /// # Arguments
-    /// * `queue` - The queue connection for database access
+    /// * `worker_id` - ID of the worker to mark as stopped
+    ///
+    /// # Returns
+    /// Ok if the status update succeeds
     ///
     /// # Errors
-    /// Returns `PgqrsError` if the database update fails
+    /// Returns `PgqrsError::Connection` if the database update fails
     pub async fn mark_stopped(&self, worker_id: i64) -> Result<()> {
         sqlx::query(crate::constants::UPDATE_WORKER_STOPPED)
             .bind(worker_id)

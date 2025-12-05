@@ -72,6 +72,16 @@ pub struct NewMessage {
     pub consumer_worker_id: Option<i64>,
 }
 
+/// Parameters for batch message insertion
+#[derive(Debug)]
+pub struct BatchInsertParams {
+    pub read_ct: i32,
+    pub enqueued_at: DateTime<Utc>,
+    pub vt: DateTime<Utc>,
+    pub producer_worker_id: Option<i64>,
+    pub consumer_worker_id: Option<i64>,
+}
+
 /// Messages table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_messages` table without business logic.
@@ -94,9 +104,7 @@ impl PgqrsMessages {
     /// # Arguments
     /// * `queue_id` - Queue ID for all messages
     /// * `payloads` - Vector of JSON payloads
-    /// * `read_ct` - Initial read count (usually 0)
-    /// * `enqueued_at` - Timestamp for all messages
-    /// * `vt` - Visibility timeout for all messages
+    /// * `params` - Batch insertion parameters including timing and worker info
     ///
     /// # Returns
     /// Vector of message IDs in order
@@ -104,20 +112,16 @@ impl PgqrsMessages {
         &self,
         queue_id: i64,
         payloads: &[serde_json::Value],
-        read_ct: i32,
-        enqueued_at: DateTime<Utc>,
-        vt: DateTime<Utc>,
-        producer_worker_id: Option<i64>,
-        consumer_worker_id: Option<i64>,
+        params: BatchInsertParams,
     ) -> Result<Vec<i64>> {
         let ids: Vec<i64> = sqlx::query_scalar(BATCH_INSERT_MESSAGES)
             .bind(queue_id)
             .bind(payloads)
-            .bind(read_ct)
-            .bind(enqueued_at)
-            .bind(vt)
-            .bind(producer_worker_id)
-            .bind(consumer_worker_id)
+            .bind(params.read_ct)
+            .bind(params.enqueued_at)
+            .bind(params.vt)
+            .bind(params.producer_worker_id)
+            .bind(params.consumer_worker_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -316,41 +320,47 @@ impl PgqrsMessages {
     /// * `worker_id` - Optional worker ID to filter messages by (messages locked by this worker)
     ///
     /// # Returns
-    /// Number of pending (available for dequeue) messages
+    /// Number of pending (available for dequeue) messages, or messages locked by the specified worker
     pub async fn count_pending_filtered(
         &self,
         queue_id: i64,
         worker_id: Option<i64>,
     ) -> Result<i64> {
-        let mut query = r#"
-            SELECT COUNT(*)
-            FROM pgqrs_messages
-            WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL
-        "#
-        .to_string();
-
-        let mut param_count = 1;
-
-        if worker_id.is_some() {
-            param_count += 1;
-            query.push_str(&format!(" AND consumer_worker_id = ${}", param_count));
+        let count = match worker_id {
+            Some(wid) => {
+                // Count messages locked by the specified worker
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM pgqrs_messages
+                    WHERE queue_id = $1 AND consumer_worker_id = $2
+                    "#,
+                )
+                .bind(queue_id)
+                .bind(wid)
+                .fetch_one(&self.pool)
+                .await
+            }
+            None => {
+                // Count available (pending) messages
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM pgqrs_messages
+                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL
+                    "#,
+                )
+                .bind(queue_id)
+                .fetch_one(&self.pool)
+                .await
+            }
         }
-
-        let mut sql_query = sqlx::query_scalar::<_, i64>(&query).bind(queue_id);
-
-        if let Some(wid) = worker_id {
-            sql_query = sql_query.bind(wid);
-        }
-
-        let count = sql_query
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| PgqrsError::Connection {
-                message: format!(
-                    "Failed to count pending messages for queue {}: {}",
-                    queue_id, e
-                ),
-            })?;
+        .map_err(|e| PgqrsError::Connection {
+            message: format!(
+                "Failed to count pending messages for queue {}: {}",
+                queue_id, e
+            ),
+        })?;
 
         Ok(count)
     }

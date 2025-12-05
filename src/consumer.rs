@@ -246,6 +246,13 @@ impl Consumer {
     /// Releases messages that are held by this consumer but haven't started processing,
     /// then transitions the worker status from Ready to ShuttingDown, then to Stopped.
     ///
+    /// The shutdown process:
+    /// 1. Identifies all messages currently held by this worker
+    /// 2. Releases messages that are NOT in the `in_progress_ids` list (these are messages
+    ///    that were dequeued but haven't started processing yet)
+    /// 3. Messages in `in_progress_ids` are left alone to allow current processing to complete
+    /// 4. Transitions worker status: Ready → ShuttingDown → Stopped
+    ///
     /// # Arguments
     /// * `in_progress_ids` - Message IDs that are currently being processed and should NOT be released
     ///

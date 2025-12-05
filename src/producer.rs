@@ -200,11 +200,13 @@ impl Producer {
             .batch_insert(
                 self.queue_info.id,
                 payloads,
-                0,
-                now,
-                vt,
-                Some(self.worker_info.id),
-                None,
+                crate::tables::pgqrs_messages::BatchInsertParams {
+                    read_ct: 0,
+                    enqueued_at: now,
+                    vt,
+                    producer_worker_id: Some(self.worker_info.id),
+                    consumer_worker_id: None,
+                },
             )
             .await?;
 
@@ -298,6 +300,10 @@ impl Producer {
     ///
     /// Transitions the worker status from Ready to ShuttingDown, then to Stopped.
     /// Producer shutdown is straightforward since producers don't hold message locks.
+    ///
+    /// The shutdown process consists of two steps:
+    /// 1. `begin_shutdown()` - Sets status to ShuttingDown and records shutdown timestamp
+    /// 2. `mark_stopped()` - Sets status to Stopped (final state)
     ///
     /// # Returns
     /// Ok if shutdown completes successfully
