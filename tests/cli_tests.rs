@@ -397,8 +397,8 @@ fn test_cli_worker_health() {
         .iter()
         .find(|s| s.queue_name == queue_name)
         .unwrap();
-    assert!(q_stat.stale_workers == 1);
-    assert!(q_stat.total_workers == 1);
+    assert_eq!(q_stat.stale_workers, 1);
+    assert_eq!(q_stat.total_workers, 1);
 
     // Test Table output
     run_cli_table_command(&db_url, &["worker", "health"]);
