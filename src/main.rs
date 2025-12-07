@@ -22,8 +22,8 @@ use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
 use pgqrs::tables::PgqrsMessages;
 use pgqrs::types::{QueueInfo, QueueMessage};
-use pgqrs::Table;
 use pgqrs::{admin::PgqrsAdmin, tables::PgqrsQueues};
+use pgqrs::{PgqrsWorkers, Table, Worker, WorkerHandle};
 use std::fs::File;
 use std::process;
 
@@ -134,15 +134,6 @@ enum QueueCommands {
 
 #[derive(Subcommand)]
 enum WorkerCommands {
-    /// Register a worker for a queue
-    Register {
-        /// Name of the queue
-        queue: String,
-        /// Worker identifier (e.g., hostname or unique name)
-        host: String,
-        /// Heartbeat interval in seconds
-        port: i32,
-    },
     /// List all workers
     List {
         /// Name of the queue to filter workers by
@@ -164,13 +155,18 @@ enum WorkerCommands {
         /// Worker ID
         id: i64,
     },
-    /// Begin worker shutdown
-    Shutdown {
+    /// Suspend a worker (Ready -> Suspended)
+    Suspend {
         /// Worker ID
         id: i64,
     },
-    /// Stop a worker (mark as stopped)
-    Stop {
+    /// Resume a worker (Suspended -> Ready)
+    Resume {
+        /// Worker ID
+        id: i64,
+    },
+    /// Shutdown a worker (must be Suspended first)
+    Shutdown {
         /// Worker ID
         id: i64,
     },
@@ -182,6 +178,11 @@ enum WorkerCommands {
     },
     /// Delete a worker
     Delete {
+        /// Worker ID
+        id: i64,
+    },
+    /// Update worker heartbeat
+    Heartbeat {
         /// Worker ID
         id: i64,
     },
@@ -417,38 +418,42 @@ async fn handle_worker_commands(
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match command {
-        WorkerCommands::Register { queue, host, port } => {
-            let worker = admin.register(queue, host, port).await?;
-            writer.write_item(&worker, out)?;
-        }
         WorkerCommands::List { queue } => {
+            let table = PgqrsWorkers::new(admin.pool.clone());
             let workers = match queue {
                 Some(queue_name) => {
                     tracing::info!("Listing workers for queue '{}'...", queue_name);
-                    admin.list_queue_workers(&queue_name).await?
+                    let queue_id = PgqrsQueues::new(admin.pool.clone())
+                        .get_by_name(&queue_name)
+                        .await?
+                        .id;
+                    table.filter_by_fk(queue_id).await?
                 }
                 None => {
                     tracing::info!("Listing all workers...");
-                    admin.list_all_workers().await?
+                    table.list().await?
                 }
             };
             tracing::info!("Found {} workers", workers.len());
             writer.write_list(&workers, out)?;
         }
         WorkerCommands::Get { id } => {
-            let worker = admin.get_worker_by_id(id).await?;
+            let worker = PgqrsWorkers::new(admin.pool.clone())
+                .get(id)
+                .await
+                .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
             writer.write_item(&worker, out)?;
         }
 
         WorkerCommands::Messages { id } => {
             // Find the worker and get its messages
-            let worker = admin
-                .get_worker_by_id(id)
+            let worker_info = PgqrsWorkers::new(admin.pool.clone())
+                .get(id)
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
 
             tracing::info!("Getting messages for worker {}...", id);
-            let messages = admin.get_worker_messages(worker.id).await?;
+            let messages = admin.get_worker_messages(worker_info.id).await?;
             tracing::info!("Found {} messages", messages.len());
             writer.write_list(&messages, out)?;
         }
@@ -464,16 +469,36 @@ async fn handle_worker_commands(
             )?;
         }
 
-        WorkerCommands::Shutdown { id } => {
-            tracing::info!("Stopping worker {}...", id);
-            admin.begin_shutdown(id).await?;
-            tracing::info!("Worker stopped successfully");
+        WorkerCommands::Suspend { id } => {
+            tracing::info!("Suspending worker {}...", id);
+            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
+            worker_handle.suspend().await?;
+            tracing::info!("Worker {} suspended", id);
+            writeln!(out, "Worker {} suspended", id)?;
         }
 
-        WorkerCommands::Stop { id } => {
-            tracing::info!("Marking worker {} as stopped...", id);
-            admin.mark_stopped(id).await?;
-            tracing::info!("Worker {} marked as stopped", id);
+        WorkerCommands::Resume { id } => {
+            tracing::info!("Resuming worker {}...", id);
+            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
+            worker_handle.resume().await?;
+            tracing::info!("Worker {} resumed", id);
+            writeln!(out, "Worker {} resumed", id)?;
+        }
+
+        WorkerCommands::Shutdown { id } => {
+            tracing::info!("Shutting down worker {}...", id);
+            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
+            worker_handle.shutdown().await?;
+            tracing::info!("Worker {} shut down successfully", id);
+            writeln!(out, "Worker {} shut down successfully", id)?;
+        }
+
+        WorkerCommands::Heartbeat { id } => {
+            tracing::info!("Updating heartbeat for worker {}...", id);
+            let worker = WorkerHandle::new(admin.pool.clone(), id);
+            worker.heartbeat().await?;
+            tracing::info!("Heartbeat updated for worker {}", id);
+            writeln!(out, "Heartbeat updated for worker {}", id)?;
         }
 
         WorkerCommands::Purge { older_than } => {
@@ -516,11 +541,7 @@ async fn handle_worker_commands(
             writeln!(out, "Worker Statistics for Queue '{}':", queue)?;
             writeln!(out, "  Total Workers: {}", stats.total_workers)?;
             writeln!(out, "  Ready Workers: {}", stats.ready_workers)?;
-            writeln!(
-                out,
-                "  Shutting Down Workers: {}",
-                stats.shutting_down_workers
-            )?;
+            writeln!(out, "  Suspended Workers: {}", stats.suspended_workers)?;
             writeln!(out, "  Stopped Workers: {}", stats.stopped_workers)?;
             writeln!(
                 out,

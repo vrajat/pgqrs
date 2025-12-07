@@ -49,7 +49,8 @@ const DELETE_WORKERS_BY_QUEUE: &str = r#"
 pub struct NewWorker {
     pub hostname: String,
     pub port: i32,
-    pub queue_id: i64,
+    /// Queue ID (None for Admin workers)
+    pub queue_id: Option<i64>,
 }
 
 /// Workers table CRUD operations for pgqrs.
@@ -244,12 +245,12 @@ impl PgqrsWorkers {
     /// * `queue_id` - ID of the queue to count workers for
     ///
     /// # Returns
-    /// Number of active workers (ready or shutting_down status)
+    /// Number of active workers (ready or suspended status)
     pub async fn count_active_for_queue(&self, queue_id: i64) -> Result<i64> {
         const COUNT_ACTIVE_WORKERS: &str = r#"
             SELECT COUNT(*)
             FROM pgqrs_workers
-            WHERE queue_id = $1 AND status IN ('ready', 'shutting_down')
+            WHERE queue_id = $1 AND status IN ('ready', 'suspended')
         "#;
 
         let count: i64 = sqlx::query_scalar(COUNT_ACTIVE_WORKERS)
@@ -276,13 +277,26 @@ mod tests {
         let new_worker = NewWorker {
             hostname: "test-host".to_string(),
             port: 8080,
-            queue_id: 1,
+            queue_id: Some(1),
         };
 
         // Test that the NewWorker struct can be created
         assert_eq!(new_worker.hostname, "test-host");
         assert_eq!(new_worker.port, 8080);
-        assert_eq!(new_worker.queue_id, 1);
+        assert_eq!(new_worker.queue_id, Some(1));
+    }
+
+    #[test]
+    fn test_new_admin_worker_creation() {
+        let new_worker = NewWorker {
+            hostname: "admin-host".to_string(),
+            port: 9090,
+            queue_id: None, // Admin workers have no queue
+        };
+
+        assert_eq!(new_worker.hostname, "admin-host");
+        assert_eq!(new_worker.port, 9090);
+        assert_eq!(new_worker.queue_id, None);
     }
 
     #[test]

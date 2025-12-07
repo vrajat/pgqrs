@@ -8,24 +8,26 @@
 //! - [`Producer`] handles message production: adding jobs to queues with validation and rate limiting
 //! - Supports single message enqueue, delayed messages, and batch operations
 //! - Includes message visibility management for producers
+//! - Implements the [`Worker`] trait for lifecycle management
 //!
 //! ## How
 //!
-//! Create a [`Producer`] using a queue configuration, then use its methods to enqueue jobs.
+//! Create a [`Producer`] using `Producer::new()` which handles worker registration automatically.
 //!
 //! ### Example
 //!
 //! ```rust
 //! use pgqrs::producer::Producer;
-//! // let producer = Producer::new(...);
+//! // let producer = Producer::new(pool, &queue_info, "localhost", 8080, &config).await?;
 //! // let message = producer.enqueue(&payload).await?;
 //! ```
 
 use crate::error::Result;
 use crate::tables::{PgqrsMessages, Table};
-use crate::types::{QueueInfo, QueueMessage};
+use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
-use crate::{admin::PgqrsAdmin, PgqrsError};
+use crate::worker::{Worker, WorkerLifecycle};
+use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -50,6 +52,8 @@ const REPLAY_FROM_DLQ: &str = r#"
 /// A Producer instance provides methods for adding messages to a queue,
 /// including validation, rate limiting, and batch operations.
 /// Each Producer corresponds to a specific queue.
+///
+/// Implements the [`Worker`] trait for lifecycle management.
 pub struct Producer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
@@ -63,8 +67,8 @@ pub struct Producer {
     validator: PayloadValidator,
     /// Messages table operations
     messages: PgqrsMessages,
-    /// Admin interface for worker management
-    admin: PgqrsAdmin,
+    /// Worker lifecycle manager
+    lifecycle: WorkerLifecycle,
 }
 
 impl Producer {
@@ -81,30 +85,28 @@ impl Producer {
     pub async fn new(
         pool: PgPool,
         queue_info: &QueueInfo,
-        worker_info: &crate::types::WorkerInfo,
+        hostname: &str,
+        port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
-        // Validate worker is active and matches queue
-        if worker_info.queue_id != queue_info.id {
-            return Err(PgqrsError::ValidationFailed {
-                reason: "Worker must be registered for this queue".to_string(),
-            });
-        }
-        if !matches!(worker_info.status, crate::types::WorkerStatus::Ready) {
-            return Err(PgqrsError::ValidationFailed {
-                reason: "Worker must be active".to_string(),
-            });
-        }
+        let lifecycle = WorkerLifecycle::new(pool.clone());
+        let worker_info = lifecycle.register(queue_info, hostname, port).await?;
+        tracing::debug!(
+            "Registered producer worker {} ({}:{}) for queue '{}'",
+            worker_info.id,
+            hostname,
+            port,
+            queue_info.queue_name
+        );
         let messages = PgqrsMessages::new(pool.clone());
-        let admin = PgqrsAdmin::new(config).await?;
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
             worker_info: worker_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
+            lifecycle,
             messages,
-            admin,
         })
     }
 
@@ -295,21 +297,37 @@ impl Producer {
     pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
         self.validator.rate_limit_status()
     }
+}
 
-    /// Gracefully shutdown this producer.
-    ///
-    /// Transitions the worker status from Ready to ShuttingDown, then to Stopped.
-    /// Producer shutdown is straightforward since producers don't hold message locks.
-    ///
-    /// The shutdown process consists of two steps:
-    /// 1. `begin_shutdown()` - Sets status to ShuttingDown and records shutdown timestamp
-    /// 2. `mark_stopped()` - Sets status to Stopped (final state)
-    ///
-    /// # Returns
-    /// Ok if shutdown completes successfully
-    pub async fn shutdown(&self) -> Result<()> {
-        self.admin.begin_shutdown(self.worker_info.id).await?;
-        self.admin.mark_stopped(self.worker_info.id).await?;
-        Ok(())
+#[async_trait]
+impl Worker for Producer {
+    fn worker_id(&self) -> i64 {
+        self.worker_info.id
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.lifecycle.heartbeat(self.worker_info.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.lifecycle
+            .is_healthy(self.worker_info.id, max_age)
+            .await
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.lifecycle.get_status(self.worker_info.id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        self.lifecycle.suspend(self.worker_info.id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        self.lifecycle.resume(self.worker_info.id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        self.lifecycle.shutdown(self.worker_info.id).await
     }
 }

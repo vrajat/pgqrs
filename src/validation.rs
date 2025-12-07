@@ -16,7 +16,7 @@
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::{Config, PgqrsAdmin, ValidationConfig};
+//! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
 //! use serde_json::json;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,8 +30,13 @@
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
-//! let worker_info = admin.register("my_queue".to_string(), "localhost".to_string(), 8080).await?;
-//! let producer = pgqrs::Producer::new(admin.pool.clone(), &queue_info, &worker_info, &admin.config).await.unwrap();
+//! let producer = Producer::new(
+//!     admin.pool.clone(),
+//!     &queue_info,
+//!     "localhost",
+//!     8080,
+//!     &admin.config,
+//! ).await?;
 //!
 //! // This will be validated automatically
 //! let payload = json!({"user_id": "123", "data": "test"});

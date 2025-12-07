@@ -48,23 +48,24 @@
 //!
 //! For more details and advanced usage, see the [README](https://github.com/vrajat/pgqrs/blob/main/README.md) and [examples](https://github.com/vrajat/pgqrs/tree/main/examples).
 
-pub mod admin;
 pub mod config;
-pub mod consumer;
 pub mod error;
-pub mod producer;
 mod rate_limit;
 pub mod tables;
 pub mod types;
 mod validation;
+pub mod worker;
 
 mod constants;
 
-pub use crate::admin::PgqrsAdmin;
+// Re-export worker types at crate root for convenience
+pub use crate::worker::admin;
+pub use crate::worker::consumer;
+pub use crate::worker::producer;
+pub use crate::worker::{Consumer, PgqrsAdmin, Producer, Worker, WorkerHandle};
+
 pub use crate::config::Config;
-pub use crate::consumer::Consumer;
 pub use crate::error::{PgqrsError, Result};
-pub use crate::producer::Producer;
 pub use crate::rate_limit::RateLimitStatus;
 pub use crate::tables::{NewWorker, PgqrsArchive, PgqrsWorkers, Table};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
