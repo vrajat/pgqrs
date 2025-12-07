@@ -144,7 +144,10 @@ async fn test_system_stats() {
     consumer.dequeue().await.unwrap(); // Make one locked
 
     // Fetch system stats
-    let stats = admin.system_stats().await.expect("Failed to get system stats");
+    let stats = admin
+        .system_stats()
+        .await
+        .expect("Failed to get system stats");
 
     // Verify system stats
     assert!(stats.total_queues >= 1);
@@ -186,7 +189,10 @@ async fn test_worker_health_stats() {
         .await
         .unwrap();
 
-    let global = global_stats.iter().find(|s| s.queue_name == "Global").unwrap();
+    let global = global_stats
+        .iter()
+        .find(|s| s.queue_name == "Global")
+        .unwrap();
     assert!(global.stale_workers >= 1);
 
     // Test Per-Queue Health
@@ -195,7 +201,10 @@ async fn test_worker_health_stats() {
         .await
         .unwrap();
 
-    let q_stat = queue_stats.iter().find(|s| s.queue_name == queue_name).unwrap();
+    let q_stat = queue_stats
+        .iter()
+        .find(|s| s.queue_name == queue_name)
+        .unwrap();
     assert_eq!(q_stat.stale_workers, 1);
     assert_eq!(q_stat.total_workers, 1);
 
@@ -238,7 +247,10 @@ async fn test_worker_stats() {
     // Verify initial stats
     // Total workers: 2
     // Ready workers: 2
-    let stats = admin.worker_stats(queue_name).await.expect("Failed to get worker stats");
+    let stats = admin
+        .worker_stats(queue_name)
+        .await
+        .expect("Failed to get worker stats");
     assert_eq!(stats.total_workers, 2);
     assert_eq!(stats.ready_workers, 2);
     assert_eq!(stats.suspended_workers, 0);
@@ -253,7 +265,10 @@ async fn test_worker_stats() {
     // Total messages locked: 1
     // Total workers: 2
     // Avg: 0.5
-    let stats = admin.worker_stats(queue_name).await.expect("Failed to get worker stats");
+    let stats = admin
+        .worker_stats(queue_name)
+        .await
+        .expect("Failed to get worker stats");
     assert_eq!(stats.average_messages_per_worker, 0.5);
 
     // Suspend producer
@@ -263,7 +278,10 @@ async fn test_worker_stats() {
     // Total: 2
     // Ready: 1 (consumer)
     // Suspended: 1 (producer)
-    let stats = admin.worker_stats(queue_name).await.expect("Failed to get worker stats");
+    let stats = admin
+        .worker_stats(queue_name)
+        .await
+        .expect("Failed to get worker stats");
     assert_eq!(stats.total_workers, 2);
     assert_eq!(stats.ready_workers, 1);
     assert_eq!(stats.suspended_workers, 1);

@@ -382,7 +382,10 @@ fn test_cli_worker_health() {
     let global_stats: Vec<pgqrs::types::WorkerHealthStats> =
         run_cli_command_json(&db_url, &["worker", "health"]);
 
-    let global = global_stats.iter().find(|s| s.queue_name == "Global").unwrap();
+    let global = global_stats
+        .iter()
+        .find(|s| s.queue_name == "Global")
+        .unwrap();
     assert!(global.total_workers >= 1);
     assert!(global.stale_workers >= 1);
 
@@ -390,7 +393,10 @@ fn test_cli_worker_health() {
     let queue_stats: Vec<pgqrs::types::WorkerHealthStats> =
         run_cli_command_json(&db_url, &["worker", "health", "--group-by-queue"]);
 
-    let q_stat = queue_stats.iter().find(|s| s.queue_name == queue_name).unwrap();
+    let q_stat = queue_stats
+        .iter()
+        .find(|s| s.queue_name == queue_name)
+        .unwrap();
     assert!(q_stat.stale_workers == 1);
     assert!(q_stat.total_workers == 1);
 

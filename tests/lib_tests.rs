@@ -620,7 +620,7 @@ async fn test_referential_integrity_checks() {
 
     // Cleanup
     admin
-        .delete_queue(&queue_info)
+        .delete_queue(queue_info)
         .await
         .expect("Failed to delete queue");
 }
@@ -741,7 +741,7 @@ async fn test_queue_deletion_with_references() {
 
     // Purge archive and try again - should succeed
     admin
-        .purge_queue(&queue_name)
+        .purge_queue(queue_name)
         .await
         .expect("Failed to purge messages");
     assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
@@ -1278,7 +1278,7 @@ async fn test_consumer_shutdown_with_held_messages() {
         .unwrap();
     assert_eq!(worker_messages.len(), 3);
 
-    let _suspend_result = consumer.suspend().await.unwrap();
+    consumer.suspend().await.unwrap();
     // Consumer cannot shutdown while holding messages
     let shutdown_result = consumer.shutdown().await;
     assert!(
