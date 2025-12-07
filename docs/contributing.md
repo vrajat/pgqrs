@@ -49,6 +49,8 @@ Releases to crates.io are automated via GitHub Actions triggered by git tags.
 
 1. **Update version in Cargo.toml**
    ```bash
+   # Install cargo-release tool if not already installed
+   cargo install cargo-release
    # Bump version (patch, minor, or major)
    cargo release patch  # or minor/major
    # OR manually edit version in Cargo.toml
@@ -65,7 +67,7 @@ Releases to crates.io are automated via GitHub Actions triggered by git tags.
    - Git tag triggers GitHub Actions workflow
    - Workflow runs tests and builds
    - On success, publishes to crates.io
-   - Creates GitHub release with changelog
+
 
 ## Version Bumping Guidelines
 

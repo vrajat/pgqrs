@@ -83,6 +83,7 @@ jobs:
   release:
     name: Publish crate (Trusted Publishing)
     runs-on: ubuntu-latest
+    needs: build
 
     # optional: ensure only one publish per tag
     concurrency:
@@ -120,10 +121,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
       # Optional sanity checks before publishing
-      - name: Build & test
+      - name: Build
         run: |
           cargo build --release --locked
-          cargo test --release --locked --lib
 
       # Get short-lived crates.io token via OIDC
       - name: Authenticate with crates.io (Trusted Publishing)
