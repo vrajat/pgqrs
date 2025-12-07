@@ -200,7 +200,7 @@ impl Tabled for SystemStats {
 /// Worker health statistics
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkerHealthStats {
-    /// Queue name (or "All" for global stats)
+    /// Queue name (or "Global" for global stats)
     pub queue_name: String,
     /// Total workers
     pub total_workers: i64,

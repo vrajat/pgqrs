@@ -690,12 +690,16 @@ impl PgqrsAdmin {
     /// # Arguments
     /// * `heartbeat_timeout` - Duration to consider a worker as stale.
     /// * `group_by_queue` - If true, returns stats per queue. Otherwise global stats.
+    ///
+    /// # Returns
+    /// A vector of [`WorkerHealthStats`] containing either global statistics or per-queue statistics,
+    /// depending on the value of `group_by_queue`.
     pub async fn worker_health_stats(
         &self,
         heartbeat_timeout: std::time::Duration,
         group_by_queue: bool,
     ) -> Result<Vec<WorkerHealthStats>> {
-        // Convert heartbeat_timeout to strings for interval (e.g., '60 seconds')
+        // Convert heartbeat_timeout to a string for interval (e.g., '60 seconds')
         let interval_str = format!("{} seconds", heartbeat_timeout.as_secs());
 
         let stats = if group_by_queue {
