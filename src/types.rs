@@ -66,7 +66,7 @@ impl fmt::Display for QueueMessage {
 }
 
 /// Queue metrics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct QueueMetrics {
     /// Name of the queue
     pub name: String,

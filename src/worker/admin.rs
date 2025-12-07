@@ -509,15 +509,85 @@ impl PgqrsAdmin {
         Ok(result)
     }
 
+
+    const GET_QUEUE_METRICS: &str = r#"
+        WITH queue_counts AS (
+            SELECT
+                COUNT(*) as total_messages,
+                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
+                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages,
+                MIN(enqueued_at) FILTER (WHERE vt <= NOW()) as oldest_pending_message,
+                MAX(enqueued_at) as newest_message
+            FROM pgqrs_messages
+            WHERE queue_id = $1
+        ),
+        archive_counts AS (
+            SELECT COUNT(*) as archived_messages
+            FROM pgqrs_archive
+            WHERE queue_id = $1
+        )
+        SELECT
+            $2 as name,
+            COALESCE(qc.total_messages, 0) as total_messages,
+            COALESCE(qc.pending_messages, 0) as pending_messages,
+            COALESCE(qc.locked_messages, 0) as locked_messages,
+            COALESCE(ac.archived_messages, 0) as archived_messages,
+            qc.oldest_pending_message,
+            qc.newest_message
+        FROM queue_counts qc
+        CROSS JOIN archive_counts ac;
+    "#;
+
+    const GET_ALL_QUEUES_METRICS: &str = r#"
+        WITH queue_counts AS (
+            SELECT
+                queue_id,
+                COUNT(*) as total_messages,
+                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
+                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages,
+                MIN(enqueued_at) FILTER (WHERE vt <= NOW()) as oldest_pending_message,
+                MAX(enqueued_at) as newest_message
+            FROM pgqrs_messages
+            GROUP BY queue_id
+        ),
+        archive_counts AS (
+            SELECT queue_id, COUNT(*) as archived_messages
+            FROM pgqrs_archive
+            GROUP BY queue_id
+        )
+        SELECT
+            q.queue_name as name,
+            COALESCE(qc.total_messages, 0) as total_messages,
+            COALESCE(qc.pending_messages, 0) as pending_messages,
+            COALESCE(qc.locked_messages, 0) as locked_messages,
+            COALESCE(ac.archived_messages, 0) as archived_messages,
+            qc.oldest_pending_message,
+            qc.newest_message
+        FROM pgqrs_queues q
+        LEFT JOIN queue_counts qc ON q.id = qc.queue_id
+        LEFT JOIN archive_counts ac ON q.id = ac.queue_id;
+    "#;
+
     /// Get metrics for a specific queue.
     ///
     /// # Arguments
     /// * `name` - Name of the queue
     ///
     /// # Returns
-    /// [`QueueMetrics`] for the queue.
-    pub async fn queue_metrics(&self, _name: &str) -> Result<QueueMetrics> {
-        todo!("Implement Admin::queue_metrics")
+    /// /// [`QueueMetrics`] for the queue.
+    pub async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
+        let queue_info = self.queues.get_by_name(name).await?;
+
+        let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_QUEUE_METRICS)
+            .bind(queue_info.id)
+            .bind(name) // Pass name to be returned in the struct
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to get metrics for queue {}: {}", name, e),
+            })?;
+
+        Ok(metrics)
     }
 
     /// Get metrics for all queues managed by pgqrs.
@@ -525,7 +595,14 @@ impl PgqrsAdmin {
     /// # Returns
     /// Vector of [`QueueMetrics`] for all queues.
     pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
-        todo!("Implement Admin::all_queues_metrics")
+        let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_ALL_QUEUES_METRICS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to get all queues metrics: {}", e),
+            })?;
+
+        Ok(metrics)
     }
 
     /// Get messages currently being processed by a worker
