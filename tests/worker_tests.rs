@@ -449,20 +449,24 @@ async fn test_worker_deletion_with_archived_references() {
     );
 }
 
+/// Test that purge_old_workers removes stopped workers with old heartbeats.
+///
+/// Workers must be in Stopped state AND have old heartbeat to be purged.
+/// Workers with recent heartbeats are not purged regardless of status.
 #[tokio::test]
 #[serial]
-async fn test_purge_old_workers_respects_references() {
+async fn test_purge_old_workers() {
     let admin = create_admin().await;
 
     // Create a test queue
-    let queue_name = "test_purge_old_workers_with_references";
+    let queue_name = "test_purge_old_workers";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
 
-    // Create producer (worker1) and a second producer (worker2) for the purge test
+    // Create two producers to be purged
     let producer1 = Producer::new(
         admin.pool.clone(),
         &queue_info,
-        "purge-worker1",
+        "purge-producer1",
         8081,
         &admin.config,
     )
@@ -472,14 +476,14 @@ async fn test_purge_old_workers_respects_references() {
     let producer2 = Producer::new(
         admin.pool.clone(),
         &queue_info,
-        "purge-worker2",
+        "purge-producer2",
         8082,
         &admin.config,
     )
     .await
     .expect("Failed to create producer2");
 
-    // Create a consumer
+    // Create a consumer that will NOT be purged (recent heartbeat)
     let consumer = Consumer::new(
         admin.pool.clone(),
         &queue_info,
@@ -490,7 +494,7 @@ async fn test_purge_old_workers_respects_references() {
     .await
     .expect("Failed to create consumer");
 
-    // Stop all workers (must suspend first per new lifecycle)
+    // Stop all workers (must suspend first per lifecycle)
     producer1.suspend().await.unwrap();
     producer1.shutdown().await.unwrap();
     producer2.suspend().await.unwrap();
@@ -498,40 +502,7 @@ async fn test_purge_old_workers_respects_references() {
     consumer.suspend().await.unwrap();
     consumer.shutdown().await.unwrap();
 
-    // Send a message (producer can still enqueue even when stopped for this test)
-    // We need to re-register a producer temporarily for enqueueing
-    let temp_producer = Producer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "purge-temp-producer",
-        8084,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create temp producer");
-
-    let temp_consumer = Consumer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "purge-temp-consumer",
-        8085,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create temp consumer");
-
-    temp_producer
-        .enqueue(&json!({"test": "purge_data"}))
-        .await
-        .unwrap();
-
-    assert!(temp_consumer.dequeue().await.is_ok());
-
-    // Stop temp workers too
-    temp_producer.suspend().await.unwrap();
-    temp_producer.shutdown().await.unwrap();
-
-    // Manually update heartbeat to be old for producer1 and producer2
+    // Set old heartbeat ONLY for producer1 and producer2
     let old_time = chrono::Utc::now() - Duration::days(30);
     sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = $1 WHERE id = ANY($2)")
         .bind(old_time)
@@ -540,7 +511,7 @@ async fn test_purge_old_workers_respects_references() {
         .await
         .unwrap();
 
-    // Purge old workers (should remove producer1 and producer2 which have no message references)
+    // Purge old workers - should only remove producer1 and producer2
     let purged_count = admin
         .purge_old_workers(std::time::Duration::from_secs(60))
         .await
@@ -548,20 +519,22 @@ async fn test_purge_old_workers_respects_references() {
 
     assert_eq!(
         purged_count, 2,
-        "Should purge workers without message references"
+        "Should purge exactly 2 workers with old heartbeats"
     );
 
-    // Verify remaining workers:
-    // - producer1 and producer2 were purged (old heartbeat, no message refs)
-    // - consumer, temp_producer, temp_consumer should remain (heartbeat not old enough)
-    // - temp_consumer also has a message reference which would protect it from purge
+    // Verify consumer remains (recent heartbeat)
     let workers = PgqrsWorkers::new(admin.pool.clone())
         .filter_by_fk(queue_info.id)
         .await
         .unwrap();
+    assert_eq!(workers.len(), 1, "Only consumer should remain");
     assert_eq!(
-        workers.len(),
-        3,
-        "consumer, temp_producer, and temp_consumer should remain (not old enough to purge)"
+        workers[0].id,
+        consumer.worker_id(),
+        "Remaining worker should be the consumer"
     );
+
+    // Cleanup
+    admin.delete_worker(consumer.worker_id()).await.unwrap();
+    admin.delete_queue(&queue_info).await.unwrap();
 }
