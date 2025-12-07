@@ -352,3 +352,59 @@ fn test_cli_metrics_output_table() {
 
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
+
+#[test]
+fn test_cli_worker_health() {
+    let db_url = get_test_db_url();
+    let queue_name = "test_worker_health_cli";
+
+    run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
+    let queue_info: QueueInfo = run_cli_command_json(&db_url, &["queue", "get", queue_name]);
+
+    // Manually insert a stale worker directly into DB to test timeout logic
+    let rt = Runtime::new().unwrap();
+    rt.block_on(async {
+        let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
+        // Insert a worker with last_heartbeat 1 hour ago
+        // Ensure we use the correct schema
+        sqlx::query(
+            "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at)
+             VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')"
+        )
+        .bind(queue_info.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    });
+
+    // Test Global Health (JSON)
+    // Default timeout is 60s, so our 1h old worker should be stale
+    let global_stats: Vec<pgqrs::types::WorkerHealthStats> =
+        run_cli_command_json(&db_url, &["worker", "health"]);
+
+    let global = global_stats.iter().find(|s| s.queue_name == "Global").unwrap();
+    assert!(global.total_workers >= 1);
+    assert!(global.stale_workers >= 1);
+
+    // Test Per-Queue Health (JSON)
+    let queue_stats: Vec<pgqrs::types::WorkerHealthStats> =
+        run_cli_command_json(&db_url, &["worker", "health", "--group-by-queue"]);
+
+    let q_stat = queue_stats.iter().find(|s| s.queue_name == queue_name).unwrap();
+    assert!(q_stat.stale_workers == 1);
+    assert!(q_stat.total_workers == 1);
+
+    // Test Table output
+    run_cli_table_command(&db_url, &["worker", "health"]);
+
+    // Cleanup
+    rt.block_on(async {
+        let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
+        sqlx::query("DELETE FROM pgqrs_cli_test.pgqrs_workers WHERE hostname = 'stale_host'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
+}

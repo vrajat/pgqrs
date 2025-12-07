@@ -31,7 +31,7 @@ use crate::config::Config;
 use crate::error::{PgqrsError, Result};
 use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
 use crate::types::QueueMetrics;
-use crate::types::{QueueInfo, SystemStats, WorkerInfo, WorkerStatus};
+use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
@@ -606,6 +606,31 @@ impl PgqrsAdmin {
         CROSS JOIN queue_counts qc
         CROSS JOIN worker_counts wc
         LEFT JOIN schema_info si ON TRUE;
+
+    "#;
+
+    const GET_WORKER_HEALTH_GLOBAL: &str = r#"
+        SELECT
+            'Global' as queue_name,
+            COUNT(*) as total_workers,
+            COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
+            COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
+            COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
+            COUNT(*) FILTER (WHERE heartbeat_at < NOW() - $1::interval) as stale_workers
+        FROM pgqrs_workers;
+    "#;
+
+    const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
+        SELECT
+            COALESCE(q.queue_name, 'Unknown') as queue_name,
+            COUNT(w.id) as total_workers,
+            COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
+            COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
+            COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
+            COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - $1::interval) as stale_workers
+        FROM pgqrs_workers w
+        LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+        GROUP BY q.queue_name;
     "#;
 
     /// Get metrics for a specific queue.
@@ -658,6 +683,36 @@ impl PgqrsAdmin {
             })?;
 
         Ok(stats)
+    }
+
+    /// Get worker health statistics.
+    ///
+    /// # Arguments
+    /// * `heartbeat_timeout` - Duration to consider a worker as stale.
+    /// * `group_by_queue` - If true, returns stats per queue. Otherwise global stats.
+    pub async fn worker_health_stats(
+        &self,
+        heartbeat_timeout: std::time::Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<WorkerHealthStats>> {
+        // Convert heartbeat_timeout to strings for interval (e.g., '60 seconds')
+        let interval_str = format!("{} seconds", heartbeat_timeout.as_secs());
+
+        let stats = if group_by_queue {
+            sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_BY_QUEUE)
+                .bind(interval_str)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_GLOBAL)
+                .bind(interval_str)
+                .fetch_all(&self.pool)
+                .await
+        };
+
+        stats.map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to get worker health stats: {}", e),
+        })
     }
 
     /// Get messages currently being processed by a worker

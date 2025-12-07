@@ -193,6 +193,15 @@ enum WorkerCommands {
         /// Name of the queue
         queue: String,
     },
+    /// Check worker health
+    Health {
+        /// Stale threshold in seconds (default: 60)
+        #[arg(long, default_value = "60")]
+        timeout: u64,
+        /// Group stats by queue
+        #[arg(long)]
+        group_by_queue: bool,
+    },
 }
 
 #[tokio::main]
@@ -524,6 +533,21 @@ async fn handle_worker_commands(
                 "  Newest Heartbeat Age: {:?}",
                 stats.newest_heartbeat_age
             )?;
+        }
+
+        WorkerCommands::Health {
+            timeout,
+            group_by_queue,
+        } => {
+            tracing::info!(
+                "Checking worker health (timeout: {}s, grouped: {})...",
+                timeout,
+                group_by_queue
+            );
+            let stats = admin
+                .worker_health_stats(std::time::Duration::from_secs(timeout), group_by_queue)
+                .await?;
+            writer.write_list(&stats, out)?;
         }
     }
     Ok(())
