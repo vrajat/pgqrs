@@ -239,7 +239,7 @@ async fn test_archive_batch_messages() {
 
     // Archive first 3 messages in batch
     let batch_to_archive = msg_ids[0..3].to_vec();
-    let archived_results = consumer.archive_batch(batch_to_archive.clone()).await;
+    let archived_results = consumer.archive_many(batch_to_archive.clone()).await;
     assert!(archived_results.is_ok());
     let archived_results = archived_results.unwrap();
     assert_eq!(
@@ -268,7 +268,7 @@ async fn test_archive_batch_messages() {
     );
 
     // Try to archive empty batch (should return empty vec)
-    let empty_archive = consumer.archive_batch(vec![]).await;
+    let empty_archive = consumer.archive_many(vec![]).await;
     assert!(empty_archive.is_ok());
     assert!(empty_archive.unwrap().is_empty());
 
