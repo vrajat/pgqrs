@@ -41,20 +41,44 @@ make clean-docs
 
 ---
 
-## Releases
+# Releases
 
-This project uses [release-plz](https://release-plz.dev/) for automated releases:
+Releases to crates.io are automated via GitHub Actions triggered by git tags.
 
-- **Automatic releases**: When changes are merged to `main`, release-plz automatically:
-  - Updates the version in `Cargo.toml` based on conventional commits
-  - Updates the `CHANGELOG.md`
-  - Creates a Git tag and GitHub release
-  - Publishes to [crates.io](https://crates.io) via trusted publishing
+## Steps to Release
 
-- **Commit format**: Use [conventional commits](https://www.conventionalcommits.org/) for automatic version bumping:
-  - `feat:` for new features (minor version bump)
-  - `fix:` for bug fixes (patch version bump)
-  - `feat!:` or `BREAKING CHANGE:` for breaking changes (major version bump)
-  - `docs:`, `refactor:`, `perf:`, etc. for other changes
+1. **Update version in Cargo.toml**
+   ```bash
+   # Bump version (patch, minor, or major)
+   cargo release patch  # or minor/major
+   # OR manually edit version in Cargo.toml
+   ```
 
-- **Manual releases**: Run the "Release-plz" workflow manually from the GitHub Actions tab
+2. **Create and push git tag**
+   ```bash
+   # Tag must follow semantic versioning (e.g., v0.3.0)
+   git tag v0.3.0
+   git push origin v0.3.0
+   ```
+
+3. **Automated release process**
+   - Git tag triggers GitHub Actions workflow
+   - Workflow runs tests and builds
+   - On success, publishes to crates.io
+   - Creates GitHub release with changelog
+
+## Version Bumping Guidelines
+
+- **Patch** (`0.1.0` → `0.1.1`): Bug fixes, documentation updates
+- **Minor** (`0.1.0` → `0.2.0`): New features, backward compatible
+- **Major** (`0.1.0` → `1.0.0`): Breaking changes
+
+## Pre-release Checklist
+
+- [ ] All tests pass (`cargo test`)
+- [ ] Code formatted (`cargo fmt`)
+- [ ] Documentation updated
+- [ ] Changelog updated (if applicable)
+- [ ] CI passes on main branch
+- [ ] Version bumped in Cargo.toml
+- [ ] Reviewed breaking changes (if any)
