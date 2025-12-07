@@ -56,7 +56,7 @@ pub trait Worker: Send + Sync {
     /// Ok if resume succeeds, error if not suspended or state transition fails.
     async fn resume(&self) -> Result<()>;
 
-    /// Initiate graceful shutdown (transition from Suspended to ShuttingDown to Stopped).
+    /// Initiate shutdown (transition from Suspended to Stopped).
     ///
     /// # Preconditions
     /// - Worker must be in `Suspended` state
