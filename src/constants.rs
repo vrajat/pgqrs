@@ -123,3 +123,6 @@ pub const PURGE_OLD_WORKERS: &str = r#"
           ) refs
       )
 "#;
+
+// NOTE: constants.rs is deprecated. Do not add new constants here.
+// Move existing constants to their respective modules when refactoring.
