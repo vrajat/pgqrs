@@ -271,3 +271,63 @@ fn test_cli_archive_functionality() {
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
+
+#[test]
+fn test_cli_metrics_output() {
+    let db_url = get_test_db_url();
+    let queue_name = "test_metrics_cli_output";
+
+    // Create queue
+    run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
+
+    // Test 1: Single queue metrics (JSON)
+    let metrics: pgqrs::types::QueueMetrics =
+        run_cli_command_json(&db_url, &["queue", "metrics", queue_name]);
+    assert_eq!(metrics.name, queue_name);
+    assert_eq!(metrics.total_messages, 0);
+
+    // Test 2: All queues metrics (JSON)
+    let all_metrics: Vec<pgqrs::types::QueueMetrics> =
+        run_cli_command_json(&db_url, &["queue", "metrics"]);
+    assert!(all_metrics.iter().any(|m| m.name == queue_name));
+
+    // Cleanup
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
+}
+
+fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
+    Command::new("cargo")
+        .args(["run", "--quiet", "--"])
+        .args([
+            "--dsn",
+            db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "--format",
+            "table",
+        ])
+        .args(args)
+        .output()
+        .expect("Failed to run CLI command")
+}
+
+#[test]
+fn test_cli_metrics_output_table() {
+    let db_url = get_test_db_url();
+    let queue_name = "test_metrics_cli_table";
+
+    run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
+
+    // Check table output success
+    let output = run_cli_table_command(&db_url, &["queue", "metrics", queue_name]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(queue_name));
+    // Table should contain headers
+    assert!(stdout.contains("total_messages"));
+
+    let output_all = run_cli_table_command(&db_url, &["queue", "metrics"]);
+    assert!(output_all.status.success());
+
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
+}

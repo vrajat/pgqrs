@@ -362,49 +362,11 @@ async fn handle_queue_commands(
             if let Some(queue_name) = name {
                 tracing::info!("Getting metrics for queue '{}'...", queue_name);
                 let metrics = admin.queue_metrics(&queue_name).await?;
-                tracing::info!("Queue: {}", metrics.name);
-                tracing::info!("  Total Messages: {}", metrics.total_messages);
-                tracing::info!("  Pending Messages: {}", metrics.pending_messages);
-                tracing::info!("  Locked Messages: {}", metrics.locked_messages);
-                if let Some(oldest) = metrics.oldest_pending_message {
-                    tracing::info!(
-                        "  Oldest Pending: {}",
-                        oldest.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                }
-                if let Some(newest) = metrics.newest_message {
-                    tracing::info!(
-                        "  Newest Message: {}",
-                        newest.format("%Y-%m-%d %H:%M:%S UTC")
-                    );
-                }
+                writer.write_item(&metrics, out)?;
             } else {
                 tracing::info!("Getting metrics for all queues...");
                 let metrics = admin.all_queues_metrics().await?;
-                if metrics.is_empty() {
-                    tracing::info!("No queues found");
-                } else {
-                    for metric in metrics {
-                        tracing::info!("Queue: {}", metric.name);
-                        tracing::info!("  Total Messages: {}", metric.total_messages);
-                        tracing::info!("  Pending Messages: {}", metric.pending_messages);
-                        tracing::info!("  Locked Messages: {}", metric.locked_messages);
-                        tracing::info!("  Archived Messages: {}", metric.archived_messages);
-                        if let Some(oldest) = metric.oldest_pending_message {
-                            tracing::info!(
-                                "  Oldest Pending: {}",
-                                oldest.format("%Y-%m-%d %H:%M:%S UTC")
-                            );
-                        }
-                        if let Some(newest) = metric.newest_message {
-                            tracing::info!(
-                                "  Newest Message: {}",
-                                newest.format("%Y-%m-%d %H:%M:%S UTC")
-                            );
-                        }
-                        println!();
-                    }
-                }
+                writer.write_list(&metrics, out)?;
             }
         }
     }
