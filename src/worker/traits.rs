@@ -15,13 +15,12 @@ use async_trait::async_trait;
 ///
 /// - `Ready`: Worker is active and can process work
 /// - `Suspended`: Worker is paused, can be resumed or shut down
-/// - `ShuttingDown`: Worker is shutting down (transitional)
 /// - `Stopped`: Worker has completed shutdown (terminal)
 ///
 /// ## State Transitions
 ///
 /// ```text
-/// Ready -> Suspended -> ShuttingDown -> Stopped
+/// Ready -> Suspended -> Stopped
 ///   ^         |
 ///   |_________|  (resume)
 /// ```

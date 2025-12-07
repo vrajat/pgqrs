@@ -551,14 +551,17 @@ async fn test_purge_old_workers_respects_references() {
         "Should purge workers without message references"
     );
 
-    // Verify temp_consumer (with message reference) remains along with others not old enough
+    // Verify remaining workers:
+    // - producer1 and producer2 were purged (old heartbeat, no message refs)
+    // - consumer, temp_producer, temp_consumer should remain (heartbeat not old enough)
+    // - temp_consumer also has a message reference which would protect it from purge
     let workers = PgqrsWorkers::new(admin.pool.clone())
         .filter_by_fk(queue_info.id)
         .await
         .unwrap();
-    // temp_consumer should remain (temp_consumer has message ref)
-    assert!(
-        workers.len() >= 1,
-        "At least one worker with references should remain"
+    assert_eq!(
+        workers.len(),
+        3,
+        "consumer, temp_producer, and temp_consumer should remain (not old enough to purge)"
     );
 }

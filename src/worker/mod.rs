@@ -51,7 +51,7 @@
 //!
 //! ### Example: Graceful shutdown
 //!
-//! ```rust,ignore
+//! ```rust
 //! use pgqrs::worker::Worker;
 //!
 //! async fn graceful_shutdown(worker: &impl Worker) -> pgqrs::Result<()> {
@@ -121,28 +121,6 @@ impl WorkerHandle {
             worker_id,
             lifecycle: WorkerLifecycle::new(pool),
         }
-    }
-
-    /// Get the number of messages currently held by this worker.
-    ///
-    /// This is useful for checking if a consumer can be suspended
-    /// (consumers must release all messages before suspending).
-    ///
-    /// # Returns
-    /// Number of messages held by this worker
-    pub async fn pending_message_count(&self) -> Result<i64> {
-        self.lifecycle.count_pending_messages(self.worker_id).await
-    }
-
-    /// Check if this worker is healthy based on heartbeat age.
-    ///
-    /// # Arguments
-    /// * `max_age` - Maximum allowed age for the last heartbeat
-    ///
-    /// # Returns
-    /// `true` if the worker's last heartbeat is within the max_age threshold
-    pub async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle.is_healthy(self.worker_id, max_age).await
     }
 }
 

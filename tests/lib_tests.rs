@@ -341,7 +341,7 @@ async fn test_purge_archive() {
         &admin.config,
     )
     .await
-    .expect("Failed to new producer");
+    .expect("Failed to create producer");
     let consumer = pgqrs::Consumer::new(
         admin.pool.clone(),
         &queue_info,
@@ -1157,7 +1157,7 @@ async fn test_producer_shutdown() {
     assert_eq!(workers.len(), 1);
     assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Ready);
 
-    // First suspend the producer (new lifecycle requirement)
+    // First suspend the producer
     let suspend_result = producer.suspend().await;
     assert!(suspend_result.is_ok(), "Producer suspend should succeed");
 
@@ -1320,12 +1320,11 @@ async fn test_consumer_shutdown_with_held_messages() {
     );
 
     // Verify worker status
-    let workers = PgqrsWorkers::new(admin.pool.clone())
-        .filter_by_fk(queue_info.id)
+    let consumer_worker = PgqrsWorkers::new(admin.pool.clone())
+        .get(consumer.worker_id())
         .await
         .unwrap();
-    assert_eq!(workers.len(), 2);
-    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
+    assert_eq!(consumer_worker.status, pgqrs::types::WorkerStatus::Stopped);
 
     // Verify all messages are back in pending state
     let pending_count = messages_table.count_pending(queue_info.id).await.unwrap();
@@ -1419,12 +1418,11 @@ async fn test_consumer_shutdown_all_messages_released() {
     );
 
     // Verify worker status
-    let workers = PgqrsWorkers::new(admin.pool.clone())
-        .filter_by_fk(queue_info.id)
+    let consumer_worker = PgqrsWorkers::new(admin.pool.clone())
+        .get(consumer.worker_id())
         .await
         .unwrap();
-    assert_eq!(workers.len(), 2);
-    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
+    assert_eq!(consumer_worker.status, pgqrs::types::WorkerStatus::Stopped);
 
     // Cleanup
     admin

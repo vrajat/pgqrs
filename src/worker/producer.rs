@@ -12,13 +12,13 @@
 //!
 //! ## How
 //!
-//! Create a [`Producer`] using `Producer::register()` which handles worker registration automatically.
+//! Create a [`Producer`] using `Producer::new()` which handles worker registration automatically.
 //!
 //! ### Example
 //!
 //! ```rust
 //! use pgqrs::producer::Producer;
-//! // let producer = Producer::register(pool, &queue_info, "localhost", 8080, &config).await?;
+//! // let producer = Producer::new(pool, &queue_info, "localhost", 8080, &config).await?;
 //! // let message = producer.enqueue(&payload).await?;
 //! ```
 

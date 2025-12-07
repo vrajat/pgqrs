@@ -15,7 +15,7 @@
 //!
 //! ### Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
 //! use serde_json::json;
 //!
@@ -30,10 +30,10 @@
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
-//! let producer = Producer::register(
+//! let producer = Producer::new(
 //!     admin.pool.clone(),
 //!     &queue_info,
-//!     "localhost".to_string(),
+//!     "localhost",
 //!     8080,
 //!     &admin.config,
 //! ).await?;

@@ -15,7 +15,7 @@
 //!
 //! ### Example
 //!
-//! ```rust,ignore
+//! ```rust
 //! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,10 +25,10 @@
 //!
 //! let admin = PgqrsAdmin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
-//! let producer = Producer::register(
+//! let producer = Producer::new(
 //!     admin.pool.clone(),
 //!     &queue_info,
-//!     "localhost".to_string(),
+//!     "localhost",
 //!     8080,
 //!     &admin.config,
 //! ).await?;
@@ -74,7 +74,7 @@ impl TokenBucket {
     /// Panics if `burst_capacity` is 0, which would cause division by zero in rate limit calculations.
     ///
     /// # Example
-    /// ```rust,ignore
+    /// ```rust
     /// // This is an internal implementation detail.
     /// // Configure rate limiting through ValidationConfig instead:
     /// use pgqrs::{Config, ValidationConfig};
