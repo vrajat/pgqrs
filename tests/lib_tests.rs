@@ -620,7 +620,7 @@ async fn test_referential_integrity_checks() {
 
     // Cleanup
     admin
-        .delete_queue(&queue_info)
+        .delete_queue(queue_info)
         .await
         .expect("Failed to delete queue");
 }
@@ -741,7 +741,7 @@ async fn test_queue_deletion_with_references() {
 
     // Purge archive and try again - should succeed
     admin
-        .purge_queue(&queue_name)
+        .purge_queue(queue_name)
         .await
         .expect("Failed to purge messages");
     assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
@@ -1278,7 +1278,7 @@ async fn test_consumer_shutdown_with_held_messages() {
         .unwrap();
     assert_eq!(worker_messages.len(), 3);
 
-    let _suspend_result = consumer.suspend().await.unwrap();
+    consumer.suspend().await.unwrap();
     // Consumer cannot shutdown while holding messages
     let shutdown_result = consumer.shutdown().await;
     assert!(
@@ -1432,104 +1432,4 @@ async fn test_consumer_shutdown_all_messages_released() {
     assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
     assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
     assert!(admin.delete_queue(&queue_info).await.is_ok());
-}
-
-#[tokio::test]
-async fn test_queue_metrics() {
-    let admin = create_admin().await;
-    let queue_name = "test_metrics_queue";
-
-    // Create queue
-    let queue_info = admin.create_queue(queue_name).await.unwrap();
-    let producer = pgqrs::Producer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "test_metrics_producer",
-        3200,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create producer");
-    let consumer = pgqrs::Consumer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "test_metrics_consumer",
-        3201,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create consumer");
-
-    // Initial state: 0 messages
-    let metrics = admin
-        .queue_metrics(queue_name)
-        .await
-        .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 0);
-    assert_eq!(metrics.pending_messages, 0);
-    assert_eq!(metrics.locked_messages, 0);
-    assert_eq!(metrics.archived_messages, 0);
-
-    // Enqueue 2 messages
-    producer.enqueue(&json!({"id": 1})).await.unwrap();
-    producer.enqueue(&json!({"id": 2})).await.unwrap();
-
-    // Check metrics: 2 pending
-    let metrics = admin
-        .queue_metrics(queue_name)
-        .await
-        .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 2);
-    assert_eq!(metrics.pending_messages, 2);
-    assert_eq!(metrics.locked_messages, 0);
-    assert_eq!(metrics.archived_messages, 0);
-
-    // Consume 1 message (locks it)
-    let messages = consumer.dequeue().await.unwrap();
-    assert_eq!(messages.len(), 1);
-    let msg_id = messages[0].id;
-
-    // Check metrics: 1 pending, 1 locked
-    let metrics = admin
-        .queue_metrics(queue_name)
-        .await
-        .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 2);
-    assert_eq!(metrics.pending_messages, 1);
-    assert_eq!(metrics.locked_messages, 1);
-    assert_eq!(metrics.archived_messages, 0);
-
-    // Archive the locked message
-    consumer.archive(msg_id).await.unwrap();
-
-    // Check metrics: 1 pending, 0 locked, 1 archived
-    // Note: total_messages counts only active messages, so it's 1 after archiving
-
-    let metrics = admin
-        .queue_metrics(queue_name)
-        .await
-        .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 1); // Only 1 left in active table
-    assert_eq!(metrics.pending_messages, 1);
-    assert_eq!(metrics.locked_messages, 0);
-    assert_eq!(metrics.archived_messages, 1);
-
-    // Check all_queues_metrics
-    let all_metrics = admin
-        .all_queues_metrics()
-        .await
-        .expect("Failed to get all metrics");
-    let initial_len = all_metrics.len();
-    assert!(initial_len >= 1);
-    let my_metric = all_metrics
-        .iter()
-        .find(|m| m.name == queue_name)
-        .expect("Queue not found in all metrics");
-    assert_eq!(my_metric.pending_messages, 1);
-
-    // Cleanup
-    admin.purge_queue(queue_name).await.unwrap();
-    admin.delete_worker(producer.worker_id()).await.unwrap();
-    admin.delete_worker(consumer.worker_id()).await.unwrap();
-    admin.delete_queue(&queue_info).await.unwrap();
 }

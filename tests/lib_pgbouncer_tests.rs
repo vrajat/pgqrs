@@ -165,7 +165,7 @@ async fn test_pgbouncer_queue_list() {
 
     // Cleanup
     admin
-        .delete_queue(&queue_info)
+        .delete_queue(queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
 }

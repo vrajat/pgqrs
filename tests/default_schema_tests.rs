@@ -50,7 +50,7 @@ async fn test_default_schema_backward_compatibility() {
 
     // Cleanup
     assert!(
-        admin.delete_queue(&found_queue.unwrap()).await.is_ok(),
+        admin.delete_queue(found_queue.unwrap()).await.is_ok(),
         "Should delete queue"
     );
 }

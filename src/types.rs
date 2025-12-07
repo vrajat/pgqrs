@@ -197,6 +197,52 @@ impl Tabled for SystemStats {
     }
 }
 
+/// Worker health statistics
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct WorkerHealthStats {
+    /// Queue name (or "Global" for global stats)
+    pub queue_name: String,
+    /// Total workers
+    pub total_workers: i64,
+    /// Active (Ready) workers
+    pub ready_workers: i64,
+    /// Suspended workers
+    pub suspended_workers: i64,
+    /// Stopped workers
+    pub stopped_workers: i64,
+    /// Workers with expired heartbeats
+    pub stale_workers: i64,
+}
+
+impl Tabled for WorkerHealthStats {
+    const LENGTH: usize = 6;
+
+    fn fields(&self) -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            self.queue_name.clone().into(),
+            self.total_workers.to_string().into(),
+            self.ready_workers.to_string().into(),
+            self.suspended_workers.to_string().into(),
+            self.stopped_workers.to_string().into(),
+            self.stale_workers.to_string().into(),
+        ]
+    }
+
+    fn headers() -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            "queue_name",
+            "total_workers",
+            "ready_workers",
+            "suspended_workers",
+            "stopped_workers",
+            "stale_workers",
+        ]
+        .into_iter()
+        .map(|s| s.into())
+        .collect()
+    }
+}
+
 /// An archived message with additional tracking information
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct ArchivedMessage {
