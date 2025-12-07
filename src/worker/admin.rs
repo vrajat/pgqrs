@@ -605,7 +605,7 @@ impl PgqrsAdmin {
         CROSS JOIN archive_counts ac
         CROSS JOIN queue_counts qc
         CROSS JOIN worker_counts wc
-        CROSS JOIN schema_info si;
+        LEFT JOIN schema_info si ON TRUE;
     "#;
 
     /// Get metrics for a specific queue.

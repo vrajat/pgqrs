@@ -308,7 +308,7 @@ fn test_cli_admin_stats() {
     assert!(stats.total_queues >= 1);
     // We can't guarantee exact numbers for other fields as tests run in parallel/shared DB
     // but we can check basic validity
-    assert!(stats.schema_version.len() > 0);
+    assert!(!stats.schema_version.is_empty());
 
     // Test Table output (success check)
     run_cli_table_command(&db_url, &["admin", "stats"]);
