@@ -1461,7 +1461,10 @@ async fn test_queue_metrics() {
     .expect("Failed to create consumer");
 
     // Initial state: 0 messages
-    let metrics = admin.queue_metrics(queue_name).await.expect("Failed to get metrics");
+    let metrics = admin
+        .queue_metrics(queue_name)
+        .await
+        .expect("Failed to get metrics");
     assert_eq!(metrics.total_messages, 0);
     assert_eq!(metrics.pending_messages, 0);
     assert_eq!(metrics.locked_messages, 0);
@@ -1472,7 +1475,10 @@ async fn test_queue_metrics() {
     producer.enqueue(&json!({"id": 2})).await.unwrap();
 
     // Check metrics: 2 pending
-    let metrics = admin.queue_metrics(queue_name).await.expect("Failed to get metrics");
+    let metrics = admin
+        .queue_metrics(queue_name)
+        .await
+        .expect("Failed to get metrics");
     assert_eq!(metrics.total_messages, 2);
     assert_eq!(metrics.pending_messages, 2);
     assert_eq!(metrics.locked_messages, 0);
@@ -1484,7 +1490,10 @@ async fn test_queue_metrics() {
     let msg_id = messages[0].id;
 
     // Check metrics: 1 pending, 1 locked
-    let metrics = admin.queue_metrics(queue_name).await.expect("Failed to get metrics");
+    let metrics = admin
+        .queue_metrics(queue_name)
+        .await
+        .expect("Failed to get metrics");
     assert_eq!(metrics.total_messages, 2);
     assert_eq!(metrics.pending_messages, 1);
     assert_eq!(metrics.locked_messages, 1);
@@ -1494,33 +1503,28 @@ async fn test_queue_metrics() {
     consumer.archive(msg_id).await.unwrap();
 
     // Check metrics: 1 pending, 0 locked, 1 archived
-    // Note: total_messages in pgqrs_messages counts active messages only.
-    // The metric 'total_messages' is defined as count(*) from pgqrs_messages.
-    // So if one is moved to archive, pgqrs_messages count drops to 1.
-    // But conceptually 'total' usually means active?
-    // Let's check the SQL: SELECT COUNT(*) as total_messages FROM pgqrs_messages.
-    // Yes, so total_messages will be 1.
-    // Wait, let's verify Issue definition: "total_messages: Lifetime message count (for capacity planning)".
-    // Issue says "Lifetime message count". Active messages table only has current messages.
-    // If we want lifetime, we probably need sum of active + archive?
-    // The SQL I implemented was `COUNT(*) as total_messages` from `pgqrs_messages`.
-    // That seems to match "total active messages".
-    // If "Lifetime" means all messages EVER, that would be harder as we delete messages too.
-    // I will assume total_messages means "total active messages in the queue" based on the SQL I wrote.
-    // But wait, the SQL I wrote: `SELECT COUNT(*) as total_messages ... FROM pgqrs_messages`.
-    // So it will be 1.
+    // Note: total_messages counts only active messages, so it's 1 after archiving
 
-    let metrics = admin.queue_metrics(queue_name).await.expect("Failed to get metrics");
+    let metrics = admin
+        .queue_metrics(queue_name)
+        .await
+        .expect("Failed to get metrics");
     assert_eq!(metrics.total_messages, 1); // Only 1 left in active table
     assert_eq!(metrics.pending_messages, 1);
     assert_eq!(metrics.locked_messages, 0);
     assert_eq!(metrics.archived_messages, 1);
 
     // Check all_queues_metrics
-    let all_metrics = admin.all_queues_metrics().await.expect("Failed to get all metrics");
+    let all_metrics = admin
+        .all_queues_metrics()
+        .await
+        .expect("Failed to get all metrics");
     let initial_len = all_metrics.len();
     assert!(initial_len >= 1);
-    let my_metric = all_metrics.iter().find(|m| m.name == queue_name).expect("Queue not found in all metrics");
+    let my_metric = all_metrics
+        .iter()
+        .find(|m| m.name == queue_name)
+        .expect("Queue not found in all metrics");
     assert_eq!(my_metric.pending_messages, 1);
 
     // Cleanup

@@ -70,7 +70,7 @@ impl fmt::Display for QueueMessage {
 pub struct QueueMetrics {
     /// Name of the queue
     pub name: String,
-    /// Total number of messages ever enqueued
+    /// Total number of messages currently in the queue (active messages only)
     pub total_messages: i64,
     /// Number of messages currently pending
     pub pending_messages: i64,

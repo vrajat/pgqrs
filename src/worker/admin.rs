@@ -509,7 +509,6 @@ impl PgqrsAdmin {
         Ok(result)
     }
 
-
     const GET_QUEUE_METRICS: &str = r#"
         WITH queue_counts AS (
             SELECT
@@ -574,7 +573,7 @@ impl PgqrsAdmin {
     /// * `name` - Name of the queue
     ///
     /// # Returns
-    /// /// [`QueueMetrics`] for the queue.
+    /// [`QueueMetrics`] for the queue.
     pub async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
         let queue_info = self.queues.get_by_name(name).await?;
 
