@@ -84,6 +84,45 @@ pub struct QueueMetrics {
     pub newest_message: Option<DateTime<Utc>>,
 }
 
+impl Tabled for QueueMetrics {
+    const LENGTH: usize = 7;
+
+    fn fields(&self) -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            self.name.clone().into(),
+            self.total_messages.to_string().into(),
+            self.pending_messages.to_string().into(),
+            self.locked_messages.to_string().into(),
+            self.archived_messages.to_string().into(),
+            display_option_datetime(&self.oldest_pending_message).into(),
+            display_option_datetime(&self.newest_message).into(),
+        ]
+    }
+
+    fn headers() -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            "name",
+            "total_messages",
+            "pending_messages",
+            "locked_messages",
+            "archived_messages",
+            "oldest_pending_message",
+            "newest_message",
+        ]
+        .into_iter()
+        .map(|s| s.into())
+        .collect()
+    }
+}
+
+/// Helper function to format Option<DateTime<Utc>> for Tabled
+pub fn display_option_datetime(o: &Option<DateTime<Utc>>) -> String {
+    match o {
+        Some(dt) => dt.to_rfc3339(),
+        None => "N/A".to_string(),
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueInfo {
     /// Queue ID (primary key)
