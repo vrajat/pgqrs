@@ -143,6 +143,60 @@ impl fmt::Display for QueueInfo {
     }
 }
 
+/// System-wide statistics
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SystemStats {
+    /// Total number of queues
+    pub total_queues: i64,
+    /// Total number of workers (all statuses)
+    pub total_workers: i64,
+    /// Number of active workers (Ready/Running)
+    pub active_workers: i64,
+    /// Total messages across all queues (active only)
+    pub total_messages: i64,
+    /// Total pending messages across all queues
+    pub pending_messages: i64,
+    /// Total locked messages across all queues
+    pub locked_messages: i64,
+    /// Total archived messages across all queues
+    pub archived_messages: i64,
+    /// Schema version
+    pub schema_version: String,
+}
+
+impl Tabled for SystemStats {
+    const LENGTH: usize = 8;
+
+    fn fields(&self) -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            self.total_queues.to_string().into(),
+            self.total_workers.to_string().into(),
+            self.active_workers.to_string().into(),
+            self.total_messages.to_string().into(),
+            self.pending_messages.to_string().into(),
+            self.locked_messages.to_string().into(),
+            self.archived_messages.to_string().into(),
+            self.schema_version.clone().into(),
+        ]
+    }
+
+    fn headers() -> Vec<std::borrow::Cow<'static, str>> {
+        vec![
+            "total_queues",
+            "total_workers",
+            "active_workers",
+            "total_messages",
+            "pending_messages",
+            "locked_messages",
+            "archived_messages",
+            "schema_version",
+        ]
+        .into_iter()
+        .map(|s| s.into())
+        .collect()
+    }
+}
+
 /// An archived message with additional tracking information
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct ArchivedMessage {

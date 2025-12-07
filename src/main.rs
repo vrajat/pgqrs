@@ -92,6 +92,8 @@ enum AdminCommands {
     Install,
     /// Verify pgqrs installation
     Verify,
+    /// Get system-wide statistics
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -285,8 +287,8 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 async fn handle_admin_commands(
     admin: &PgqrsAdmin,
     command: AdminCommands,
-    _writer: OutputWriter,
-    _out: &mut dyn std::io::Write,
+    writer: OutputWriter,
+    out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match command {
         AdminCommands::Install => {
@@ -299,6 +301,12 @@ async fn handle_admin_commands(
             tracing::info!("Verifying pgqrs installation...");
             admin.verify().await?;
             tracing::info!("Verification completed successfully");
+        }
+
+        AdminCommands::Stats => {
+            tracing::info!("Getting system statistics...");
+            let stats = admin.system_stats().await?;
+            writer.write_item(&stats, out)?;
         }
     }
     Ok(())
