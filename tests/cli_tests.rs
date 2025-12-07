@@ -295,6 +295,27 @@ fn test_cli_metrics_output() {
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
 
+#[test]
+fn test_cli_admin_stats() {
+    let db_url = get_test_db_url();
+    let queue_name = "test_admin_stats_cli";
+
+    run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
+
+    // Test JSON output
+    let stats: pgqrs::types::SystemStats = run_cli_command_json(&db_url, &["admin", "stats"]);
+
+    assert!(stats.total_queues >= 1);
+    // We can't guarantee exact numbers for other fields as tests run in parallel/shared DB
+    // but we can check basic validity
+    assert!(!stats.schema_version.is_empty());
+
+    // Test Table output (success check)
+    run_cli_table_command(&db_url, &["admin", "stats"]);
+
+    run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
+}
+
 fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
     Command::new("cargo")
         .args(["run", "--quiet", "--"])

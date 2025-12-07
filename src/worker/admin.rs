@@ -31,7 +31,7 @@ use crate::config::Config;
 use crate::error::{PgqrsError, Result};
 use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
 use crate::types::QueueMetrics;
-use crate::types::{QueueInfo, WorkerInfo, WorkerStatus};
+use crate::types::{QueueInfo, SystemStats, WorkerInfo, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
@@ -567,6 +567,47 @@ impl PgqrsAdmin {
         LEFT JOIN archive_counts ac ON q.id = ac.queue_id;
     "#;
 
+    const GET_SYSTEM_STATS: &str = r#"
+        WITH message_counts AS (
+            SELECT
+                COUNT(*) as total_messages,
+                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
+                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages
+            FROM pgqrs_messages
+        ),
+        archive_counts AS (
+            SELECT COUNT(*) as archived_messages
+            FROM pgqrs_archive
+        ),
+        queue_counts AS (
+            SELECT COUNT(*) as total_queues
+            FROM pgqrs_queues
+        ),
+        worker_counts AS (
+            SELECT
+                COUNT(*) as total_workers,
+                COUNT(*) FILTER (WHERE status = 'ready') as active_workers
+            FROM pgqrs_workers
+        ),
+        schema_info AS (
+           SELECT version::text as schema_version FROM _sqlx_migrations ORDER BY version DESC LIMIT 1
+        )
+        SELECT
+            qc.total_queues,
+            wc.total_workers,
+            wc.active_workers,
+            mc.total_messages,
+            mc.pending_messages,
+            mc.locked_messages,
+            ac.archived_messages,
+            COALESCE(si.schema_version, 'Unknown') as schema_version
+        FROM message_counts mc
+        CROSS JOIN archive_counts ac
+        CROSS JOIN queue_counts qc
+        CROSS JOIN worker_counts wc
+        LEFT JOIN schema_info si ON TRUE;
+    "#;
+
     /// Get metrics for a specific queue.
     ///
     /// # Arguments
@@ -602,6 +643,21 @@ impl PgqrsAdmin {
             })?;
 
         Ok(metrics)
+    }
+
+    /// Get system-wide statistics.
+    ///
+    /// # Returns
+    /// [`SystemStats`] containing system-wide metrics.
+    pub async fn system_stats(&self) -> Result<SystemStats> {
+        let stats = sqlx::query_as::<_, SystemStats>(Self::GET_SYSTEM_STATS)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to get system stats: {}", e),
+            })?;
+
+        Ok(stats)
     }
 
     /// Get messages currently being processed by a worker
