@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Batch archiving email messages...");
     let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.id).collect();
     if !email_msg_ids.is_empty() {
-        let archived_ids = email_consumer.archive_batch(email_msg_ids.clone()).await?;
+        let archived_ids = email_consumer.archive_many(email_msg_ids.clone()).await?;
         println!(
             "Successfully archived {} email messages",
             archived_ids.len()
