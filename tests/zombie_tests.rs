@@ -60,7 +60,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // Verify it's counted as a zombie
     let zombie_count = workers_table
         .count_zombies_for_queue(queue.id, Duration::from_secs(60))
-        .await?;
+    // We intentionally violate encapsulation here for the test setup
     assert_eq!(zombie_count, 1, "Should detect 1 zombie worker");
 
     let zombies = workers_table
@@ -86,7 +86,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         stored_msg.read_ct, 1,
         "Read count should be preserved/incremented"
     );
-
+    assert_eq!(stored_msg.read_ct, 1, "Read count should be preserved at 1");
     // Verify worker is stopped
     let updated_worker = workers_table.get(consumer_worker_id).await?;
     assert!(
