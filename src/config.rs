@@ -324,7 +324,6 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
 
-
         let validation_config = env::var(ENV_VALIDATION_CONFIG)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
