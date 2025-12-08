@@ -47,7 +47,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // 5. Simulate Zombie (Update Heartbeat)
     // Manually set the worker's heartbeat to be old (e.g., 1 hour ago)
-    // We intentionally valid encapsulation here for the test setup
+    // We intentionally violate encapsulation here for the test setup
     let consumer_worker_id = consumer.worker_id();
     sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
         .bind(consumer_worker_id)
@@ -139,7 +139,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Reclaimed 1 messages"),
+        stdout.contains("Reclaimed 1 message"),
         "CLI output mismatch: {}",
         stdout
     );
