@@ -263,7 +263,11 @@ impl PgqrsWorkers {
     ///
     /// # Returns
     /// Count of workers matching the criteria
-    pub async fn count_for_queue(&self, queue_id: i64, state: crate::types::WorkerStatus) -> Result<i64> {
+    pub async fn count_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<i64> {
         const COUNT_WORKERS_BY_STATE: &str = r#"
             SELECT COUNT(*)
             FROM pgqrs_workers
@@ -308,12 +312,14 @@ impl PgqrsWorkers {
 
         let count: i64 = sqlx::query_scalar(COUNT_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                PgqrsError::InvalidConfig {
-                    field: "older_than".to_string(),
-                    message: format!("Invalid duration: {}", e),
-                }
-            })?)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -372,12 +378,14 @@ impl PgqrsWorkers {
     ) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                PgqrsError::InvalidConfig {
-                    field: "older_than".to_string(),
-                    message: format!("Invalid duration: {}", e),
-                }
-            })?)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
@@ -407,12 +415,14 @@ impl PgqrsWorkers {
     ) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                PgqrsError::InvalidConfig {
-                    field: "older_than".to_string(),
-                    message: format!("Invalid duration: {}", e),
-                }
-            })?)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
             .fetch_all(&mut **tx)
             .await
             .map_err(|e| PgqrsError::Connection {

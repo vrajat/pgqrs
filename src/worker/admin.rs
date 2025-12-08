@@ -836,14 +836,17 @@ impl PgqrsAdmin {
         queue_id: i64,
         older_than: Option<std::time::Duration>,
     ) -> Result<u64> {
-        let timeout = older_than.unwrap_or_else(|| {
-            std::time::Duration::from_secs(self.config.heartbeat_interval)
-        });
+        let timeout = older_than
+            .unwrap_or_else(|| std::time::Duration::from_secs(self.config.heartbeat_interval));
 
         // Start a transaction for the entire reclamation process
-        let mut tx = self.pool.begin().await.map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to begin transaction: {}", e),
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
 
         // 1. Find zombie workers using the transaction
         let zombies = self

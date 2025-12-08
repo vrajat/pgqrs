@@ -324,7 +324,6 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
 
-
         // Parse validation config from environment (JSON format)
         let validation_config = env::var(ENV_VALIDATION_CONFIG)
             .ok()
