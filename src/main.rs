@@ -94,6 +94,17 @@ enum AdminCommands {
     Verify,
     /// Get system-wide statistics
     Stats,
+    /// Reclaim messages from zombie workers
+    Reclaim {
+        /// Name of the queue
+        #[arg(long, short = 'q')]
+        queue: String,
+
+        /// Reclaim messages from workers with heartbeat older than this duration (e.g., '5s', '1m')
+        /// If not provided, uses configured heartbeat_interval
+        #[arg(long)]
+        older_than: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -316,6 +327,24 @@ async fn handle_admin_commands(
             tracing::info!("Getting system statistics...");
             let stats = admin.system_stats().await?;
             writer.write_item(&stats, out)?;
+        }
+
+        AdminCommands::Reclaim { queue, older_than } => {
+            tracing::info!("Reclaiming messages for queue '{}'...", queue);
+            let queue_info = admin.get_queue(&queue).await?;
+
+            let duration = match older_than {
+                Some(s) => Some(
+                    s.parse::<humantime::Duration>()
+                        .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", s, e))?
+                        .into(),
+                ),
+                None => None,
+            };
+
+            let count = admin.reclaim_messages(queue_info.id, duration).await?;
+            tracing::info!("Reclaimed {} messages from zombie workers", count);
+            writeln!(out, "Reclaimed {} messages from zombie workers", count)?;
         }
     }
     Ok(())
