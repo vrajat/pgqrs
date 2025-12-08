@@ -44,6 +44,22 @@ const DELETE_WORKERS_BY_QUEUE: &str = r#"
     WHERE queue_id = $1
 "#;
 
+const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
+    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    FROM pgqrs_workers
+    WHERE queue_id = $1 AND status = $2
+    ORDER BY started_at DESC
+"#;
+
+const LIST_ZOMBIE_WORKERS: &str = r#"
+    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    FROM pgqrs_workers
+    WHERE queue_id = $1
+    AND status IN ('ready', 'suspended')
+    AND heartbeat_at < NOW() - $2
+    ORDER BY heartbeat_at ASC
+"#;
+
 /// Input data for creating a new worker
 #[derive(Debug)]
 pub struct NewWorker {
@@ -239,32 +255,184 @@ impl Table for PgqrsWorkers {
 }
 
 impl PgqrsWorkers {
-    /// Count active workers for a specific queue.
+    /// Count workers for a queue in a specific state
     ///
     /// # Arguments
-    /// * `queue_id` - ID of the queue to count workers for
+    /// * `queue_id` - ID of the queue
+    /// * `state` - Worker state to filter by
     ///
     /// # Returns
-    /// Number of active workers (ready or suspended status)
-    pub async fn count_active_for_queue(&self, queue_id: i64) -> Result<i64> {
-        const COUNT_ACTIVE_WORKERS: &str = r#"
+    /// Count of workers matching the criteria
+    pub async fn count_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<i64> {
+        const COUNT_WORKERS_BY_STATE: &str = r#"
             SELECT COUNT(*)
             FROM pgqrs_workers
-            WHERE queue_id = $1 AND status IN ('ready', 'suspended')
+            WHERE queue_id = $1 AND status = $2
         "#;
 
-        let count: i64 = sqlx::query_scalar(COUNT_ACTIVE_WORKERS)
+        let count: i64 = sqlx::query_scalar(COUNT_WORKERS_BY_STATE)
             .bind(queue_id)
+            .bind(state.clone())
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PgqrsError::Connection {
                 message: format!(
-                    "Failed to count active workers for queue '{}': {}",
+                    "Failed to count workers for queue {} with state {:?}: {}",
+                    queue_id, state, e
+                ),
+            })?;
+
+        Ok(count)
+    }
+
+    /// Count potentially dead "zombie" workers.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue to check
+    /// * `older_than` - Duration threshold for last heartbeat
+    ///
+    /// # Returns
+    /// Count of zombie workers
+    pub async fn count_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: std::time::Duration,
+    ) -> Result<i64> {
+        const COUNT_ZOMBIE_WORKERS: &str = r#"
+            SELECT COUNT(*)
+            FROM pgqrs_workers
+            WHERE queue_id = $1
+            AND status IN ('ready', 'suspended')
+            AND heartbeat_at < NOW() - $2
+        "#;
+
+        let count: i64 = sqlx::query_scalar(COUNT_ZOMBIE_WORKERS)
+            .bind(queue_id)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to count zombie workers for queue {}: {}",
                     queue_id, e
                 ),
             })?;
 
         Ok(count)
+    }
+
+    /// List workers for a queue in a specific state.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue
+    /// * `state` - Worker state to filter by
+    ///
+    /// # Returns
+    /// List of workers matching the criteria
+    pub async fn list_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE_AND_STATE)
+            .bind(queue_id)
+            .bind(state.clone())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to list workers for queue {} with state {:?}: {}",
+                    queue_id, state, e
+                ),
+            })?;
+
+        Ok(workers)
+    }
+
+    /// List potentially dead "zombie" workers.
+    ///
+    /// Finds workers that are in Ready or Suspended state but haven't
+    /// sent a heartbeat within the specified duration.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue to check
+    /// * `older_than` - Duration threshold for last heartbeat
+    ///
+    /// # Returns
+    /// List of zombie workers
+    pub async fn list_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: std::time::Duration,
+    ) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
+            .bind(queue_id)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to list zombie workers for queue {}: {}",
+                    queue_id, e
+                ),
+            })?;
+
+        Ok(workers)
+    }
+
+    /// List potentially dead "zombie" workers within a transaction.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue to check
+    /// * `older_than` - Duration threshold for last heartbeat
+    /// * `tx` - Mutable reference to an active SQL transaction
+    ///
+    /// # Returns
+    /// List of zombie workers
+    pub async fn list_zombies_for_queue_tx<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        older_than: std::time::Duration,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
+            .bind(queue_id)
+            .bind(
+                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
+                    PgqrsError::InvalidConfig {
+                        field: "older_than".to_string(),
+                        message: format!("Invalid duration: {}", e),
+                    }
+                })?,
+            )
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!(
+                    "Failed to list zombie workers for queue {}: {}",
+                    queue_id, e
+                ),
+            })?;
+
+        Ok(workers)
     }
 }
 

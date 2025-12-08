@@ -94,6 +94,21 @@ pub const DLQ_BATCH: &str = r#"
     RETURNING original_msg_id;
 "#;
 
+const RELEASE_ZOMBIE_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET consumer_worker_id = NULL,
+        vt = NOW(),
+        dequeued_at = NULL
+    WHERE consumer_worker_id = $1
+"#;
+
+const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
+    UPDATE pgqrs_workers
+    SET status = 'stopped',
+        shutdown_at = NOW()
+    WHERE id = $1
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 ///
@@ -413,7 +428,15 @@ impl PgqrsAdmin {
         })?;
 
         // Check for active workers assigned to this queue
-        let active_workers = self.workers.count_active_for_queue(queue_info.id).await?;
+        let ready_workers = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Ready)
+            .await?;
+        let suspended_workers = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
+            .await?;
+        let active_workers = ready_workers + suspended_workers;
 
         if active_workers > 0 {
             return Err(crate::error::PgqrsError::Connection {
@@ -792,6 +815,100 @@ impl PgqrsAdmin {
             })?;
 
         Ok(result.rows_affected())
+    }
+
+    /// Reclaim messages from zombie consumers.
+    ///
+    /// Identifies consumers that are in `Ready` or `Suspended` state but have not
+    /// sent a heartbeat within the specified duration (or default config).
+    /// For each zombie consumer found:
+    /// 1. Releases all held messages back to the pending queue.
+    /// 2. Marks the consumer as `Stopped`.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue to check
+    /// * `older_than` - Optional override for heartbeat timeout
+    ///
+    /// # Returns
+    /// Total number of messages released
+    pub async fn reclaim_messages(
+        &self,
+        queue_id: i64,
+        older_than: Option<std::time::Duration>,
+    ) -> Result<u64> {
+        let timeout = older_than
+            .unwrap_or_else(|| std::time::Duration::from_secs(self.config.heartbeat_interval));
+
+        // Start a transaction for the entire reclamation process
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // 1. Find zombie workers using the transaction
+        let zombies = self
+            .workers
+            .list_zombies_for_queue_tx(queue_id, timeout, &mut tx)
+            .await?;
+
+        if zombies.is_empty() {
+            tx.commit().await.map_err(|e| PgqrsError::Connection {
+                message: format!("Failed to commit empty transaction: {}", e),
+            })?;
+            return Ok(0);
+        }
+
+        let mut total_released = 0;
+
+        // Process each zombie
+        for zombie in zombies {
+            tracing::info!(
+                "Reclaiming messages from zombie worker {} (last heartbeat: {:?})",
+                zombie.id,
+                zombie.heartbeat_at
+            );
+
+            // 2. Release messages
+            let result = sqlx::query(RELEASE_ZOMBIE_MESSAGES)
+                .bind(zombie.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!(
+                        "Failed to release messages for zombie worker {}: {}",
+                        zombie.id, e
+                    ),
+                })?;
+
+            let released = result.rows_affected();
+            total_released += released;
+
+            // 3. Mark worker as stopped
+            sqlx::query(SHUTDOWN_ZOMBIE_WORKER)
+                .bind(zombie.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| PgqrsError::Connection {
+                    message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
+                })?;
+
+            if released > 0 {
+                tracing::info!(
+                    "Released {} messages from zombie worker {}",
+                    released,
+                    zombie.id
+                );
+            }
+        }
+
+        tx.commit().await.map_err(|e| PgqrsError::Connection {
+            message: format!("Failed to commit zombie cleanup: {}", e),
+        })?;
+
+        Ok(total_released)
     }
 
     /// Remove stopped workers older than specified duration

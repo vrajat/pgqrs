@@ -107,6 +107,7 @@ const ENV_CONFIG_FILE: &str = "PGQRS_CONFIG_FILE";
 const ENV_SCHEMA: &str = "PGQRS_SCHEMA";
 const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
 const ENV_MAX_READ_CT: &str = "PGQRS_MAX_READ_CT";
+const ENV_HEARTBEAT_INTERVAL: &str = "PGQRS_HEARTBEAT_INTERVAL";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -115,6 +116,7 @@ const DEFAULT_LOCK_TIME_SECONDS: u32 = 5;
 const DEFAULT_BATCH_SIZE: usize = 100;
 const DEFAULT_SCHEMA: &str = "public";
 const DEFAULT_MAX_READ_CT: i32 = 5;
+const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5;
 
 /// Configuration for pgqrs
 ///
@@ -143,6 +145,9 @@ pub struct Config {
     /// Maximum read count for messages before moving to dead-letter queue
     #[serde(default = "default_max_read_ct")]
     pub max_read_ct: i32,
+    /// Heartbeat interval (seconds) for workers
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval: u64,
     /// Validation configuration for payload checking and rate limiting
     #[serde(default)]
     pub validation_config: crate::validation::ValidationConfig,
@@ -173,6 +178,10 @@ fn default_max_read_ct() -> i32 {
     DEFAULT_MAX_READ_CT
 }
 
+fn default_heartbeat_interval() -> u64 {
+    DEFAULT_HEARTBEAT_INTERVAL
+}
+
 impl Config {
     /// Create a new Config with the provided DSN and default values for other fields.
     ///
@@ -197,6 +206,7 @@ impl Config {
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
             max_read_ct: DEFAULT_MAX_READ_CT,
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             validation_config: Default::default(),
         }
     }
@@ -239,6 +249,7 @@ impl Config {
             default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
             default_max_batch_size: DEFAULT_BATCH_SIZE,
             max_read_ct: DEFAULT_MAX_READ_CT,
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             validation_config: Default::default(),
         })
     }
@@ -252,6 +263,7 @@ impl Config {
     /// - PGQRS_CONNECTION_TIMEOUT: Connection timeout in seconds (default: 30)
     /// - PGQRS_DEFAULT_LOCK_TIME: Default lock time in seconds (default: 5)
     /// - PGQRS_DEFAULT_BATCH_SIZE: Default batch size (default: 100)
+    /// - PGQRS_HEARTBEAT_INTERVAL: Heartbeat interval in seconds (default: 5)
     /// - PGQRS_VALIDATION_CONFIG: JSON validation configuration (optional)
     pub fn from_env() -> Result<Self> {
         use std::env;
@@ -307,7 +319,11 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_MAX_READ_CT);
 
-        // Parse validation config from environment (JSON format)
+        let heartbeat_interval = env::var(ENV_HEARTBEAT_INTERVAL)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
+
         let validation_config = env::var(ENV_VALIDATION_CONFIG)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -321,6 +337,7 @@ impl Config {
             default_lock_time_seconds,
             default_max_batch_size,
             max_read_ct,
+            heartbeat_interval,
             validation_config,
         })
     }
