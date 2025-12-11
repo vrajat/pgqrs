@@ -31,7 +31,7 @@ pip install pgqrs
 
 ```toml
 [dependencies]
-pgqrs = { git = "https://github.com/vrajat/pgqrs" }
+pgqrs = "0.4.0"
 ```
 
 ## Development

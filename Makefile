@@ -4,7 +4,7 @@ UV ?= uv
 	$(UV) venv
 
 requirements: .venv  ## Install Python requirements
-	$(UV) pip install maturin pytest pytest-asyncio testcontainers[postgres] psycopg[binary]
+	$(UV) pip install maturin pytest pytest-asyncio testcontainers[postgres] psycopg[binary] "mkdocs-material[imaging]"
 
 build: requirements  ## Build Rust and Python bindings
 	cargo build -p pgqrs
@@ -24,6 +24,13 @@ clean:  ## Clean artifacts
 	cargo clean
 	rm -rf .venv
 	rm -rf target
+	rm -rf site
+
+docs: requirements  ## Serve documentation
+	$(UV) run mkdocs serve -f mkdocs.yml
+
+docs-build: requirements  ## Build documentation
+	$(UV) run mkdocs build --strict -f mkdocs.yml
 
 help:  ## Display this help screen
 	@echo "Usage: make [target]"
