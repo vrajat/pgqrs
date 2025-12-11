@@ -1,5 +1,4 @@
 #![allow(non_local_definitions)]
-use std::sync::{Arc, OnceLock};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -11,6 +10,7 @@ use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMes
 use rust_pgqrs::{
     Config, Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
 };
+use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
