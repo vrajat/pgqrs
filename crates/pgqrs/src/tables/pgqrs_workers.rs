@@ -72,7 +72,7 @@ pub struct NewWorker {
 /// Workers table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table without business logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PgqrsWorkers {
     pub pool: PgPool,
 }

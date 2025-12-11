@@ -56,7 +56,7 @@ pub struct NewQueue {
 /// Queues table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_queues` table without business logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PgqrsQueues {
     pub pool: PgPool,
 }

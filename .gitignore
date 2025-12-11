@@ -1,8 +1,12 @@
 /target
+docs/api
 .cache
 .idea
 venv
 .venv
 .DS_Store
 results
-docs/api/
+*.log
+__pycache__/
+.pytest_cache/
+.vscode

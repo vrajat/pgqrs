@@ -70,7 +70,7 @@ use sqlx::PgPool;
 ///
 /// Provides pure CRUD operations on the `pgqrs_archive` table without business logic.
 /// This is separate from the queue-specific PgqrsArchive which provides higher-level operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PgqrsArchive {
     pub pool: PgPool,
 }
