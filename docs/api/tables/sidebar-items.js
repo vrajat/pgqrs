@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["pgqrs_archive","pgqrs_messages","pgqrs_queues","pgqrs_workers","table"]};

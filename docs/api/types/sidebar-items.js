@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["WorkerStatus"],"struct":["ArchivedMessage","NewArchivedMessage","QueueInfo","QueueMessage","QueueMetrics","WorkerInfo","WorkerStats"]};
