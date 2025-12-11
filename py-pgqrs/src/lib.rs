@@ -1,52 +1,22 @@
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString, PyList};
-use pyo3::wrap_pyfunction;
+#![allow(non_local_definitions)]
+use std::sync::{Arc, OnceLock};
 use ::pgqrs as rust_pgqrs;
-use rust_pgqrs::{
-    Producer as RustProducer,
-    Consumer as RustConsumer,
-    PgqrsAdmin as RustAdmin,
-    Config,
-    PgqrsError,
-};
-use rust_pgqrs::types::{
-    QueueInfo as RustQueueInfo,
-    QueueMessage as RustQueueMessage,
-};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::tables::{
-    PgqrsWorkers as RustPgqrsWorkers,
-    PgqrsMessages as RustPgqrsMessages,
-    PgqrsQueues as RustPgqrsQueues,
-    PgqrsArchive as RustPgqrsArchive,
-    Table,
-    NewQueue, NewWorker
+    PgqrsArchive as RustPgqrsArchive, PgqrsMessages as RustPgqrsMessages,
+    PgqrsQueues as RustPgqrsQueues, PgqrsWorkers as RustPgqrsWorkers, Table,
 };
-use std::sync::Arc;
+use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
+use rust_pgqrs::{
+    Config, Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
+};
 use tokio::runtime::Runtime;
-use std::collections::HashMap;
 
-// Helper to get tokio runtime
-struct PyRuntime {
-    rt: Runtime,
-}
-
-impl PyRuntime {
-    fn new() -> Self {
-        Self {
-            rt: Runtime::new().unwrap(),
-        }
-    }
-}
-
-static mut RUNTIME: Option<PyRuntime> = None;
+static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 fn get_runtime() -> &'static Runtime {
-    unsafe {
-        if RUNTIME.is_none() {
-            RUNTIME = Some(PyRuntime::new());
-        }
-        &RUNTIME.as_ref().unwrap().rt
-    }
+    RUNTIME.get_or_init(|| Runtime::new().unwrap())
 }
 
 // Helper to convert serde-json value to PyObject
@@ -62,7 +32,7 @@ fn json_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
             } else {
                 Ok(n.to_string().to_object(py)) // Fallback
             }
-        },
+        }
         serde_json::Value::String(s) => Ok(s.to_object(py)),
         serde_json::Value::Array(arr) => {
             let list = PyList::empty(py);
@@ -70,14 +40,14 @@ fn json_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
                 list.append(json_to_py(py, item)?)?;
             }
             Ok(list.to_object(py))
-        },
+        }
         serde_json::Value::Object(map) => {
             let dict = PyDict::new(py);
             for (k, v) in map {
                 dict.set_item(k, json_to_py(py, v)?)?;
             }
             Ok(dict.to_object(py))
-        },
+        }
     }
 }
 
@@ -90,10 +60,12 @@ fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
     // Let's assume user passes a dict or other json-serializable object,
     // we use json.dumps
     let json_module = val.py().import("json")?;
-    let json_str = json_module.call_method1("dumps", (val,))?.extract::<String>()?;
-    serde_json::from_str(&json_str).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    let json_str = json_module
+        .call_method1("dumps", (val,))?
+        .extract::<String>()?;
+    serde_json::from_str(&json_str)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
-
 
 #[pyclass]
 struct Producer {
@@ -108,12 +80,20 @@ impl Producer {
         let producer = rt.block_on(async {
             let config = Config::from_dsn(dsn);
             // Use Admin to get queue info and manage pool
-            let admin = RustAdmin::new(&config).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+            let admin = RustAdmin::new(&config)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
+            })?;
 
-            RustProducer::new(admin.pool.clone(), &q, &hostname, port, &config).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            RustProducer::new(admin.pool.clone(), &q, &hostname, port, &config)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
-        Ok(Producer { inner: Arc::new(producer) })
+        Ok(Producer {
+            inner: Arc::new(producer),
+        })
     }
 
     fn enqueue<'a>(&self, py: Python<'a>, payload: &PyAny) -> PyResult<&'a PyAny> {
@@ -121,7 +101,10 @@ impl Producer {
         let json_payload = py_to_json(payload)?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let msg = inner.enqueue(&json_payload).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let msg = inner
+                .enqueue(&json_payload)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(msg.id)
         })
     }
@@ -139,30 +122,48 @@ impl Consumer {
         let rt = get_runtime();
         let consumer = rt.block_on(async {
             let config = Config::from_dsn(dsn);
-             let admin = RustAdmin::new(&config).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+            let admin = RustAdmin::new(&config)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
+            })?;
 
-            RustConsumer::new(admin.pool.clone(), &q, &hostname, port, &config).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            RustConsumer::new(admin.pool.clone(), &q, &hostname, port, &config)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
-         Ok(Consumer { inner: Arc::new(consumer) })
+        Ok(Consumer {
+            inner: Arc::new(consumer),
+        })
     }
 
     fn dequeue<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner.dequeue().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let messages = inner
+                .dequeue()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             // Convert to QueueMessage or dicts. Let's return QueueMessage objects.
             // But implementing ToPyObject for QueueMessage manually is tedious.
             // Let's assume we return list of dicts for now as it's cleaner without boilerplate.
             // Or better, creating QueueMessage instances.
-            Ok(messages.into_iter().map(QueueMessage::from).collect::<Vec<_>>())
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
         })
     }
 
     fn archive<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.archive(message_id).await.map(|_| Python::with_gil(|py| py.None())).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner
+                .archive(message_id)
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 }
@@ -180,7 +181,10 @@ impl PgqrsWorkers {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.count().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner
+                .count()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
@@ -198,7 +202,10 @@ impl PgqrsQueues {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.count().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner
+                .count()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 }
@@ -214,11 +221,13 @@ impl PgqrsMessages {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-             inner.count().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner
+                .count()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 }
-
 
 #[pyclass]
 #[derive(Clone)]
@@ -228,14 +237,16 @@ struct PgqrsArchive {
 
 #[pymethods]
 impl PgqrsArchive {
-     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+    fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-             inner.count().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner
+                .count()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 }
-
 
 #[pyclass]
 struct PgqrsAdmin {
@@ -246,27 +257,37 @@ struct PgqrsAdmin {
 impl PgqrsAdmin {
     #[new]
     fn new(dsn: &str) -> PyResult<Self> {
-         let rt = get_runtime();
-         let admin = rt.block_on(async {
+        let rt = get_runtime();
+        let admin = rt.block_on(async {
             let config = Config::from_dsn(dsn);
-            RustAdmin::new(&config).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            RustAdmin::new(&config)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
-        Ok(PgqrsAdmin { inner: Arc::new(tokio::sync::Mutex::new(admin)) })
+        Ok(PgqrsAdmin {
+            inner: Arc::new(tokio::sync::Mutex::new(admin)),
+        })
     }
 
     fn install<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            admin.install().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            admin
+                .install()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
     fn verify<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-         let inner = self.inner.clone();
+        let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            admin.verify().await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            admin
+                .verify()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
@@ -274,7 +295,10 @@ impl PgqrsAdmin {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            let q = admin.create_queue(&name).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let q = admin
+                .create_queue(&name)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(QueueInfo::from(q))
         })
     }
@@ -288,38 +312,45 @@ impl PgqrsAdmin {
     // But we are inside a Mutex.
 
     fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-         let inner = self.inner.clone();
-         pyo3_asyncio::tokio::future_into_py(py, async move {
-             let admin = inner.lock().await;
-             Ok(PgqrsWorkers { inner: admin.workers.clone() })
-         })
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            Ok(PgqrsWorkers {
+                inner: admin.workers.clone(),
+            })
+        })
     }
 
     fn get_queues<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-         let inner = self.inner.clone();
-         pyo3_asyncio::tokio::future_into_py(py, async move {
-             let admin = inner.lock().await;
-             Ok(PgqrsQueues { inner: admin.queues.clone() })
-         })
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            Ok(PgqrsQueues {
+                inner: admin.queues.clone(),
+            })
+        })
     }
 
     fn get_messages<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-         let inner = self.inner.clone();
-         pyo3_asyncio::tokio::future_into_py(py, async move {
-             let admin = inner.lock().await;
-             Ok(PgqrsMessages { inner: admin.messages.clone() })
-         })
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            Ok(PgqrsMessages {
+                inner: admin.messages.clone(),
+            })
+        })
     }
 
     fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-         let inner = self.inner.clone();
-         pyo3_asyncio::tokio::future_into_py(py, async move {
-             let admin = inner.lock().await;
-             Ok(PgqrsArchive { inner: admin.archive.clone() })
-         })
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            Ok(PgqrsArchive {
+                inner: admin.archive.clone(),
+            })
+        })
     }
 }
-
 
 // Data Types Wrappers
 
@@ -358,17 +389,13 @@ struct QueueMessage {
 
 impl From<RustQueueMessage> for QueueMessage {
     fn from(r: RustQueueMessage) -> Self {
-        Python::with_gil(|py| {
-            QueueMessage {
-                id: r.id,
-                queue_id: r.queue_id,
-                payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
-            }
+        Python::with_gil(|py| QueueMessage {
+            id: r.id,
+            queue_id: r.queue_id,
+            payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
         })
     }
 }
-
-
 
 #[pymodule]
 fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
