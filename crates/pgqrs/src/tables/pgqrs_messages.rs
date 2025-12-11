@@ -85,7 +85,7 @@ pub struct BatchInsertParams {
 /// Messages table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_messages` table without business logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PgqrsMessages {
     pub pool: PgPool,
 }

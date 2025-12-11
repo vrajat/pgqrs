@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["admin","config","consumer","error","producer","tables","types"],"struct":["RateLimitStatus","ValidationConfig"]};
