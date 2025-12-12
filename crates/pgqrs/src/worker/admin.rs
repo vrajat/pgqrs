@@ -795,7 +795,7 @@ impl Admin {
     ///
     /// # Errors
     /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
-    /// Returns `PgqrsError` if database operations fail
+    /// Returns `crate::error::Error` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         // Validate the worker is not an admin
         let worker = self.workers.get(worker_id).await?;
