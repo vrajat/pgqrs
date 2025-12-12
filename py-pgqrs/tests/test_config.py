@@ -8,19 +8,20 @@ async def test_config_properties(postgres_dsn):
     c = pgqrs.Config.from_dsn(postgres_dsn)
 
     # Test Schema Defaults and Setter
-    assert c.get_schema() == "public"
-    c.set_schema("custom_schema")
-    assert c.get_schema() == "custom_schema"
+    # Test Schema Defaults and Setter
+    assert c.schema == "public"
+    c.schema = "custom_schema"
+    assert c.schema == "custom_schema"
 
     # Test Max Connections Defaults and Setter
-    assert c.get_max_connections() == 16
-    c.set_max_connections(42)
-    assert c.get_max_connections() == 42
+    assert c.max_connections == 16
+    c.max_connections = 42
+    assert c.max_connections == 42
 
     # Test Timeout Defaults and Setter
-    assert c.get_connection_timeout_seconds() == 30
-    c.set_connection_timeout_seconds(60)
-    assert c.get_connection_timeout_seconds() == 60
+    assert c.connection_timeout_seconds == 30
+    c.connection_timeout_seconds = 60
+    assert c.connection_timeout_seconds == 60
 
 @pytest.mark.asyncio
 async def test_config_integration(postgres_dsn, schema):
@@ -28,8 +29,8 @@ async def test_config_integration(postgres_dsn, schema):
     # and they respect the settings (specifically schema).
 
     config = pgqrs.Config.from_dsn(postgres_dsn)
-    config.set_schema(schema)
-    config.set_max_connections(5)
+    config.schema = schema
+    config.max_connections = 5
 
     # Test Admin with Config
     admin = pgqrs.PgqrsAdmin(config)

@@ -6,12 +6,12 @@ use rust_pgqrs::tables::{
     PgqrsArchive as RustPgqrsArchive, PgqrsMessages as RustPgqrsMessages,
     PgqrsQueues as RustPgqrsQueues, PgqrsWorkers as RustPgqrsWorkers, Table,
 };
-use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
-use rust_pgqrs::{
-    Config, Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
-};
 use rust_pgqrs::types::WorkerStatus as RustWorkerStatus;
+use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
 use rust_pgqrs::worker::Worker;
+use rust_pgqrs::{
+    Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
+};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
