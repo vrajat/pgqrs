@@ -24,7 +24,11 @@ clippy:  ## Run clippy
 check:  ## Run all checks (fmt, clippy, deny)
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets --all-features
-	cargo deny check
+	@if command -v cargo-deny >/dev/null 2>&1; then \
+		cargo deny check; \
+	else \
+		echo "cargo-deny not installed, skipping checks (install with 'cargo install cargo-deny')"; \
+	fi
 
 clean:  ## Clean artifacts
 	cargo clean
