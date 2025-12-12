@@ -67,6 +67,52 @@ fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[pyclass(name = "Config")]
+#[derive(Clone)]
+struct PyConfig {
+    inner: rust_pgqrs::Config,
+}
+
+#[pymethods]
+impl PyConfig {
+    #[staticmethod]
+    fn from_dsn(dsn: String) -> Self {
+        PyConfig {
+            inner: rust_pgqrs::Config::from_dsn(dsn),
+        }
+    }
+
+    #[setter]
+    fn set_schema(&mut self, schema: String) {
+        self.inner.schema = schema;
+    }
+
+    #[getter]
+    fn get_schema(&self) -> String {
+        self.inner.schema.clone()
+    }
+
+    #[setter]
+    fn set_max_connections(&mut self, max: u32) {
+        self.inner.max_connections = max;
+    }
+
+    #[getter]
+    fn get_max_connections(&self) -> u32 {
+        self.inner.max_connections
+    }
+
+    #[setter]
+    fn set_connection_timeout_seconds(&mut self, timeout: u64) {
+        self.inner.connection_timeout_seconds = timeout;
+    }
+
+    #[getter]
+    fn get_connection_timeout_seconds(&self) -> u64 {
+        self.inner.connection_timeout_seconds
+    }
+}
+
 #[pyclass]
 struct Producer {
     inner: Arc<RustProducer>,
@@ -75,10 +121,19 @@ struct Producer {
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(dsn_or_config: &PyAny, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+        let config = if let Ok(dsn) = dsn_or_config.extract::<String>() {
+            rust_pgqrs::Config::from_dsn(dsn)
+        } else if let Ok(config_wrapper) = dsn_or_config.extract::<PyConfig>() {
+            config_wrapper.inner
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Argument 'dsn_or_config' must be a string or a Config instance",
+            ));
+        };
+
         let rt = get_runtime();
         let producer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
             // Use Admin to get queue info and manage pool
             let admin = RustAdmin::new(&config)
                 .await
@@ -118,10 +173,19 @@ struct Consumer {
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(dsn_or_config: &PyAny, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+        let config = if let Ok(dsn) = dsn_or_config.extract::<String>() {
+            rust_pgqrs::Config::from_dsn(dsn)
+        } else if let Ok(config_wrapper) = dsn_or_config.extract::<PyConfig>() {
+            config_wrapper.inner
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Argument 'dsn_or_config' must be a string or a Config instance",
+            ));
+        };
+
         let rt = get_runtime();
         let consumer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
             let admin = RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -256,10 +320,19 @@ struct PgqrsAdmin {
 #[pymethods]
 impl PgqrsAdmin {
     #[new]
-    fn new(dsn: &str) -> PyResult<Self> {
+    fn new(dsn_or_config: &PyAny) -> PyResult<Self> {
+        let config = if let Ok(dsn) = dsn_or_config.extract::<String>() {
+            rust_pgqrs::Config::from_dsn(dsn)
+        } else if let Ok(config_wrapper) = dsn_or_config.extract::<PyConfig>() {
+            config_wrapper.inner
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Argument 'dsn_or_config' must be a string or a Config instance",
+            ));
+        };
+
         let rt = get_runtime();
         let admin = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
             RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -408,5 +481,7 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PgqrsArchive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
+    m.add_class::<WorkerStatus>()?;
+    m.add_class::<PyConfig>()?;
     Ok(())
 }
