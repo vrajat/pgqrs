@@ -10,6 +10,8 @@ use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMes
 use rust_pgqrs::{
     Config, Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
 };
+use rust_pgqrs::types::WorkerStatus as RustWorkerStatus;
+use rust_pgqrs::worker::Worker;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
@@ -108,6 +110,76 @@ impl Producer {
             Ok(msg.id)
         })
     }
+
+    fn worker_id(&self) -> i64 {
+        self.inner.worker_id()
+    }
+
+    fn heartbeat<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .heartbeat()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn is_healthy<'a>(&self, py: Python<'a>, max_age_seconds: f64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let max_age = chrono::Duration::milliseconds((max_age_seconds * 1000.0) as i64);
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .is_healthy(max_age)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn status<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let status = inner
+                .status()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(WorkerStatus::from(status))
+        })
+    }
+
+    fn suspend<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .suspend()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn resume<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .resume()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn shutdown<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .shutdown()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 #[pyclass]
@@ -161,6 +233,76 @@ impl Consumer {
         pyo3_asyncio::tokio::future_into_py(py, async move {
             inner
                 .archive(message_id)
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn worker_id(&self) -> i64 {
+        self.inner.worker_id()
+    }
+
+    fn heartbeat<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .heartbeat()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn is_healthy<'a>(&self, py: Python<'a>, max_age_seconds: f64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let max_age = chrono::Duration::milliseconds((max_age_seconds * 1000.0) as i64);
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .is_healthy(max_age)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn status<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let status = inner
+                .status()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(WorkerStatus::from(status))
+        })
+    }
+
+    fn suspend<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .suspend()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn resume<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .resume()
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn shutdown<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .shutdown()
                 .await
                 .map(|_| Python::with_gil(|py| py.None()))
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -397,6 +539,24 @@ impl From<RustQueueMessage> for QueueMessage {
     }
 }
 
+#[pyclass]
+#[derive(Clone)]
+enum WorkerStatus {
+    Ready,
+    Suspended,
+    Stopped,
+}
+
+impl From<RustWorkerStatus> for WorkerStatus {
+    fn from(s: RustWorkerStatus) -> Self {
+        match s {
+            RustWorkerStatus::Ready => WorkerStatus::Ready,
+            RustWorkerStatus::Suspended => WorkerStatus::Suspended,
+            RustWorkerStatus::Stopped => WorkerStatus::Stopped,
+        }
+    }
+}
+
 #[pymodule]
 fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Producer>()?;
@@ -408,5 +568,6 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PgqrsArchive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
+    m.add_class::<WorkerStatus>()?;
     Ok(())
 }
