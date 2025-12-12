@@ -1,8 +1,8 @@
 //! Integration tests for error handling scenarios with schema operations
 
-use pgqrs::admin::PgqrsAdmin;
+use pgqrs::admin::Admin;
 use pgqrs::config::Config;
-use pgqrs::error::PgqrsError;
+use pgqrs::error::Error;
 use serial_test::serial;
 
 mod common;
@@ -15,7 +15,7 @@ async fn test_invalid_schema_name_empty() {
     let result = Config::from_dsn_with_schema(database_url, "");
     assert!(result.is_err());
 
-    if let Err(PgqrsError::InvalidConfig { field, message }) = result {
+    if let Err(Error::InvalidConfig { field, message }) = result {
         assert_eq!(field, "schema");
         assert!(message.contains("cannot be empty"));
     } else {
@@ -33,7 +33,7 @@ async fn test_invalid_schema_name_too_long() {
     let result = Config::from_dsn_with_schema(database_url, &long_schema);
     assert!(result.is_err());
 
-    if let Err(PgqrsError::InvalidConfig { field, message }) = result {
+    if let Err(Error::InvalidConfig { field, message }) = result {
         assert_eq!(field, "schema");
         assert!(message.contains("exceeds maximum length"));
     } else {
@@ -50,7 +50,7 @@ async fn test_invalid_schema_name_bad_start() {
     let result = Config::from_dsn_with_schema(database_url, "123invalid");
     assert!(result.is_err());
 
-    if let Err(PgqrsError::InvalidConfig { field, message }) = result {
+    if let Err(Error::InvalidConfig { field, message }) = result {
         assert_eq!(field, "schema");
         assert!(message.contains("must start with a letter or underscore"));
     } else {
@@ -67,7 +67,7 @@ async fn test_invalid_schema_name_bad_characters() {
     let result = Config::from_dsn_with_schema(database_url, "test-schema");
     assert!(result.is_err());
 
-    if let Err(PgqrsError::InvalidConfig { field, message }) = result {
+    if let Err(Error::InvalidConfig { field, message }) = result {
         assert_eq!(field, "schema");
         assert!(message.contains("invalid character"));
     } else {
@@ -111,7 +111,7 @@ async fn test_nonexistent_schema_operations() {
         .expect("Valid schema name");
 
     // Creating admin should succeed (connection pool is created)
-    let admin = PgqrsAdmin::new(&config)
+    let admin = Admin::new(&config)
         .await
         .expect("Creating admin should succeed");
 
@@ -123,7 +123,7 @@ async fn test_nonexistent_schema_operations() {
         "Verify should fail for non-existent schema"
     );
 
-    if let Err(PgqrsError::Connection { message }) = result {
+    if let Err(Error::Connection { message }) = result {
         assert!(
             message.contains("relation \"pgqrs_messages\" does not exist"),
             "Error should mention schema not existing, got: {}",
@@ -145,7 +145,7 @@ async fn test_verify_requires_existing_schema() {
     // Create admin with existing schema
     let config =
         Config::from_dsn_with_schema(database_url, "pgqrs_error_test").expect("Valid schema name");
-    let admin = PgqrsAdmin::new(&config)
+    let admin = Admin::new(&config)
         .await
         .expect("Should be able to create admin with existing schema");
 

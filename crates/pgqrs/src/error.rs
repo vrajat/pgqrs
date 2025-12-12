@@ -9,22 +9,22 @@
 //!
 //! ## How
 //!
-//! Use [`PgqrsError`] for error handling in your application code and when matching on error cases. Most crate APIs return [`Result<T>`].
+//! Use [`Error`] for error handling in your application code and when matching on error cases. Most crate APIs return [`Result<T>`].
 //!
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::error::{PgqrsError, Result};
+//! use pgqrs::error::{Error, Result};
 //!
 //! fn do_something() -> Result<()> {
 //!     // ...
-//!     Err(PgqrsError::QueueNotFound { name: "jobs".to_string() })
+//!     Err(Error::QueueNotFound { name: "jobs".to_string() })
 //! }
 //! ```
 use thiserror::Error;
 
 /// Result type for pgqrs operations
-pub type Result<T> = std::result::Result<T, PgqrsError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Error types for pgqrs operations.
 ///
@@ -32,7 +32,7 @@ pub type Result<T> = std::result::Result<T, PgqrsError>;
 /// including database connectivity, configuration, serialization, and
 /// queue-specific operations.
 #[derive(Error, Debug)]
-pub enum PgqrsError {
+pub enum Error {
     /// Database operation failed (SQLx errors)
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),

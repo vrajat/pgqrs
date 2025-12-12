@@ -16,14 +16,14 @@
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
+//! use pgqrs::{Config, Admin, Producer, ValidationConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut config = Config::from_dsn("postgresql://localhost/test");
 //! config.validation_config.max_enqueue_per_second = Some(100); // 100/second
 //! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
 //!
-//! let admin = PgqrsAdmin::new(&config).await?;
+//! let admin = Admin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
 //! let producer = Producer::new(
 //!     admin.pool.clone(),

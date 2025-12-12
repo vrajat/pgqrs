@@ -3,13 +3,11 @@ use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::tables::{
-    PgqrsArchive as RustPgqrsArchive, PgqrsMessages as RustPgqrsMessages,
-    PgqrsQueues as RustPgqrsQueues, PgqrsWorkers as RustPgqrsWorkers, Table,
+    Archive as RustArchive, Messages as RustMessages, Queues as RustQueues, Table,
+    Workers as RustWorkers,
 };
 use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
-use rust_pgqrs::{
-    Config, Consumer as RustConsumer, PgqrsAdmin as RustAdmin, Producer as RustProducer,
-};
+use rust_pgqrs::{Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
@@ -172,12 +170,12 @@ impl Consumer {
 
 #[pyclass]
 #[derive(Clone)]
-struct PgqrsWorkers {
-    inner: RustPgqrsWorkers,
+struct Workers {
+    inner: RustWorkers,
 }
 
 #[pymethods]
-impl PgqrsWorkers {
+impl Workers {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -193,12 +191,12 @@ impl PgqrsWorkers {
 
 #[pyclass]
 #[derive(Clone)]
-struct PgqrsQueues {
-    inner: RustPgqrsQueues,
+struct Queues {
+    inner: RustQueues,
 }
 
 #[pymethods]
-impl PgqrsQueues {
+impl Queues {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -212,12 +210,12 @@ impl PgqrsQueues {
 
 #[pyclass]
 #[derive(Clone)]
-struct PgqrsMessages {
-    inner: RustPgqrsMessages,
+struct Messages {
+    inner: RustMessages,
 }
 
 #[pymethods]
-impl PgqrsMessages {
+impl Messages {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -231,12 +229,12 @@ impl PgqrsMessages {
 
 #[pyclass]
 #[derive(Clone)]
-struct PgqrsArchive {
-    inner: RustPgqrsArchive,
+struct Archive {
+    inner: RustArchive,
 }
 
 #[pymethods]
-impl PgqrsArchive {
+impl Archive {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -249,12 +247,12 @@ impl PgqrsArchive {
 }
 
 #[pyclass]
-struct PgqrsAdmin {
+struct Admin {
     inner: Arc<tokio::sync::Mutex<RustAdmin>>, // Admin is mutable in register, so need Mutex
 }
 
 #[pymethods]
-impl PgqrsAdmin {
+impl Admin {
     #[new]
     fn new(dsn: &str) -> PyResult<Self> {
         let rt = get_runtime();
@@ -264,7 +262,7 @@ impl PgqrsAdmin {
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
-        Ok(PgqrsAdmin {
+        Ok(Admin {
             inner: Arc::new(tokio::sync::Mutex::new(admin)),
         })
     }
@@ -305,17 +303,17 @@ impl PgqrsAdmin {
 
     // Accessors for tables
     // Since Rust structs are owned by Admin, we can't easily return a permanent reference.
-    // However, the tables (PgqrsQueues etc) just hold a Pool, so they are cheap to clone.
+    // However, the tables (Queues etc) just hold a Pool, so they are cheap to clone.
     // But Admin struct doesn't expose them publicly in a way we can clone them out from here
     // without locking.
-    // And actually `PgqrsAdmin` struct fields ARE public!
+    // And actually `Admin` struct fields ARE public!
     // But we are inside a Mutex.
 
     fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            Ok(PgqrsWorkers {
+            Ok(Workers {
                 inner: admin.workers.clone(),
             })
         })
@@ -325,7 +323,7 @@ impl PgqrsAdmin {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            Ok(PgqrsQueues {
+            Ok(Queues {
                 inner: admin.queues.clone(),
             })
         })
@@ -335,7 +333,7 @@ impl PgqrsAdmin {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            Ok(PgqrsMessages {
+            Ok(Messages {
                 inner: admin.messages.clone(),
             })
         })
@@ -345,7 +343,7 @@ impl PgqrsAdmin {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let admin = inner.lock().await;
-            Ok(PgqrsArchive {
+            Ok(Archive {
                 inner: admin.archive.clone(),
             })
         })
@@ -401,11 +399,11 @@ impl From<RustQueueMessage> for QueueMessage {
 fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Producer>()?;
     m.add_class::<Consumer>()?;
-    m.add_class::<PgqrsAdmin>()?;
-    m.add_class::<PgqrsWorkers>()?;
-    m.add_class::<PgqrsQueues>()?;
-    m.add_class::<PgqrsMessages>()?;
-    m.add_class::<PgqrsArchive>()?;
+    m.add_class::<Admin>()?;
+    m.add_class::<Workers>()?;
+    m.add_class::<Queues>()?;
+    m.add_class::<Messages>()?;
+    m.add_class::<Archive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
     Ok(())

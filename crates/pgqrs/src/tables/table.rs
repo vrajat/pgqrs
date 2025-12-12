@@ -20,7 +20,7 @@ use crate::error::Result;
 /// # Example
 /// ```rust,no_run
 /// # use sqlx::PgPool;
-/// # use pgqrs::tables::{Table, pgqrs_workers::{PgqrsWorkers, NewWorker}};
+/// # use pgqrs::tables::{Table, pgqrs_workers::{Workers, NewWorker}};
 /// # async fn example(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// // Create a new worker
 /// let new_worker = NewWorker {
@@ -30,7 +30,7 @@ use crate::error::Result;
 /// };
 ///
 /// // Insert returns full WorkerInfo with generated ID and timestamps
-/// let workers = PgqrsWorkers::new(pool);
+/// let workers = Workers::new(pool);
 /// let worker = workers.insert(new_worker).await?;
 /// # Ok(())
 /// # }

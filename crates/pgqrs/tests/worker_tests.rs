@@ -1,22 +1,22 @@
 //! Integration tests for worker management functionality
 
 use chrono::Duration;
-use pgqrs::admin::PgqrsAdmin;
+use pgqrs::admin::Admin;
 use pgqrs::config::Config;
 use pgqrs::types::WorkerStatus;
 use pgqrs::worker::Worker;
-use pgqrs::{Consumer, PgqrsWorkers, Producer, Table};
+use pgqrs::{Consumer, Producer, Table, Workers};
 use serde_json::json;
 use serial_test::serial;
 
 mod common;
 
-async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
+async fn create_admin() -> pgqrs::admin::Admin {
     let database_url = common::get_postgres_dsn(Some("pgqrs_worker_test")).await;
     let admin =
-        PgqrsAdmin::new(&Config::from_dsn_with_schema(database_url, "pgqrs_worker_test").unwrap())
+        Admin::new(&Config::from_dsn_with_schema(database_url, "pgqrs_worker_test").unwrap())
             .await
-            .expect("Failed to create PgqrsAdmin");
+            .expect("Failed to create Admin");
 
     // Clean up any existing workers to ensure test isolation
     if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE")
@@ -44,7 +44,7 @@ async fn test_worker_registration() {
         .expect("Failed to create producer");
 
     // Verify worker appears in queue workers list
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue.id)
         .await
         .unwrap();
@@ -83,7 +83,7 @@ async fn test_worker_lifecycle() {
     producer.shutdown().await.unwrap();
 
     // Verify worker is in stopped state
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue.id)
         .await
         .unwrap();
@@ -120,7 +120,7 @@ async fn test_worker_message_assignment() {
     .await
     .expect("Failed to create consumer");
 
-    let messages = pgqrs::tables::PgqrsMessages::new(admin.pool.clone());
+    let messages = pgqrs::tables::Messages::new(admin.pool.clone());
 
     // Add some messages to the queue
     producer.enqueue(&json!({"task": "test1"})).await.unwrap();
@@ -178,18 +178,18 @@ async fn test_admin_worker_management() {
     .expect("Failed to create producer2");
 
     // Test listing all workers
-    let all_workers = PgqrsWorkers::new(admin.pool.clone()).list().await.unwrap();
+    let all_workers = Workers::new(admin.pool.clone()).list().await.unwrap();
     assert_eq!(all_workers.len(), 2);
 
     // Test listing workers by queue
-    let queue1_workers = PgqrsWorkers::new(admin.pool.clone())
+    let queue1_workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue1.id)
         .await
         .unwrap();
     assert_eq!(queue1_workers.len(), 1);
     assert_eq!(queue1_workers[0].id, producer1.worker_id());
 
-    let queue2_workers = PgqrsWorkers::new(admin.pool.clone())
+    let queue2_workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue2.id)
         .await
         .unwrap();
@@ -272,7 +272,7 @@ async fn test_custom_schema_search_path() {
     .expect("Failed to create producer");
 
     // Verify worker registration via admin listing
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue.id)
         .await
         .unwrap();
@@ -287,7 +287,7 @@ async fn test_custom_schema_search_path() {
     producer.shutdown().await.unwrap();
 
     // Verify worker status updated
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue.id)
         .await
         .unwrap();
@@ -342,7 +342,7 @@ async fn test_worker_deletion_with_references() {
     );
 
     // Verify workers still exist
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue_info.id)
         .await
         .unwrap();
@@ -385,7 +385,7 @@ async fn test_worker_deletion_without_references() {
     assert_eq!(result.unwrap(), 1, "Should delete exactly 1 worker");
 
     // Verify worker no longer exists
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue.id)
         .await
         .unwrap();
@@ -523,7 +523,7 @@ async fn test_purge_old_workers() {
     );
 
     // Verify consumer remains (recent heartbeat)
-    let workers = PgqrsWorkers::new(admin.pool.clone())
+    let workers = Workers::new(admin.pool.clone())
         .filter_by_fk(queue_info.id)
         .await
         .unwrap();

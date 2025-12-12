@@ -112,7 +112,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Send message using a Producer
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (sent_message, producer_worker_id): (QueueMessage, i64) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
@@ -148,7 +148,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
 
     // Dequeue message using a Consumer
     let (dequeued_messages, consumer_worker_id): (Vec<QueueMessage>, i64) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
@@ -203,7 +203,7 @@ fn test_cli_archive_functionality() {
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _sent_message: QueueMessage = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
         let producer = Producer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
@@ -221,7 +221,7 @@ fn test_cli_archive_functionality() {
 
     // Dequeue and archive using a Consumer
     let (dequeued_messages, consumer): (Vec<QueueMessage>, Consumer) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
+        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
         let consumer = Consumer::new(
             pgqrs_admin.pool.clone(),
             &created_queue,
@@ -257,8 +257,8 @@ fn test_cli_archive_functionality() {
     assert_eq!(archived_message.original_msg_id, dequeued_message.id);
 
     let archived_list: Vec<ArchivedMessage> = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::PgqrsAdmin::new(&config).await.unwrap();
-        let pgqrs_archive = pgqrs::tables::PgqrsArchive::new(pgqrs_admin.pool.clone());
+        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
+        let pgqrs_archive = pgqrs::tables::Archive::new(pgqrs_admin.pool.clone());
         pgqrs_archive.filter_by_fk(created_queue.id).await.unwrap()
     });
     assert!(

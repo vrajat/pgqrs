@@ -1,9 +1,9 @@
 use pgqrs::{
-    admin::PgqrsAdmin,
+    admin::Admin,
     config::Config,
     consumer::Consumer,
     producer::Producer,
-    tables::{PgqrsMessages, PgqrsWorkers},
+    tables::{Messages, Workers},
     types::WorkerStatus,
     Table, Worker,
 };
@@ -23,7 +23,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let config = Config::from_dsn(dsn.clone());
     let pool = PgPool::connect(&dsn).await?;
 
-    let admin = PgqrsAdmin::new(&config).await?;
+    let admin = Admin::new(&config).await?;
     admin.install().await?;
 
     // 2. Create Queue
@@ -55,7 +55,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         .await?;
 
     // 6. Test pgqrs_workers functions
-    let workers_table = PgqrsWorkers::new(pool.clone());
+    let workers_table = Workers::new(pool.clone());
 
     // Verify it's counted as a zombie
     let zombie_count = workers_table
@@ -77,7 +77,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     assert_eq!(reclaimed, 1, "Should reclaim 1 message");
 
     // Verify message is released
-    let messages_table = PgqrsMessages::new(pool.clone());
+    let messages_table = Messages::new(pool.clone());
     let stored_msg = messages_table.get(msg.id).await?;
     assert_eq!(
         stored_msg.consumer_worker_id, None,

@@ -3,7 +3,7 @@
 //! This module provides pure CRUD operations on the `pgqrs_queues` table without business logic.
 //! Complex operations like referential integrity checks and transaction management remain in admin.rs.
 
-use crate::error::{PgqrsError, Result};
+use crate::error::Result;
 use crate::tables::table::Table;
 use crate::types::QueueInfo;
 use sqlx::PgPool;
@@ -57,12 +57,12 @@ pub struct NewQueue {
 ///
 /// Provides pure CRUD operations on the `pgqrs_queues` table without business logic.
 #[derive(Debug, Clone)]
-pub struct PgqrsQueues {
+pub struct Queues {
     pub pool: PgPool,
 }
 
-impl PgqrsQueues {
-    /// Create a new PgqrsQueues instance.
+impl Queues {
+    /// Create a new Queues instance.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
@@ -83,10 +83,10 @@ impl PgqrsQueues {
             .fetch_one(&self.pool)
             .await
             .map_err(|e| match e {
-                sqlx::Error::RowNotFound => PgqrsError::QueueNotFound {
+                sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
                     name: name.to_string(),
                 },
-                _ => PgqrsError::Connection {
+                _ => crate::error::Error::Connection {
                     message: format!("Failed to get queue '{}': {}", name, e),
                 },
             })?;
@@ -106,7 +106,7 @@ impl PgqrsQueues {
             .bind(name)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete queue '{}': {}", name, e),
             })?
             .rows_affected();
@@ -130,7 +130,7 @@ impl PgqrsQueues {
             .bind(name)
             .execute(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete queue '{}': {}", name, e),
             })?
             .rows_affected();
@@ -150,7 +150,7 @@ impl PgqrsQueues {
             .bind(name)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to check if queue '{}' exists: {}", name, e),
             })?;
 
@@ -158,7 +158,7 @@ impl PgqrsQueues {
     }
 }
 
-impl Table for PgqrsQueues {
+impl Table for Queues {
     type Entity = QueueInfo;
     type NewEntity = NewQueue;
 
@@ -179,12 +179,12 @@ impl Table for PgqrsQueues {
                 if let sqlx::Error::Database(db_err) = &e {
                     if db_err.code().as_deref() == Some("23505") {
                         // PostgreSQL unique violation code
-                        return PgqrsError::QueueAlreadyExists {
+                        return crate::error::Error::QueueAlreadyExists {
                             name: data.queue_name.clone(),
                         };
                     }
                 }
-                PgqrsError::Connection {
+                crate::error::Error::Connection {
                     message: format!("Failed to insert queue '{}': {}", data.queue_name, e),
                 }
             })?;
@@ -204,7 +204,7 @@ impl Table for PgqrsQueues {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get queue {}: {}", id, e),
             })?;
 
@@ -219,7 +219,7 @@ impl Table for PgqrsQueues {
         let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list queues: {}", e),
             })?;
 
@@ -247,7 +247,7 @@ impl Table for PgqrsQueues {
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count queues: {}", e),
             })?;
         Ok(count)
@@ -281,7 +281,7 @@ impl Table for PgqrsQueues {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete queue {}: {}", id, e),
             })?
             .rows_affected();
@@ -327,6 +327,6 @@ mod tests {
         // has the correct associated types.
 
         // Note: This is a compile-time test, we don't actually create connections
-        // In real usage, PgqrsQueues would be created with a valid pool
+        // In real usage, Queues would be created with a valid pool
     }
 }

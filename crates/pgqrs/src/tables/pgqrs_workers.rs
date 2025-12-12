@@ -1,9 +1,9 @@
 //! Workers table CRUD operations for pgqrs.
 //!
-//! This module provides the [`PgqrsWorkers`] struct which implements pure CRUD operations
+//! This module provides the [`Workers`] struct which implements pure CRUD operations
 //! on the `pgqrs_workers` table without business logic.
 
-use crate::error::{PgqrsError, Result};
+use crate::error::Result;
 use crate::tables::table::Table;
 use crate::types::WorkerInfo;
 use sqlx::PgPool;
@@ -73,12 +73,12 @@ pub struct NewWorker {
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table without business logic.
 #[derive(Debug, Clone)]
-pub struct PgqrsWorkers {
+pub struct Workers {
     pub pool: PgPool,
 }
 
-impl PgqrsWorkers {
-    /// Create a new PgqrsWorkers instance.
+impl Workers {
+    /// Create a new Workers instance.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
@@ -87,7 +87,7 @@ impl PgqrsWorkers {
     }
 }
 
-impl Table for PgqrsWorkers {
+impl Table for Workers {
     type Entity = WorkerInfo;
     type NewEntity = NewWorker;
 
@@ -113,7 +113,7 @@ impl Table for PgqrsWorkers {
             .bind(WorkerStatus::Ready)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to insert worker: {}", e),
             })?;
 
@@ -141,7 +141,7 @@ impl Table for PgqrsWorkers {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get worker {}: {}", id, e),
             })?;
 
@@ -156,7 +156,7 @@ impl Table for PgqrsWorkers {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list workers: {}", e),
             })?;
 
@@ -175,7 +175,7 @@ impl Table for PgqrsWorkers {
             .bind(queue_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to filter workers by queue ID {}: {}", queue_id, e),
             })?;
 
@@ -188,7 +188,7 @@ impl Table for PgqrsWorkers {
         let row = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count workers: {}", e),
             })?;
         Ok(row)
@@ -205,7 +205,7 @@ impl Table for PgqrsWorkers {
             .bind(queue_id)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count workers for queue {}: {}", queue_id, e),
             })?;
         Ok(row)
@@ -223,7 +223,7 @@ impl Table for PgqrsWorkers {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete worker {}: {}", id, e),
             })?;
 
@@ -246,7 +246,7 @@ impl Table for PgqrsWorkers {
             .bind(queue_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete messages for queue {}: {}", queue_id, e),
             })?
             .rows_affected();
@@ -254,7 +254,7 @@ impl Table for PgqrsWorkers {
     }
 }
 
-impl PgqrsWorkers {
+impl Workers {
     /// Count workers for a queue in a specific state
     ///
     /// # Arguments
@@ -279,7 +279,7 @@ impl PgqrsWorkers {
             .bind(state.clone())
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to count workers for queue {} with state {:?}: {}",
                     queue_id, state, e
@@ -314,7 +314,7 @@ impl PgqrsWorkers {
             .bind(queue_id)
             .bind(
                 sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    PgqrsError::InvalidConfig {
+                    crate::error::Error::InvalidConfig {
                         field: "older_than".to_string(),
                         message: format!("Invalid duration: {}", e),
                     }
@@ -322,7 +322,7 @@ impl PgqrsWorkers {
             )
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to count zombie workers for queue {}: {}",
                     queue_id, e
@@ -350,7 +350,7 @@ impl PgqrsWorkers {
             .bind(state.clone())
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to list workers for queue {} with state {:?}: {}",
                     queue_id, state, e
@@ -380,7 +380,7 @@ impl PgqrsWorkers {
             .bind(queue_id)
             .bind(
                 sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    PgqrsError::InvalidConfig {
+                    crate::error::Error::InvalidConfig {
                         field: "older_than".to_string(),
                         message: format!("Invalid duration: {}", e),
                     }
@@ -388,7 +388,7 @@ impl PgqrsWorkers {
             )
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to list zombie workers for queue {}: {}",
                     queue_id, e
@@ -417,7 +417,7 @@ impl PgqrsWorkers {
             .bind(queue_id)
             .bind(
                 sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    PgqrsError::InvalidConfig {
+                    crate::error::Error::InvalidConfig {
                         field: "older_than".to_string(),
                         message: format!("Invalid duration: {}", e),
                     }
@@ -425,7 +425,7 @@ impl PgqrsWorkers {
             )
             .fetch_all(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to list zombie workers for queue {}: {}",
                     queue_id, e
@@ -477,7 +477,7 @@ mod tests {
 
             // These would need a real database pool to actually create:
             // let pool = PgPool::connect("...").await.unwrap();
-            // let workers = PgqrsWorkers::new(pool);
+            // let workers = Workers::new(pool);
             // assert_entity_type(&workers);
             // assert_new_entity_type(&workers);
         }

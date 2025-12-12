@@ -52,8 +52,8 @@ Always include:
 
 ### Pre-commit Process
 
-1. Run `cargo test` to ensure all tests pass
-2. Run `cargo fmt` to format code
+1. Run `make test` to ensure all tests pass
+2. Run `make fmt` to format code
 3. Update documentation for API changes
 4. Add tests for new functionality
 5. Ensure CI passes before requesting review
@@ -315,7 +315,7 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 6. **Backward Compatibility**: Defaults to 'public' schema if not specified
 
 ### Error Handling
-- Custom `PgqrsError` enum for domain-specific errors
+- Custom `Error` enum for domain-specific errors
 - Integration with `anyhow` for error context
 - Database errors are properly wrapped and contextualized
 
@@ -420,15 +420,15 @@ benchmark/
 // Core role-based APIs
 pub use crate::producer::Producer;
 pub use crate::consumer::Consumer;
-pub use crate::admin::PgqrsAdmin;
+pub use crate::admin::Admin;
 
 // Table interface for advanced use cases
-pub use crate::tables::{Table, PgqrsQueues, PgqrsWorkers, PgqrsMessages, PgqrsArchiveTable};
+pub use crate::tables::{Table, Queues, Workers, Messages, Archive};
 pub use crate::tables::{NewQueue, NewWorker, NewMessage}; // NewArchivedMessage available via types
 
 // Configuration and utilities
 pub use crate::config::Config;
-pub use crate::error::{PgqrsError, Result};
+pub use crate::error::{Error, Result};
 pub use crate::types::{QueueInfo, WorkerInfo, QueueMessage, ArchivedMessage, WorkerStatus};
 ```
 

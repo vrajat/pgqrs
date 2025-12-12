@@ -69,7 +69,7 @@ mod lifecycle;
 pub mod producer;
 mod traits;
 
-pub use admin::PgqrsAdmin;
+pub use admin::Admin;
 pub use consumer::Consumer;
 pub use lifecycle::WorkerLifecycle;
 pub use producer::Producer;

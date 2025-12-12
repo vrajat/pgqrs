@@ -60,7 +60,7 @@ import asyncio
 
 async def admin_tasks():
     dsn = "postgres://user:pass@localhost:5432/db"
-    admin = pgqrs.PgqrsAdmin(dsn)
+    admin = pgqrs.Admin(dsn)
 
     # Setup
     await admin.install()

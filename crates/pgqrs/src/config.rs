@@ -50,17 +50,17 @@ use std::path::Path;
 ///
 /// # Returns
 /// * `Ok(())` if the schema name is valid
-/// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
+/// * `Err(crate::error::Error::InvalidConfig)` if the schema name is invalid
 fn validate_identifier(identifier: &str) -> Result<()> {
     if identifier.is_empty() {
-        return Err(crate::error::PgqrsError::InvalidConfig {
+        return Err(crate::error::Error::InvalidConfig {
             field: "schema".to_string(),
             message: "Schema name cannot be empty".to_string(),
         });
     }
 
     if identifier.len() > 63 {
-        return Err(crate::error::PgqrsError::InvalidConfig {
+        return Err(crate::error::Error::InvalidConfig {
             field: "schema".to_string(),
             message: format!(
                 "Schema name '{}' exceeds maximum length of 63 bytes",
@@ -72,7 +72,7 @@ fn validate_identifier(identifier: &str) -> Result<()> {
     // Check first character
     let first_char = identifier.chars().next().unwrap();
     if !first_char.is_ascii_alphabetic() && first_char != '_' {
-        return Err(crate::error::PgqrsError::InvalidConfig {
+        return Err(crate::error::Error::InvalidConfig {
             field: "schema".to_string(),
             message: format!(
                 "Schema name '{}' must start with a letter or underscore",
@@ -84,7 +84,7 @@ fn validate_identifier(identifier: &str) -> Result<()> {
     // Check remaining characters
     for c in identifier.chars() {
         if !c.is_ascii_alphanumeric() && c != '_' && c != '$' {
-            return Err(crate::error::PgqrsError::InvalidConfig {
+            return Err(crate::error::Error::InvalidConfig {
                 field: "schema".to_string(),
                 message: format!(
                     "Schema name '{}' contains invalid character '{}'. Only letters, digits, underscores, and dollar signs are allowed",
@@ -222,7 +222,7 @@ impl Config {
     ///
     /// # Returns
     /// * `Ok(Config)` if the schema name is valid
-    /// * `Err(PgqrsError::InvalidConfig)` if the schema name is invalid
+    /// * `Err(crate::error::Error::InvalidConfig)` if the schema name is invalid
     ///
     /// # Example
     /// ```
@@ -269,7 +269,7 @@ impl Config {
         use std::env;
 
         // DSN is required
-        let dsn = env::var(ENV_DSN).map_err(|_| crate::error::PgqrsError::MissingConfig {
+        let dsn = env::var(ENV_DSN).map_err(|_| crate::error::Error::MissingConfig {
             field: ENV_DSN.to_string(),
         })?;
 
@@ -364,17 +364,16 @@ impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content =
-            std::fs::read_to_string(path).map_err(|e| crate::error::PgqrsError::InvalidConfig {
+            std::fs::read_to_string(path).map_err(|e| crate::error::Error::InvalidConfig {
                 field: "file".to_string(),
                 message: format!("Failed to read config file '{}': {}", path.display(), e),
             })?;
 
-        let config: Config = serde_yaml::from_str(&content).map_err(|e| {
-            crate::error::PgqrsError::InvalidConfig {
+        let config: Config =
+            serde_yaml::from_str(&content).map_err(|e| crate::error::Error::InvalidConfig {
                 field: "yaml".to_string(),
                 message: format!("Failed to parse YAML config: {}", e),
-            }
-        })?;
+            })?;
 
         // Validate schema name
         validate_identifier(&config.schema)?;
@@ -525,7 +524,7 @@ impl Config {
         }
 
         // No configuration source found
-        Err(crate::error::PgqrsError::MissingConfig {
+        Err(crate::error::Error::MissingConfig {
             field: "configuration".to_string(),
         })
     }
@@ -638,7 +637,7 @@ mod tests {
         let result = Config::from_env();
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::MissingConfig { field }) = result {
+        if let Err(crate::error::Error::MissingConfig { field }) = result {
             assert_eq!(field, ENV_DSN);
         } else {
             panic!("Expected MissingConfig error for DSN");
@@ -735,7 +734,7 @@ max_connections: [invalid yaml structure
         let result = Config::from_file(&config_path);
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
             assert_eq!(field, "yaml");
         } else {
             panic!("Expected InvalidConfig error for yaml");
@@ -749,7 +748,7 @@ max_connections: [invalid yaml structure
         let result = Config::from_file("/nonexistent/path/config.yaml");
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
             assert_eq!(field, "file");
         } else {
             panic!("Expected InvalidConfig error for file");
@@ -858,7 +857,7 @@ max_connections: 256
         let result = Config::load();
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::MissingConfig { field }) = result {
+        if let Err(crate::error::Error::MissingConfig { field }) = result {
             assert_eq!(field, "configuration");
         } else {
             panic!("Expected MissingConfig error for configuration");
@@ -909,7 +908,7 @@ max_connections: 256
         let result = Config::from_dsn_with_schema("postgresql://test@localhost/db", "123invalid");
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
             assert_eq!(field, "schema");
         } else {
             panic!("Expected InvalidConfig error for schema");
@@ -943,7 +942,7 @@ max_connections: 256
         let result = Config::from_env();
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
             assert_eq!(field, "schema");
         } else {
             panic!("Expected InvalidConfig error for schema");
@@ -981,7 +980,7 @@ schema: "invalid-schema-name"
         let result = Config::from_file(&config_path);
         assert!(result.is_err());
 
-        if let Err(crate::error::PgqrsError::InvalidConfig { field, .. }) = result {
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
             assert_eq!(field, "schema");
         } else {
             panic!("Expected InvalidConfig error for schema");
