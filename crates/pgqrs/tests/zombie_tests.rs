@@ -11,7 +11,6 @@ use serial_test::serial;
 use sqlx::PgPool;
 use std::process::Command;
 
-
 mod common;
 
 #[tokio::test]
