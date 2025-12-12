@@ -59,20 +59,20 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Verify it's counted as a zombie
     let zombie_count = workers_table
-        .count_zombies_for_queue(queue.id, Duration::from_secs(60))
+        .count_zombies_for_queue(queue.id, chrono::Duration::seconds(60))
         .await?;
     // We intentionally violate encapsulation here for the test setup
     assert_eq!(zombie_count, 1, "Should detect 1 zombie worker");
 
     let zombies = workers_table
-        .list_zombies_for_queue(queue.id, Duration::from_secs(60))
+        .list_zombies_for_queue(queue.id, chrono::Duration::seconds(60))
         .await?;
     assert_eq!(zombies.len(), 1);
     assert_eq!(zombies[0].id, consumer_worker_id);
 
     // 7. Test admin.reclaim_messages
     let reclaimed = admin
-        .reclaim_messages(queue.id, Some(Duration::from_secs(60)))
+        .reclaim_messages(queue.id, Some(chrono::Duration::seconds(60)))
         .await?;
     assert_eq!(reclaimed, 1, "Should reclaim 1 message");
 
