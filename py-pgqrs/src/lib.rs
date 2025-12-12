@@ -7,7 +7,11 @@ use rust_pgqrs::tables::{
     Workers as RustWorkers,
 };
 use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
-use rust_pgqrs::{Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer};
+use rust_pgqrs::{
+    Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer,
+    WorkerStatus as RustWorkerStatus,
+};
+use rust_pgqrs::worker::Worker;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
@@ -80,32 +84,26 @@ impl PyConfig {
         }
     }
 
-    #[setter]
     fn set_schema(&mut self, schema: String) {
         self.inner.schema = schema;
     }
 
-    #[getter]
     fn get_schema(&self) -> String {
         self.inner.schema.clone()
     }
 
-    #[setter]
     fn set_max_connections(&mut self, max: u32) {
         self.inner.max_connections = max;
     }
 
-    #[getter]
     fn get_max_connections(&self) -> u32 {
         self.inner.max_connections
     }
 
-    #[setter]
     fn set_connection_timeout_seconds(&mut self, timeout: u64) {
         self.inner.connection_timeout_seconds = timeout;
     }
 
-    #[getter]
     fn get_connection_timeout_seconds(&self) -> u64 {
         self.inner.connection_timeout_seconds
     }
@@ -465,6 +463,24 @@ impl From<RustQueueMessage> for QueueMessage {
             queue_id: r.queue_id,
             payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
         })
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+enum WorkerStatus {
+    Ready,
+    Suspended,
+    Stopped,
+}
+
+impl From<RustWorkerStatus> for WorkerStatus {
+    fn from(s: RustWorkerStatus) -> Self {
+        match s {
+            RustWorkerStatus::Ready => WorkerStatus::Ready,
+            RustWorkerStatus::Suspended => WorkerStatus::Suspended,
+            RustWorkerStatus::Stopped => WorkerStatus::Stopped,
+        }
     }
 }
 

@@ -32,7 +32,7 @@ async def test_config_integration(postgres_dsn, schema):
     config.set_max_connections(5)
 
     # Test Admin with Config
-    admin = pgqrs.PgqrsAdmin(config)
+    admin = pgqrs.Admin(config)
     await admin.install()
 
     queue_name = "test_config_queue"
@@ -63,6 +63,6 @@ async def test_legacy_string_dsn(postgres_dsn, schema):
     # However, to avoid polluting public in shared db, maybe we skip full install
     # and just assert it doesn't crash on instantiation.
 
-    admin = pgqrs.PgqrsAdmin(postgres_dsn)
+    admin = pgqrs.Admin(postgres_dsn)
     # Just creating it proves constructor accepted the string.
-    assert isinstance(admin, pgqrs.PgqrsAdmin)
+    assert isinstance(admin, pgqrs.Admin)
