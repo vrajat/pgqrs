@@ -1940,6 +1940,7 @@ dependencies = [
 name = "py-pgqrs"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "pgqrs",
  "pyo3",
  "pyo3-asyncio",
