@@ -7,11 +7,11 @@ use rust_pgqrs::tables::{
     Workers as RustWorkers,
 };
 use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
+use rust_pgqrs::worker::Worker;
 use rust_pgqrs::{
     Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer,
     WorkerStatus as RustWorkerStatus,
 };
-use rust_pgqrs::worker::Worker;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
