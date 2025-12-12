@@ -16,7 +16,7 @@ async def test_enqueue_delayed(postgres_dsn, schema):
 
     payload = {"foo": "bar"}
     # Enqueue with 2 seconds delay
-    msg_id = await producer.enqueue_delayed(payload, 2.0)
+    msg_id = await producer.enqueue_delayed(payload, 2)
     assert msg_id > 0
 
     # Try immediate dequeue

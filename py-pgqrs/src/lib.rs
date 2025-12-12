@@ -111,11 +111,14 @@ impl Producer {
         &self,
         py: Python<'a>,
         payload: &PyAny,
-        delay_seconds: f64,
+        delay_seconds: u64,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let json_payload = py_to_json(payload)?;
-        let delay = delay_seconds as u32;
+
+        let delay: u32 = delay_seconds.try_into().map_err(|_| {
+            pyo3::exceptions::PyOverflowError::new_err("Delay seconds must fit in u32")
+        })?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let msg = inner
