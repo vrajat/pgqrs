@@ -106,6 +106,26 @@ impl Producer {
             Ok(msg.id)
         })
     }
+
+    fn enqueue_batch<'a>(&self, py: Python<'a>, payloads: Vec<PyObject>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_payloads: Result<Vec<serde_json::Value>, _> = payloads
+            .into_iter()
+            .map(|p| py_to_json(p.as_ref(py)))
+            .collect();
+        let json_payloads = json_payloads?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .batch_enqueue(&json_payloads)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
 }
 
 #[pyclass]
@@ -162,6 +182,50 @@ impl Consumer {
                 .await
                 .map(|_| Python::with_gil(|py| py.None()))
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn dequeue_many<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .dequeue_many(limit)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn dequeue_many_with_delay<'a>(
+        &self,
+        py: Python<'a>,
+        limit: usize,
+        vt_seconds: u32,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .dequeue_many_with_delay(limit, vt_seconds)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn archive_many<'a>(&self, py: Python<'a>, message_ids: Vec<i64>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let results = inner
+                .archive_many(message_ids)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(results)
         })
     }
 }
