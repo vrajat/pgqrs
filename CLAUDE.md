@@ -14,6 +14,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 * Extract a feature name from the title.
 * Create a branch with the feature name.
 * Use kebabCase for the branchname
+* Use git worktrees for parallel development (see Worktrees section below).
+
+#### Worktrees
+This project encourages using git worktrees for parallelizing tasks:
+1. Create a worktree: `git worktree add ./<name>_worktree -b <branch-name>`
+2. Directory naming convention: end with `_worktree/` (e.g., `deps_worktree/`) so it's ignored by git.
+3. Cleanup: `rm -rf <name>_worktree && git worktree prune`
+
 
 #### Conventional Commits (REQUIRED)
 

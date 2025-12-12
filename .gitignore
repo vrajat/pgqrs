@@ -10,3 +10,4 @@ results
 __pycache__/
 .pytest_cache/
 .vscode
+*_worktree/
