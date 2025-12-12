@@ -4,7 +4,7 @@ UV ?= uv
 	$(UV) venv
 
 requirements: .venv  ## Install Python requirements
-	$(UV) pip install maturin "mkdocs-material[imaging]"
+	$(UV) pip install maturin "mkdocs-material[imaging]" mkdocs-catppuccin
 	$(UV) pip install -e "py-pgqrs[test]"
 
 build: requirements  ## Build Rust and Python bindings

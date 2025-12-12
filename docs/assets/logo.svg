@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7c4dff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#536dfe;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Database cylinder -->
+  <ellipse cx="50" cy="25" rx="35" ry="12" fill="url(#grad)"/>
+  <rect x="15" y="25" width="70" height="50" fill="url(#grad)"/>
+  <ellipse cx="50" cy="75" rx="35" ry="12" fill="url(#grad)"/>
+  <ellipse cx="50" cy="25" rx="30" ry="8" fill="#fff" opacity="0.3"/>
+  <!-- Queue arrows -->
+  <path d="M30 45 L45 45 L45 40 L55 50 L45 60 L45 55 L30 55 Z" fill="#fff"/>
+  <path d="M55 45 L70 45 L70 40 L80 50 L70 60 L70 55 L55 55 Z" fill="#fff" opacity="0.7"/>
+</svg>
