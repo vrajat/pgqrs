@@ -53,12 +53,12 @@ LIMIT $2 OFFSET $3
 const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
 SELECT COUNT(*)
 FROM pgqrs_archive
-WHERE queue_id = $1 AND worker_id = $2
+WHERE consumer_worker_id = $1
 "#;
 
 const ARCHIVE_DELETE_WITH_WORKER: &str = r#"
 DELETE FROM pgqrs_archive
-WHERE queue_id = $1 AND worker_id = $2
+WHERE consumer_worker_id = $1
 "#;
 
 use crate::error::Result;
