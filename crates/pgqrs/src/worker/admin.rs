@@ -925,8 +925,7 @@ impl Admin {
     /// # Returns
     /// Number of workers removed
     pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
-        let threshold = chrono::Utc::now()
-            - older_than;
+        let threshold = chrono::Utc::now() - older_than;
 
         let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
             .bind(threshold)

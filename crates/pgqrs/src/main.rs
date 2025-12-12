@@ -517,7 +517,9 @@ async fn handle_worker_commands(
             let duration = chrono::Duration::from_std(
                 older_than
                     .parse::<humantime::Duration>()
-                    .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e))?
+                    .map_err(|e| {
+                        anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e)
+                    })?
                     .into(),
             )
             .map_err(|e| anyhow::anyhow!("Duration too large: {}", e))?;
