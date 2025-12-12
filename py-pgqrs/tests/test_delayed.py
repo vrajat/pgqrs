@@ -1,7 +1,6 @@
 import pytest
 import pgqrs
 import asyncio
-import time
 
 @pytest.mark.asyncio
 async def test_enqueue_delayed(postgres_dsn, schema):
