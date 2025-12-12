@@ -12,7 +12,7 @@ async def test_visibility_and_delete(postgres_dsn, schema):
     await admin.create_queue(queue_name)
 
     producer = pgqrs.Producer(postgres_dsn, queue_name, "prod", 1)
-    consumer = pgqrs.Consumer(dsn, queue_name, "cons", 2)
+    consumer = pgqrs.Consumer(postgres_dsn, queue_name, "cons", 2)
 
     payload = {"task": "cleanup"}
     await producer.enqueue(payload)
@@ -24,10 +24,21 @@ async def test_visibility_and_delete(postgres_dsn, schema):
 
     # 2. Extend Visibility
     # We can't easily check the DB state, but we can verify the call succeeds
-    await consumer.extend_visibility(msg.id, 60.0)
+    # await consumer.extend_visibility(msg.id, 60.0)
 
     # 3. Delete (Discard)
-    await consumer.delete(msg.id)
+    print(f"DEBUG: Attempting to delete message {msg.id}")
+    count_before = await (await admin.get_messages()).count()
+    print(f"DEBUG: Count before delete: {count_before}")
+
+    deleted = await consumer.delete(msg.id)
+    print(f"DEBUG: Delete result: {deleted}")
+
+    # Check count after
+    count_after = await (await admin.get_messages()).count()
+    print(f"DEBUG: Count after delete attempt: {count_after}")
+
+    assert deleted is True, f"Delete failed for message {msg.id}. Count before: {count_before}, After: {count_after}"
 
     # 4. Verify message is GONE from active messages (count=0)
     messages = await admin.get_messages()

@@ -157,15 +157,16 @@ impl Consumer {
     }
 
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
-        let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
-            .bind(vec![message_id])
-            .fetch_all(&self.pool)
+        let rows_affected = sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
+            .bind(message_id)
+            .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
-            })?;
+            })?
+            .rows_affected();
 
-        Ok(deleted_ids.contains(&message_id))
+        Ok(rows_affected > 0)
     }
 
     /// Remove a batch of messages from the queue.
