@@ -6,7 +6,7 @@ use rust_pgqrs::tables::{
     Archive as RustArchive, Messages as RustMessages, Queues as RustQueues, Table,
     Workers as RustWorkers,
 };
-use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
+use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerStatus};
 use rust_pgqrs::{Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
