@@ -5,14 +5,14 @@ import asyncio
 @pytest.mark.asyncio
 async def test_visibility_and_delete(postgres_dsn, schema):
     dsn = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-    admin = pgqrs.PgqrsAdmin(dsn)
+    admin = pgqrs.Admin(postgres_dsn)
     await admin.install()
 
-    queue = "vis_test"
-    await admin.create_queue(queue)
+    queue_name = "test_vis_queue"
+    await admin.create_queue(queue_name)
 
-    producer = pgqrs.Producer(dsn, queue, "prod", 1)
-    consumer = pgqrs.Consumer(dsn, queue, "cons", 2)
+    producer = pgqrs.Producer(postgres_dsn, queue_name, "prod", 1)
+    consumer = pgqrs.Consumer(dsn, queue_name, "cons", 2)
 
     payload = {"task": "cleanup"}
     await producer.enqueue(payload)

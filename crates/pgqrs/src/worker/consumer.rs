@@ -149,7 +149,7 @@ impl Consumer {
         message_id: i64,
         additional_seconds: u32,
     ) -> Result<bool> {
-        let messages = PgqrsMessages::new(self.pool.clone());
+        let messages = Messages::new(self.pool.clone());
         let rows_affected = messages
             .extend_visibility(message_id, additional_seconds)
             .await?;
