@@ -17,8 +17,8 @@ graph TB
 		subgraph "pgqrs APIs"
 				PROD["Producer API<br/>enqueue()<br/>batch_enqueue()<br/>extend_visibility()"]
 				CONS["Consumer API<br/>dequeue()<br/>archive()<br/>delete()"]
-				TABLES["Table APIs<br/>PgqrsQueues<br/>PgqrsWorkers<br/>PgqrsMessages<br/>PgqrsArchiveTable"]
-				AA["PgqrsAdmin API<br/>queue_metrics()<br/>create_queue()<br/>worker_management()"]
+				TABLES["Table APIs<br/>Queues<br/>Workers<br/>Messages<br/>Archive"]
+				AA["Admin API<br/>queue_metrics()<br/>create_queue()<br/>worker_management()"]
 		end
 
 		CLI["pgqrs CLI<br/>install<br/>queue create<br/>message send<br/>metrics"]
@@ -124,10 +124,10 @@ graph TB
 #### 4. **Table APIs - Direct Data Access**
 - **Table trait interface** for consistent CRUD operations
 - **Four table implementations**:
-	- `PgqrsQueues`: Manage queue definitions (`insert`, `get`, `list`, `delete`)
-	- `PgqrsWorkers`: Manage worker registrations with queue relationships
-	- `PgqrsMessages`: Direct message table access (typically used by Producer/Consumer)
-	- `PgqrsArchiveTable`: Archive management with full CRUD support
+	- `Queues`: Manage queue definitions (`insert`, `get`, `list`, `delete`)
+	- `Workers`: Manage worker registrations with queue relationships
+	- `Messages`: Direct message table access (typically used by Producer/Consumer)
+	- `Archive`: Archive management with full CRUD support
 - **Common interface methods**:
 	- `count()` - Count total records
 	- `count_by_fk(id)` - Count records by foreign key relationship
@@ -135,7 +135,7 @@ graph TB
 - **Type-safe operations** with proper error handling
 
 #### 5. **Admin Server - System Management**
-- **Your monitoring/admin service** using `PgqrsAdmin` APIs
+- **Your monitoring/admin service** using `Admin` APIs
 - **Cross-cutting concerns** for system health and management
 - **Key operations**:
 	- `admin.queue_metrics(name)` - Get queue health metrics

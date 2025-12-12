@@ -7,25 +7,25 @@
 
 use chrono::Utc;
 use pgqrs::config::Config;
-use pgqrs::tables::pgqrs_messages::{NewMessage, PgqrsMessages};
-use pgqrs::tables::pgqrs_queues::{NewQueue, PgqrsQueues};
-use pgqrs::tables::pgqrs_workers::{NewWorker, PgqrsWorkers};
-use pgqrs::tables::{PgqrsArchive, Table};
-use pgqrs::PgqrsAdmin;
+use pgqrs::tables::pgqrs_messages::{Messages, NewMessage};
+use pgqrs::tables::pgqrs_queues::{NewQueue, Queues};
+use pgqrs::tables::pgqrs_workers::{NewWorker, Workers};
+use pgqrs::tables::{Archive, Table};
+use pgqrs::Admin;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration and initialize the admin
     let config = Config::from_dsn("postgres://postgres:password@localhost:5432/postgres");
-    let admin = PgqrsAdmin::new(&config).await?;
+    let admin = Admin::new(&config).await?;
     let pool = admin.pool.clone();
 
     // Initialize table instances
-    let queues = PgqrsQueues::new(pool.clone());
-    let workers = PgqrsWorkers::new(pool.clone());
-    let messages = PgqrsMessages::new(pool.clone());
-    let archives = PgqrsArchive::new(pool.clone());
+    let queues = Queues::new(pool.clone());
+    let workers = Workers::new(pool.clone());
+    let messages = Messages::new(pool.clone());
+    let archives = Archive::new(pool.clone());
 
     // Install the schema and create test data
     admin.install().await?;

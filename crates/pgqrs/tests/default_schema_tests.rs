@@ -1,12 +1,12 @@
-use pgqrs::{tables::PgqrsQueues, PgqrsAdmin, Table};
+use pgqrs::{tables::Queues, Admin, Table};
 
 mod common;
 
-async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
+async fn create_admin() -> pgqrs::admin::Admin {
     let database_url = common::get_postgres_dsn(None).await;
-    PgqrsAdmin::new(&pgqrs::config::Config::from_dsn(database_url))
+    Admin::new(&pgqrs::config::Config::from_dsn(database_url))
         .await
-        .expect("Failed to create PgqrsAdmin")
+        .expect("Failed to create Admin")
 }
 
 #[tokio::test]
@@ -27,9 +27,7 @@ async fn test_default_schema_backward_compatibility() {
     assert_eq!(config.schema, "public");
 
     // Test that admin operations work with default schema
-    let admin = PgqrsAdmin::new(&config)
-        .await
-        .expect("Failed to create admin");
+    let admin = Admin::new(&config).await.expect("Failed to create admin");
 
     // Verify installation in default schema
     assert!(admin.verify().await.is_ok());
@@ -43,7 +41,7 @@ async fn test_default_schema_backward_compatibility() {
     );
 
     // Test queue listing
-    let queue_obj = PgqrsQueues::new(admin.pool.clone());
+    let queue_obj = Queues::new(admin.pool.clone());
     let queues = queue_obj.list().await.expect("Should list queues");
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Should find created queue in list");

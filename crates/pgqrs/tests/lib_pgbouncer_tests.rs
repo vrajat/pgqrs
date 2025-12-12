@@ -1,7 +1,7 @@
 use pgqrs::{
-    tables::{PgqrsMessages, PgqrsQueues},
+    tables::{Messages, Queues},
     worker::Worker,
-    Consumer, PgqrsAdmin, Producer, Table,
+    Admin, Consumer, Producer, Table,
 };
 use serde_json::json;
 
@@ -11,13 +11,11 @@ const TEST_QUEUE_PGBOUNCER_LIST: &str = "test_pgbouncer_list_path";
 
 mod common;
 
-async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
+async fn create_admin() -> pgqrs::admin::Admin {
     let database_url = common::get_pgbouncer_dsn(Some("pgqrs_pgbouncer_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_pgbouncer_test")
         .expect("Failed to create config with pgbouncer test schema");
-    PgqrsAdmin::new(&config)
-        .await
-        .expect("Failed to create PgqrsAdmin")
+    Admin::new(&config).await.expect("Failed to create Admin")
 }
 
 #[tokio::test]
@@ -55,7 +53,7 @@ async fn test_pgbouncer_happy_path() {
     )
     .await
     .expect("Failed to create consumer through PgBouncer");
-    let messages = PgqrsMessages::new(admin.pool.clone());
+    let messages = Messages::new(admin.pool.clone());
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -145,7 +143,7 @@ async fn test_pgbouncer_queue_list() {
         .await
         .expect("Failed to create queue through PgBouncer");
 
-    let queue_obj = PgqrsQueues::new(admin.pool.clone());
+    let queue_obj = Queues::new(admin.pool.clone());
     // List queues to verify it shows up
     let queues = queue_obj
         .list()

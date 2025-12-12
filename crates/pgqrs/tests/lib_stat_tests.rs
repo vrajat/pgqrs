@@ -1,17 +1,15 @@
-use pgqrs::PgqrsAdmin;
+use pgqrs::Admin;
 
 use pgqrs::worker::Worker;
 use serde_json::json;
 
 mod common;
 
-async fn create_admin() -> pgqrs::admin::PgqrsAdmin {
+async fn create_admin() -> pgqrs::admin::Admin {
     let database_url = common::get_postgres_dsn(Some("pgqrs_lib_stat_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_stat_test")
         .expect("Failed to create config with lib_stat_test schema");
-    PgqrsAdmin::new(&config)
-        .await
-        .expect("Failed to create PgqrsAdmin")
+    Admin::new(&config).await.expect("Failed to create Admin")
 }
 
 #[tokio::test]

@@ -16,9 +16,9 @@ async def test_admin_install_and_queue_workflow(postgres_dsn, schema):
 
     # Or rely on pgqrs Config supporting schema?
     # Rust `Config` struct doesn't seem to have explicit schema field, it relies on DB connection.
-    # But `PgqrsAdmin::install()` creates tables. If search_path is set, they go to that schema.
+    # But `Admin::install()` creates tables. If search_path is set, they go to that schema.
 
-    admin = pgqrs.PgqrsAdmin(dsn_with_schema)
+    admin = pgqrs.Admin(dsn_with_schema)
 
     # 1. Install Schema
     await admin.install()

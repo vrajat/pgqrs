@@ -62,11 +62,11 @@ mod constants;
 pub use crate::worker::admin;
 pub use crate::worker::consumer;
 pub use crate::worker::producer;
-pub use crate::worker::{Consumer, PgqrsAdmin, Producer, Worker, WorkerHandle};
+pub use crate::worker::{Admin, Consumer, Producer, Worker, WorkerHandle};
 
 pub use crate::config::Config;
-pub use crate::error::{PgqrsError, Result};
+pub use crate::error::{Error, Result};
 pub use crate::rate_limit::RateLimitStatus;
-pub use crate::tables::{NewWorker, PgqrsArchive, PgqrsWorkers, Table};
+pub use crate::tables::{Archive, NewWorker, Table, Workers};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
 pub use crate::validation::ValidationConfig;

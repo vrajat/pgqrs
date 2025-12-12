@@ -15,10 +15,10 @@
 //! cargo run --example basic_usage
 //! ```
 
-use pgqrs::admin::PgqrsAdmin;
+use pgqrs::admin::Admin;
 use pgqrs::config::Config;
-use pgqrs::tables::PgqrsMessages;
-use pgqrs::{Consumer, PgqrsArchive, Producer, Table};
+use pgqrs::tables::Messages;
+use pgqrs::{Archive, Consumer, Producer, Table};
 use serde_json::json;
 
 #[tokio::main]
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
     // Create client
-    let admin = PgqrsAdmin::new(&config).await?;
+    let admin = Admin::new(&config).await?;
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
@@ -220,7 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let tx = &mut admin.pool.begin().await?;
         println!("Archive counts:");
-        let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
+        let pgqrs_archive = Archive::new(admin.pool.clone());
         let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
         let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
         println!("  email_consumer archived: {}", email_archive_count);
@@ -263,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show pending count
-    let messages = PgqrsMessages::new(admin.pool.clone());
+    let messages = Messages::new(admin.pool.clone());
     let email_pending = messages.count_pending(email_id.id).await?;
     let task_pending = messages.count_pending(task_id.id).await?;
     println!("\nPending messages:");
@@ -276,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check archive counts before operations
     {
         let tx = &mut admin.pool.begin().await?;
-        let pgqrs_archive = PgqrsArchive::new(admin.pool.clone());
+        let pgqrs_archive = Archive::new(admin.pool.clone());
         let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
         let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
         println!(

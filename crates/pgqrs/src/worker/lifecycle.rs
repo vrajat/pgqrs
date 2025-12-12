@@ -3,7 +3,7 @@
 //! This module provides the [`WorkerLifecycle`] struct that handles all worker
 //! state transitions using atomic SQL operations with row-level locking.
 
-use crate::error::{PgqrsError, Result};
+use crate::error::Result;
 use crate::types::WorkerStatus;
 use crate::WorkerInfo;
 use chrono::{Duration, Utc};
@@ -123,7 +123,7 @@ impl WorkerLifecycle {
             .bind(port)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to find worker: {}", e),
             })?;
 
@@ -137,12 +137,12 @@ impl WorkerLifecycle {
                             .bind(queue_info.id)
                             .fetch_one(&self.pool)
                             .await
-                            .map_err(|e| PgqrsError::Connection {
+                            .map_err(|e| crate::error::Error::Connection {
                                 message: format!("Failed to reset worker: {}", e),
                             })?
                     }
                     WorkerStatus::Ready => {
-                        return Err(PgqrsError::ValidationFailed {
+                        return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
                                 "Worker {}:{} is already active. Cannot register duplicate.",
                                 hostname, port
@@ -150,7 +150,7 @@ impl WorkerLifecycle {
                         });
                     }
                     WorkerStatus::Suspended => {
-                        return Err(PgqrsError::ValidationFailed {
+                        return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
                                 "Worker {}:{} is suspended. Use resume() to reactivate.",
                                 hostname, port
@@ -167,7 +167,7 @@ impl WorkerLifecycle {
                     .bind(queue_info.id)
                     .fetch_one(&self.pool)
                     .await
-                    .map_err(|e| PgqrsError::Connection {
+                    .map_err(|e| crate::error::Error::Connection {
                         message: format!("Failed to create worker: {}", e),
                     })?
             }
@@ -187,7 +187,7 @@ impl WorkerLifecycle {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get worker {} status: {}", worker_id, e),
             })?;
 
@@ -206,7 +206,7 @@ impl WorkerLifecycle {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count messages for worker {}: {}", worker_id, e),
             })?;
 
@@ -225,7 +225,7 @@ impl WorkerLifecycle {
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to suspend worker {}: {}", worker_id, e),
             })?;
 
@@ -234,7 +234,7 @@ impl WorkerLifecycle {
             None => {
                 // Get current status for better error message
                 let current_status = self.get_status(worker_id).await?;
-                Err(PgqrsError::InvalidStateTransition {
+                Err(crate::error::Error::InvalidStateTransition {
                     from: current_status.to_string(),
                     to: "suspended".to_string(),
                     reason: "Worker must be in Ready state to suspend".to_string(),
@@ -255,7 +255,7 @@ impl WorkerLifecycle {
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to resume worker {}: {}", worker_id, e),
             })?;
 
@@ -263,7 +263,7 @@ impl WorkerLifecycle {
             Some(_) => Ok(()),
             None => {
                 let current_status = self.get_status(worker_id).await?;
-                Err(PgqrsError::InvalidStateTransition {
+                Err(crate::error::Error::InvalidStateTransition {
                     from: current_status.to_string(),
                     to: "ready".to_string(),
                     reason: "Worker must be in Suspended state to resume".to_string(),
@@ -289,7 +289,7 @@ impl WorkerLifecycle {
             .bind(now)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to shutdown worker {}: {}", worker_id, e),
             })?;
 
@@ -297,7 +297,7 @@ impl WorkerLifecycle {
             Some(_) => Ok(()),
             None => {
                 let current_status = self.get_status(worker_id).await?;
-                Err(PgqrsError::InvalidStateTransition {
+                Err(crate::error::Error::InvalidStateTransition {
                     from: current_status.to_string(),
                     to: "stopped".to_string(),
                     reason: "Worker must be in Suspended state to shutdown".to_string(),
@@ -320,7 +320,7 @@ impl WorkerLifecycle {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to update heartbeat for worker {}: {}", worker_id, e),
             })?;
 
@@ -345,7 +345,7 @@ impl WorkerLifecycle {
                 .bind(threshold)
                 .fetch_one(&self.pool)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!("Failed to check health for worker {}: {}", worker_id, e),
                 })?;
 

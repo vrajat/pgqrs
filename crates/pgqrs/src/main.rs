@@ -20,10 +20,10 @@
 //! ```
 use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
-use pgqrs::tables::PgqrsMessages;
+use pgqrs::tables::Messages;
 use pgqrs::types::{QueueInfo, QueueMessage};
-use pgqrs::{admin::PgqrsAdmin, tables::PgqrsQueues};
-use pgqrs::{PgqrsWorkers, Table, Worker, WorkerHandle};
+use pgqrs::{admin::Admin, tables::Queues};
+use pgqrs::{Table, Worker, WorkerHandle, Workers};
 use std::fs::File;
 use std::process;
 
@@ -276,7 +276,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     let config = Config::load_with_schema_options(cli.dsn, cli.schema, cli.config)
         .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
 
-    let admin = PgqrsAdmin::new(&config).await?;
+    let admin = Admin::new(&config).await?;
     let writer = match cli.format.to_lowercase().as_str() {
         "json" => OutputWriter::Json(JsonOutputWriter),
         _ => OutputWriter::Table(TableOutputWriter),
@@ -305,7 +305,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 }
 
 async fn handle_admin_commands(
-    admin: &PgqrsAdmin,
+    admin: &Admin,
     command: AdminCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
@@ -351,7 +351,7 @@ async fn handle_admin_commands(
 }
 
 async fn handle_queue_commands(
-    admin: &PgqrsAdmin,
+    admin: &Admin,
     command: QueueCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
@@ -365,7 +365,7 @@ async fn handle_queue_commands(
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let queue = PgqrsQueues::new(admin.pool.clone());
+            let queue = Queues::new(admin.pool.clone());
             let queue_list: Vec<QueueInfo> = queue.list().await?;
             writer.write_list(&queue_list, out)?;
         }
@@ -379,7 +379,7 @@ async fn handle_queue_commands(
         QueueCommands::Messages { name } => {
             tracing::info!("Listing messages for queue '{}'...", name);
             let queue_info = admin.get_queue(&name).await?;
-            let messages = PgqrsMessages::new(admin.pool.clone());
+            let messages = Messages::new(admin.pool.clone());
             let messages_list: Vec<QueueMessage> = messages.filter_by_fk(queue_info.id).await?;
             writer.write_list(&messages_list, out)?;
         }
@@ -420,18 +420,18 @@ async fn handle_queue_commands(
 }
 
 async fn handle_worker_commands(
-    admin: &PgqrsAdmin,
+    admin: &Admin,
     command: WorkerCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match command {
         WorkerCommands::List { queue } => {
-            let table = PgqrsWorkers::new(admin.pool.clone());
+            let table = Workers::new(admin.pool.clone());
             let workers = match queue {
                 Some(queue_name) => {
                     tracing::info!("Listing workers for queue '{}'...", queue_name);
-                    let queue_id = PgqrsQueues::new(admin.pool.clone())
+                    let queue_id = Queues::new(admin.pool.clone())
                         .get_by_name(&queue_name)
                         .await?
                         .id;
@@ -446,7 +446,7 @@ async fn handle_worker_commands(
             writer.write_list(&workers, out)?;
         }
         WorkerCommands::Get { id } => {
-            let worker = PgqrsWorkers::new(admin.pool.clone())
+            let worker = Workers::new(admin.pool.clone())
                 .get(id)
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
@@ -455,7 +455,7 @@ async fn handle_worker_commands(
 
         WorkerCommands::Messages { id } => {
             // Find the worker and get its messages
-            let worker_info = PgqrsWorkers::new(admin.pool.clone())
+            let worker_info = Workers::new(admin.pool.clone())
                 .get(id)
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;

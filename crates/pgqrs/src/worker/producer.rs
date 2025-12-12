@@ -23,7 +23,7 @@
 //! ```
 
 use crate::error::Result;
-use crate::tables::{PgqrsMessages, Table};
+use crate::tables::{Messages, Table};
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
 use crate::worker::{Worker, WorkerLifecycle};
@@ -66,7 +66,7 @@ pub struct Producer {
     /// Payload validator for this queue
     validator: PayloadValidator,
     /// Messages table operations
-    messages: PgqrsMessages,
+    messages: Messages,
     /// Worker lifecycle manager
     lifecycle: WorkerLifecycle,
 }
@@ -98,7 +98,7 @@ impl Producer {
             port,
             queue_info.queue_name
         );
-        let messages = PgqrsMessages::new(pool.clone());
+        let messages = Messages::new(pool.clone());
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
@@ -284,7 +284,7 @@ impl Producer {
             .bind(archived_msg_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to replay message from DLQ: {}", e),
             })?;
         Ok(rec)

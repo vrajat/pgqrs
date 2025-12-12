@@ -1,35 +1,35 @@
 //! Administrative interface for managing pgqrs infrastructure.
 //!
-//! This module provides the [`PgqrsAdmin`] struct and related functions for installing, uninstalling, verifying, and managing queues in a PostgreSQL-backed job queue system.
+//! This module provides the [`Admin`] struct and related functions for installing, uninstalling, verifying, and managing queues in a PostgreSQL-backed job queue system.
 //!
 //! ## What
 //!
-//! - [`PgqrsAdmin`] allows you to create, delete, purge, and list queues, as well as install and uninstall the schema.
+//! - [`Admin`] allows you to create, delete, purge, and list queues, as well as install and uninstall the schema.
 //! - Provides metrics and access to individual queues.
 //! - Implements the [`Worker`] trait for lifecycle management.
 //!
 //! ## How
 //!
-//! Use [`PgqrsAdmin`] to set up and administer your queue infrastructure. See function docs for usage details.
+//! Use [`Admin`] to set up and administer your queue infrastructure. See function docs for usage details.
 //!
 //! ### Example
 //!
 //! ```no_run
-//! use pgqrs::admin::PgqrsAdmin;
+//! use pgqrs::admin::Admin;
 //! use pgqrs::config::Config;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
-//!     let admin = PgqrsAdmin::new(&config).await?;
+//!     let admin = Admin::new(&config).await?;
 //!     admin.install().await?;
 //!     admin.create_queue("jobs").await?;
 //!     Ok(())
 //! }
 //! ```
 use crate::config::Config;
-use crate::error::{PgqrsError, Result};
-use crate::tables::{PgqrsArchive, PgqrsMessages, PgqrsQueues, PgqrsWorkers, Table};
+use crate::error::Result;
+use crate::tables::{Archive, Messages, Queues, Table, Workers};
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
@@ -114,20 +114,20 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
 ///
 /// Implements the [`Worker`] trait for lifecycle management.
 /// Call `register()` after `install()` to register Admin as a worker.
-pub struct PgqrsAdmin {
+pub struct Admin {
     pub pool: PgPool,
     pub config: Config,
-    pub queues: PgqrsQueues,
-    pub messages: PgqrsMessages,
-    pub archive: PgqrsArchive,
-    pub workers: PgqrsWorkers,
+    pub queues: Queues,
+    pub messages: Messages,
+    pub archive: Archive,
+    pub workers: Workers,
     /// Worker info for this Admin instance (set after calling register())
     worker_info: Option<WorkerInfo>,
     /// Worker lifecycle manager
     lifecycle: WorkerLifecycle,
 }
 
-impl PgqrsAdmin {
+impl Admin {
     /// Create a new admin interface for managing pgqrs infrastructure.
     ///
     /// Call `register()` after `install()` to register this Admin as a worker.
@@ -136,7 +136,7 @@ impl PgqrsAdmin {
     /// * `config` - Configuration for database connection and queue options
     ///
     /// # Returns
-    /// A new `PgqrsAdmin` instance.
+    /// A new `Admin` instance.
     pub async fn new(config: &Config) -> Result<Self> {
         // Create the search_path setting
         let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
@@ -152,14 +152,14 @@ impl PgqrsAdmin {
             })
             .connect(&config.dsn)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
 
-        let workers = PgqrsWorkers::new(pool.clone());
-        let queues = PgqrsQueues::new(pool.clone());
-        let messages = PgqrsMessages::new(pool.clone());
-        let archive = PgqrsArchive::new(pool.clone());
+        let workers = Workers::new(pool.clone());
+        let queues = Queues::new(pool.clone());
+        let messages = Messages::new(pool.clone());
+        let archive = Archive::new(pool.clone());
         let lifecycle = WorkerLifecycle::new(pool.clone());
 
         Ok(Self {
@@ -227,7 +227,7 @@ impl PgqrsAdmin {
         MIGRATOR
             .run(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Migration failed: {}", e),
             })?;
         Ok(())
@@ -247,7 +247,7 @@ impl PgqrsAdmin {
             .pool
             .begin()
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
@@ -264,12 +264,12 @@ impl PgqrsAdmin {
                 .bind(table_name)
                 .fetch_one(&mut *tx)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!("Failed to check {} existence: {}", description, e),
                 })?;
 
             if !table_exists {
-                return Err(PgqrsError::Connection {
+                return Err(crate::error::Error::Connection {
                     message: format!("{} ('{}') does not exist", description, table_name),
                 });
             }
@@ -281,12 +281,12 @@ impl PgqrsAdmin {
         let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to check message referential integrity: {}", e),
             })?;
 
         if orphaned_messages > 0 {
-            return Err(PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Found {} messages with invalid queue_id references",
                     orphaned_messages
@@ -298,7 +298,7 @@ impl PgqrsAdmin {
         let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to check message worker referential integrity: {}",
                     e
@@ -306,7 +306,7 @@ impl PgqrsAdmin {
             })?;
 
         if orphaned_message_workers > 0 {
-            return Err(PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_message_workers
@@ -318,12 +318,12 @@ impl PgqrsAdmin {
         let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to check archive referential integrity: {}", e),
             })?;
 
         if orphaned_archive_queues > 0 {
-            return Err(PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Found {} archived messages with invalid queue_id references",
                     orphaned_archive_queues
@@ -335,7 +335,7 @@ impl PgqrsAdmin {
         let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to check archive worker referential integrity: {}",
                     e
@@ -343,7 +343,7 @@ impl PgqrsAdmin {
             })?;
 
         if orphaned_archive_workers > 0 {
-            return Err(PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_archive_workers
@@ -352,9 +352,11 @@ impl PgqrsAdmin {
         }
 
         // Commit the transaction (ensures consistency of all checks)
-        tx.commit().await.map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to commit transaction: {}", e),
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit transaction: {}", e),
+            })?;
 
         Ok(())
     }
@@ -410,7 +412,7 @@ impl PgqrsAdmin {
             .pool
             .begin()
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
@@ -419,11 +421,11 @@ impl PgqrsAdmin {
             .bind(&queue_info.queue_name)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to lock queue '{}': {}", queue_info.queue_name, e),
             })?;
 
-        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
             name: queue_info.queue_name.clone(),
         })?;
 
@@ -439,7 +441,7 @@ impl PgqrsAdmin {
         let active_workers = ready_workers + suspended_workers;
 
         if active_workers > 0 {
-            return Err(crate::error::PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
                     queue_info.queue_name, active_workers
@@ -453,7 +455,7 @@ impl PgqrsAdmin {
         let total_references = messages_count + archive_count;
 
         if total_references > 0 {
-            return Err(crate::error::PgqrsError::Connection {
+            return Err(crate::error::Error::Connection {
                 message: format!(
                     "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
                     queue_info.queue_name, total_references
@@ -462,11 +464,11 @@ impl PgqrsAdmin {
         }
 
         // Safe to delete - no references exist and we have exclusive lock
-        PgqrsQueues::delete_by_name_tx(&queue_info.queue_name, &mut tx).await?;
+        Queues::delete_by_name_tx(&queue_info.queue_name, &mut tx).await?;
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to commit queue deletion: {}", e),
             })?;
 
@@ -489,7 +491,7 @@ impl PgqrsAdmin {
             .pool
             .begin()
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
@@ -498,11 +500,11 @@ impl PgqrsAdmin {
             .bind(name)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to lock queue '{}': {}", name, e),
             })?;
 
-        let queue_id = queue_id.ok_or_else(|| crate::error::PgqrsError::QueueNotFound {
+        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
             name: name.to_string(),
         })?;
 
@@ -512,7 +514,7 @@ impl PgqrsAdmin {
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to commit queue purge: {}", e),
             })?;
 
@@ -525,7 +527,7 @@ impl PgqrsAdmin {
             .bind(self.config.max_read_ct)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to move messages to DLQ: {}", e),
             })?;
 
@@ -671,7 +673,7 @@ impl PgqrsAdmin {
             .bind(name) // Pass name to be returned in the struct
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get metrics for queue {}: {}", name, e),
             })?;
 
@@ -686,7 +688,7 @@ impl PgqrsAdmin {
         let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_ALL_QUEUES_METRICS)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get all queues metrics: {}", e),
             })?;
 
@@ -701,7 +703,7 @@ impl PgqrsAdmin {
         let stats = sqlx::query_as::<_, SystemStats>(Self::GET_SYSTEM_STATS)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get system stats: {}", e),
             })?;
 
@@ -737,7 +739,7 @@ impl PgqrsAdmin {
                 .await
         };
 
-        stats.map_err(|e| PgqrsError::Connection {
+        stats.map_err(|e| crate::error::Error::Connection {
             message: format!("Failed to get worker health stats: {}", e),
         })
     }
@@ -753,7 +755,7 @@ impl PgqrsAdmin {
     /// Vector of messages being processed by the worker
     ///
     /// # Errors
-    /// Returns `PgqrsError::InvalidWorkerType` if called on an admin worker
+    /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
     pub async fn get_worker_messages(
         &self,
         worker_id: i64,
@@ -761,7 +763,7 @@ impl PgqrsAdmin {
         // First validate the worker is not an admin (admin workers have queue_id = None)
         let worker = self.workers.get(worker_id).await?;
         if worker.queue_id.is_none() {
-            return Err(PgqrsError::InvalidWorkerType {
+            return Err(crate::error::Error::InvalidWorkerType {
                 message: format!(
                     "Cannot get messages for admin worker {}. Admin workers do not process messages.",
                     worker_id
@@ -774,7 +776,7 @@ impl PgqrsAdmin {
                 .bind(worker_id)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!("Failed to get messages for worker {}: {}", worker_id, e),
                 })?;
 
@@ -792,13 +794,13 @@ impl PgqrsAdmin {
     /// Number of messages released
     ///
     /// # Errors
-    /// Returns `PgqrsError::InvalidWorkerType` if called on an admin worker
-    /// Returns `PgqrsError` if database operations fail
+    /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
+    /// Returns `crate::error::Error` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         // Validate the worker is not an admin
         let worker = self.workers.get(worker_id).await?;
         if worker.queue_id.is_none() {
-            return Err(PgqrsError::InvalidWorkerType {
+            return Err(crate::error::Error::InvalidWorkerType {
                 message: format!(
                     "Cannot release messages for admin worker {}. Admin workers do not hold messages.",
                     worker_id
@@ -810,7 +812,7 @@ impl PgqrsAdmin {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to release messages for worker {}: {}", worker_id, e),
             })?;
 
@@ -844,7 +846,7 @@ impl PgqrsAdmin {
             .pool
             .begin()
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to begin transaction: {}", e),
             })?;
 
@@ -855,9 +857,11 @@ impl PgqrsAdmin {
             .await?;
 
         if zombies.is_empty() {
-            tx.commit().await.map_err(|e| PgqrsError::Connection {
-                message: format!("Failed to commit empty transaction: {}", e),
-            })?;
+            tx.commit()
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: format!("Failed to commit empty transaction: {}", e),
+                })?;
             return Ok(0);
         }
 
@@ -876,7 +880,7 @@ impl PgqrsAdmin {
                 .bind(zombie.id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!(
                         "Failed to release messages for zombie worker {}: {}",
                         zombie.id, e
@@ -891,7 +895,7 @@ impl PgqrsAdmin {
                 .bind(zombie.id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
                 })?;
 
@@ -904,9 +908,11 @@ impl PgqrsAdmin {
             }
         }
 
-        tx.commit().await.map_err(|e| PgqrsError::Connection {
-            message: format!("Failed to commit zombie cleanup: {}", e),
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit zombie cleanup: {}", e),
+            })?;
 
         Ok(total_released)
     }
@@ -920,16 +926,18 @@ impl PgqrsAdmin {
     /// Number of workers removed
     pub async fn purge_old_workers(&self, older_than: std::time::Duration) -> Result<u64> {
         let threshold = chrono::Utc::now()
-            - chrono::Duration::from_std(older_than).map_err(|e| PgqrsError::InvalidConfig {
-                field: "older_than".to_string(),
-                message: format!("Invalid duration: {}", e),
+            - chrono::Duration::from_std(older_than).map_err(|e| {
+                crate::error::Error::InvalidConfig {
+                    field: "older_than".to_string(),
+                    message: format!("Invalid duration: {}", e),
+                }
             })?;
 
         let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
             .bind(threshold)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
 
@@ -948,7 +956,7 @@ impl PgqrsAdmin {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
 
@@ -967,7 +975,7 @@ impl PgqrsAdmin {
         let reference_count = self.check_worker_references(worker_id).await?;
 
         if reference_count > 0 {
-            return Err(PgqrsError::SchemaValidation {
+            return Err(crate::error::Error::SchemaValidation {
                 message: format!(
                     "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
                     worker_id, reference_count
@@ -1047,7 +1055,7 @@ impl PgqrsAdmin {
 }
 
 #[async_trait]
-impl Worker for PgqrsAdmin {
+impl Worker for Admin {
     fn worker_id(&self) -> i64 {
         self.worker_info
             .as_ref()
@@ -1085,7 +1093,7 @@ impl Worker for PgqrsAdmin {
     }
 }
 
-impl PgqrsAdmin {
+impl Admin {
     /// Delete this admin worker from the database.
     ///
     /// Admin workers can delete themselves since they don't hold messages.

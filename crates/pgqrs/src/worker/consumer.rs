@@ -25,8 +25,8 @@
 //! // consumer.dequeue(...)
 //! ```
 use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
-use crate::error::{PgqrsError, Result};
-use crate::tables::PgqrsMessages;
+use crate::error::Result;
+use crate::tables::Messages;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
 use async_trait::async_trait;
@@ -138,7 +138,7 @@ impl Consumer {
             .bind(self.worker_info.id) // worker_id
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
         Ok(result)
@@ -149,7 +149,7 @@ impl Consumer {
             .bind(vec![message_id])
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
 
@@ -168,7 +168,7 @@ impl Consumer {
             .bind(&message_ids)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
 
@@ -196,7 +196,7 @@ impl Consumer {
             .bind(msg_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to archive message {msg_id}: {e}"),
             })?;
 
@@ -222,7 +222,7 @@ impl Consumer {
             .bind(&msg_ids)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to archive batch messages: {e}"),
             })?;
 
@@ -245,7 +245,7 @@ impl Consumer {
     /// # Returns
     /// Number of messages released.
     pub async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
-        let messages = PgqrsMessages::new(self.pool.clone());
+        let messages = Messages::new(self.pool.clone());
         let results = messages
             .release_messages_by_ids(message_ids, self.worker_info.id)
             .await?;
@@ -308,7 +308,7 @@ impl Worker for Consumer {
             .await?;
 
         if pending_count > 0 {
-            return Err(PgqrsError::WorkerHasPendingMessages {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
                 count: pending_count as u64,
                 reason: "Consumer must release all messages before shutdown".to_string(),
             });

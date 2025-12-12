@@ -1,23 +1,23 @@
 //! Archive operations and management interface for pgqrs.
 //!
-//! This module defines the [`PgqrsArchive`] struct, which provides methods for managing archived messages
+//! This module defines the [`Archive`] struct, which provides methods for managing archived messages
 //! including listing, counting, and deleting archived messages with filtering capabilities.
 //!
 //! ## What
 //!
-//! - [`PgqrsArchive`] provides management interface for archived messages
+//! - [`Archive`] provides management interface for archived messages
 //! - Supports filtering by queue and worker
 //! - Provides efficient batch operations for archive management
 //!
 //! ## How
 //!
-//! Create a [`PgqrsArchive`] instance to manage archived messages across all queues or for specific queues/workers.
+//! Create a [`Archive`] instance to manage archived messages across all queues or for specific queues/workers.
 //!
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::tables::pgqrs_archive::PgqrsArchive;
-//! // let archive = PgqrsArchive::new(pool);
+//! use pgqrs::tables::pgqrs_archive::Archive;
+//! // let archive = Archive::new(pool);
 //! // let messages = archive.list(None, None, 10, 0).await?;
 //! ```
 
@@ -69,14 +69,14 @@ use sqlx::PgPool;
 /// Archive table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_archive` table without business logic.
-/// This is separate from the queue-specific PgqrsArchive which provides higher-level operations.
+/// This is separate from the queue-specific Archive which provides higher-level operations.
 #[derive(Debug, Clone)]
-pub struct PgqrsArchive {
+pub struct Archive {
     pub pool: PgPool,
 }
 
-impl PgqrsArchive {
-    /// Create a new PgqrsArchive instance for a specific queue.
+impl Archive {
+    /// Create a new Archive instance for a specific queue.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
@@ -102,7 +102,7 @@ impl PgqrsArchive {
             .bind(offset)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list DLQ messages: {}", e),
             })?;
         Ok(messages)
@@ -117,7 +117,7 @@ impl PgqrsArchive {
             .bind(max_attempts)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count DLQ messages: {}", e),
             })?;
         Ok(count)
@@ -160,7 +160,7 @@ impl PgqrsArchive {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to count archived messages for worker {}: {}",
                     worker_id, e
@@ -181,7 +181,7 @@ impl PgqrsArchive {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete archived messages: {}", e),
             })?;
 
@@ -225,7 +225,7 @@ const ARCHIVE_PURGE_QUEUE: &str = r#"
     WHERE queue_id = $1
 "#;
 
-impl Table for PgqrsArchive {
+impl Table for Archive {
     type Entity = ArchivedMessage;
     type NewEntity = NewArchivedMessage;
 
@@ -253,7 +253,7 @@ impl Table for PgqrsArchive {
             .bind(data.dequeued_at)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to insert archived message: {}", e),
             })?;
 
@@ -284,7 +284,7 @@ impl Table for PgqrsArchive {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get archived message {}: {}", id, e),
             })?;
 
@@ -299,7 +299,7 @@ impl Table for PgqrsArchive {
         let archives = sqlx::query_as::<_, ArchivedMessage>(LIST_ALL_ARCHIVE)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list archived messages: {}", e),
             })?;
 
@@ -318,7 +318,7 @@ impl Table for PgqrsArchive {
             .bind(queue_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to filter archived messages by queue ID {}: {}",
                     queue_id, e
@@ -337,7 +337,7 @@ impl Table for PgqrsArchive {
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count archived messages: {}", e),
             })?;
         Ok(count)
@@ -360,7 +360,7 @@ impl Table for PgqrsArchive {
             .bind(queue_id)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to count archived messages for queue {}: {}",
                     queue_id, e
@@ -381,7 +381,7 @@ impl Table for PgqrsArchive {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete archived message {}: {}", id, e),
             })?
             .rows_affected();
@@ -405,7 +405,7 @@ impl Table for PgqrsArchive {
             .bind(queue_id)
             .execute(&mut **tx)
             .await
-            .map_err(|e| crate::error::PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to delete archived messages for queue {}: {}",
                     queue_id, e
@@ -449,7 +449,7 @@ mod tests {
         // This test ensures the type associations work correctly
         // We can't use dyn Table because async traits aren't object-safe,
         // but we can verify the types compile correctly
-        let _type_check = |table: PgqrsArchive| {
+        let _type_check = |table: Archive| {
             // Verify the associated types are correct
             let _entity_check: Option<ArchivedMessage> = None;
             let _new_entity_check: Option<NewArchivedMessage> = None;
@@ -458,7 +458,7 @@ mod tests {
 
         // Just verify we can construct the types
         assert_eq!(
-            std::mem::size_of::<PgqrsArchive>(),
+            std::mem::size_of::<Archive>(),
             std::mem::size_of::<PgPool>()
         );
     }

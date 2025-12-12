@@ -3,7 +3,7 @@
 //! This module provides pure CRUD operations on the `pgqrs_messages` table without business logic.
 //! Complex operations like dequeue with worker assignment and visibility timeout management remain in queue.rs.
 
-use crate::error::{PgqrsError, Result};
+use crate::error::Result;
 use crate::tables::table::Table;
 use crate::types::QueueMessage;
 use chrono::{DateTime, Utc};
@@ -86,12 +86,12 @@ pub struct BatchInsertParams {
 ///
 /// Provides pure CRUD operations on the `pgqrs_messages` table without business logic.
 #[derive(Debug, Clone)]
-pub struct PgqrsMessages {
+pub struct Messages {
     pub pool: PgPool,
 }
 
-impl PgqrsMessages {
-    /// Create a new PgqrsMessages instance.
+impl Messages {
+    /// Create a new Messages instance.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
@@ -124,7 +124,7 @@ impl PgqrsMessages {
             .bind(params.consumer_worker_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to batch insert messages: {}", e),
             })?;
 
@@ -143,7 +143,7 @@ impl PgqrsMessages {
             .bind(ids)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get messages by IDs: {}", e),
             })?;
 
@@ -164,7 +164,7 @@ impl PgqrsMessages {
             .bind(vt)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to update visibility timeout for message {}: {}",
                     id, e
@@ -195,7 +195,7 @@ impl PgqrsMessages {
             .bind(additional_seconds as i32)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to extend visibility timeout for message {}: {}",
                     id, e
@@ -240,7 +240,7 @@ impl PgqrsMessages {
             .bind(additional_seconds as i32)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to extend visibility timeout for batch messages: {}",
                     e
@@ -288,7 +288,7 @@ impl PgqrsMessages {
             .bind(worker_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to release specific messages: {}", e),
             })?;
 
@@ -355,7 +355,7 @@ impl PgqrsMessages {
                 .await
             }
         }
-        .map_err(|e| PgqrsError::Connection {
+        .map_err(|e| crate::error::Error::Connection {
             message: format!(
                 "Failed to count pending messages for queue {}: {}",
                 queue_id, e
@@ -380,7 +380,7 @@ impl PgqrsMessages {
                 .bind(id)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| PgqrsError::Connection {
+                .map_err(|e| crate::error::Error::Connection {
                     message: format!("Failed to delete message {}: {}", id, e),
                 })?
                 .rows_affected();
@@ -392,7 +392,7 @@ impl PgqrsMessages {
     }
 }
 
-impl Table for PgqrsMessages {
+impl Table for Messages {
     type Entity = QueueMessage;
     type NewEntity = NewMessage;
 
@@ -414,7 +414,7 @@ impl Table for PgqrsMessages {
             .bind(data.consumer_worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to insert message: {}", e),
             })?;
 
@@ -433,7 +433,7 @@ impl Table for PgqrsMessages {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get message {}: {}", id, e),
             })?;
 
@@ -448,7 +448,7 @@ impl Table for PgqrsMessages {
         let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list all messages: {}", e),
             })?;
 
@@ -467,7 +467,7 @@ impl Table for PgqrsMessages {
             .bind(foreign_key_value)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to list messages for queue {}: {}",
                     foreign_key_value, e
@@ -486,7 +486,7 @@ impl Table for PgqrsMessages {
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to count messages: {}", e),
             })?;
         Ok(count)
@@ -509,7 +509,7 @@ impl Table for PgqrsMessages {
             .bind(foreign_key_value)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to count messages for queue {}: {}",
                     foreign_key_value, e
@@ -530,7 +530,7 @@ impl Table for PgqrsMessages {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to delete message {}: {}", id, e),
             })?
             .rows_affected();
@@ -559,7 +559,7 @@ impl Table for PgqrsMessages {
             .bind(foreign_key_value)
             .execute(&mut **tx)
             .await
-            .map_err(|e| PgqrsError::Connection {
+            .map_err(|e| crate::error::Error::Connection {
                 message: format!(
                     "Failed to delete messages for queue {}: {}",
                     foreign_key_value, e
@@ -604,8 +604,8 @@ mod tests {
         // has the correct associated types.
 
         // Note: This is a compile-time test, we don't actually create connections
-        // In real usage, PgqrsMessages would be created with a valid pool
-        // let messages = PgqrsMessages::new(pool);
+        // In real usage, Messages would be created with a valid pool
+        // let messages = Messages::new(pool);
         // assert_entity_type(&messages);
         // assert_new_entity_type(&messages);
     }

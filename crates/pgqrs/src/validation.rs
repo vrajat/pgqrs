@@ -16,7 +16,7 @@
 //! ### Example
 //!
 //! ```rust
-//! use pgqrs::{Config, PgqrsAdmin, Producer, ValidationConfig};
+//! use pgqrs::{Config, Admin, Producer, ValidationConfig};
 //! use serde_json::json;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,7 +28,7 @@
 //!     ..Default::default()
 //! };
 //!
-//! let admin = PgqrsAdmin::new(&config).await?;
+//! let admin = Admin::new(&config).await?;
 //! let queue_info = admin.create_queue("my_queue").await?;
 //! let producer = Producer::new(
 //!     admin.pool.clone(),
@@ -172,7 +172,7 @@ impl PayloadValidator {
         // 2. Rate limit check (after we know the payload structure is reasonable)
         if let Some(ref limiter) = self.rate_limiter {
             if !limiter.try_acquire() {
-                return Err(crate::error::PgqrsError::RateLimited {
+                return Err(crate::error::Error::RateLimited {
                     retry_after: Duration::from_secs(1),
                 });
             }
@@ -207,8 +207,8 @@ impl PayloadValidator {
         for (index, payload) in payloads.iter().enumerate() {
             self.validate_single_pass(payload, 0, true)
                 .map_err(|e| match e {
-                    crate::error::PgqrsError::ValidationFailed { reason } => {
-                        crate::error::PgqrsError::ValidationFailed {
+                    crate::error::Error::ValidationFailed { reason } => {
+                        crate::error::Error::ValidationFailed {
                             reason: format!("Payload at index {}: {}", index, reason),
                         }
                     }
@@ -219,7 +219,7 @@ impl PayloadValidator {
         // 2. Then check rate limit capacity for entire batch (atomic consumption)
         if let Some(ref limiter) = self.rate_limiter {
             if !limiter.try_acquire_multiple(payloads.len() as u32) {
-                return Err(crate::error::PgqrsError::RateLimited {
+                return Err(crate::error::Error::RateLimited {
                     retry_after: Duration::from_secs(1),
                 });
             }
@@ -228,10 +228,10 @@ impl PayloadValidator {
         // 3. Finally do expensive size validation (only if structure valid and rate limit passed)
         for (index, payload) in payloads.iter().enumerate() {
             self.validate_size(payload).map_err(|e| match e {
-                crate::error::PgqrsError::PayloadTooLarge {
+                crate::error::Error::PayloadTooLarge {
                     actual_bytes,
                     max_bytes,
-                } => crate::error::PgqrsError::ValidationFailed {
+                } => crate::error::Error::ValidationFailed {
                     reason: format!(
                         "Payload at index {} too large: {} bytes exceeds limit {}",
                         index, actual_bytes, max_bytes
@@ -250,7 +250,7 @@ impl PayloadValidator {
         let size = serialized.len();
 
         if size > self.config.max_payload_size_bytes {
-            return Err(crate::error::PgqrsError::PayloadTooLarge {
+            return Err(crate::error::Error::PayloadTooLarge {
                 actual_bytes: size,
                 max_bytes: self.config.max_payload_size_bytes,
             });
@@ -276,7 +276,7 @@ impl PayloadValidator {
     ) -> Result<()> {
         // Check depth limit first
         if depth > self.config.max_object_depth {
-            return Err(crate::error::PgqrsError::ValidationFailed {
+            return Err(crate::error::Error::ValidationFailed {
                 reason: format!(
                     "Object depth {} exceeds limit {}",
                     depth, self.config.max_object_depth
@@ -290,7 +290,7 @@ impl PayloadValidator {
                 if !self.config.forbidden_keys.is_empty() {
                     for forbidden in &self.config.forbidden_keys {
                         if obj.contains_key(forbidden) {
-                            return Err(crate::error::PgqrsError::ValidationFailed {
+                            return Err(crate::error::Error::ValidationFailed {
                                 reason: format!("Forbidden key '{}' found in payload", forbidden),
                             });
                         }
@@ -301,7 +301,7 @@ impl PayloadValidator {
                 if is_top_level && !self.config.required_keys.is_empty() {
                     for required in &self.config.required_keys {
                         if !obj.contains_key(required) {
-                            return Err(crate::error::PgqrsError::ValidationFailed {
+                            return Err(crate::error::Error::ValidationFailed {
                                 reason: format!("Required key '{}' missing from payload", required),
                             });
                         }
@@ -311,7 +311,7 @@ impl PayloadValidator {
                 // Check key lengths and recurse into values
                 for (key, value) in obj {
                     if key.len() > self.config.max_string_length {
-                        return Err(crate::error::PgqrsError::ValidationFailed {
+                        return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
                                 "Key '{}' length {} exceeds limit {}",
                                 key,
@@ -331,7 +331,7 @@ impl PayloadValidator {
             }
             serde_json::Value::String(s) => {
                 if s.len() > self.config.max_string_length {
-                    return Err(crate::error::PgqrsError::ValidationFailed {
+                    return Err(crate::error::Error::ValidationFailed {
                         reason: format!(
                             "String length {} exceeds limit {}",
                             s.len(),
