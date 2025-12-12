@@ -108,6 +108,25 @@ impl Producer {
             Ok(msg.id)
         })
     }
+
+    fn enqueue_delayed<'a>(
+        &self,
+        py: Python<'a>,
+        payload: &PyAny,
+        delay_seconds: f64,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_payload = py_to_json(payload)?;
+        let delay = delay_seconds as u32;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let msg = inner
+                .enqueue_delayed(&json_payload, delay)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(msg.id)
+        })
+    }
 }
 
 #[pyclass]
