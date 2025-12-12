@@ -4,7 +4,8 @@ UV ?= uv
 	$(UV) venv
 
 requirements: .venv  ## Install Python requirements
-	$(UV) pip install maturin pytest pytest-asyncio testcontainers[postgres] psycopg[binary] "mkdocs-material[imaging]"
+	$(UV) pip install maturin "mkdocs-material[imaging]"
+	$(UV) pip install -e "py-pgqrs[test]"
 
 build: requirements  ## Build Rust and Python bindings
 	cargo build -p pgqrs
@@ -18,6 +19,10 @@ fmt:  ## Format code
 	cargo fmt --all
 
 clippy:  ## Run clippy
+	cargo clippy --workspace --all-targets --all-features
+
+check:  ## Run all checks (fmt, clippy, deny)
+	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets --all-features
 
 clean:  ## Clean artifacts
