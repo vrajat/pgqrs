@@ -300,7 +300,7 @@ impl Workers {
     pub async fn count_zombies_for_queue(
         &self,
         queue_id: i64,
-        older_than: std::time::Duration,
+        older_than: chrono::Duration,
     ) -> Result<i64> {
         const COUNT_ZOMBIE_WORKERS: &str = r#"
             SELECT COUNT(*)
@@ -312,14 +312,7 @@ impl Workers {
 
         let count: i64 = sqlx::query_scalar(COUNT_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(
-                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    crate::error::Error::InvalidConfig {
-                        field: "older_than".to_string(),
-                        message: format!("Invalid duration: {}", e),
-                    }
-                })?,
-            )
+            .bind(older_than)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -374,18 +367,11 @@ impl Workers {
     pub async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
-        older_than: std::time::Duration,
+        older_than: chrono::Duration,
     ) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(
-                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    crate::error::Error::InvalidConfig {
-                        field: "older_than".to_string(),
-                        message: format!("Invalid duration: {}", e),
-                    }
-                })?,
-            )
+            .bind(older_than)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -410,19 +396,12 @@ impl Workers {
     pub async fn list_zombies_for_queue_tx<'a, 'b: 'a>(
         &self,
         queue_id: i64,
-        older_than: std::time::Duration,
+        older_than: chrono::Duration,
         tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
     ) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
-            .bind(
-                sqlx::postgres::types::PgInterval::try_from(older_than).map_err(|e| {
-                    crate::error::Error::InvalidConfig {
-                        field: "older_than".to_string(),
-                        message: format!("Invalid duration: {}", e),
-                    }
-                })?,
-            )
+            .bind(older_than)
             .fetch_all(&mut **tx)
             .await
             .map_err(|e| crate::error::Error::Connection {

@@ -311,10 +311,10 @@ impl fmt::Display for ArchivedMessage {
 
 impl ArchivedMessage {
     /// Calculate processing duration if both enqueued_at and dequeued_at are available
-    pub fn get_processing_duration(&self) -> Option<std::time::Duration> {
+    pub fn get_processing_duration(&self) -> Option<chrono::Duration> {
         self.dequeued_at.map(|dequeued| {
             let duration = dequeued - self.enqueued_at;
-            duration.to_std().unwrap_or_default()
+            duration
         })
     }
 }
@@ -396,9 +396,9 @@ pub struct WorkerStats {
     /// Average messages per worker
     pub average_messages_per_worker: f64,
     /// Age of the oldest worker
-    pub oldest_worker_age: std::time::Duration,
+    pub oldest_worker_age: chrono::Duration,
     /// Age of the newest heartbeat
-    pub newest_heartbeat_age: std::time::Duration,
+    pub newest_heartbeat_age: chrono::Duration,
 }
 
 impl fmt::Display for WorkerStats {
