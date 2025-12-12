@@ -335,9 +335,12 @@ async fn handle_admin_commands(
 
             let duration = match older_than {
                 Some(s) => Some(
-                    s.parse::<humantime::Duration>()
-                        .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", s, e))?
-                        .into(),
+                    chrono::Duration::from_std(
+                        s.parse::<humantime::Duration>()
+                            .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", s, e))?
+                            .into(),
+                    )
+                    .map_err(|e| anyhow::anyhow!("Duration too large: {}", e))?,
                 ),
                 None => None,
             };
@@ -511,10 +514,15 @@ async fn handle_worker_commands(
 
         WorkerCommands::Purge { older_than } => {
             // Parse duration string using humantime (supports "7d", "24h", "30m", "1s", etc.)
-            let duration = older_than
-                .parse::<humantime::Duration>()
-                .map_err(|e| anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e))?
-                .into();
+            let duration = chrono::Duration::from_std(
+                older_than
+                    .parse::<humantime::Duration>()
+                    .map_err(|e| {
+                        anyhow::anyhow!("Invalid duration format '{}': {}", older_than, e)
+                    })?
+                    .into(),
+            )
+            .map_err(|e| anyhow::anyhow!("Duration too large: {}", e))?;
             tracing::info!("Purging workers older than {:?}...", duration);
             let purged_count = admin.purge_old_workers(duration).await?;
             tracing::info!("Purged {} old workers", purged_count);
@@ -574,7 +582,7 @@ async fn handle_worker_commands(
                 group_by_queue
             );
             let stats = admin
-                .worker_health_stats(std::time::Duration::from_secs(timeout), group_by_queue)
+                .worker_health_stats(chrono::Duration::seconds(timeout as i64), group_by_queue)
                 .await?;
             writer.write_list(&stats, out)?;
         }

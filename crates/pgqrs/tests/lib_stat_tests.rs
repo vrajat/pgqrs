@@ -183,7 +183,7 @@ async fn test_worker_health_stats() {
 
     // Test Global Health
     let global_stats = admin
-        .worker_health_stats(std::time::Duration::from_secs(60), false)
+        .worker_health_stats(chrono::Duration::seconds(60), false)
         .await
         .unwrap();
 
@@ -195,7 +195,7 @@ async fn test_worker_health_stats() {
 
     // Test Per-Queue Health
     let queue_stats = admin
-        .worker_health_stats(std::time::Duration::from_secs(60), true)
+        .worker_health_stats(chrono::Duration::seconds(60), true)
         .await
         .unwrap();
 

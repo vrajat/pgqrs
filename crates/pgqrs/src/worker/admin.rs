@@ -721,11 +721,11 @@ impl Admin {
     /// depending on the value of `group_by_queue`.
     pub async fn worker_health_stats(
         &self,
-        heartbeat_timeout: std::time::Duration,
+        heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
     ) -> Result<Vec<WorkerHealthStats>> {
         // Convert heartbeat_timeout to a string for interval (e.g., '60 seconds')
-        let interval_str = format!("{} seconds", heartbeat_timeout.as_secs());
+        let interval_str = format!("{} seconds", heartbeat_timeout.num_seconds());
 
         let stats = if group_by_queue {
             sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_BY_QUEUE)
@@ -836,10 +836,10 @@ impl Admin {
     pub async fn reclaim_messages(
         &self,
         queue_id: i64,
-        older_than: Option<std::time::Duration>,
+        older_than: Option<chrono::Duration>,
     ) -> Result<u64> {
         let timeout = older_than
-            .unwrap_or_else(|| std::time::Duration::from_secs(self.config.heartbeat_interval));
+            .unwrap_or_else(|| chrono::Duration::seconds(self.config.heartbeat_interval as i64));
 
         // Start a transaction for the entire reclamation process
         let mut tx = self
@@ -924,14 +924,8 @@ impl Admin {
     ///
     /// # Returns
     /// Number of workers removed
-    pub async fn purge_old_workers(&self, older_than: std::time::Duration) -> Result<u64> {
-        let threshold = chrono::Utc::now()
-            - chrono::Duration::from_std(older_than).map_err(|e| {
-                crate::error::Error::InvalidConfig {
-                    field: "older_than".to_string(),
-                    message: format!("Invalid duration: {}", e),
-                }
-            })?;
+    pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
+        let threshold = chrono::Utc::now() - older_than;
 
         let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
             .bind(threshold)
@@ -1030,17 +1024,13 @@ impl Admin {
             .iter()
             .map(|w| now.signed_duration_since(w.started_at))
             .max()
-            .unwrap_or(chrono::Duration::zero())
-            .to_std()
-            .unwrap_or(std::time::Duration::ZERO);
+            .unwrap_or(chrono::Duration::zero());
 
         let newest_heartbeat_age = workers
             .iter()
             .map(|w| now.signed_duration_since(w.heartbeat_at))
             .min()
-            .unwrap_or(chrono::Duration::zero())
-            .to_std()
-            .unwrap_or(std::time::Duration::ZERO);
+            .unwrap_or(chrono::Duration::zero());
 
         Ok(crate::types::WorkerStats {
             total_workers,

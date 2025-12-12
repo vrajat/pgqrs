@@ -513,7 +513,7 @@ async fn test_purge_old_workers() {
 
     // Purge old workers - should only remove producer1 and producer2
     let purged_count = admin
-        .purge_old_workers(std::time::Duration::from_secs(60))
+        .purge_old_workers(chrono::Duration::seconds(60))
         .await
         .unwrap();
 
