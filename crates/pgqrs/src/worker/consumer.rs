@@ -144,6 +144,18 @@ impl Consumer {
         Ok(result)
     }
 
+    pub async fn extend_visibility(
+        &self,
+        message_id: i64,
+        additional_seconds: u32,
+    ) -> Result<bool> {
+        let messages = PgqrsMessages::new(self.pool.clone());
+        let rows_affected = messages
+            .extend_visibility(message_id, additional_seconds)
+            .await?;
+        Ok(rows_affected > 0)
+    }
+
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(vec![message_id])

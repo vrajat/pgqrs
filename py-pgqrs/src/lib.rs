@@ -166,6 +166,35 @@ impl Consumer {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    fn extend_visibility<'a>(
+        &self,
+        py: Python<'a>,
+        message_id: i64,
+        extension_seconds: f64,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let extension = extension_seconds as u32;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .extend_visibility(message_id, extension)
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .delete(message_id)
+                .await
+                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 // Wrappers for Tables
