@@ -10,7 +10,7 @@ use pgqrs::{
 use serial_test::serial;
 use sqlx::PgPool;
 use std::process::Command;
-use std::time::Duration;
+
 
 mod common;
 
