@@ -73,19 +73,26 @@ struct Producer {
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(
+        admin: &Admin,
+        queue: &str,
+        hostname: String,
+        port: i32,
+    ) -> PyResult<Self> {
         let rt = get_runtime();
         let producer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
-            // Use Admin to get queue info and manage pool
-            let admin = RustAdmin::new(&config)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
-            })?;
+            let (pool, config) = {
+                let locked_admin = admin.inner.lock().await;
+                (locked_admin.pool.clone(), locked_admin.config.clone())
+            };
 
-            RustProducer::new(admin.pool.clone(), &q, &hostname, port, &config)
+            let queues = RustQueues::new(pool.clone());
+            let q = queues
+                .get_by_name(queue)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+
+            RustProducer::new(pool, &q, &hostname, port, &config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -101,6 +108,28 @@ impl Producer {
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let msg = inner
                 .enqueue(&json_payload)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(msg.id)
+        })
+    }
+
+    fn enqueue_delayed<'a>(
+        &self,
+        py: Python<'a>,
+        payload: &PyAny,
+        delay_seconds: u64,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_payload = py_to_json(payload)?;
+
+        let delay: u32 = delay_seconds.try_into().map_err(|_| {
+            pyo3::exceptions::PyOverflowError::new_err("Delay seconds must fit in u32")
+        })?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let msg = inner
+                .enqueue_delayed(&json_payload, delay)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(msg.id)
@@ -136,18 +165,26 @@ struct Consumer {
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(
+        admin: &Admin,
+        queue: &str,
+        hostname: String,
+        port: i32,
+    ) -> PyResult<Self> {
         let rt = get_runtime();
         let consumer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
-            let admin = RustAdmin::new(&config)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
-            })?;
+            let (pool, config) = {
+                let locked_admin = admin.inner.lock().await;
+                (locked_admin.pool.clone(), locked_admin.config.clone())
+            };
 
-            RustConsumer::new(admin.pool.clone(), &q, &hostname, port, &config)
+            let queues = RustQueues::new(pool.clone());
+            let q = queues
+                .get_by_name(queue)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+
+            RustConsumer::new(pool, &q, &hostname, port, &config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -163,14 +200,21 @@ impl Consumer {
                 .dequeue()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            // Convert to QueueMessage or dicts. Let's return QueueMessage objects.
-            // But implementing ToPyObject for QueueMessage manually is tedious.
-            // Let's assume we return list of dicts for now as it's cleaner without boilerplate.
-            // Or better, creating QueueMessage instances.
             Ok(messages
                 .into_iter()
                 .map(QueueMessage::from)
                 .collect::<Vec<_>>())
+        })
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let result = inner
+                .delete(message_id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(result)
         })
     }
 
@@ -185,7 +229,7 @@ impl Consumer {
         })
     }
 
-    fn dequeue_many<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
+    fn dequeue_batch<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let messages = inner
@@ -199,7 +243,7 @@ impl Consumer {
         })
     }
 
-    fn dequeue_many_with_delay<'a>(
+    fn dequeue_batch_with_delay<'a>(
         &self,
         py: Python<'a>,
         limit: usize,
@@ -218,7 +262,7 @@ impl Consumer {
         })
     }
 
-    fn archive_many<'a>(&self, py: Python<'a>, message_ids: Vec<i64>) -> PyResult<&'a PyAny> {
+    fn archive_batch<'a>(&self, py: Python<'a>, message_ids: Vec<i64>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let results = inner
@@ -249,8 +293,6 @@ impl Workers {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
-
-    // Additional methods based on Table traits or specific impls
 }
 
 #[pyclass]
@@ -318,10 +360,15 @@ struct Admin {
 #[pymethods]
 impl Admin {
     #[new]
-    fn new(dsn: &str) -> PyResult<Self> {
+    fn new(dsn: &str, schema: Option<String>) -> PyResult<Self> {
         let rt = get_runtime();
         let admin = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
+            let config = if let Some(s) = schema {
+                Config::from_dsn_with_schema(dsn.to_string(), &s)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                Config::from_dsn(dsn)
+            };
             RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -364,14 +411,6 @@ impl Admin {
             Ok(QueueInfo::from(q))
         })
     }
-
-    // Accessors for tables
-    // Since Rust structs are owned by Admin, we can't easily return a permanent reference.
-    // However, the tables (Queues etc) just hold a Pool, so they are cheap to clone.
-    // But Admin struct doesn't expose them publicly in a way we can clone them out from here
-    // without locking.
-    // And actually `Admin` struct fields ARE public!
-    // But we are inside a Mutex.
 
     fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
@@ -422,8 +461,6 @@ struct QueueInfo {
     id: i64,
     #[pyo3(get)]
     queue_name: String,
-    // created_at: DateTime<Utc> - convert to python datetime?
-    // For simplicity, stringify or omit for now, or use chrono-tz
     #[pyo3(get)]
     created_at: String,
 }
@@ -446,7 +483,6 @@ struct QueueMessage {
     queue_id: i64,
     #[pyo3(get)]
     payload: PyObject,
-    // ... other fields as needed
 }
 
 impl From<RustQueueMessage> for QueueMessage {
