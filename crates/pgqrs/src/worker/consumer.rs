@@ -24,13 +24,53 @@
 //! // producer.enqueue(...)
 //! // consumer.dequeue(...)
 //! ```
-use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
+
 use crate::error::Result;
 use crate::tables::Messages;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
 use async_trait::async_trait;
 use sqlx::PgPool;
+
+/// Default visibility timeout in seconds for locked messages
+const VISIBILITY_TIMEOUT: u32 = 5;
+
+/// Delete batch of messages
+const DELETE_MESSAGE_BATCH: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = ANY($1) AND consumer_worker_id = $2
+    RETURNING id;
+"#;
+
+/// Archive single message (atomic operation)
+const ARCHIVE_MESSAGE: &str = r#"
+    WITH archived_msg AS (
+        DELETE FROM pgqrs_messages
+        WHERE id = $1 AND consumer_worker_id = $2
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msg
+    RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
+"#;
+
+/// Archive batch of messages (efficient batch operation)
+const ARCHIVE_BATCH: &str = r#"
+    WITH archived_msgs AS (
+        DELETE FROM pgqrs_messages
+        WHERE id = ANY($1) AND consumer_worker_id = $2
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msgs
+    RETURNING original_msg_id;
+"#;
 
 /// Read available messages from queue (with SKIP LOCKED)
 /// Select messages for worker with lock
@@ -40,7 +80,7 @@ pub const DEQUEUE_MESSAGES: &str = r#"
     FROM (
         SELECT id
         FROM pgqrs_messages
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND read_ct < $3
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND read_ct < $3
         ORDER BY id ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED

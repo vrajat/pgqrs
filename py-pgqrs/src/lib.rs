@@ -457,6 +457,31 @@ impl Admin {
             })
         })
     }
+
+    fn reclaim_messages<'a>(
+        &self,
+        py: Python<'a>,
+        queue_name: String,
+        older_than_seconds: Option<f64>,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            let queue = admin
+                .get_queue(&queue_name)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+            let duration =
+                older_than_seconds.map(|s| chrono::Duration::milliseconds((s * 1000.0) as i64));
+
+            let count = admin
+                .reclaim_messages(queue.id, duration)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(count)
+        })
+    }
 }
 
 // Data Types Wrappers

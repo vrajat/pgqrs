@@ -214,8 +214,11 @@ async def test_extend_visibility(postgres_dsn, schema):
     msgs_retry = await consumer.dequeue()
     assert len(msgs_retry) == 0, "Message should still be invisible after extension"
 
-    # Wait another 5 seconds (total 7.5s > 2+5=7s)
-    await asyncio.sleep(5.0)
+    # Wait another 4 seconds (total 6.5s > 5.5s)
+    await asyncio.sleep(4.0)
+
+    # Reclaim messages from zombie consumers (since we waited > heartbeat interval likely, or we force it)
+    await admin.reclaim_messages(queue_name, older_than_seconds=1.0)
 
     # Now it should be visible (or nearly)
     msgs_retry_2 = await consumer.dequeue()
