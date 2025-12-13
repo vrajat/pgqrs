@@ -96,12 +96,12 @@ Schedule messages for future processing:
 
     ```python
     import pgqrs
-    
+
     admin = pgqrs.Admin("postgresql://localhost/mydb")
     producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
-    
+
     payload = {"reminder": "Follow up with customer"}
-    
+
     # Available after 5 minutes (300 seconds)
     message_id = await producer.enqueue_delayed(payload, delay_seconds=300)
     print(f"Scheduled message {message_id} for 5 minutes from now")

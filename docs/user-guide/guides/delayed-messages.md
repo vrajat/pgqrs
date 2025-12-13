@@ -52,30 +52,30 @@ Delayed messages are messages that won't be visible to consumers until a specifi
     import asyncio
     import pgqrs
     from datetime import datetime, timedelta
-    
+
     async def schedule_message():
         admin = pgqrs.Admin("postgresql://localhost/mydb")
         await admin.install()
         queue_name = "reminders"
         await admin.create_queue(queue_name)
-        
+
         producer = pgqrs.Producer(admin, queue_name, "scheduler", 3000)
-        
+
         # Schedule a reminder for 1 hour from now
         payload = {
             "type": "reminder",
             "message": "Follow up with customer",
             "customer_id": 12345
         }
-        
+
         # enqueue_delayed takes delay in seconds (3600 = 1 hour)
         msg_id = await producer.enqueue_delayed(
             payload,
             delay_seconds=3600
         )
-        
+
         print(f"Scheduled reminder {msg_id} for 1 hour from now")
-    
+
     # Run the async function
     asyncio.run(schedule_message())
     ```
@@ -144,35 +144,35 @@ producer.enqueue_delayed(&payload, 604800).await?;
     import asyncio
     from datetime import datetime, timedelta
     import pgqrs
-    
+
     def seconds_until_next_hour() -> int:
         """Calculate delay until the next hour."""
         now = datetime.utcnow()
         next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         return int((next_hour - now).total_seconds())
-    
+
     def seconds_until_time(hour: int, minute: int = 0) -> int:
         """Calculate delay until specific time today (or tomorrow if passed)."""
         now = datetime.utcnow()
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        
+
         # If target time has passed today, schedule for tomorrow
         if target <= now:
             target += timedelta(days=1)
-        
+
         return int((target - now).total_seconds())
-    
+
     async def schedule_for_specific_times(producer):
         payload = {"task": "daily_report", "type": "scheduled"}
-        
+
         # Schedule for next hour
         delay = seconds_until_next_hour()
         await producer.enqueue_delayed(payload, delay_seconds=delay)
-        
+
         # Schedule for 9:00 AM
         delay = seconds_until_time(9, 0)
         await producer.enqueue_delayed(payload, delay_seconds=delay)
-        
+
         print(f"Messages scheduled successfully")
     ```
 
@@ -233,7 +233,7 @@ producer.enqueue_delayed(&payload, 604800).await?;
     ```python
     import asyncio
     import pgqrs
-    
+
     async def schedule_welcome_email(
         producer: pgqrs.Producer,
         user_id: int,
@@ -246,11 +246,11 @@ producer.enqueue_delayed(&payload, 604800).await?;
             "email": email,
             "template": "welcome_series_1"
         }
-        
+
         # Send 10 minutes after signup (600 seconds)
         msg_id = await producer.enqueue_delayed(payload, delay_seconds=600)
         return msg_id
-    
+
     async def schedule_follow_up_series(
         producer: pgqrs.Producer,
         user_id: int
@@ -262,31 +262,31 @@ producer.enqueue_delayed(&payload, 604800).await?;
             (7, 604800),     # Day 7 (1 week)
             (14, 1209600),   # Day 14 (2 weeks)
         ]
-        
+
         message_ids = []
-        
+
         for day, delay_seconds in delays:
             payload = {
                 "type": "follow_up_email",
                 "user_id": user_id,
                 "series_day": day
             }
-            
+
             msg_id = await producer.enqueue_delayed(payload, delay_seconds=delay_seconds)
             message_ids.append(msg_id)
-            
+
             print(f"Scheduled follow-up email for day {day} (message {msg_id})")
-        
+
         return message_ids
-    
+
     # Usage example
     async def setup_user_emails(admin, user_id: int, email: str):
         producer = pgqrs.Producer(admin, "emails", "email-scheduler", 8080)
-        
+
         # Welcome email
         welcome_id = await schedule_welcome_email(producer, user_id, email)
         print(f"Welcome email scheduled: {welcome_id}")
-        
+
         # Follow-up series
         follow_up_ids = await schedule_follow_up_series(producer, user_id)
         print(f"Follow-up series scheduled: {follow_up_ids}")
@@ -328,7 +328,7 @@ producer.enqueue_delayed(&payload, 604800).await?;
     import asyncio
     import pgqrs
     from typing import Optional
-    
+
     async def schedule_retry(
         producer: pgqrs.Producer,
         original_payload: dict,
@@ -336,26 +336,26 @@ producer.enqueue_delayed(&payload, 604800).await?;
     ) -> Optional[int]:
         """Schedule a retry with exponential backoff."""
         MAX_ATTEMPTS = 5
-        
+
         if attempt >= MAX_ATTEMPTS:
             print(f"Max attempts ({MAX_ATTEMPTS}) reached, giving up")
             return None
-        
+
         # Exponential backoff: 1min, 4min, 16min, 64min
         delay_seconds = 60 * (4 ** attempt)
-        
+
         retry_payload = {
             "original": original_payload,
             "attempt": attempt + 1,
             "scheduled_retry": True,
             "delay_applied": delay_seconds
         }
-        
+
         msg_id = await producer.enqueue_delayed(retry_payload, delay_seconds=delay_seconds)
-        
+
         print(f"Scheduled retry attempt {attempt + 1} in {delay_seconds}s (message {msg_id})")
         return msg_id
-    
+
     async def handle_failed_task(
         producer: pgqrs.Producer,
         failed_payload: dict,
@@ -363,11 +363,11 @@ producer.enqueue_delayed(&payload, 604800).await?;
     ):
         """Handle a failed task by scheduling retries."""
         attempt = failed_payload.get("attempt", 0)
-        
+
         print(f"Task failed (attempt {attempt}): {error}")
-        
+
         retry_id = await schedule_retry(producer, failed_payload, attempt)
-        
+
         if retry_id is None:
             # Send to dead letter queue or alert
             await producer.enqueue({
@@ -500,16 +500,16 @@ Consumers automatically handle delayed messages—they simply won't see them unt
     ```python
     import asyncio
     import pgqrs
-    
+
     async def process_scheduled_tasks(consumer: pgqrs.Consumer):
         """Process delayed messages as they become available."""
         while True:
             # dequeue() only returns messages where visibility timeout has passed
             messages = await consumer.dequeue()
-            
+
             for message in messages:
                 msg_type = message.payload.get("type")
-                
+
                 try:
                     if msg_type == "reminder":
                         await handle_reminder(message)
@@ -521,37 +521,37 @@ Consumers automatically handle delayed messages—they simply won't see them unt
                         await handle_retry(message)
                     else:
                         print(f"⚠️ Unknown message type: {msg_type}")
-                    
+
                     # Archive successfully processed message
                     await consumer.archive(message.id)
                     print(f"✅ Processed {msg_type} message {message.id}")
-                    
+
                 except Exception as e:
                     print(f"❌ Error processing message {message.id}: {e}")
                     # Consider extending visibility or moving to retry
                     await consumer.extend_visibility(message.id, 300)  # 5 min delay
-            
+
             if not messages:
                 await asyncio.sleep(1)  # Brief pause when no messages
-    
+
     async def handle_reminder(message):
         """Process reminder messages."""
         payload = message.payload
         print(f"🔔 Reminder: {payload.get('message')}")
         print(f"   User ID: {payload.get('user_id')}")
-    
+
     async def handle_email(message):
         """Process email messages."""
         payload = message.payload
         print(f"📧 Sending email to {payload.get('email')}")
         print(f"   Template: {payload.get('template')}")
-    
+
     async def handle_follow_up_email(message):
         """Process follow-up email messages."""
         payload = message.payload
         print(f"📨 Sending follow-up email (day {payload.get('series_day')})")
         print(f"   User ID: {payload.get('user_id')}")
-    
+
     async def handle_retry(message):
         """Process retry messages."""
         payload = message.payload
@@ -580,20 +580,20 @@ To cancel a scheduled message, delete it before it becomes visible:
     ```python
     import asyncio
     import pgqrs
-    
+
     async def schedule_and_cancel_example():
         admin = pgqrs.Admin("postgresql://localhost/mydb")
         producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
         consumer = pgqrs.Consumer(admin, "tasks", "canceller", 8081)
-        
+
         # Store the message ID when scheduling
         payload = {"task": "send_email", "user_id": 123}
         msg_id = await producer.enqueue_delayed(payload, delay_seconds=3600)
         print(f"Scheduled message {msg_id} for 1 hour from now")
-        
+
         # Store the ID for later cancellation
         scheduled_ids = [msg_id]
-        
+
         # Later, to cancel before it becomes visible:
         for msg_id in scheduled_ids:
             try:
@@ -604,17 +604,17 @@ To cancel a scheduled message, delete it before it becomes visible:
                     print(f"⚠️ Message {msg_id} not found (may have been processed)")
             except Exception as e:
                 print(f"❌ Failed to cancel message {msg_id}: {e}")
-    
+
     async def cancel_user_reminders(admin, user_id: int):
         """Cancel all scheduled reminders for a user."""
         # Note: This requires tracking message IDs per user
         # You might store these in your application database
-        
+
         messages = await admin.get_messages()
         user_messages = await messages.filter_by_payload({"user_id": user_id})
-        
+
         consumer = pgqrs.Consumer(admin, "reminders", "canceller", 8082)
-        
+
         cancelled_count = 0
         for message in user_messages:
             try:
@@ -622,7 +622,7 @@ To cancel a scheduled message, delete it before it becomes visible:
                 cancelled_count += 1
             except Exception as e:
                 print(f"Failed to cancel message {message.id}: {e}")
-        
+
         print(f"Cancelled {cancelled_count} scheduled reminders for user {user_id}")
     ```
 
@@ -709,85 +709,85 @@ pgqrs queue metrics reminders
     import asyncio
     import pgqrs
     from datetime import datetime
-    
+
     async def delayed_messages_demo():
         \"\"\"Complete example of scheduling and processing delayed messages.\"\"\"
-        
+
         # Setup
         admin = pgqrs.Admin("postgresql://localhost/mydb")
         await admin.install()
-        
+
         queue_name = "scheduled"
         await admin.create_queue(queue_name)
-        
+
         producer = pgqrs.Producer(admin, queue_name, "scheduler", 3000)
         consumer = pgqrs.Consumer(admin, queue_name, "consumer", 3001)
-        
+
         print("Scheduling messages...")
-        
+
         # Schedule messages with different delays
         msg1 = await producer.enqueue_delayed({"msg": "5 seconds"}, delay_seconds=5)
         msg2 = await producer.enqueue_delayed({"msg": "10 seconds"}, delay_seconds=10)
         msg3 = await producer.enqueue_delayed({"msg": "15 seconds"}, delay_seconds=15)
-        
+
         print(f"Scheduled 3 messages: {msg1}, {msg2}, {msg3}")
         print("Waiting for messages to become available...\\n")
-        
+
         # Consume as they become available
         processed = 0
         start_time = datetime.utcnow()
-        
+
         while processed < 3:
             messages = await consumer.dequeue()
-            
+
             for message in messages:
                 elapsed = (datetime.utcnow() - start_time).total_seconds()
                 print(f"[{elapsed:4.1f}s] Received: {message.payload}")
-                
+
                 await consumer.archive(message.id)
                 processed += 1
-            
+
             if not messages:
                 await asyncio.sleep(0.5)  # Brief pause when no messages
-        
+
         print("\\nAll scheduled messages processed!")
-    
+
     async def advanced_scheduling_demo():
         \"\"\"Demonstrate advanced scheduling patterns.\"\"\"
-        
+
         admin = pgqrs.Admin("postgresql://localhost/mydb")
         queue_name = "advanced_scheduling"
         await admin.create_queue(queue_name)
-        
+
         producer = pgqrs.Producer(admin, queue_name, "advanced-scheduler", 3100)
-        
+
         print("Advanced scheduling demo...")
-        
+
         # Schedule welcome email series
         user_id = 12345
         email_ids = await schedule_follow_up_series(producer, user_id)
         print(f"Scheduled follow-up series: {email_ids}")
-        
+
         # Schedule with retry logic
         original_task = {"task": "process_payment", "amount": 99.99}
         retry_id = await schedule_retry(producer, original_task, attempt=0)
         print(f"Scheduled retry task: {retry_id}")
-        
+
         # Schedule for specific time (next minute)
         from datetime import timedelta
         next_minute = datetime.utcnow() + timedelta(minutes=1)
         delay = int((next_minute - datetime.utcnow()).total_seconds())
-        
+
         reminder_id = await producer.enqueue_delayed(
             {"type": "reminder", "message": "Time-based reminder"},
             delay_seconds=delay
         )
         print(f"Scheduled time-based reminder: {reminder_id}")
-    
+
     if __name__ == "__main__":
         # Run the basic demo
         asyncio.run(delayed_messages_demo())
-        
+
         # Uncomment to run advanced demo
         # asyncio.run(advanced_scheduling_demo())
     ```

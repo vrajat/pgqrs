@@ -196,24 +196,24 @@ Send periodic heartbeats to indicate worker health:
     ```python
     import pgqrs
     import asyncio
-    
+
     admin = pgqrs.Admin("postgresql://localhost/mydb")
-    
+
     # Batch producer
     producer = pgqrs.Producer(admin, "tasks", "batch-producer", 8080)
-    
+
     # Enqueue multiple messages at once
     payloads = [
         {"task": "process_user", "user_id": i}
         for i in range(100, 200)
     ]
-    
+
     messages = await producer.enqueue_batch(payloads)
     print(f"Enqueued {len(messages)} messages")
-    
+
     # Batch consumer
     consumer = pgqrs.Consumer(admin, "tasks", "batch-consumer", 8081)
-    
+
     # Process messages in batches
     batch = await consumer.dequeue_batch(limit=50)
     if batch:
@@ -221,11 +221,11 @@ Send periodic heartbeats to indicate worker health:
         results = await asyncio.gather(*[
             process_message(msg.payload) for msg in batch
         ])
-        
+
         # Archive the whole batch
         message_ids = [msg.id for msg in batch]
         await consumer.archive_batch(message_ids)
-        
+
         print(f"Processed {len(batch)} messages")
     ```### Graceful Shutdown
 
@@ -696,7 +696,7 @@ pgqrs worker delete --id 42
 ## Best Practices
 
 1. **Use meaningful identifiers** - Include hostname and worker ID
-2. **Send regular heartbeats** - Every 30-60 seconds  
+2. **Send regular heartbeats** - Every 30-60 seconds
 3. **Implement graceful shutdown** - Suspend before stopping
 4. **Monitor worker health** - Alert on stale heartbeats
 5. **Clean up stopped workers** - Purge periodically
@@ -712,14 +712,14 @@ Monitor workers proactively to detect issues early:
     ```rust
     use pgqrs::{Admin, WorkerHandle};
     use chrono::Duration;
-    
+
     async fn check_worker_health(admin: &Admin) -> Result<(), Box<dyn std::error::Error>> {
         let workers = admin.get_workers().await?;
         let worker_list = workers.list().await?;
-        
+
         for worker in worker_list {
             let handle = WorkerHandle::new(admin.pool.clone(), worker.id);
-            
+
             // Check if worker responded to heartbeat in last 5 minutes
             if !handle.is_healthy(Duration::minutes(5)).await? {
                 // Alert your monitoring system
@@ -736,9 +736,9 @@ Monitor workers proactively to detect issues early:
     async def monitor_workers(admin: pgqrs.Admin):
         workers = await admin.get_workers()
         worker_list = await workers.list()
-        
+
         stale_threshold = datetime.utcnow() - timedelta(minutes=5)
-        
+
         for worker in worker_list:
             if worker.updated_at < stale_threshold:
                 # Send alert to monitoring system
@@ -755,10 +755,10 @@ Set up automated cleanup of old workers:
     // Run daily cleanup
     async fn daily_worker_cleanup(admin: Admin) {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
-        
+
         loop {
             interval.tick().await;
-            
+
             // Clean up workers stopped more than 7 days ago
             if let Err(e) = cleanup_old_workers(&admin, 7).await {
                 log::error!("Worker cleanup failed: {}", e);
@@ -776,7 +776,7 @@ Set up automated cleanup of old workers:
                 # Clean up workers stopped more than 7 days ago
                 count = await cleanup_stopped_workers(admin, older_than_days=7)
                 print(f"Cleaned up {count} old workers")
-                
+
                 # Wait 24 hours
                 await asyncio.sleep(24 * 60 * 60)
             except Exception as e:
