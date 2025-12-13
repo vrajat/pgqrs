@@ -179,19 +179,26 @@ impl Messages {
     ///
     /// # Arguments
     /// * `id` - Message ID
+    /// * `worker_id` - ID of the worker attempting to extend visibility
     /// * `additional_seconds` - Additional seconds to add to current vt
     ///
     /// # Returns
     /// Number of rows affected (should be 1 if successful)
-    pub async fn extend_visibility(&self, id: i64, additional_seconds: u32) -> Result<u64> {
+    pub async fn extend_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<u64> {
         const EXTEND_MESSAGE_VT: &str = r#"
             UPDATE pgqrs_messages
-            SET vt = vt + make_interval(secs => $2::double precision)
-            WHERE id = $1;
+            SET vt = vt + make_interval(secs => $3::double precision)
+            WHERE id = $1 AND consumer_worker_id = $2;
         "#;
 
         let rows_affected = sqlx::query(EXTEND_MESSAGE_VT)
             .bind(id)
+            .bind(worker_id)
             .bind(additional_seconds as i32)
             .execute(&self.pool)
             .await

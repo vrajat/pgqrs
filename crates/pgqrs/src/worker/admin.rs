@@ -109,6 +109,63 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
     WHERE id = $1
 "#;
 
+/// Get messages assigned to a specific worker
+const GET_WORKER_MESSAGES: &str = r#"
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    FROM pgqrs_messages
+    WHERE consumer_worker_id = $1
+    ORDER BY id;
+"#;
+
+/// Release messages assigned to a worker (set worker_id to NULL and reset vt)
+const RELEASE_WORKER_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = NOW(), consumer_worker_id = NULL
+    WHERE consumer_worker_id = $1;
+"#;
+
+/// Lock queue row for exclusive access during deletion
+const LOCK_QUEUE_FOR_DELETE: &str = r#"
+    SELECT id FROM pgqrs_queues
+    WHERE queue_name = $1
+    FOR UPDATE;
+"#;
+
+/// Lock queue row for data modification operations (purge, etc.)
+const LOCK_QUEUE_FOR_UPDATE: &str = r#"
+    SELECT id FROM pgqrs_queues
+    WHERE queue_name = $1
+    FOR NO KEY UPDATE;
+"#;
+
+/// Check if worker has any associated messages or archives
+const CHECK_WORKER_REFERENCES: &str = r#"
+    SELECT COUNT(*) as total_references FROM (
+        SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = $1 OR consumer_worker_id = $1
+        UNION ALL
+        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = $1 OR consumer_worker_id = $1
+    ) refs
+"#;
+
+/// Delete old stopped workers (only those without references)
+const PURGE_OLD_WORKERS: &str = r#"
+    DELETE FROM pgqrs_workers
+    WHERE status = 'stopped'
+      AND heartbeat_at < $1
+      AND id NOT IN (
+          SELECT DISTINCT worker_id
+          FROM (
+              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+              UNION
+              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
+          ) refs
+      )
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 ///
@@ -417,7 +474,7 @@ impl Admin {
             })?;
 
         // Lock the queue row for exclusive access and get queue_id
-        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_DELETE)
+        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_DELETE)
             .bind(&queue_info.queue_name)
             .fetch_optional(&mut *tx)
             .await
@@ -496,7 +553,7 @@ impl Admin {
             })?;
 
         // Lock the queue row for data modification and get queue_id
-        let queue_id: Option<i64> = sqlx::query_scalar(crate::constants::LOCK_QUEUE_FOR_UPDATE)
+        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_UPDATE)
             .bind(name)
             .fetch_optional(&mut *tx)
             .await
@@ -771,14 +828,13 @@ impl Admin {
             });
         }
 
-        let messages =
-            sqlx::query_as::<_, crate::types::QueueMessage>(crate::constants::GET_WORKER_MESSAGES)
-                .bind(worker_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to get messages for worker {}: {}", worker_id, e),
-                })?;
+        let messages = sqlx::query_as::<_, crate::types::QueueMessage>(GET_WORKER_MESSAGES)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get messages for worker {}: {}", worker_id, e),
+            })?;
 
         Ok(messages)
     }
@@ -808,7 +864,7 @@ impl Admin {
             });
         }
 
-        let result = sqlx::query(crate::constants::RELEASE_WORKER_MESSAGES)
+        let result = sqlx::query(RELEASE_WORKER_MESSAGES)
             .bind(worker_id)
             .execute(&self.pool)
             .await
@@ -927,7 +983,7 @@ impl Admin {
     pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
         let threshold = chrono::Utc::now() - older_than;
 
-        let result = sqlx::query(crate::constants::PURGE_OLD_WORKERS)
+        let result = sqlx::query(PURGE_OLD_WORKERS)
             .bind(threshold)
             .execute(&self.pool)
             .await
@@ -946,7 +1002,7 @@ impl Admin {
     /// # Returns
     /// Number of associated records (messages + archives)
     async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
-        let row = sqlx::query_scalar::<_, i64>(crate::constants::CHECK_WORKER_REFERENCES)
+        let row = sqlx::query_scalar::<_, i64>(CHECK_WORKER_REFERENCES)
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
