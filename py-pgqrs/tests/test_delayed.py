@@ -4,14 +4,13 @@ import asyncio
 
 @pytest.mark.asyncio
 async def test_enqueue_delayed(postgres_dsn, schema):
-    dsn = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
     admin = pgqrs.Admin(postgres_dsn)
     await admin.install()
     queue_name = "test_delayed_queue"
     await admin.create_queue(queue_name)
 
     producer = pgqrs.Producer(postgres_dsn, queue_name, "host1", 123)
-    consumer = pgqrs.Consumer(dsn, queue_name, "cons", 2)
+    consumer = pgqrs.Consumer(postgres_dsn, queue_name, "cons", 2)
 
     payload = {"foo": "bar"}
     # Enqueue with 2 seconds delay
