@@ -183,17 +183,14 @@ async def test_batch_operations(postgres_dsn, schema):
     Test batch operations (enqueue, dequeue, archive).
     Consolidated from test_batch.py
     """
-    # Setup isolated schema DSN
-    dsn_with_schema = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-
-    # Create Admin
-    admin = pgqrs.Admin(dsn_with_schema)
+    # Create Admin with schema parameter
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
     await admin.install()
 
     queue_name = "batch_ops_test"
     await admin.create_queue(queue_name)
 
-    # Use Shared Admin API
+
     producer = pgqrs.Producer(admin, queue_name, "batch_prod", PRODUCER_PORT)
     consumer = pgqrs.Consumer(admin, queue_name, "batch_cons", CONSUMER_PORT)
 
@@ -201,7 +198,7 @@ async def test_batch_operations(postgres_dsn, schema):
     payloads = [{"id": i, "data": f"msg_{i}"} for i in range(5)]
     msgs = await producer.enqueue_batch(payloads)
     assert len(msgs) == 5
-    ids = [m.id for m in msgs]
+
 
     # Verify count
     count = await (await admin.get_messages()).count()
