@@ -1,7 +1,6 @@
 import pytest
 import pgqrs
 import asyncio
-import os
 
 # Constants for ports as requested
 PRODUCER_PORT = 8100
@@ -85,13 +84,7 @@ async def test_consumer_delete(postgres_dsn, schema):
     Test consumer delete functionality, including ownership checks.
     From original test_consumer_delete.py
     """
-    # Use DSN with schema if consistently needed, or rely on search_path being set by fixture/env?
-    # Original test_consumer_delete used raw postgres_dsn but passed `schema` fixture (which does logic?)
-    # Actually the fixture `schema` in conftest typically creates a schema and sets it?
-    # No, usually standard pg fixture just gives DSN. Let's start sticking to dsn_with_schema pattern
-    # OR rely on admin.install() if it uses the passed DSN.
-    # The `test_basic.py` was explicit about `dsn_with_schema`.
-    # Let's use `dsn_with_schema` to be safe and consistent with "Admin needs valid connection to schema".
+
     dsn_with_schema = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
 
     admin = pgqrs.Admin(dsn_with_schema)

@@ -20,6 +20,7 @@ test = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "testcontainers[postgres]>=3.7",
+    # urllib3 is pinned to <2.0 due to testcontainers not yet supporting urllib3>=2.0. Remove this pin when testcontainers adds support.
     "urllib3<2.0",
 ]
 
