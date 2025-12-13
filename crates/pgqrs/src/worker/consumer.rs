@@ -169,6 +169,7 @@ impl Consumer {
     pub async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
+            .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -197,6 +198,7 @@ impl Consumer {
     pub async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
+            .bind(self.worker_info.id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -223,6 +225,7 @@ impl Consumer {
 
         let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
             .bind(&msg_ids)
+            .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {

@@ -12,7 +12,11 @@ build: requirements  ## Build Rust and Python bindings
 	$(UV) run maturin develop -m py-pgqrs/Cargo.toml
 
 test-rust:  ## Run Rust tests only
+ifdef TEST
+	cargo test --workspace --test $(TEST)
+else
 	cargo test --workspace
+endif
 
 test: build  ## Run all tests
 	cargo test --workspace
