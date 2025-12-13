@@ -200,35 +200,17 @@ async fn test_concurrent_visibility_extension() {
     let queue_name = "concurrent_vis_queue";
     let queue_info = admin.create_queue(queue_name).await.unwrap();
 
-    let consumer_a = Consumer::new(
-        pool.clone(),
-        &queue_info,
-        "consumer_a",
-        1001,
-        &config,
-    )
-    .await
-    .unwrap();
+    let consumer_a = Consumer::new(pool.clone(), &queue_info, "consumer_a", 1001, &config)
+        .await
+        .unwrap();
 
-    let consumer_b = Consumer::new(
-        pool.clone(),
-        &queue_info,
-        "consumer_b",
-        1002,
-        &config,
-    )
-    .await
-    .unwrap();
+    let consumer_b = Consumer::new(pool.clone(), &queue_info, "consumer_b", 1002, &config)
+        .await
+        .unwrap();
 
-    let producer = Producer::new(
-        pool.clone(),
-        &queue_info,
-        "producer",
-        2001,
-        &config,
-    )
-    .await
-    .unwrap();
+    let producer = Producer::new(pool.clone(), &queue_info, "producer", 2001, &config)
+        .await
+        .unwrap();
 
     // 3. Enqueue Message
     let msg_id = producer.enqueue(&json!({"foo": "bar"})).await.unwrap().id;
@@ -240,9 +222,15 @@ async fn test_concurrent_visibility_extension() {
 
     // 5. Consumer B tries to extend visibility -> SHOULD FAIL
     let extended_by_b = consumer_b.extend_visibility(msg_id, 10).await.unwrap();
-    assert!(!extended_by_b, "Consumer B should not be able to extend visibility of message owned by A");
+    assert!(
+        !extended_by_b,
+        "Consumer B should not be able to extend visibility of message owned by A"
+    );
 
     // 6. Consumer A tries to extend visibility -> SHOULD SUCCEED
     let extended_by_a = consumer_a.extend_visibility(msg_id, 10).await.unwrap();
-    assert!(extended_by_a, "Consumer A should be able to extend visibility of its own message");
+    assert!(
+        extended_by_a,
+        "Consumer A should be able to extend visibility of its own message"
+    );
 }
