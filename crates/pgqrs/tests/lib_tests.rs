@@ -244,7 +244,10 @@ async fn test_archive_batch_messages() {
 
     // Archive first 3 messages in batch
     // First dequeue them to acquire ownership
-    let dequeued_msgs = consumer.dequeue_many(3).await.expect("Failed to dequeue messages");
+    let dequeued_msgs = consumer
+        .dequeue_many(3)
+        .await
+        .expect("Failed to dequeue messages");
     assert_eq!(dequeued_msgs.len(), 3);
 
     let batch_to_archive = msg_ids[0..3].to_vec();
@@ -1349,7 +1352,8 @@ async fn test_consumer_shutdown_with_held_messages() {
 
     // Cleanup - delete remaining messages and worker
     // Cleanup - purge queue to remove messages since consumer doesn't own them anymore
-    admin.purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
+    admin
+        .purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
         .await
         .expect("Failed to purge queue");
     assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
