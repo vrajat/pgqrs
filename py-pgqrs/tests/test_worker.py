@@ -5,22 +5,21 @@ import pytest_asyncio
 
 @pytest.mark.asyncio
 async def test_worker_lifecycle(postgres_dsn, schema):
-    dsn = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-    admin = pgqrs.Admin(dsn)
+    # Use Admin correctly
+    # Note: postgres_dsn fixture is bare DSN. schema fixture is string.
+    # Admin(dsn, schema=...) handles schema isolation.
+
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
     await admin.install()
 
-    queue = "worker_test_queue"
+    queue = "worker_test_queue_legacy"
     await admin.create_queue(queue)
 
     # 1. Create Consumer (which is a Worker)
-    consumer = pgqrs.Consumer(dsn, queue, "worker_host", 1)
+    # MUST pass admin, not dsn string
+    consumer = pgqrs.Consumer(admin, queue, "worker_host", 1)
 
-    # 2. Check Status (Should be 'On' or similar, depending on enum exposure)
-    # Note: WorkerStatus might be an enum or string. Let's inspect what we get.
-    # If it's an enum, we need to know its values. Usually: Active, Suspended, etc.
-    # Based on rust code: Active, Suspended, Stopping, Stopped.
-
-    # Verify we can access the worker table via Admin
+    # 2. Check Status
     workers = await admin.get_workers()
     count = await workers.count()
     assert count == 1

@@ -6,7 +6,9 @@ use rust_pgqrs::tables::{
     Archive as RustArchive, Messages as RustMessages, Queues as RustQueues, Table,
     Workers as RustWorkers,
 };
-use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerStatus};
+use rust_pgqrs::types::{
+    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerStatus,
+};
 use rust_pgqrs::{Admin as RustAdmin, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -362,6 +364,31 @@ impl Workers {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    fn list<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let workers = inner
+                .list()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(workers
+                .into_iter()
+                .map(WorkerInfo::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let worker = inner
+                .get(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            Ok(WorkerInfo::from(worker))
+        })
+    }
 }
 
 #[pyclass]
@@ -597,6 +624,41 @@ impl From<RustQueueMessage> for QueueMessage {
     }
 }
 
+#[pyclass]
+struct WorkerInfo {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    hostname: String,
+    #[pyo3(get)]
+    port: i32,
+    #[pyo3(get)]
+    queue_id: Option<i64>,
+    #[pyo3(get)]
+    started_at: String,
+    #[pyo3(get)]
+    heartbeat_at: String,
+    #[pyo3(get)]
+    shutdown_at: Option<String>,
+    #[pyo3(get)]
+    status: PyWorkerStatus,
+}
+
+impl From<rust_pgqrs::types::WorkerInfo> for WorkerInfo {
+    fn from(w: rust_pgqrs::types::WorkerInfo) -> Self {
+        WorkerInfo {
+            id: w.id,
+            hostname: w.hostname,
+            port: w.port,
+            queue_id: w.queue_id,
+            started_at: w.started_at.to_rfc3339(),
+            heartbeat_at: w.heartbeat_at.to_rfc3339(),
+            shutdown_at: w.shutdown_at.map(|t| t.to_rfc3339()),
+            status: w.status.into(),
+        }
+    }
+}
+
 #[pyclass(name = "WorkerStatus")]
 #[derive(Clone, PartialEq, Debug)]
 enum PyWorkerStatus {
@@ -636,6 +698,7 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Archive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
+    m.add_class::<WorkerInfo>()?;
     m.add_class::<PyWorkerStatus>()?;
     m.add_class::<PyConfig>()?;
     Ok(())
