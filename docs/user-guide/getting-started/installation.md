@@ -96,10 +96,6 @@ Install PostgreSQL using your system package manager:
     sudo systemctl start postgresql
     ```
 
-=== "Windows"
-
-    Download and install from [postgresql.org](https://www.postgresql.org/download/windows/)
-
 ### Option 3: Cloud PostgreSQL
 
 pgqrs works with any PostgreSQL-compatible database:
@@ -114,85 +110,90 @@ pgqrs works with any PostgreSQL-compatible database:
 
 Before using pgqrs, you need to install its schema in your database. You can do this via the CLI or programmatically.
 
-### Using the CLI
+=== "CLI"
 
-```bash
-# Install the CLI
-cargo install pgqrs
+    ```bash
+    # Install the CLI
+    cargo install pgqrs
 
-# Set your database connection
-export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
+    # Set your database connection
+    export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
 
-# Install the schema
-pgqrs install
+    # Install the schema
+    pgqrs install
 
-# Verify the installation
-pgqrs verify
-```
+    # Verify the installation
+    pgqrs verify
+    ```
 
-### Programmatically (Rust)
+=== "Rust"
 
-```rust
-use pgqrs::{Admin, Config};
+    ```rust
+    use pgqrs::{Admin, Config};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::from_dsn("postgresql://localhost/mydb");
-    let admin = Admin::new(&config).await?;
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let config = Config::from_dsn("postgresql://localhost/mydb")?;
+        let admin = Admin::new(&config).await?;
 
-    // Install schema
-    admin.install().await?;
+        // Install schema
+        admin.install().await?;
 
-    // Verify installation
-    admin.verify().await?;
+        // Verify installation
+        admin.verify().await?;
 
-    println!("Schema installed successfully!");
-    Ok(())
-}
-```
+        println!("Schema installed successfully!");
+        Ok(())
+    }
+    ```
 
-### Programmatically (Python)
+=== "Python"
 
-```python
-import asyncio
-from pgqrs import Admin
+    ```python
+    import pgqrs
 
-async def main():
-    admin = Admin("postgresql://localhost/mydb")
+    # Connect to database
+    config = pgqrs.Config.from_dsn("postgresql://localhost/mydb")
+    admin = pgqrs.Admin(config)
 
     # Install schema
-    await admin.install()
+    admin.install()
 
     # Verify installation
-    await admin.verify()
+    admin.verify()
 
     print("Schema installed successfully!")
-
-asyncio.run(main())
-```
+    ```
 
 ## Custom Schema
 
 By default, pgqrs creates tables in the `public` schema. To use a custom schema:
 
-### CLI
+=== "CLI"
 
-```bash
-# Create the schema first (in psql)
-# CREATE SCHEMA IF NOT EXISTS pgqrs;
+    ```bash
+    # Create the schema first (in psql)
+    # CREATE SCHEMA IF NOT EXISTS pgqrs;
 
-# Install with custom schema
-pgqrs --schema pgqrs install
-```
+    # Install with custom schema
+    pgqrs --schema pgqrs install
+    ```
 
-### Rust
+=== "Rust"
 
-```rust
-let config = Config::from_dsn_with_schema(
-    "postgresql://localhost/mydb",
-    "pgqrs"
-)?;
-```
+    ```rust
+    let config = Config::from_dsn_with_schema(
+        "postgresql://localhost/mydb",
+        "pgqrs"
+    )?;
+    ```
+
+=== "Python"
+
+    ```python
+    # Set schema during Admin initialization
+    admin = pgqrs.Admin(dsn, schema="pgqrs")
+    ```
 
 ## What's Next?
 

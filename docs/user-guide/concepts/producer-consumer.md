@@ -83,12 +83,29 @@ println!("Enqueued {} messages", messages.len());
 
 Schedule messages for future processing:
 
-```rust
-let payload = json!({"reminder": "Follow up with customer"});
+=== "Rust"
 
-// Available after 5 minutes (300 seconds)
-let message = producer.enqueue_delayed(&payload, 300).await?;
-```
+    ```rust
+    let payload = json!({"reminder": "Follow up with customer"});
+
+    // Available after 5 minutes (300 seconds)
+    let message = producer.enqueue_delayed(&payload, 300).await?;
+    ```
+
+=== "Python"
+
+    ```python
+    import pgqrs
+    
+    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
+    
+    payload = {"reminder": "Follow up with customer"}
+    
+    # Available after 5 minutes (300 seconds)
+    message_id = await producer.enqueue_delayed(payload, delay_seconds=300)
+    print(f"Scheduled message {message_id} for 5 minutes from now")
+    ```
 
 #### Extend Visibility
 
@@ -96,7 +113,7 @@ If processing takes longer than expected, extend the lock:
 
 ```rust
 // Extend lock by 30 more seconds
-let extended = producer.extend_visibility(message_id, 30).await?;
+let extended = consumer.extend_visibility(message_id, 30).await?;
 if extended {
     println!("Lock extended successfully");
 }
@@ -267,7 +284,8 @@ for message in messages {
 
     // Extend lock if needed
     if result.needs_more_time() {
-        producer.extend_visibility(message.id, 60).await?;
+        // Processing is taking longer than expected
+        consumer.extend_visibility(message.id, 60).await?;
     }
 
     // Complete and archive

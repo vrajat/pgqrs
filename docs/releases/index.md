@@ -51,8 +51,8 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 | Version | Date | Highlights |
 |---------|------|------------|
 | [0.3.0](changelog.md#030---2024-11-13) | 2024-11-13 | Producer/Consumer architecture |
-| [0.2.0](changelog.md#020---previous-release) | - | Initial queue implementation |
-| [0.1.0](changelog.md#010---initial-release) | - | Project inception |
+| [0.2.0](changelog.md#020-previous-release) | - | Initial queue implementation |
+| [0.1.0](changelog.md#010-initial-release) | - | Project inception |
 
 ## Upgrade Guides
 

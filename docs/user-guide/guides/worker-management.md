@@ -193,27 +193,41 @@ Send periodic heartbeats to indicate worker health:
 
 === "Python"
 
-    !!! warning "Not Yet Implemented"
-        Heartbeat functionality is not yet available in Python bindings.
-
-    For now, implement a basic consumer loop:
-
     ```python
+    import pgqrs
     import asyncio
-    from pgqrs import Consumer
-
-    async def consumer_loop(consumer):
-        while True:
-            messages = await consumer.dequeue()
-            for message in messages:
-                await process_message(message)
-                await consumer.archive(message.id)
-
-            if not messages:
-                await asyncio.sleep(1)
-    ```
-
-### Graceful Shutdown
+    
+    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    
+    # Batch producer
+    producer = pgqrs.Producer(admin, "tasks", "batch-producer", 8080)
+    
+    # Enqueue multiple messages at once
+    payloads = [
+        {"task": "process_user", "user_id": i}
+        for i in range(100, 200)
+    ]
+    
+    messages = await producer.enqueue_batch(payloads)
+    print(f"Enqueued {len(messages)} messages")
+    
+    # Batch consumer
+    consumer = pgqrs.Consumer(admin, "tasks", "batch-consumer", 8081)
+    
+    # Process messages in batches
+    batch = await consumer.dequeue_batch(limit=50)
+    if batch:
+        # Process all messages in the batch
+        results = await asyncio.gather(*[
+            process_message(msg.payload) for msg in batch
+        ])
+        
+        # Archive the whole batch
+        message_ids = [msg.id for msg in batch]
+        await consumer.archive_batch(message_ids)
+        
+        print(f"Processed {len(batch)} messages")
+    ```### Graceful Shutdown
 
 Handle shutdown signals properly:
 
@@ -298,11 +312,8 @@ Handle shutdown signals properly:
                 await asyncio.sleep(0.1)
 
         print("Consumer stopped gracefully")
-        # Note: suspend() and shutdown() not yet available in Python
+        # Use signal handlers for graceful shutdown as shown above
     ```
-
-    !!! note
-        Full graceful shutdown with `suspend()` and `shutdown()` methods not yet available in Python bindings.
 
 ## Monitoring Workers
 
@@ -685,12 +696,93 @@ pgqrs worker delete --id 42
 ## Best Practices
 
 1. **Use meaningful identifiers** - Include hostname and worker ID
-2. **Send regular heartbeats** - Every 30-60 seconds
+2. **Send regular heartbeats** - Every 30-60 seconds  
 3. **Implement graceful shutdown** - Suspend before stopping
 4. **Monitor worker health** - Alert on stale heartbeats
 5. **Clean up stopped workers** - Purge periodically
 6. **Scale based on queue depth** - Not just time of day
 7. **Use connection pooling** - Share pools across workers when possible
+
+### Worker Health Monitoring
+
+Monitor workers proactively to detect issues early:
+
+=== "Rust"
+
+    ```rust
+    use pgqrs::{Admin, WorkerHandle};
+    use chrono::Duration;
+    
+    async fn check_worker_health(admin: &Admin) -> Result<(), Box<dyn std::error::Error>> {
+        let workers = admin.get_workers().await?;
+        let worker_list = workers.list().await?;
+        
+        for worker in worker_list {
+            let handle = WorkerHandle::new(admin.pool.clone(), worker.id);
+            
+            // Check if worker responded to heartbeat in last 5 minutes
+            if !handle.is_healthy(Duration::minutes(5)).await? {
+                // Alert your monitoring system
+                alert_stale_worker(&worker).await?;
+            }
+        }
+        Ok(())
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    async def monitor_workers(admin: pgqrs.Admin):
+        workers = await admin.get_workers()
+        worker_list = await workers.list()
+        
+        stale_threshold = datetime.utcnow() - timedelta(minutes=5)
+        
+        for worker in worker_list:
+            if worker.updated_at < stale_threshold:
+                # Send alert to monitoring system
+                await send_alert(f"Worker {worker.id} is stale")
+    ```
+
+### Automated Cleanup
+
+Set up automated cleanup of old workers:
+
+=== "Rust"
+
+    ```rust
+    // Run daily cleanup
+    async fn daily_worker_cleanup(admin: Admin) {
+        let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+        
+        loop {
+            interval.tick().await;
+            
+            // Clean up workers stopped more than 7 days ago
+            if let Err(e) = cleanup_old_workers(&admin, 7).await {
+                log::error!("Worker cleanup failed: {}", e);
+            }
+        }
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    async def scheduled_cleanup(admin: pgqrs.Admin):
+        while True:
+            try:
+                # Clean up workers stopped more than 7 days ago
+                count = await cleanup_stopped_workers(admin, older_than_days=7)
+                print(f"Cleaned up {count} old workers")
+                
+                # Wait 24 hours
+                await asyncio.sleep(24 * 60 * 60)
+            except Exception as e:
+                print(f"Cleanup error: {e}")
+                await asyncio.sleep(3600)  # Retry in 1 hour
+    ```
 
 ## What's Next?
 

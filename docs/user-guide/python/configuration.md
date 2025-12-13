@@ -156,7 +156,7 @@ The following Rust configuration options are not yet available in Python:
 
 | Feature | Rust | Python |
 |---------|------|--------|
-| Custom schema | ✅ `Config::from_dsn_with_schema()` | ❌ Not available |
+| Custom schema | ✅ `Config::from_dsn_with_schema()` | ✅ `Admin(dsn, schema="custom")` |
 | Max connections | ✅ `config.max_connections` | ❌ Not available |
 | Connection timeout | ✅ `config.connection_timeout_seconds` | ❌ Not available |
 | Default lock time | ✅ `config.default_lock_time_seconds` | ❌ Not available |

@@ -1,6 +1,6 @@
 # User Guide
 
-Welcome to the pgqrs User Guide. This comprehensive guide covers everything you need to know to effectively use pgqrs in your applications.
+Welcome to the pgqrs User Guide. This guide covers everything you need to know to effectively use pgqrs in your applications.
 
 ## Overview
 

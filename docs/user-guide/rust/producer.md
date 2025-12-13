@@ -113,7 +113,7 @@ Extend the lock on a message being processed.
 // Processing is taking longer than expected...
 
 // Extend lock by 30 more seconds
-let extended = producer.extend_visibility(42, 30).await?;
+let extended = consumer.extend_visibility(42, 30).await?;
 
 if extended {
     println!("Lock extended, continue processing...");

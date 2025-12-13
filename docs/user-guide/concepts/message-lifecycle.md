@@ -162,21 +162,20 @@ Delayed messages have a `vt` set in the future at creation time:
 
 === "Python"
 
-    !!! warning "Not Yet Implemented"
-        `enqueue_delayed` is not yet available in Python bindings.
-        See [GitHub Issue](https://github.com/vrajat/pgqrs/issues) for status.
-
-    As a workaround, you can include a scheduled time in your payload and filter in the consumer:
-
     ```python
-    from datetime import datetime, timedelta
+    import pgqrs
+    import asyncio
 
-    # Include scheduled time in payload
-    scheduled_at = datetime.utcnow() + timedelta(minutes=5)
-    await producer.enqueue({
-        "task": "send_email",
-        "scheduled_at": scheduled_at.isoformat()
-    })
+    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
+
+    # Send delayed message (available in 300 seconds = 5 minutes)
+    message_id = await producer.enqueue_delayed(
+        {"task": "send_reminder", "user_id": 123},
+        delay_seconds=300
+    )
+
+    print(f"Scheduled message {message_id} for future processing")
     ```
 
 ```mermaid
@@ -204,14 +203,31 @@ Extend the lock on a message if processing takes longer:
 === "Rust"
 
     ```rust
-    // Extend lock by 30 more seconds
-    producer.extend_visibility(message.id, 30).await?;
+        // Processing taking longer than expected...
+    consumer.extend_visibility(message.id, 30).await?;
     ```
 
 === "Python"
 
-    !!! warning "Not Yet Implemented"
-        `extend_visibility` is not yet available in Python bindings.
+    ```python
+    import pgqrs
+    import asyncio
+
+    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    consumer = pgqrs.Consumer(admin, "tasks", "worker1", 8080)
+
+    # Dequeue and extend processing time
+    messages = await consumer.dequeue()
+    if messages:
+        msg = messages[0]
+
+        # Extend visibility by 5 minutes (300 seconds)
+        await consumer.extend_visibility(msg.id, extension_seconds=300)
+
+        # Continue processing with extended timeout
+        result = await long_running_task(msg.payload)
+        await consumer.archive(msg.id)
+    ```
 
 ```mermaid
 sequenceDiagram
@@ -314,9 +330,28 @@ Choose based on your requirements:
 
 === "Python"
 
-    !!! warning "Not Yet Implemented"
-        `delete` method is not yet available in Python bindings.
-        Use `archive` for all completed messages.
+    ```python
+    import pgqrs
+    import json
+
+    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    consumer = pgqrs.Consumer(admin, "tasks", "worker1", 8080)
+
+    # Dequeue and handle poison message
+    messages = await consumer.dequeue()
+    if messages:
+        msg = messages[0]
+
+        try:
+            # Attempt to process
+            data = json.loads(msg.payload) if isinstance(msg.payload, str) else msg.payload
+            result = await process_task(data)
+            await consumer.archive(msg.id)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Invalid message format: {e}")
+            # Delete without archiving
+            await consumer.delete(msg.id)
+    ```
 
 ## Archive Management
 
@@ -375,7 +410,7 @@ pgqrs archive delete tasks --older-than 30d
     let messages = consumer.dequeue_many_with_delay(10, 60).await?;
     for message in messages {
         if might_take_long(&message) {
-            producer.extend_visibility(message.id, 300).await?;
+            consumer.extend_visibility(message.id, 300).await?;
         }
         // Process...
     }
@@ -392,9 +427,6 @@ pgqrs archive delete tasks --older-than 30d
         await process(message)
         await consumer.archive(message.id)
     ```
-
-    !!! note
-        `dequeue_many_with_delay` and `extend_visibility` are not yet available in Python.
 
 ### 2. Handle Retries Gracefully
 
@@ -451,7 +483,7 @@ Even if you don't need long-term retention, archives help debugging:
 === "Python"
 
     ```python
-    # Always archive (delete not yet available in Python)
+    # Archive the message to remove it from the queue
     await consumer.archive(message.id)
     ```
 

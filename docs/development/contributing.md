@@ -232,23 +232,6 @@ cargo test -- --nocapture
 
 Look for issues labeled `good first issue`:
 
-- Documentation improvements
-- Error message clarity
-- Test coverage
-- Example code
-
-### Medium Effort
-
-- New CLI commands
-- Python binding improvements
-- Performance optimizations
-
-### Larger Projects
-
-- New storage backends
-- Metrics and observability
-- Message routing features
-
 ## Review Process
 
 1. **Automated checks** run on all PRs
