@@ -298,6 +298,19 @@ async def test_config_properties(postgres_dsn):
     c.connection_timeout_seconds = 60
     assert c.connection_timeout_seconds == 60
 
+    # Test Advanced Config (PR #89)
+    c.default_lock_time_seconds = 120
+    assert c.default_lock_time_seconds == 120
+
+    c.default_max_batch_size = 500
+    assert c.default_max_batch_size == 500
+
+    c.max_read_ct = 10
+    assert c.max_read_ct == 10
+
+    c.heartbeat_interval_seconds = 15
+    assert c.heartbeat_interval_seconds == 15
+
 @pytest.mark.asyncio
 async def test_config_integration(postgres_dsn, schema):
     # This test verifies that we can pass a Config object to Admin
