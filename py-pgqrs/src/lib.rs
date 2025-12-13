@@ -223,6 +223,26 @@ impl Consumer {
         message_id: i64,
         extension_seconds: f64,
     ) -> PyResult<&'a PyAny> {
+        """
+        Extends the visibility timeout for a message in the queue.
+
+        Parameters
+        ----------
+        message_id : int
+            The ID of the message whose visibility timeout is to be extended.
+        extension_seconds : float
+            The number of seconds to extend the visibility timeout.
+
+        Returns
+        -------
+        None
+            Returns None on success.
+
+        Raises
+        ------
+        RuntimeError
+            If the operation fails.
+        """
         let inner = self.inner.clone();
         let extension = extension_seconds as u32;
 

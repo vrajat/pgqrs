@@ -181,7 +181,7 @@ async def test_enqueue_delayed(postgres_dsn, schema):
 async def test_extend_visibility(postgres_dsn, schema):
     """
     Test visibility timeout extension.
-    From Issue #69 / PR #85
+    From Issue #69
     """
     admin = pgqrs.Admin(postgres_dsn, schema=schema)
     await admin.install()
