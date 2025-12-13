@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_msg.id
         );
 
-        let extended = task_producer.extend_visibility(task_msg.id, 30).await?;
+        let extended = task_consumer.extend_visibility(task_msg.id, 30).await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.id);
         }

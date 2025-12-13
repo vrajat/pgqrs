@@ -217,32 +217,32 @@ impl Consumer {
         })
     }
 
+    /// Extends the visibility timeout for a message in the queue.
+    ///
+    /// Parameters
+    /// ----------
+    /// message_id : int
+    ///     The ID of the message whose visibility timeout is to be extended.
+    /// extension_seconds : float
+    ///     The number of seconds to extend the visibility timeout.
+    ///
+    /// Returns
+    /// -------
+    /// None
+    ///     Returns None on success.
+    ///
+    /// Raises
+    /// ------
+    /// RuntimeError
+    ///     If the operation fails.
     fn extend_visibility<'a>(
         &self,
         py: Python<'a>,
         message_id: i64,
         extension_seconds: u32,
     ) -> PyResult<&'a PyAny> {
-        """
-        Extends the visibility timeout for a message in the queue.
 
-        Parameters
-        ----------
-        message_id : int
-            The ID of the message whose visibility timeout is to be extended.
-        extension_seconds : float
-            The number of seconds to extend the visibility timeout.
 
-        Returns
-        -------
-        None
-            Returns None on success.
-
-        Raises
-        ------
-        RuntimeError
-            If the operation fails.
-        """
         let inner = self.inner.clone();
 
         pyo3_asyncio::tokio::future_into_py(py, async move {

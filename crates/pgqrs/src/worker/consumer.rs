@@ -191,7 +191,7 @@ impl Consumer {
     ) -> Result<bool> {
         let messages = Messages::new(self.pool.clone());
         let rows_affected = messages
-            .extend_visibility(message_id, additional_seconds)
+            .extend_visibility(message_id, self.worker_info.id, additional_seconds)
             .await?;
         Ok(rows_affected > 0)
     }
