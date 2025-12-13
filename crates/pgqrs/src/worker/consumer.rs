@@ -145,15 +145,16 @@ impl Consumer {
     }
 
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
-        let rows_affected = sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
-            .bind(message_id)
-            .bind(self.worker_info.id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?
-            .rows_affected();
+        let rows_affected =
+            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
+                .bind(message_id)
+                .bind(self.worker_info.id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: e.to_string(),
+                })?
+                .rows_affected();
 
         Ok(rows_affected > 0)
     }

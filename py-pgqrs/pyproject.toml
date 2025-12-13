@@ -16,8 +16,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "testcontainers[postgres]>=3.7",
+    "urllib3<2.0",
 ]
