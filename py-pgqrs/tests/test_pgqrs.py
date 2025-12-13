@@ -201,7 +201,8 @@ async def test_extend_visibility(postgres_dsn, schema):
 
     # Extend visibility by 5 seconds
     # If successful, another consumer shouldn't see it even after 2s
-    await consumer.extend_visibility(msg.id, 5)
+    extended = await consumer.extend_visibility(msg.id, 5)
+    assert extended is True, "Failed to extend visibility"
 
     # Wait 2.5 seconds (original VT expired, but extended should hold)
     await asyncio.sleep(2.5)
