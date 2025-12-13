@@ -435,6 +435,8 @@ async def test_archive_advanced_methods(postgres_dsn, schema):
 
     assert arch_msg.original_msg_id == msg_id
     assert arch_msg.consumer_worker_id == cons_worker.id
+    assert isinstance(arch_msg.vt, str)
+    assert isinstance(arch_msg.dequeued_at, str)
 
     # Test get() using the ID we just found
     fetched_arch_msg = await archive.get(arch_msg.id)

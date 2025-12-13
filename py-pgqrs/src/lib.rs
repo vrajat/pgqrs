@@ -732,6 +732,10 @@ struct ArchivedMessage {
     #[pyo3(get)]
     archived_at: String,
     #[pyo3(get)]
+    vt: String,
+    #[pyo3(get)]
+    dequeued_at: Option<String>,
+    #[pyo3(get)]
     read_ct: i32,
     #[pyo3(get)]
     producer_worker_id: Option<i64>,
@@ -748,6 +752,8 @@ impl From<RustArchivedMessage> for ArchivedMessage {
             payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
             enqueued_at: r.enqueued_at.to_rfc3339(),
             archived_at: r.archived_at.to_rfc3339(),
+            vt: r.vt.to_rfc3339(),
+            dequeued_at: r.dequeued_at.map(|t| t.to_rfc3339()),
             read_ct: r.read_ct,
             producer_worker_id: r.producer_worker_id,
             consumer_worker_id: r.consumer_worker_id,
