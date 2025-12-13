@@ -24,13 +24,53 @@
 //! // producer.enqueue(...)
 //! // consumer.dequeue(...)
 //! ```
-use crate::constants::{ARCHIVE_BATCH, ARCHIVE_MESSAGE, DELETE_MESSAGE_BATCH, VISIBILITY_TIMEOUT};
+
 use crate::error::Result;
 use crate::tables::Messages;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
 use crate::worker::{Worker, WorkerLifecycle};
 use async_trait::async_trait;
 use sqlx::PgPool;
+
+/// Default visibility timeout in seconds for locked messages
+const VISIBILITY_TIMEOUT: u32 = 5;
+
+/// Delete batch of messages
+const DELETE_MESSAGE_BATCH: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = ANY($1) AND consumer_worker_id = $2
+    RETURNING id;
+"#;
+
+/// Archive single message (atomic operation)
+const ARCHIVE_MESSAGE: &str = r#"
+    WITH archived_msg AS (
+        DELETE FROM pgqrs_messages
+        WHERE id = $1 AND consumer_worker_id = $2
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msg
+    RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
+"#;
+
+/// Archive batch of messages (efficient batch operation)
+const ARCHIVE_BATCH: &str = r#"
+    WITH archived_msgs AS (
+        DELETE FROM pgqrs_messages
+        WHERE id = ANY($1) AND consumer_worker_id = $2
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msgs
+    RETURNING original_msg_id;
+"#;
 
 /// Read available messages from queue (with SKIP LOCKED)
 /// Select messages for worker with lock
@@ -144,6 +184,32 @@ impl Consumer {
         Ok(result)
     }
 
+    pub async fn extend_visibility(
+        &self,
+        message_id: i64,
+        additional_seconds: u32,
+    ) -> Result<bool> {
+        let messages = Messages::new(self.pool.clone());
+        let rows_affected = messages
+            .extend_visibility(message_id, self.worker_info.id, additional_seconds)
+            .await?;
+        Ok(rows_affected > 0)
+    }
+
+    /// Permanently delete a message from the queue.
+    ///
+    /// This method removes the message with the specified `message_id` from the `pgqrs_messages` table.
+    /// Unlike [`archive`](Self::archive), which moves messages to an archive table for potential recovery or auditing,
+    /// this method deletes the message permanently and it cannot be recovered.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - The ID of the message to delete.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if a message was deleted, or `Ok(false)` if no message with the given ID was found.
+    /// Returns an error if the database operation fails.
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
         let rows_affected =
             sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")

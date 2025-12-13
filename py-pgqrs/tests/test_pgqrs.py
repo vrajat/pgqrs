@@ -178,6 +178,60 @@ async def test_enqueue_delayed(postgres_dsn, schema):
 
 
 @pytest.mark.asyncio
+async def test_extend_visibility(postgres_dsn, schema):
+    """
+    Test visibility timeout extension.
+    From Issue #69
+    """
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+    queue_name = "test_visibility_queue"
+    await admin.create_queue(queue_name)
+
+    producer = pgqrs.Producer(admin, queue_name, "vis_prod", PRODUCER_PORT)
+    consumer = pgqrs.Consumer(admin, queue_name, "vis_cons", CONSUMER_PORT)
+
+    # Enqueue message
+    msg_id = await producer.enqueue({"foo": "bar"})
+
+    # Dequeue with short visibility (2 seconds)
+    msgs = await consumer.dequeue_batch_with_delay(1, 2)
+    assert len(msgs) == 1
+    msg = msgs[0]
+
+    # Extend visibility by 5 seconds
+    # If successful, another consumer shouldn't see it even after 2s
+    extended = await consumer.extend_visibility(msg.id, 5)
+    assert extended is True, "Failed to extend visibility"
+
+    # Wait 2.5 seconds (original VT expired, but extended should hold)
+    await asyncio.sleep(2.5)
+
+
+
+    # Let's check if it is visible. It should NOT be.
+    msgs_retry = await consumer.dequeue()
+    assert len(msgs_retry) == 0, "Message should still be invisible after extension"
+
+    # Wait another 4 seconds (total 6.5s elapsed; still less than the extended visibility timeout of 7s [2s initial + 5s extension])
+    await asyncio.sleep(4.0)
+
+    # Reclaim messages from zombie consumers (since we waited > heartbeat interval likely, or we force it)
+    await admin.reclaim_messages(queue_name, older_than_seconds=1.0)
+
+    # Now it should be visible (or nearly)
+    msgs_retry_2 = await consumer.dequeue()
+    # The dequeue method performs a single fetch and does not loop internally.
+
+    if len(msgs_retry_2) == 0:
+        await asyncio.sleep(1.0)
+        msgs_retry_2 = await consumer.dequeue()
+
+    assert len(msgs_retry_2) == 1, "Message should become visible after extended timeout"
+    assert msgs_retry_2[0].id == msg_id
+
+
+@pytest.mark.asyncio
 async def test_batch_operations(postgres_dsn, schema):
     """
     Test batch operations (enqueue, dequeue, archive).

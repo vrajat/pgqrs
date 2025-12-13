@@ -217,6 +217,41 @@ impl Consumer {
         })
     }
 
+    /// Extends the visibility timeout for a message in the queue.
+    ///
+    /// Parameters
+    /// ----------
+    /// message_id : int
+    ///     The ID of the message whose visibility timeout is to be extended.
+    /// extension_seconds : float
+    ///     The number of seconds to extend the visibility timeout.
+    ///
+    /// Returns
+    /// -------
+    /// None
+    ///     Returns None on success.
+    ///
+    /// Raises
+    /// ------
+    /// RuntimeError
+    ///     If the operation fails.
+    fn extend_visibility<'a>(
+        &self,
+        py: Python<'a>,
+        message_id: i64,
+        extension_seconds: u32,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let result = inner
+                .extend_visibility(message_id, extension_seconds)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(result)
+        })
+    }
+
     fn dequeue_batch<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -437,6 +472,31 @@ impl Admin {
             Ok(Archive {
                 inner: admin.archive.clone(),
             })
+        })
+    }
+
+    fn reclaim_messages<'a>(
+        &self,
+        py: Python<'a>,
+        queue_name: String,
+        older_than_seconds: Option<f64>,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            let queue = admin
+                .get_queue(&queue_name)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+            let duration =
+                older_than_seconds.map(|s| chrono::Duration::milliseconds((s * 1000.0) as i64));
+
+            let count = admin
+                .reclaim_messages(queue.id, duration)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(count)
         })
     }
 }

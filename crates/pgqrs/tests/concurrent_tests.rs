@@ -12,7 +12,6 @@ async fn create_admin() -> pgqrs::admin::Admin {
             .expect("Failed to create Admin");
 
     // Clean up any existing queues/workers to ensure test isolation
-    // Since schema is unique per test run usually via common, this might be redundant but safe
     if let Err(e) =
         sqlx::query("TRUNCATE TABLE pgqrs_workers, pgqrs_queues RESTART IDENTITY CASCADE")
             .execute(&admin.pool)
@@ -188,5 +187,50 @@ async fn test_zombie_consumer_batch_ops() {
         results_b,
         vec![true, true],
         "Batch delete by B should succeed"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_concurrent_visibility_extension() {
+    let admin = create_admin().await;
+    let pool = admin.pool.clone();
+    let config = admin.config.clone();
+
+    let queue_name = "concurrent_vis_queue";
+    let queue_info = admin.create_queue(queue_name).await.unwrap();
+
+    let consumer_a = Consumer::new(pool.clone(), &queue_info, "consumer_a", 1001, &config)
+        .await
+        .unwrap();
+
+    let consumer_b = Consumer::new(pool.clone(), &queue_info, "consumer_b", 1002, &config)
+        .await
+        .unwrap();
+
+    let producer = Producer::new(pool.clone(), &queue_info, "producer", 2001, &config)
+        .await
+        .unwrap();
+
+    // 3. Enqueue Message
+    let msg_id = producer.enqueue(&json!({"foo": "bar"})).await.unwrap().id;
+
+    // 4. Consumer A dequeues
+    let msgs_a = consumer_a.dequeue().await.unwrap();
+    assert_eq!(msgs_a.len(), 1);
+    assert_eq!(msgs_a[0].id, msg_id);
+
+    // 5. Consumer B tries to extend visibility -> SHOULD FAIL
+    let extended_by_b = consumer_b.extend_visibility(msg_id, 10).await.unwrap();
+    assert!(
+        !extended_by_b,
+        "Consumer B should not be able to extend visibility of message owned by A"
+    );
+
+    // 6. Consumer A tries to extend visibility -> SHOULD SUCCEED
+    let extended_by_a = consumer_a.extend_visibility(msg_id, 10).await.unwrap();
+    assert!(
+        extended_by_a,
+        "Consumer A should be able to extend visibility of its own message"
     );
 }

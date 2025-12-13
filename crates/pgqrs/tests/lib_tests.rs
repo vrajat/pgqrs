@@ -533,7 +533,7 @@ async fn test_interval_parameter_syntax() {
     let original_vt = message.vt;
 
     // Test extending visibility timeout (which uses make_interval in UPDATE_MESSAGE_VT)
-    let extend_result = producer.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
+    let extend_result = consumer.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
     assert!(
         extend_result,
         "Should successfully extend visibility timeout"
