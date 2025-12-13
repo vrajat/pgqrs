@@ -207,14 +207,12 @@ async def test_extend_visibility(postgres_dsn, schema):
     await asyncio.sleep(2.5)
 
     # Try dequeue with another consumer (simulated by same consumer instance for simplicity, as it respects DB state)
-    # Actually, dequeue uses SKIP LOCKED, so even same consumer won't pick it up if it's still locked/invisible.
-    # But to be sure it's not visible to "others", we rely on the query logic: (vt <= NOW())
 
     # Let's check if it is visible. It should NOT be.
     msgs_retry = await consumer.dequeue()
     assert len(msgs_retry) == 0, "Message should still be invisible after extension"
 
-    # Wait another 4 seconds (total 6.5s > 5.5s)
+    # Wait another 4 seconds (total 6.5s elapsed; still less than the extended visibility timeout of 7s [2s initial + 5s extension])
     await asyncio.sleep(4.0)
 
     # Reclaim messages from zombie consumers (since we waited > heartbeat interval likely, or we force it)
@@ -223,7 +221,7 @@ async def test_extend_visibility(postgres_dsn, schema):
     # Now it should be visible (or nearly)
     msgs_retry_2 = await consumer.dequeue()
     # It loops a bit in dequeue? No, pure single fetch.
-    # To be robust, let's wait a comfortable margin.
+
     if len(msgs_retry_2) == 0:
         await asyncio.sleep(1.0)
         msgs_retry_2 = await consumer.dequeue()

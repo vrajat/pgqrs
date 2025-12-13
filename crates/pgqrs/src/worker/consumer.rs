@@ -196,6 +196,20 @@ impl Consumer {
         Ok(rows_affected > 0)
     }
 
+    /// Permanently delete a message from the queue.
+    ///
+    /// This method removes the message with the specified `message_id` from the `pgqrs_messages` table.
+    /// Unlike [`archive`](Self::archive), which moves messages to an archive table for potential recovery or auditing,
+    /// this method deletes the message permanently and it cannot be recovered.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - The ID of the message to delete.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(true)` if a message was deleted, or `Ok(false)` if no message with the given ID was found.
+    /// Returns an error if the database operation fails.
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
         let rows_affected =
             sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
