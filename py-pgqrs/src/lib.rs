@@ -129,6 +129,26 @@ impl Producer {
             Ok(msg.id)
         })
     }
+
+    fn enqueue_batch<'a>(&self, py: Python<'a>, payloads: Vec<PyObject>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_payloads: Result<Vec<serde_json::Value>, _> = payloads
+            .into_iter()
+            .map(|p| py_to_json(p.as_ref(py)))
+            .collect();
+        let json_payloads = json_payloads?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .batch_enqueue(&json_payloads)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
 }
 
 #[pyclass]
@@ -168,10 +188,6 @@ impl Consumer {
                 .dequeue()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            // Convert to QueueMessage or dicts. Let's return QueueMessage objects.
-            // But implementing ToPyObject for QueueMessage manually is tedious.
-            // Let's assume we return list of dicts for now as it's cleaner without boilerplate.
-            // Or better, creating QueueMessage instances.
             Ok(messages
                 .into_iter()
                 .map(QueueMessage::from)
@@ -200,6 +216,50 @@ impl Consumer {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    fn dequeue_batch<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .dequeue_many(limit)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn dequeue_batch_with_delay<'a>(
+        &self,
+        py: Python<'a>,
+        limit: usize,
+        vt_seconds: u32,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .dequeue_many_with_delay(limit, vt_seconds)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(QueueMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn archive_batch<'a>(&self, py: Python<'a>, message_ids: Vec<i64>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let results = inner
+                .archive_many(message_ids)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(results)
+        })
+    }
 }
 
 // Wrappers for Tables
@@ -221,8 +281,6 @@ impl Workers {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
-
-    // Additional methods based on Table traits or specific impls
 }
 
 #[pyclass]
@@ -342,14 +400,6 @@ impl Admin {
         })
     }
 
-    // Accessors for tables
-    // Since Rust structs are owned by Admin, we can't easily return a permanent reference.
-    // However, the tables (Queues etc) just hold a Pool, so they are cheap to clone.
-    // But Admin struct doesn't expose them publicly in a way we can clone them out from here
-    // without locking.
-    // And actually `Admin` struct fields ARE public!
-    // But we are inside a Mutex.
-
     fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -399,8 +449,6 @@ struct QueueInfo {
     id: i64,
     #[pyo3(get)]
     queue_name: String,
-    // created_at: DateTime<Utc> - convert to python datetime?
-    // For simplicity, stringify or omit for now, or use chrono-tz
     #[pyo3(get)]
     created_at: String,
 }
@@ -423,7 +471,6 @@ struct QueueMessage {
     queue_id: i64,
     #[pyo3(get)]
     payload: PyObject,
-    // ... other fields as needed
 }
 
 impl From<RustQueueMessage> for QueueMessage {
