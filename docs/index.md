@@ -1,49 +1,83 @@
 # pgqrs
 
-`pgqrs` is a library-only PostgreSQL-backed job queue for Rust applications.
+`pgqrs` is a library-only PostgreSQL-backed job queue for Rust and Python applications.
 
 ## Features
-- **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust applications.
+
+- **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust or Python applications.
 - **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
 - **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
-- **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit.
+- **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by visibility timeout.
 - **Message Archiving**: Built-in archiving system for audit trails and historical data retention.
 
-## Example
+## Quick Example
 
-### Producer
+=== "Rust"
 
-```rust
-use pgqrs::Producer;
-use serde_json::Value;
+    ```rust
+    use pgqrs::{Admin, Config, Producer, Consumer};
+    use serde_json::json;
 
-/// Enqueue a payload to the queue
-async fn enqueue_job(producer: &Producer, payload: Value) -> Result<i64, Box<dyn std::error::Error>> {
-	let message = producer.enqueue(&payload).await?;
-	Ok(message.id)
-}
-```
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        // Connect to PostgreSQL
+        let config = Config::from_dsn("postgresql://user:pass@localhost/mydb")?;
 
-### Consumer
+        // Set up pgqrs (run once)
+        let admin = Admin::new(&config).await?;
+        admin.install().await?;
+        admin.create_queue("tasks").await?;
 
-```rust
-use pgqrs::{Consumer, WorkerInfo};
-use std::time::Duration;
+        // Producer: enqueue a job
+        let producer = Producer::new(&config, "tasks").await?;
+        let message = producer.enqueue(&json!({"task": "send_email", "to": "user@example.com"})).await?;
+        println!("Enqueued message: {}", message.id);
 
-/// Poll for jobs from the queue and print them as they arrive
-async fn poll_and_print_jobs(consumer: &Consumer, worker: &WorkerInfo) -> Result<(), Box<dyn std::error::Error>> {
-	loop {
-		let messages = consumer.dequeue(worker).await?;
-		if messages.is_empty() {
-			// No job found, wait before polling again
-			tokio::time::sleep(Duration::from_secs(2)).await;
-		} else {
-			for message in messages {
-				println!("Dequeued job: {}", message.payload);
-				// Optionally archive or delete the message after processing
-				consumer.archive(message.id).await?;
-			}
-		}
-	}
-}
+        // Consumer: process jobs
+        let consumer = Consumer::new(&config, "tasks").await?;
+        if let Some(msg) = consumer.dequeue().await? {
+            println!("Processing: {}", msg.payload);
+
+            // Mark as complete
+            consumer.archive(msg.id, "completed").await?;
+        }
+
+        Ok(())
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    import pgqrs
+    import json
+
+    # Connect to PostgreSQL
+    config = pgqrs.Config.from_dsn("postgresql://user:pass@localhost/mydb")
+
+    # Set up pgqrs (run once)
+    admin = pgqrs.Admin(config)
+    admin.install()
+    admin.create_queue("tasks")
+
+    # Producer: enqueue a job
+    producer = pgqrs.Producer(config, "tasks")
+    message = producer.enqueue(json.dumps({"task": "send_email", "to": "user@example.com"}))
+    print(f"Enqueued message: {message.id}")
+
+    # Consumer: process jobs
+    consumer = pgqrs.Consumer(config, "tasks")
+    msg = consumer.dequeue()
+    if msg:
+        print(f"Processing: {msg.payload}")
+
+        # Mark as complete
+        consumer.archive(msg.id, "completed")
+    ```
+
+## Next Steps
+
+- [Installation](user-guide/getting-started/installation.md) - Get pgqrs set up
+- [Quickstart](user-guide/getting-started/quickstart.md) - Complete walkthrough
+- [Architecture](user-guide/concepts/architecture.md) - Understand how pgqrs works
 ```

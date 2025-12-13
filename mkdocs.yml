@@ -1,45 +1,144 @@
-site_name: pgqrs Documentation
-site_description: Documentation for the pgqrs project
+site_name: pgqrs
+site_url: https://pgqrs.com
+site_description: A lightweight PostgreSQL-backed job queue library for Rust and Python
 site_author: vrajat
 repo_url: https://github.com/vrajat/pgqrs
+repo_name: vrajat/pgqrs
+edit_uri: edit/main/docs/
 
 theme:
-  name: material
+  name: catppuccin
+  logo: assets/logo.svg
+  favicon: assets/favicon.ico
   palette:
-
-    # Palette toggle for automatic mode
-    - media: "(prefers-color-scheme)"
+    # Light theme - Catppuccin Latte
+    - scheme: latte
       toggle:
-        icon: material/brightness-auto
-        name: Switch to light mode
+        icon: material/weather-sunny
+        name: Switch to Frappé
 
-    # Palette toggle for light mode
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+    # Dark theme - Frappé (coolest)
+    - scheme: frappe
       toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
+        icon: material/weather-night
+        name: Switch to Macchiato
 
-    # Palette toggle for dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    # Dark theme - Macchiato (warm)
+    - scheme: macchiato
       toggle:
-        icon: material/brightness-4
-        name: Switch to system preference
+        icon: material/weather-partly-cloudy
+        name: Switch to Mocha
+
+    # Dark theme - Mocha (warmest)
+    - scheme: mocha
+      toggle:
+        icon: material/weather-cloudy
+        name: Switch to Latte
+  features:
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.copy
+    - content.code.annotate
+
 nav:
   - Home: index.md
-  - Quickstart: quickstart.md
-  - Guides: guides.md
-  - Concepts: concepts.md
-  - Reference: reference.md
-  - Rust API: https://docs.rs/pgqrs/latest/pgqrs/
-  - Contributing: contributing.md
+  - User Guide:
+    - user-guide/index.md
+    - Getting Started:
+      - Installation: user-guide/getting-started/installation.md
+      - Quickstart: user-guide/getting-started/quickstart.md
+    - Concepts:
+      - Architecture: user-guide/concepts/architecture.md
+      - Producer & Consumer: user-guide/concepts/producer-consumer.md
+      - Workers: user-guide/concepts/workers.md
+      - Message Lifecycle: user-guide/concepts/message-lifecycle.md
+    - Rust API:
+      - user-guide/rust/index.md
+      - Producer: user-guide/rust/producer.md
+      - Consumer: user-guide/rust/consumer.md
+      - Admin: user-guide/rust/admin.md
+      - Configuration: user-guide/rust/configuration.md
+    - Python API:
+      - user-guide/python/index.md
+      - Producer: user-guide/python/producer.md
+      - Consumer: user-guide/python/consumer.md
+      - Admin: user-guide/python/admin.md
+      - Configuration: user-guide/python/configuration.md
+    - Guides:
+      - user-guide/guides/index.md
+      - Basic Workflow: user-guide/guides/basic-workflow.md
+      - Batch Processing: user-guide/guides/batch-processing.md
+      - Delayed Messages: user-guide/guides/delayed-messages.md
+      - Worker Management: user-guide/guides/worker-management.md
+    - CLI Reference: user-guide/cli-reference.md
+  - Development:
+    - development/index.md
+    - Contributing: development/contributing.md
+    - Testing: development/testing.md
+    - Release Process: development/release-process.md
+  - Releases:
+    - releases/index.md
+    - Changelog: releases/changelog.md
+
 plugins:
   - search
-  - social
+
 markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/vrajat/pgqrs
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/pgqrs/
+  generator: false
+
+extra_css:
+  - stylesheets/extra.css
