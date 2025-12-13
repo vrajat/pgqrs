@@ -73,19 +73,20 @@ struct Producer {
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
         let rt = get_runtime();
         let producer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
-            // Use Admin to get queue info and manage pool
-            let admin = RustAdmin::new(&config)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
+            let (pool, config) = {
+                let locked_admin = admin.inner.lock().await;
+                (locked_admin.pool.clone(), locked_admin.config.clone())
+            };
+
+            let queues = RustQueues::new(pool.clone());
+            let q = queues.get_by_name(queue).await.map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
             })?;
 
-            RustProducer::new(admin.pool.clone(), &q, &hostname, port, &config)
+            RustProducer::new(pool, &q, &hostname, port, &config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -138,18 +139,20 @@ struct Consumer {
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
         let rt = get_runtime();
         let consumer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
-            let admin = RustAdmin::new(&config)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let q = admin.queues.get_by_name(queue).await.map_err(|e| {
+            let (pool, config) = {
+                let locked_admin = admin.inner.lock().await;
+                (locked_admin.pool.clone(), locked_admin.config.clone())
+            };
+
+            let queues = RustQueues::new(pool.clone());
+            let q = queues.get_by_name(queue).await.map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
             })?;
 
-            RustConsumer::new(admin.pool.clone(), &q, &hostname, port, &config)
+            RustConsumer::new(pool, &q, &hostname, port, &config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
@@ -173,6 +176,17 @@ impl Consumer {
                 .into_iter()
                 .map(QueueMessage::from)
                 .collect::<Vec<_>>())
+        })
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let result = inner
+                .delete(message_id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(result)
         })
     }
 
@@ -276,10 +290,15 @@ struct Admin {
 #[pymethods]
 impl Admin {
     #[new]
-    fn new(dsn: &str) -> PyResult<Self> {
+    fn new(dsn: &str, schema: Option<String>) -> PyResult<Self> {
         let rt = get_runtime();
         let admin = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
+            let config = if let Some(s) = schema {
+                Config::from_dsn_with_schema(dsn.to_string(), &s)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                Config::from_dsn(dsn)
+            };
             RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
