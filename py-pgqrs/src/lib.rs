@@ -241,8 +241,6 @@ impl Consumer {
         message_id: i64,
         extension_seconds: u32,
     ) -> PyResult<&'a PyAny> {
-
-
         let inner = self.inner.clone();
 
         pyo3_asyncio::tokio::future_into_py(py, async move {

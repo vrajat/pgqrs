@@ -218,8 +218,6 @@ impl Producer {
         Ok(queue_messages)
     }
 
-
-
     /// Internal method to insert a message with specific timestamps.
     ///
     /// # Arguments

@@ -45,7 +45,10 @@ async fn test_concurrent_visibility_extension() -> Result<(), Box<dyn std::error
     .await?;
 
     // 3. Enqueue Message
-    let msg_id = producer.enqueue(&serde_json::json!({"foo": "bar"})).await?.id;
+    let msg_id = producer
+        .enqueue(&serde_json::json!({"foo": "bar"}))
+        .await?
+        .id;
 
     // 4. Consumer A dequeues
     let msgs_a = consumer_a.dequeue().await?;
@@ -54,11 +57,17 @@ async fn test_concurrent_visibility_extension() -> Result<(), Box<dyn std::error
 
     // 5. Consumer B tries to extend visibility -> SHOULD FAIL
     let extended_by_b = consumer_b.extend_visibility(msg_id, 10).await?;
-    assert!(!extended_by_b, "Consumer B should not be able to extend visibility of message owned by A");
+    assert!(
+        !extended_by_b,
+        "Consumer B should not be able to extend visibility of message owned by A"
+    );
 
     // 6. Consumer A tries to extend visibility -> SHOULD SUCCEED
     let extended_by_a = consumer_a.extend_visibility(msg_id, 10).await?;
-    assert!(extended_by_a, "Consumer A should be able to extend visibility of its own message");
+    assert!(
+        extended_by_a,
+        "Consumer A should be able to extend visibility of its own message"
+    );
 
     Ok(())
 }
