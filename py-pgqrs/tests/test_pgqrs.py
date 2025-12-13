@@ -389,3 +389,72 @@ async def test_worker_list_status(postgres_dsn, schema):
     fetched_worker = await workers_handle.get(prod_worker.id)
     assert fetched_worker.id == prod_worker.id
     assert fetched_worker.hostname == "prod_host"
+
+@pytest.mark.asyncio
+async def test_archive_advanced_methods(postgres_dsn, schema):
+    """
+    Test advanced archive methods (get, list_by_worker, dlq).
+    From Issue #90
+    """
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+    queue_name = "archive_api_queue"
+    await admin.create_queue(queue_name)
+
+    producer = pgqrs.Producer(admin, queue_name, "arch_prod", PRODUCER_PORT)
+    consumer = pgqrs.Consumer(admin, queue_name, "arch_cons", CONSUMER_PORT)
+
+    # 1. Enqueue, Consume, Archive
+    msg_id = await producer.enqueue({"foo": "bar"})
+    msgs = await consumer.dequeue()
+    assert len(msgs) == 1
+    msg = msgs[0]
+    await consumer.archive(msg.id)
+
+    # 2. Get Archive handle
+    archive = await admin.get_archive()
+
+    # 3. Test get()
+    # Note: archive.get() takes archive ID, which is typically same as msg ID in current impl or we need to find it.
+    # The rust implementation might use same ID sequence or different?
+    # Usually archive table uses `id` serial. `original_msg_id` is the queue message id.
+    # We need to find the archive record first.
+
+    # Since we can't search by original_msg_id easily without list(), let's list by worker if possible?
+    # Or just guess ID 1 (since it's fresh schema).
+
+    # Let's try to find it via worker list if consumer registered properly.
+    # Consumer worker ID is needed.
+    workers = await (await admin.get_workers()).list()
+    cons_worker = next(w for w in workers if w.hostname == "arch_cons")
+
+    # Test list_by_worker
+    archived_msgs = await archive.list_by_worker(cons_worker.id, 10, 0)
+    assert len(archived_msgs) == 1
+    arch_msg = archived_msgs[0]
+
+    assert arch_msg.original_msg_id == msg_id
+    assert arch_msg.consumer_worker_id == cons_worker.id
+    assert isinstance(arch_msg.vt, str)
+    assert isinstance(arch_msg.dequeued_at, str)
+
+    # Test get() using the ID we just found
+    fetched_arch_msg = await archive.get(arch_msg.id)
+    assert fetched_arch_msg.id == arch_msg.id
+    assert fetched_arch_msg.payload == {"foo": "bar"}
+
+    # 4. Test count_by_worker
+    count = await archive.count_by_worker(cons_worker.id)
+    assert count == 1
+
+    # 5. Test delete()
+    deleted = await archive.delete(arch_msg.id)
+    assert deleted == 1
+
+    # Verify gone
+    assert await archive.count() == 0
+
+    # 6. Test DLQ (optional, if we can simulate failure easily)
+    # We won't simulate DLQ logic here to keep it simple, verifying API existence was the main goal.
+    dlq_count = await archive.dlq_count(5)
+    assert dlq_count == 0
