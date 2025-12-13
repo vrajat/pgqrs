@@ -7,7 +7,8 @@ use rust_pgqrs::tables::{
     Workers as RustWorkers,
 };
 use rust_pgqrs::types::{
-    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerStatus,
+    ArchivedMessage as RustArchivedMessage, QueueInfo as RustQueueInfo,
+    QueueMessage as RustQueueMessage, WorkerStatus,
 };
 use rust_pgqrs::{Admin as RustAdmin, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
@@ -486,6 +487,98 @@ impl Archive {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let msg = inner
+                .get(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(ArchivedMessage::from(msg))
+        })
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let count = inner
+                .delete(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(count)
+        })
+    }
+
+    fn list_dlq_messages<'a>(
+        &self,
+        py: Python<'a>,
+        max_attempts: i32,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .list_dlq_messages(max_attempts, limit, offset)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(ArchivedMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn dlq_count<'a>(&self, py: Python<'a>, max_attempts: i32) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .dlq_count(max_attempts)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn list_by_worker<'a>(
+        &self,
+        py: Python<'a>,
+        worker_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let messages = inner
+                .list_by_worker(worker_id, limit, offset)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(messages
+                .into_iter()
+                .map(ArchivedMessage::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn count_by_worker<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .count_by_worker(worker_id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn delete_by_worker<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .delete_by_worker(worker_id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 #[pyclass]
@@ -665,6 +758,50 @@ impl From<RustQueueMessage> for QueueMessage {
 }
 
 #[pyclass]
+struct ArchivedMessage {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    original_msg_id: i64,
+    #[pyo3(get)]
+    queue_id: i64,
+    #[pyo3(get)]
+    payload: PyObject,
+    #[pyo3(get)]
+    enqueued_at: String,
+    #[pyo3(get)]
+    archived_at: String,
+    #[pyo3(get)]
+    vt: String,
+    #[pyo3(get)]
+    dequeued_at: Option<String>,
+    #[pyo3(get)]
+    read_ct: i32,
+    #[pyo3(get)]
+    producer_worker_id: Option<i64>,
+    #[pyo3(get)]
+    consumer_worker_id: Option<i64>,
+}
+
+impl From<RustArchivedMessage> for ArchivedMessage {
+    fn from(r: RustArchivedMessage) -> Self {
+        Python::with_gil(|py| ArchivedMessage {
+            id: r.id,
+            original_msg_id: r.original_msg_id,
+            queue_id: r.queue_id,
+            payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
+            enqueued_at: r.enqueued_at.to_rfc3339(),
+            archived_at: r.archived_at.to_rfc3339(),
+            vt: r.vt.to_rfc3339(),
+            dequeued_at: r.dequeued_at.map(|t| t.to_rfc3339()),
+            read_ct: r.read_ct,
+            producer_worker_id: r.producer_worker_id,
+            consumer_worker_id: r.consumer_worker_id,
+        })
+    }
+}
+
+#[pyclass]
 struct WorkerInfo {
     #[pyo3(get)]
     id: i64,
@@ -738,6 +875,7 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Archive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
+    m.add_class::<ArchivedMessage>()?;
     m.add_class::<WorkerInfo>()?;
     m.add_class::<PyWorkerStatus>()?;
     m.add_class::<PyConfig>()?;
