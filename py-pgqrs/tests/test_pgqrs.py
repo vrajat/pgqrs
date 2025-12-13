@@ -12,10 +12,7 @@ async def test_basic_workflow(postgres_dsn, schema):
     Test basic workflow: Install -> Create Queue -> Produce -> Consume -> Archive
     From original test_basic.py
     """
-    # Append search_path options to DSN so all operations happen in the isolated schema
-    dsn_with_schema = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-
-    admin = pgqrs.Admin(dsn_with_schema)
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
 
     # 1. Install & Verify Schema
     await admin.install()
@@ -32,10 +29,11 @@ async def test_basic_workflow(postgres_dsn, schema):
     # 4. Produce Message
     test_name = "test_basic_workflow"
     producer = pgqrs.Producer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_producer",
-        port=PRODUCER_PORT
+        port=PRODUCER_PORT,
+        schema=schema
     )
     payload = {"data": "test_payload", "id": 123}
     msg_id = await producer.enqueue(payload)
@@ -47,10 +45,11 @@ async def test_basic_workflow(postgres_dsn, schema):
 
     # 6. Consume Message
     consumer = pgqrs.Consumer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_consumer",
-        port=CONSUMER_PORT
+        port=CONSUMER_PORT,
+        schema=schema
     )
 
     # Poll for message
@@ -85,9 +84,7 @@ async def test_consumer_delete(postgres_dsn, schema):
     From original test_consumer_delete.py
     """
 
-    dsn_with_schema = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-
-    admin = pgqrs.Admin(dsn_with_schema)
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
     await admin.install()
 
     queue_name = "test_delete_queue"
@@ -95,16 +92,18 @@ async def test_consumer_delete(postgres_dsn, schema):
 
     test_name = "test_consumer_delete"
     producer = pgqrs.Producer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_producer",
-        port=PRODUCER_PORT
+        port=PRODUCER_PORT,
+        schema=schema
     )
     consumer = pgqrs.Consumer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_consumer",
-        port=CONSUMER_PORT
+        port=CONSUMER_PORT,
+        schema=schema
     )
 
     # Enqueue a message
@@ -142,25 +141,25 @@ async def test_enqueue_delayed(postgres_dsn, schema):
     Test delayed message enqueueing.
     From original test_delayed.py
     """
-    dsn_with_schema = f"{postgres_dsn}?options=-c%20search_path%3D{schema}"
-
-    admin = pgqrs.Admin(dsn_with_schema)
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
     await admin.install()
     queue_name = "test_delayed_queue"
     await admin.create_queue(queue_name)
 
     test_name = "test_enqueue_delayed"
     producer = pgqrs.Producer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_producer",
-        port=PRODUCER_PORT
+        port=PRODUCER_PORT,
+        schema=schema
     )
     consumer = pgqrs.Consumer(
-        dsn_with_schema,
+        postgres_dsn,
         queue_name,
         hostname=f"{test_name}_consumer",
-        port=CONSUMER_PORT
+        port=CONSUMER_PORT,
+        schema=schema
     )
 
     payload = {"foo": "bar"}

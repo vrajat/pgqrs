@@ -73,10 +73,14 @@ struct Producer {
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(dsn: &str, queue: &str, hostname: String, port: i32, schema: Option<String>) -> PyResult<Self> {
         let rt = get_runtime();
         let producer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
+            let config = if let Some(s) = schema {
+                Config::from_dsn_with_schema(dsn.to_string(), &s).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                Config::from_dsn(dsn)
+            };
             // Use Admin to get queue info and manage pool
             let admin = RustAdmin::new(&config)
                 .await
@@ -138,10 +142,14 @@ struct Consumer {
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(dsn: &str, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new(dsn: &str, queue: &str, hostname: String, port: i32, schema: Option<String>) -> PyResult<Self> {
         let rt = get_runtime();
         let consumer = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
+            let config = if let Some(s) = schema {
+                Config::from_dsn_with_schema(dsn.to_string(), &s).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                Config::from_dsn(dsn)
+            };
             let admin = RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -287,10 +295,14 @@ struct Admin {
 #[pymethods]
 impl Admin {
     #[new]
-    fn new(dsn: &str) -> PyResult<Self> {
+    fn new(dsn: &str, schema: Option<String>) -> PyResult<Self> {
         let rt = get_runtime();
         let admin = rt.block_on(async {
-            let config = Config::from_dsn(dsn);
+            let config = if let Some(s) = schema {
+                Config::from_dsn_with_schema(dsn.to_string(), &s).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                Config::from_dsn(dsn)
+            };
             RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
