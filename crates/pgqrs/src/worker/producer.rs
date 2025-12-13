@@ -218,29 +218,6 @@ impl Producer {
         Ok(queue_messages)
     }
 
-    /// Extend the visibility timeout of a message.
-    ///
-    /// This allows producers to extend the processing time for messages they are handling,
-    /// preventing other workers from picking them up before processing is complete.
-    ///
-    /// # Arguments
-    /// * `message_id` - ID of the message to extend visibility for
-    /// * `additional_seconds` - Additional seconds to extend the visibility timeout
-    ///
-    /// # Returns
-    /// True if the message's visibility was extended, false otherwise.
-    pub async fn extend_visibility(
-        &self,
-        message_id: i64,
-        additional_seconds: u32,
-    ) -> Result<bool> {
-        let rows_affected = self
-            .messages
-            .extend_visibility(message_id, additional_seconds)
-            .await?;
-        Ok(rows_affected > 0)
-    }
-
     /// Internal method to insert a message with specific timestamps.
     ///
     /// # Arguments

@@ -56,8 +56,6 @@ pub mod types;
 mod validation;
 pub mod worker;
 
-mod constants;
-
 // Re-export worker types at crate root for convenience
 pub use crate::worker::admin;
 pub use crate::worker::consumer;
