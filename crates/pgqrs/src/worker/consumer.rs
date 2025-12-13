@@ -40,7 +40,7 @@ pub const DEQUEUE_MESSAGES: &str = r#"
     FROM (
         SELECT id
         FROM pgqrs_messages
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND read_ct < $3
+        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND read_ct < $3
         ORDER BY id ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
@@ -157,14 +157,16 @@ impl Consumer {
     }
 
     pub async fn delete(&self, message_id: i64) -> Result<bool> {
-        let rows_affected = sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
-            .bind(message_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?
-            .rows_affected();
+        let rows_affected =
+            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
+                .bind(message_id)
+                .bind(self.worker_info.id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: e.to_string(),
+                })?
+                .rows_affected();
 
         Ok(rows_affected > 0)
     }
@@ -179,6 +181,7 @@ impl Consumer {
     pub async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
+            .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -207,6 +210,7 @@ impl Consumer {
     pub async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
+            .bind(self.worker_info.id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -233,6 +237,7 @@ impl Consumer {
 
         let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
             .bind(&msg_ids)
+            .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {

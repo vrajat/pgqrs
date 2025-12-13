@@ -27,7 +27,7 @@ pub const VISIBILITY_TIMEOUT: u32 = 5;
 /// Delete batch of messages
 pub const DELETE_MESSAGE_BATCH: &str = r#"
     DELETE FROM pgqrs_messages
-    WHERE id = ANY($1)
+    WHERE id = ANY($1) AND consumer_worker_id = $2
     RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct;
 "#;
 
@@ -37,7 +37,7 @@ pub const DELETE_MESSAGE_BATCH: &str = r#"
 pub const ARCHIVE_MESSAGE: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_messages
-        WHERE id = $1
+        WHERE id = $1 AND consumer_worker_id = $2
         RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
@@ -52,7 +52,7 @@ pub const ARCHIVE_MESSAGE: &str = r#"
 pub const ARCHIVE_BATCH: &str = r#"
     WITH archived_msgs AS (
         DELETE FROM pgqrs_messages
-        WHERE id = ANY($1)
+        WHERE id = ANY($1) AND consumer_worker_id = $2
         RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
