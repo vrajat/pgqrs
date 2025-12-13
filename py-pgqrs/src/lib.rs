@@ -6,8 +6,10 @@ use rust_pgqrs::tables::{
     Archive as RustArchive, Messages as RustMessages, Queues as RustQueues, Table,
     Workers as RustWorkers,
 };
-use rust_pgqrs::types::{QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage};
-use rust_pgqrs::{Admin as RustAdmin, Config, Consumer as RustConsumer, Producer as RustProducer};
+use rust_pgqrs::types::{
+    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerStatus,
+};
+use rust_pgqrs::{Admin as RustAdmin, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
 
@@ -63,6 +65,52 @@ fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
         .extract::<String>()?;
     serde_json::from_str(&json_str)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[pyclass(name = "Config")]
+#[derive(Clone)]
+struct PyConfig {
+    inner: rust_pgqrs::Config,
+}
+
+#[pymethods]
+impl PyConfig {
+    #[staticmethod]
+    fn from_dsn(dsn: String) -> Self {
+        PyConfig {
+            inner: rust_pgqrs::Config::from_dsn(dsn),
+        }
+    }
+
+    #[setter]
+    fn set_schema(&mut self, schema: String) {
+        self.inner.schema = schema;
+    }
+
+    #[getter]
+    fn get_schema(&self) -> String {
+        self.inner.schema.clone()
+    }
+
+    #[setter]
+    fn set_max_connections(&mut self, max: u32) {
+        self.inner.max_connections = max;
+    }
+
+    #[getter]
+    fn get_max_connections(&self) -> u32 {
+        self.inner.max_connections
+    }
+
+    #[setter]
+    fn set_connection_timeout_seconds(&mut self, timeout: u64) {
+        self.inner.connection_timeout_seconds = timeout;
+    }
+
+    #[getter]
+    fn get_connection_timeout_seconds(&self) -> u64 {
+        self.inner.connection_timeout_seconds
+    }
 }
 
 #[pyclass]
@@ -316,6 +364,31 @@ impl Workers {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    fn list<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let workers = inner
+                .list()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(workers
+                .into_iter()
+                .map(WorkerInfo::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let worker = inner
+                .get(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            Ok(WorkerInfo::from(worker))
+        })
+    }
 }
 
 #[pyclass]
@@ -383,15 +456,23 @@ struct Admin {
 #[pymethods]
 impl Admin {
     #[new]
-    fn new(dsn: &str, schema: Option<String>) -> PyResult<Self> {
+    fn new(dsn: &PyAny, schema: Option<String>) -> PyResult<Self> {
+        let mut config = if let Ok(dsn_str) = dsn.extract::<String>() {
+            rust_pgqrs::Config::from_dsn(&dsn_str)
+        } else if let Ok(config_wrapper) = dsn.extract::<PyConfig>() {
+            config_wrapper.inner
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "Argument 'dsn' must be a string or a Config instance",
+            ));
+        };
+
+        if let Some(s) = schema {
+            config.schema = s;
+        }
+
         let rt = get_runtime();
         let admin = rt.block_on(async {
-            let config = if let Some(s) = schema {
-                Config::from_dsn_with_schema(dsn.to_string(), &s)
-                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
-            } else {
-                Config::from_dsn(dsn)
-            };
             RustAdmin::new(&config)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -543,6 +624,69 @@ impl From<RustQueueMessage> for QueueMessage {
     }
 }
 
+#[pyclass]
+struct WorkerInfo {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    hostname: String,
+    #[pyo3(get)]
+    port: i32,
+    #[pyo3(get)]
+    queue_id: Option<i64>,
+    #[pyo3(get)]
+    started_at: String,
+    #[pyo3(get)]
+    heartbeat_at: String,
+    #[pyo3(get)]
+    shutdown_at: Option<String>,
+    #[pyo3(get)]
+    status: PyWorkerStatus,
+}
+
+impl From<rust_pgqrs::types::WorkerInfo> for WorkerInfo {
+    fn from(w: rust_pgqrs::types::WorkerInfo) -> Self {
+        WorkerInfo {
+            id: w.id,
+            hostname: w.hostname,
+            port: w.port,
+            queue_id: w.queue_id,
+            started_at: w.started_at.to_rfc3339(),
+            heartbeat_at: w.heartbeat_at.to_rfc3339(),
+            shutdown_at: w.shutdown_at.map(|t| t.to_rfc3339()),
+            status: w.status.into(),
+        }
+    }
+}
+
+#[pyclass(name = "WorkerStatus")]
+#[derive(Clone, PartialEq, Debug)]
+enum PyWorkerStatus {
+    Ready,
+    Suspended,
+    Stopped,
+}
+
+impl From<WorkerStatus> for PyWorkerStatus {
+    fn from(s: WorkerStatus) -> Self {
+        match s {
+            WorkerStatus::Ready => PyWorkerStatus::Ready,
+            WorkerStatus::Suspended => PyWorkerStatus::Suspended,
+            WorkerStatus::Stopped => PyWorkerStatus::Stopped,
+        }
+    }
+}
+
+impl From<PyWorkerStatus> for WorkerStatus {
+    fn from(s: PyWorkerStatus) -> Self {
+        match s {
+            PyWorkerStatus::Ready => WorkerStatus::Ready,
+            PyWorkerStatus::Suspended => WorkerStatus::Suspended,
+            PyWorkerStatus::Stopped => WorkerStatus::Stopped,
+        }
+    }
+}
+
 #[pymodule]
 fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Producer>()?;
@@ -554,5 +698,8 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Archive>()?;
     m.add_class::<QueueInfo>()?;
     m.add_class::<QueueMessage>()?;
+    m.add_class::<WorkerInfo>()?;
+    m.add_class::<PyWorkerStatus>()?;
+    m.add_class::<PyConfig>()?;
     Ok(())
 }
