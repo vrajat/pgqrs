@@ -284,3 +284,108 @@ async def test_batch_operations(postgres_dsn, schema):
     # Verify 4 items in archive
     arch_count = await (await admin.get_archive()).count()
     assert arch_count == 4
+
+@pytest.mark.asyncio
+async def test_config_properties(postgres_dsn):
+    # Test valid DSN creation
+    c = pgqrs.Config.from_dsn(postgres_dsn)
+
+    # Test Max Connections Defaults and Setter
+    c.max_connections = 42
+    assert c.max_connections == 42
+
+    # Test Timeout Defaults and Setter
+    c.connection_timeout_seconds = 60
+    assert c.connection_timeout_seconds == 60
+
+@pytest.mark.asyncio
+async def test_config_integration(postgres_dsn, schema):
+    # This test verifies that we can pass a Config object to Admin
+
+    config = pgqrs.Config.from_dsn(postgres_dsn)
+    config.schema = schema
+    config.max_connections = 5
+
+    # Test Admin with Config
+    admin = pgqrs.Admin(config)
+    await admin.install()
+
+    queue_name = "test_config_queue"
+    await admin.create_queue(queue_name)
+
+    # Test Producer with Config -> MUST use Admin now
+    producer = pgqrs.Producer(admin, queue_name, "prod_conf", 1)
+    await producer.enqueue({"key": "val"})
+
+    # Test Consumer with Config -> MUST use Admin now
+    consumer = pgqrs.Consumer(admin, queue_name, "cons_conf", 1)
+    messages = await consumer.dequeue()
+
+    assert len(messages) == 1
+    assert messages[0].payload == {"key": "val"}
+
+@pytest.mark.asyncio
+async def test_legacy_string_dsn(postgres_dsn, schema):
+    # Verify backward compatibility (passing string DSN to Admin)
+
+    # We use schema arg to support test isolation
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    assert isinstance(admin, pgqrs.Admin)
+
+@pytest.mark.asyncio
+async def test_worker_lifecycle(postgres_dsn, schema):
+    # Use Admin correctly
+    # Note: postgres_dsn fixture is bare DSN. schema fixture is string.
+    # Admin(dsn, schema=...) handles schema isolation.
+
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+
+    queue = "worker_test_queue_legacy"
+    await admin.create_queue(queue)
+
+    # 1. Create Consumer (which is a Worker)
+    # MUST pass admin, not dsn string
+    consumer = pgqrs.Consumer(admin, queue, "worker_host", 1)
+
+    # 2. Check Status
+    workers = await admin.get_workers()
+    count = await workers.count()
+    assert count == 1
+
+@pytest.mark.asyncio
+async def test_worker_list_status(postgres_dsn, schema):
+    """
+    Test worker listing and status APIs.
+    """
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+    queue_name = "worker_test_queue"
+    await admin.create_queue(queue_name)
+
+    producer = pgqrs.Producer(admin, queue_name, "prod_host", 5000)
+    consumer = pgqrs.Consumer(admin, queue_name, "cons_host", 5001)
+
+    # Ensure workers are registered
+    # Producer registration happens on new()
+    # Consumer registration happens on new()
+
+    workers_handle = await admin.get_workers()
+
+    # List workers
+    worker_list = await workers_handle.list()
+    assert len(worker_list) >= 2
+
+    # Verify fields
+    prod_worker = next(w for w in worker_list if w.hostname == "prod_host")
+    cons_worker = next(w for w in worker_list if w.hostname == "cons_host")
+
+    assert prod_worker.port == 5000
+    assert cons_worker.port == 5001
+
+    assert prod_worker.status == pgqrs.WorkerStatus.Ready
+
+    # Verify Get
+    fetched_worker = await workers_handle.get(prod_worker.id)
+    assert fetched_worker.id == prod_worker.id
+    assert fetched_worker.hostname == "prod_host"
