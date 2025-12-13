@@ -73,12 +73,7 @@ struct Producer {
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(
-        admin: &Admin,
-        queue: &str,
-        hostname: String,
-        port: i32,
-    ) -> PyResult<Self> {
+    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
         let rt = get_runtime();
         let producer = rt.block_on(async {
             let (pool, config) = {
@@ -87,10 +82,9 @@ impl Producer {
             };
 
             let queues = RustQueues::new(pool.clone());
-            let q = queues
-                .get_by_name(queue)
-                .await
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+            let q = queues.get_by_name(queue).await.map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
+            })?;
 
             RustProducer::new(pool, &q, &hostname, port, &config)
                 .await
@@ -145,12 +139,7 @@ struct Consumer {
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(
-        admin: &Admin,
-        queue: &str,
-        hostname: String,
-        port: i32,
-    ) -> PyResult<Self> {
+    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
         let rt = get_runtime();
         let consumer = rt.block_on(async {
             let (pool, config) = {
@@ -159,10 +148,9 @@ impl Consumer {
             };
 
             let queues = RustQueues::new(pool.clone());
-            let q = queues
-                .get_by_name(queue)
-                .await
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e)))?;
+            let q = queues.get_by_name(queue).await.map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
+            })?;
 
             RustConsumer::new(pool, &q, &hostname, port, &config)
                 .await
