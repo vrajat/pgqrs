@@ -221,7 +221,7 @@ impl Consumer {
         &self,
         py: Python<'a>,
         message_id: i64,
-        extension_seconds: f64,
+        extension_seconds: u32,
     ) -> PyResult<&'a PyAny> {
         """
         Extends the visibility timeout for a message in the queue.
@@ -244,14 +244,13 @@ impl Consumer {
             If the operation fails.
         """
         let inner = self.inner.clone();
-        let extension = extension_seconds as u32;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .extend_visibility(message_id, extension)
+            let result = inner
+                .extend_visibility(message_id, extension_seconds)
                 .await
-                .map(|_| Python::with_gil(|py| py.None()))
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(result)
         })
     }
 
