@@ -206,7 +206,7 @@ async def test_extend_visibility(postgres_dsn, schema):
     # Wait 2.5 seconds (original VT expired, but extended should hold)
     await asyncio.sleep(2.5)
 
-    # Try dequeue with another consumer (simulated by same consumer instance for simplicity, as it respects DB state)
+
 
     # Let's check if it is visible. It should NOT be.
     msgs_retry = await consumer.dequeue()
@@ -220,7 +220,7 @@ async def test_extend_visibility(postgres_dsn, schema):
 
     # Now it should be visible (or nearly)
     msgs_retry_2 = await consumer.dequeue()
-    # It loops a bit in dequeue? No, pure single fetch.
+    # The dequeue method performs a single fetch and does not loop internally.
 
     if len(msgs_retry_2) == 0:
         await asyncio.sleep(1.0)
