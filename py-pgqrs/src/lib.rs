@@ -112,6 +112,46 @@ impl PyConfig {
     fn get_connection_timeout_seconds(&self) -> u64 {
         self.inner.connection_timeout_seconds
     }
+
+    #[setter]
+    fn set_default_lock_time_seconds(&mut self, seconds: u32) {
+        self.inner.default_lock_time_seconds = seconds;
+    }
+
+    #[getter]
+    fn get_default_lock_time_seconds(&self) -> u32 {
+        self.inner.default_lock_time_seconds
+    }
+
+    #[setter]
+    fn set_default_max_batch_size(&mut self, size: usize) {
+        self.inner.default_max_batch_size = size;
+    }
+
+    #[getter]
+    fn get_default_max_batch_size(&self) -> usize {
+        self.inner.default_max_batch_size
+    }
+
+    #[setter]
+    fn set_max_read_ct(&mut self, count: i32) {
+        self.inner.max_read_ct = count;
+    }
+
+    #[getter]
+    fn get_max_read_ct(&self) -> i32 {
+        self.inner.max_read_ct
+    }
+
+    #[setter]
+    fn set_heartbeat_interval_seconds(&mut self, seconds: u64) {
+        self.inner.heartbeat_interval = seconds;
+    }
+
+    #[getter]
+    fn get_heartbeat_interval_seconds(&self) -> u64 {
+        self.inner.heartbeat_interval
+    }
 }
 
 #[pyclass]
