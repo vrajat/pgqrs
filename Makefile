@@ -50,3 +50,11 @@ docs-build: requirements  ## Build documentation
 help:  ## Display this help screen
 	@echo "Usage: make [target]"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+release-dry-run: requirements  ## Dry run of the release process
+	cargo release minor --no-push --no-publish
+	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
+
+release: requirements  ## Execute the release process
+	cargo release minor --execute
+	$(UV) run maturin publish -m py-pgqrs/Cargo.toml

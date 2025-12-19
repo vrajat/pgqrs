@@ -248,3 +248,41 @@ Look for issues labeled `good first issue`:
 ## License
 
 By contributing, you agree that your contributions will be licensed under the Apache 2.0 license.
+
+## Releasing
+
+To release a new version of `pgqrs` (both the Rust crate and Python bindings), follow these steps:
+
+### Prerequisites
+
+1.  **Cargo Release**: Ensure `cargo-release` is installed:
+    ```bash
+    cargo install cargo-release
+    ```
+2.  **Maturin**: Ensure `maturin` and `uv` are available (managed via `make requirements`).
+3.  **Crates.io Token**: Ensure you are logged in to crates.io:
+    ```bash
+    cargo login
+    # Verify login (optional, lists known registries)
+    ls ~/.cargo/credentials.toml
+    ```
+4.  **PyPI Token**: Ensure you have a PyPI token configured. You can set it via the `MATURIN_PYPI_TOKEN` environment variable or in `~/.pypirc`.
+
+### Release Process
+
+1.  **Dry Run**: Always run a dry run first to verify the process:
+    ```bash
+    make release-dry-run
+    ```
+    Check the output to ensure:
+    -   Version bumps are correct.
+    -   Git tags are created as expected.
+    -   The Python build succeeds.
+
+2.  **Execute Release**: If the dry run looks good, execute the release:
+    ```bash
+    make release
+    ```
+    This will:
+    -   Bump versions and publish the Rust crate to crates.io using `cargo release`.
+    -   Build and upload the Python wheels to PyPI using `maturin`.
