@@ -4,7 +4,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2025-12-19
+
+### Added (Python Bindings)
+- **Advanced Configuration**: Fine-tune specific settings like `lock_time`, `batch_size`, `pre_fetch` count, and `heartbeat_interval` via the `Config` object.
+- **Archive Access**: Read-only access to archived messages via `get_archived_message` and `list_archived_messages`.
+- **Worker API**: Python API for registering and managing workers.
+- **Delayed Messages**: Support for `enqueue_delayed` to schedule messages for future delivery.
+- **Batch Operations**: Efficient batch enqueue and delete operations.
+- **Message Ownership**: Enforced ownership checks when deleting or updating messages.
+- **Visibility Extension**: Ability to extend the visibility timeout of a message using `extend_visibility`.
+
+### Documentation
+- **Comprehensive Guide**: Added a complete User Guide with "Getting Started", "Concepts", and API references for both Rust and Python.
+- **Catppuccin Theme**: Updated documentation theme to Catppuccin with multiple color schemes.
+
+### Chores
+- **Build System**: Improved build system and dependency management.
+- **Release Workflow**: Added manual release workflow for coordinated Rust and Python releases.
+
+## [0.4.0] - 2025-12-12
+
+### Added
+- **Workspace Support**: Restructured the repository into a Cargo workspace to support multiple crates (core library and python bindings).
+- **Python Bindings**: Initial structure for `py-pgqrs` crate.
+- **Zombie Reclamation**: Admin command to recover tasks from dead workers.
+- **Worker Health**: New health check command for workers.
+- **System Stats**: Admin command to view global system statistics.
+- **Queue Metrics**: CLI command to view metrics for specific queues.
+
+### Changed
+- **Renaming**: Removed `Pgqrs` prefix from internal struct names for cleaner API.
 
 ## [0.3.0] - 2024-11-13
 
