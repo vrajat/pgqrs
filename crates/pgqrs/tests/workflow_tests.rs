@@ -1,5 +1,5 @@
-use pgqrs::{Admin, Config, Workflow};
 use pgqrs::workflow::{StepGuard, StepResult};
+use pgqrs::{Admin, Config, Workflow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -24,23 +24,27 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let workflow = Workflow::new(pool.clone(), workflow_id);
 
     // Start workflow
-    let input = TestData { msg: "start".to_string() };
+    let input = TestData {
+        msg: "start".to_string(),
+    };
     workflow.start("test_wf", &input).await?;
 
     // Step 1: Run
     let step1_id = "step1";
-    let step_res = StepGuard::new::<TestData>(&pool, workflow_id, step1_id).await?;
+    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step1_id).await?;
 
     match step_res {
         StepResult::Execute(guard) => {
-            let output = TestData { msg: "step1_done".to_string() };
+            let output = TestData {
+                msg: "step1_done".to_string(),
+            };
             guard.success(output).await?;
         }
         StepResult::Skipped(_) => panic!("Step 1 should execute first time"),
     }
 
     // Step 1: Rerun (should skip)
-    let step_res = StepGuard::new::<TestData>(&pool, workflow_id, step1_id).await?;
+    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step1_id).await?;
     match step_res {
         StepResult::Skipped(val) => {
             assert_eq!(val.msg, "step1_done");
@@ -49,7 +53,11 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     }
 
     // Finish Workflow
-    workflow.success(TestData { msg: "done".to_string() }).await?;
+    workflow
+        .success(TestData {
+            msg: "done".to_string(),
+        })
+        .await?;
 
     Ok(())
 }

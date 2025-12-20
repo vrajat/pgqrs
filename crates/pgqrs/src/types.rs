@@ -312,10 +312,7 @@ impl fmt::Display for ArchivedMessage {
 impl ArchivedMessage {
     /// Calculate processing duration if both enqueued_at and dequeued_at are available
     pub fn get_processing_duration(&self) -> Option<chrono::Duration> {
-        self.dequeued_at.map(|dequeued| {
-            let duration = dequeued - self.enqueued_at;
-            duration
-        })
+        self.dequeued_at.map(|dequeued| dequeued - self.enqueued_at)
     }
 }
 
