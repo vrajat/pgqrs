@@ -33,7 +33,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
             let step_id = #step_id;
 
             // Attempt to initialize the step
-            let guard_res = pgqrs::workflow::StepGuard::acquire(&#first_arg_name.pool, #first_arg_name.id, step_id)
+            let guard_res = pgqrs::workflow::StepGuard::acquire(#first_arg_name.pool(), #first_arg_name.id(), step_id)
                 .await?;
 
             match guard_res {
