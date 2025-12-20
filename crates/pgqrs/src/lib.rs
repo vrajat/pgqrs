@@ -55,6 +55,7 @@ pub mod tables;
 pub mod types;
 mod validation;
 pub mod worker;
+pub mod workflow;
 
 // Re-export worker types at crate root for convenience
 pub use crate::worker::admin;
@@ -68,3 +69,4 @@ pub use crate::rate_limit::RateLimitStatus;
 pub use crate::tables::{Archive, NewWorker, Table, Workers};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
 pub use crate::validation::ValidationConfig;
+pub use crate::workflow::{StepGuard, StepResult, Workflow};
