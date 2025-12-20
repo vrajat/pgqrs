@@ -52,12 +52,41 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         StepResult::Execute(_) => panic!("Step 1 should skip on rerun"),
     }
 
+    // Step 2: Fail
+    let step2_id = "step2";
+    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await?;
+    match step_res {
+        StepResult::Execute(guard) => {
+             guard.fail(TestData { msg: "failed".to_string() }).await?;
+        }
+        StepResult::Skipped(_) => panic!("Step 2 should execute"),
+    }
+
+    // Step 2: Rerun (should fail because ERROR is terminal)
+    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await;
+    assert!(step_res.is_err(), "Step 2 should be in terminal ERROR state");
+
     // Finish Workflow
     workflow
         .success(TestData {
             msg: "done".to_string(),
         })
         .await?;
+
+    // Restart Workflow (should adhere to SUCCESS terminal state)
+    // Currently start() on SUCCESS behaves like update (idempotent success or keeps success).
+    // Our refactor returns Ok(()) but updates nothing if already SUCCESS.
+    workflow.start("test_wf", &input).await?;
+
+    // Verify Workflow Failure Logic
+    let wf_fail_id = Uuid::new_v4();
+    let wf_fail = Workflow::new(pool.clone(), wf_fail_id);
+    wf_fail.start("fail_wf", &input).await?;
+    wf_fail.fail(TestData { msg: "failed".to_string() }).await?;
+
+    // Restart Failed Workflow (should fail because ERROR is terminal)
+    let res = wf_fail.start("fail_wf", &input).await;
+    assert!(res.is_err(), "Workflow start should fail if currently ERROR");
 
     Ok(())
 }
