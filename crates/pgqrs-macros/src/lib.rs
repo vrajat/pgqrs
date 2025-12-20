@@ -186,6 +186,75 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
-    // Currently a pass-through, but reserved for future injection or validation
-    input
+    let input_fn = parse_macro_input!(input as ItemFn);
+    let fn_name = &input_fn.sig.ident;
+    let workflow_name = fn_name.to_string();
+
+    // Identify first argument (workflow context)
+    let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
+        if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+            &pat_ident.ident
+        } else {
+            return syn::Error::new_spanned(
+                pat_type,
+                "First argument must be a named workflow identifier (e.g. workflow)",
+            )
+            .to_compile_error()
+            .into();
+        }
+    } else {
+        return syn::Error::new_spanned(
+            &input_fn.sig,
+            "Workflow function must take at least one argument (workflow context)",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    // Identify second argument (input) for logging, defaults to "null" if missing
+    let input_arg = if input_fn.sig.inputs.len() >= 2 {
+        if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.iter().nth(1) {
+            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                let ident = &pat_ident.ident;
+                quote! { #ident }
+            } else {
+                quote! { &() }
+            }
+        } else {
+            quote! { &() }
+        }
+    } else {
+        quote! { &() }
+    };
+
+    let block = &input_fn.block;
+    let visibility = &input_fn.vis;
+    let sig = &input_fn.sig;
+
+    let output_type = match &sig.output {
+        syn::ReturnType::Default => quote! { () },
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+    };
+
+    let expanded = quote! {
+        #visibility #sig {
+            let workflow_name = #workflow_name;
+
+            // Start workflow
+            #first_arg_name.start(workflow_name, #input_arg).await?;
+
+            // Execute body
+            let result: #output_type = async { #block }.await;
+
+            // Handle terminal state
+            match &result {
+                Ok(val) => #first_arg_name.success(val).await?,
+                Err(e) => #first_arg_name.fail(e.to_string()).await?,
+            }
+
+            result
+        }
+    };
+
+    TokenStream::from(expanded)
 }

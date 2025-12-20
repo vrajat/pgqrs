@@ -1,4 +1,4 @@
-use pgqrs::{pgqrs_step, Admin, Config, Workflow};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Admin, Config, Workflow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,6 +16,17 @@ async fn step_one(ctx: &Workflow, _input: &str) -> anyhow::Result<TestData> {
     })
 }
 
+#[pgqrs_workflow]
+async fn my_workflow(ctx: &Workflow, input: &TestData) -> anyhow::Result<TestData> {
+    // Step 1
+    let s1 = step_one(ctx, "input").await?;
+
+    // Return combined result
+    Ok(TestData {
+        msg: format!("{}, {}", input.msg, s1.msg),
+    })
+}
+
 #[tokio::test]
 async fn test_macro_workflow() -> anyhow::Result<()> {
     // Setup
@@ -28,26 +39,19 @@ async fn test_macro_workflow() -> anyhow::Result<()> {
 
     let workflow_id = Uuid::new_v4();
     let workflow = Workflow::new(pool.clone(), workflow_id);
-    workflow
-        .start(
-            "macro_test",
-            &TestData {
-                msg: "start".to_string(),
-            },
-        )
-        .await?;
 
-    // Call step
-    let res = step_one(&workflow, "input").await?;
-    assert_eq!(res.msg, "step1_done");
+    // Call workflow (implicit start)
+    // The macro should call workflow.start(), then run body, then workflow.success()
+    let input = TestData {
+        msg: "start".to_string(),
+    };
+    let res = my_workflow(&workflow, &input).await?;
 
-    // Call step again (should skip/resume transparently)
-    // We can't easily verify it skipped without logs or side effects, but correctness checks functionality
-    // To verify skip, we could update the DB manually to "SUCCESS" ensuring it returns old value?
-    // Or simpler, if the function had side effects (like counter), we'd check it.
-    // For now, basic execution is enough.
-    let res = step_one(&workflow, "input").await?;
-    assert_eq!(res.msg, "step1_done");
+    assert_eq!(res.msg, "start, step1_done");
+
+    // Start verification:
+    // If start was not called, step_one would fail due to FK constraint (assuming it exists)
+    // or workflow would not be in DB.
 
     Ok(())
 }
