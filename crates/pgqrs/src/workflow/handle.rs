@@ -65,10 +65,13 @@ impl Workflow {
 
         // If explicitly in ERROR state, return failure
         if status == crate::workflow::WorkflowStatus::Error {
-             let error_val = error.unwrap_or(serde_json::Value::Null);
-             return Err(crate::error::Error::ValidationFailed {
-                 reason: format!("Workflow {} is in terminal ERROR state: {}", self.id, error_val),
-             });
+            let error_val = error.unwrap_or(serde_json::Value::Null);
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!(
+                    "Workflow {} is in terminal ERROR state: {}",
+                    self.id, error_val
+                ),
+            });
         }
 
         Ok(())
