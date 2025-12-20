@@ -1,4 +1,4 @@
-use pgqrs::{Admin, Config, Workflow, pgqrs_step};
+use pgqrs::{pgqrs_step, Admin, Config, Workflow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,7 +11,9 @@ struct TestData {
 
 #[pgqrs_step]
 async fn step_one(ctx: &Workflow, _input: &str) -> anyhow::Result<TestData> {
-    Ok(TestData { msg: "step1_done".to_string() })
+    Ok(TestData {
+        msg: "step1_done".to_string(),
+    })
 }
 
 #[tokio::test]
@@ -26,7 +28,14 @@ async fn test_macro_workflow() -> anyhow::Result<()> {
 
     let workflow_id = Uuid::new_v4();
     let workflow = Workflow::new(pool.clone(), workflow_id);
-    workflow.start("macro_test", &TestData { msg: "start".to_string() }).await?;
+    workflow
+        .start(
+            "macro_test",
+            &TestData {
+                msg: "start".to_string(),
+            },
+        )
+        .await?;
 
     // Call step
     let res = step_one(&workflow, "input").await?;

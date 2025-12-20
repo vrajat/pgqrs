@@ -11,12 +11,22 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     // Identify the first argument name to use as context (e.g., ctx)
     let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
         if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-             &pat_ident.ident
+            &pat_ident.ident
         } else {
-             return syn::Error::new_spanned(pat_type, "First argument must be a named context identifier (e.g. ctx)").to_compile_error().into();
+            return syn::Error::new_spanned(
+                pat_type,
+                "First argument must be a named context identifier (e.g. ctx)",
+            )
+            .to_compile_error()
+            .into();
         }
     } else {
-         return syn::Error::new_spanned(&input_fn.sig, "Step function must take at least one argument (context)").to_compile_error().into();
+        return syn::Error::new_spanned(
+            &input_fn.sig,
+            "Step function must take at least one argument (context)",
+        )
+        .to_compile_error()
+        .into();
     };
 
     let block = &input_fn.block;
