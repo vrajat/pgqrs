@@ -70,3 +70,4 @@ pub use crate::tables::{Archive, NewWorker, Table, Workers};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
 pub use crate::validation::ValidationConfig;
 pub use crate::workflow::{StepGuard, StepResult, Workflow};
+pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};

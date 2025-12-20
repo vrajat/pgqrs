@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/pgqrs",
+    "crates/pgqrs", "crates/pgqrs-macros",
     "py-pgqrs",
 ]
 resolver = "2"
