@@ -52,25 +52,25 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         StepResult::Execute(_) => panic!("Step 1 should skip on rerun"),
     }
 
-    // Step 2: Fail
+    // Step 2: Drop (Panic simulation)
     let step2_id = "step2";
     let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await?;
     match step_res {
         StepResult::Execute(guard) => {
-            guard
-                .fail(TestData {
-                    msg: "failed".to_string(),
-                })
-                .await?;
+            // Explicitly drop without calling success/fail
+            drop(guard);
         }
         StepResult::Skipped(_) => panic!("Step 2 should execute"),
     }
 
-    // Step 2: Rerun (should fail because ERROR is terminal)
+    // Allow async drop to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Step 2: Rerun (should be ERROR state because of drop)
     let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await;
     assert!(
         step_res.is_err(),
-        "Step 2 should be in terminal ERROR state"
+        "Step 2 should be in terminal ERROR state after drop"
     );
 
     // Finish Workflow

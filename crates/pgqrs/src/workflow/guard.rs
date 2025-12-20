@@ -40,6 +40,7 @@ pub struct StepGuard {
     pool: PgPool,
     workflow_id: Uuid,
     step_id: String,
+    completed: bool,
 }
 
 /// The result of attempting to start a step.
@@ -102,11 +103,12 @@ impl StepGuard {
             pool: pool.clone(),
             workflow_id,
             step_id: step_id_string,
+            completed: false,
         }))
     }
 
     /// Mark the step as successfully completed and persist the output.
-    pub async fn success<T: Serialize>(self, output: T) -> Result<()> {
+    pub async fn success<T: Serialize>(mut self, output: T) -> Result<()> {
         let output_json =
             serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
 
@@ -120,11 +122,12 @@ impl StepGuard {
                 message: format!("Failed to mark step {} as success: {}", self.step_id, e),
             })?;
 
+        self.completed = true;
         Ok(())
     }
 
     /// Mark the step as failed and persist the error.
-    pub async fn fail<E: Serialize>(self, error: E) -> Result<()> {
+    pub async fn fail<E: Serialize>(mut self, error: E) -> Result<()> {
         let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(SQL_STEP_FAIL)
@@ -137,6 +140,34 @@ impl StepGuard {
                 message: format!("Failed to mark step {} as error: {}", self.step_id, e),
             })?;
 
+        self.completed = true;
         Ok(())
+    }
+}
+
+impl Drop for StepGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let pool = self.pool.clone();
+            let workflow_id = self.workflow_id;
+            let step_id = self.step_id.clone();
+
+            // Best-effort attempt to mark as error if dropped unexpectedly.
+            // We use tokio::spawn to run this asynchronously.
+            // Note: This relies on a tokio runtime being available.
+            tokio::spawn(async move {
+                let error_json = serde_json::json!({
+                    "msg": "Step execution interrupted (dropped without completion)",
+                    "code": "STEP_DROPPED"
+                });
+
+                let _ = sqlx::query(SQL_STEP_FAIL)
+                    .bind(workflow_id)
+                    .bind(step_id)
+                    .bind(error_json)
+                    .execute(&pool)
+                    .await;
+            });
+        }
     }
 }

@@ -30,14 +30,24 @@ WHERE workflow_id = $1
 
 /// Handle for a durable workflow execution.
 pub struct Workflow {
-    pub id: Uuid,
-    pub pool: PgPool,
+    id: Uuid,
+    pool: PgPool,
 }
 
 impl Workflow {
     /// Create a new workflow instance connected to the database.
     pub fn new(pool: PgPool, id: Uuid) -> Self {
         Self { id, pool }
+    }
+
+    /// Get the workflow ID.
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Get a reference to the database pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Initialize or resume the workflow execution.
