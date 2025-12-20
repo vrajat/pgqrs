@@ -28,7 +28,7 @@ impl StepGuard {
     /// Checks the database state for the given `workflow_id` and `step_id`.
     /// - If the step is already `SUCCESS`, returns `StepResult::Skipped` with the deserialized output.
     /// - If the step is `PENDING`, `RUNNING`, or `ERROR` (retry), marks it as `RUNNING` and returns `StepResult::Execute`.
-    pub async fn new<T: DeserializeOwned>(
+    pub async fn acquire<T: DeserializeOwned>(
         pool: &PgPool,
         workflow_id: Uuid,
         step_id: &str,
@@ -64,9 +64,8 @@ impl StepGuard {
         if status == WorkflowStatus::Success {
             // Step already completed, deserialize output
             let output_val = output.unwrap_or(serde_json::Value::Null);
-            let result: T = serde_json::from_value(output_val).map_err(|e| {
-                crate::error::Error::Serialization(e)
-            })?;
+            let result: T =
+                serde_json::from_value(output_val).map_err(crate::error::Error::Serialization)?;
             return Ok(StepResult::Skipped(result));
         }
 
@@ -79,9 +78,8 @@ impl StepGuard {
 
     /// Mark the step as successfully completed and persist the output.
     pub async fn success<T: Serialize>(self, output: T) -> Result<()> {
-        let output_json = serde_json::to_value(output).map_err(|e| {
-            crate::error::Error::Serialization(e)
-        })?;
+        let output_json =
+            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(
             r#"
@@ -104,9 +102,7 @@ impl StepGuard {
 
     /// Mark the step as failed and persist the error.
     pub async fn fail<E: Serialize>(self, error: E) -> Result<()> {
-        let error_json = serde_json::to_value(error).map_err(|e| {
-            crate::error::Error::Serialization(e)
-        })?;
+        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(
             r#"

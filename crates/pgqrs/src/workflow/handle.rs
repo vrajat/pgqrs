@@ -19,9 +19,7 @@ impl Workflow {
     ///
     /// Persists the workflow metadata to `pgqrs_workflows`.
     pub async fn start<T: Serialize>(&self, name: &str, input: &T) -> Result<()> {
-        let input_json = serde_json::to_value(input).map_err(|e| {
-            crate::error::Error::Serialization(e)
-        })?;
+        let input_json = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
 
         // Upsert workflow state.
         // If it exists, we assume we are resuming (status might be anything).
@@ -54,9 +52,8 @@ impl Workflow {
 
     /// Mark the workflow as successfully completed.
     pub async fn success<T: Serialize>(&self, output: T) -> Result<()> {
-        let output_json = serde_json::to_value(output).map_err(|e| {
-            crate::error::Error::Serialization(e)
-        })?;
+        let output_json =
+            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(
             r#"
@@ -78,9 +75,7 @@ impl Workflow {
 
     /// Mark the workflow as failed.
     pub async fn fail<E: Serialize>(&self, error: E) -> Result<()> {
-        let error_json = serde_json::to_value(error).map_err(|e| {
-            crate::error::Error::Serialization(e)
-        })?;
+        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(
             r#"
