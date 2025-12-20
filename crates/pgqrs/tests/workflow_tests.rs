@@ -57,14 +57,21 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await?;
     match step_res {
         StepResult::Execute(guard) => {
-             guard.fail(TestData { msg: "failed".to_string() }).await?;
+            guard
+                .fail(TestData {
+                    msg: "failed".to_string(),
+                })
+                .await?;
         }
         StepResult::Skipped(_) => panic!("Step 2 should execute"),
     }
 
     // Step 2: Rerun (should fail because ERROR is terminal)
     let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await;
-    assert!(step_res.is_err(), "Step 2 should be in terminal ERROR state");
+    assert!(
+        step_res.is_err(),
+        "Step 2 should be in terminal ERROR state"
+    );
 
     // Finish Workflow
     workflow
@@ -82,11 +89,18 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let wf_fail_id = Uuid::new_v4();
     let wf_fail = Workflow::new(pool.clone(), wf_fail_id);
     wf_fail.start("fail_wf", &input).await?;
-    wf_fail.fail(TestData { msg: "failed".to_string() }).await?;
+    wf_fail
+        .fail(TestData {
+            msg: "failed".to_string(),
+        })
+        .await?;
 
     // Restart Failed Workflow (should fail because ERROR is terminal)
     let res = wf_fail.start("fail_wf", &input).await;
-    assert!(res.is_err(), "Workflow start should fail if currently ERROR");
+    assert!(
+        res.is_err(),
+        "Workflow start should fail if currently ERROR"
+    );
 
     Ok(())
 }

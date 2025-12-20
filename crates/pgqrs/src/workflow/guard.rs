@@ -64,15 +64,18 @@ impl StepGuard {
     ) -> Result<StepResult<T>> {
         let step_id_string = step_id.to_string();
 
-        let row: (WorkflowStatus, Option<serde_json::Value>, Option<serde_json::Value>) =
-            sqlx::query_as(SQL_ACQUIRE_STEP)
-                .bind(workflow_id)
-                .bind(&step_id_string)
-                .fetch_one(pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to initialize step {}: {}", step_id_string, e),
-                })?;
+        let row: (
+            WorkflowStatus,
+            Option<serde_json::Value>,
+            Option<serde_json::Value>,
+        ) = sqlx::query_as(SQL_ACQUIRE_STEP)
+            .bind(workflow_id)
+            .bind(&step_id_string)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to initialize step {}: {}", step_id_string, e),
+            })?;
 
         let (status, output, error) = row;
 
@@ -85,11 +88,14 @@ impl StepGuard {
         }
 
         if status == WorkflowStatus::Error {
-             // Step failed previously and is terminal. Return the error as a failure.
-             let error_val = error.unwrap_or(serde_json::Value::Null);
-             return Err(crate::error::Error::ValidationFailed {
-                 reason: format!("Step {} is in terminal ERROR state: {}", step_id_string, error_val),
-             });
+            // Step failed previously and is terminal. Return the error as a failure.
+            let error_val = error.unwrap_or(serde_json::Value::Null);
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!(
+                    "Step {} is in terminal ERROR state: {}",
+                    step_id_string, error_val
+                ),
+            });
         }
 
         Ok(StepResult::Execute(StepGuard {
