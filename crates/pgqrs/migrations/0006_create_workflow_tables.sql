@@ -1,7 +1,7 @@
 CREATE TYPE pgqrs_workflow_status AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'ERROR');
 
 CREATE TABLE pgqrs_workflows (
-    workflow_id UUID PRIMARY KEY,
+    workflow_id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
@@ -29,7 +29,7 @@ COMMENT ON COLUMN pgqrs_workflows.executor_id IS 'ID of the worker currently exe
 
 
 CREATE TABLE pgqrs_workflow_steps (
-    workflow_id UUID NOT NULL REFERENCES pgqrs_workflows(workflow_id) ON DELETE CASCADE,
+    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id) ON DELETE CASCADE,
     step_id VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,

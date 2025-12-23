@@ -7,8 +7,8 @@ pub mod pgqrs_archive;
 pub mod pgqrs_messages;
 pub mod pgqrs_queues;
 pub mod pgqrs_workers;
-pub mod table;
 pub mod pgqrs_workflows;
+pub mod table;
 
 pub use pgqrs_archive::Archive;
 pub use pgqrs_messages::{Messages, NewMessage};

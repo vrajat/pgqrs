@@ -3,7 +3,7 @@ use crate::error::Result;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::PgPool;
-use uuid::Uuid;
+
 
 const SQL_ACQUIRE_STEP: &str = r#"
 INSERT INTO pgqrs_workflow_steps (workflow_id, step_id, status, started_at)
@@ -38,7 +38,7 @@ WHERE workflow_id = $1 AND step_id = $2
 /// Ensures exactly-once logical execution of steps by persisting state to the database.
 pub struct StepGuard {
     pool: PgPool,
-    workflow_id: Uuid,
+    workflow_id: i64,
     step_id: String,
     completed: bool,
 }
@@ -60,7 +60,7 @@ impl StepGuard {
     /// - If the step is `PENDING`, `RUNNING` (retry), marks it as `RUNNING` and returns `StepResult::Execute`.
     pub async fn acquire<T: DeserializeOwned>(
         pool: &PgPool,
-        workflow_id: Uuid,
+        workflow_id: i64,
         step_id: &str,
     ) -> Result<StepResult<T>> {
         let step_id_string = step_id.to_string();

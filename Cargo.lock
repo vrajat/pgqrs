@@ -1784,6 +1784,7 @@ dependencies = [
  "ctor",
  "humantime",
  "once_cell",
+ "pgqrs-macros",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1798,6 +1799,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "pgqrs-macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]

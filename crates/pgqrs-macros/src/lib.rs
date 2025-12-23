@@ -25,11 +25,11 @@ use syn::{parse_macro_input, ItemFn};
 /// 1. **First argument is a workflow/context value**
 ///    - The function must take **at least one argument**.
 ///    - The first argument must be a **named** pattern, e.g. `ctx` or `workflow`.
-///    - That context is used to construct the step guard:
-///      `StepGuard::new(&ctx.pool, ctx.id, step_id)`.
+///    - That context is used to construct the step guard via:
+///      `StepGuard::acquire(ctx.pool(), ctx.id(), step_id).await?`.
 ///    - Concretely, the context type is expected to expose:
-///      - A `pool` field (used as a database / storage handle).
-///      - An `id` field (the workflow instance identifier).
+///      - A `pool()` method returning `&PgPool`.
+///      - An `id()` method returning `i64`.
 ///
 ///    If the first argument is missing or is not a simple identifier pattern,
 ///    compilation will fail with a descriptive error.
@@ -45,7 +45,7 @@ use syn::{parse_macro_input, ItemFn};
 ///    function returns a `Result`-like value it can pattern-match as `Ok` / `Err`.
 ///
 /// 3. **Async usage**
-///    - The generated wrapper uses `.await` on `StepGuard::new` and on the
+///    - The generated wrapper uses `.await` on `StepGuard::acquire` and on the
 ///      `success` / `fail` methods, so the annotated function is typically
 ///      declared as `async fn`.
 ///
@@ -68,14 +68,14 @@ use syn::{parse_macro_input, ItemFn};
 /// At runtime, the generated wrapper:
 ///
 /// 1. Constructs a step guard:
-///    `StepGuard::new(&ctx.pool, ctx.id, step_id).await?`.
+///    `StepGuard::acquire(ctx.pool(), ctx.id(), step_id).await?`.
 /// 2. Examines the returned [`pgqrs::workflow::StepResult`]:
 ///    - `StepResult::Skipped(val)` — the step has already completed; the stored
 ///      value is returned immediately as `Ok(val)` without re-running the body.
 ///    - `StepResult::Execute(guard)` — the step body should be executed now.
 /// 3. When executing, it runs the original body in an async block, obtains the
 ///    `Result<T, E>`, and:
-///    - Calls `guard.success(&value).await?` on `Ok(value)`.
+///    - Calls `guard.success(value).await?` on `Ok(value)`.
 ///    - Calls `guard.fail(err.to_string()).await?` on `Err(err)`.
 /// 4. Finally, it returns the original `Result<T, E>` from the step function.
 ///
@@ -87,28 +87,31 @@ use syn::{parse_macro_input, ItemFn};
 /// A minimal workflow context type might look like:
 ///
 /// ```rust,ignore
-/// use pgqrs::WorkflowId;
+/// use pgqrs::Workflow;
 ///
-/// pub struct WorkflowCtx {
-///     pub pool: pgqrs::DbPool,
-///     pub id: WorkflowId,
-/// }
+/// // Workflow struct provided by pgqrs already has pool() and id() methods.
+/// // pub struct Workflow {
+/// //     pool: PgPool,
+/// //     id: i64,
+/// // }
 /// ```
 ///
 /// A typical step function:
 ///
 /// ```rust,ignore
 /// use pgqrs_macros::pgqrs_step;
+/// use pgqrs::Workflow;
 ///
 /// #[pgqrs_step]
 /// pub async fn charge_customer(
-///     ctx: &WorkflowCtx,
+///     ctx: &Workflow,
 ///     amount_cents: i64,
 /// ) -> Result<(), anyhow::Error> {
 ///     // This body is wrapped with StepGuard logic:
 ///     // - On first execution: run the code, persist success/failure.
 ///     // - On retry: skip if already successful.
-///     ctx.pool.charge(ctx.id, amount_cents).await?;
+///     // ctx.pool() and ctx.id() are accessible.
+///     charge_service::charge(ctx.pool(), ctx.id(), amount_cents).await?;
 ///     Ok(())
 /// }
 /// ```
@@ -119,6 +122,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     let fn_name = &input_fn.sig.ident;
     let step_id = fn_name.to_string(); // Default to fn name
+    let attrs = &input_fn.attrs;
 
     // Identify the first argument name to use as context (e.g., ctx)
     let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
@@ -127,7 +131,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named context identifier (e.g. ctx)",
+                "First argument must be a named parameter of type &Workflow (e.g., ctx: &Workflow)",
             )
             .to_compile_error()
             .into();
@@ -145,12 +149,43 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let visibility = &input_fn.vis;
     let sig = &input_fn.sig;
 
+    // Validate return type is Result
     let output_type = match &sig.output {
-        syn::ReturnType::Default => quote! { () },
-        syn::ReturnType::Type(_, ty) => quote! { #ty },
+        syn::ReturnType::Type(_, ty) => {
+            // Simple heuristic to check if return type is a Result.
+            // Checks if the last path segment is "Result".
+            let is_result = if let syn::Type::Path(type_path) = &**ty {
+                type_path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "Result")
+            } else {
+                false
+            };
+
+            if !is_result {
+                return syn::Error::new_spanned(
+                    &sig.output,
+                    "Step function must return a Result type (e.g. Result<T, E>)",
+                )
+                .to_compile_error()
+                .into();
+            }
+            quote! { #ty }
+        }
+        syn::ReturnType::Default => {
+            return syn::Error::new_spanned(
+                &sig.output,
+                "Step function must return a Result type (e.g. Result<T, E>)",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let expanded = quote! {
+        #(#attrs)*
         #visibility #sig {
             let step_id = #step_id;
 
@@ -181,11 +216,59 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Attribute macro for defining a **workflow entry point**.
+///
+/// # Overview
+///
+/// `#[pgqrs_workflow]` marks a function as the entry point of a durable workflow.
+/// It wraps the function to:
+///
+/// - Start the workflow execution (transition from `PENDING` to `RUNNING`).
+/// - Execute the workflow logic.
+/// - Mark the workflow as `SUCCESS` or `ERROR` upon completion.
+///
+/// # Signature requirements
+///
+/// 1. **First argument is a workflow handle**
+///    - The function must take at least one argument.
+///    - The first argument must be a named pattern typed as `&pgqrs::Workflow` (or similar context).
+///    - This handle is used to call `.start()`, `.success()`, and `.fail()`.
+///
+/// 2. **Return type must be a `Result`**
+///    - On `Ok(value)`, the workflow is marked as `SUCCESS` with the serialized value.
+///    - On `Err(err)`, the workflow is marked as `ERROR` with the serialized error string.
+///
+/// 3. **Async usage**
+///    - The function must be `async fn`.
+///
+/// # Usage
+///
+/// Typically, you create the workflow row **before** calling this function using
+/// `Workflow::create`. This separation allows the ID to be generated by the database
+/// and returned to the caller immediately, while the execution happens asynchronously.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use pgqrs::Workflow;
+/// use pgqrs_macros::pgqrs_workflow;
+///
+/// #[pgqrs_workflow]
+/// async fn process_order(workflow: &Workflow, order_id: i32) -> Result<String, anyhow::Error> {
+///     // Workflow logic here...
+///     Ok("Order processed".to_string())
+/// }
+///
+/// // Usage:
+/// // let workflow = Workflow::create(pool, "process_order", &order_id).await?;
+/// // process_order(&workflow, order_id).await?;
+/// ```
 #[proc_macro_attribute]
 pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     let fn_name = &input_fn.sig.ident;
     let workflow_name = fn_name.to_string();
+    let attrs = &input_fn.attrs;
 
     // Identify first argument (workflow context)
     let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
@@ -194,7 +277,7 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named workflow identifier (e.g. workflow)",
+                "First argument must be a named parameter of type &Workflow (e.g., workflow: &Workflow)",
             )
             .to_compile_error()
             .into();
@@ -208,37 +291,51 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
         .into();
     };
 
-    // Identify second argument (input) for logging, defaults to "null" if missing
-    let input_arg = if input_fn.sig.inputs.len() >= 2 {
-        if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.iter().nth(1) {
-            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                let ident = &pat_ident.ident;
-                quote! { #ident }
-            } else {
-                quote! { &() }
-            }
-        } else {
-            quote! { &() }
-        }
-    } else {
-        quote! { &() }
-    };
-
     let block = &input_fn.block;
     let visibility = &input_fn.vis;
     let sig = &input_fn.sig;
 
+    // Validate return type is Result
     let output_type = match &sig.output {
-        syn::ReturnType::Default => quote! { () },
-        syn::ReturnType::Type(_, ty) => quote! { #ty },
+        syn::ReturnType::Type(_, ty) => {
+            // Simple heuristic to check if return type is a Result.
+            let is_result = if let syn::Type::Path(type_path) = &**ty {
+                type_path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "Result")
+            } else {
+                false
+            };
+
+            if !is_result {
+                return syn::Error::new_spanned(
+                    &sig.output,
+                    "Workflow function must return a Result type (e.g. Result<T, E>)",
+                )
+                .to_compile_error()
+                .into();
+            }
+            quote! { #ty }
+        }
+        syn::ReturnType::Default => {
+            return syn::Error::new_spanned(
+                &sig.output,
+                "Workflow function must return a Result type (e.g. Result<T, E>)",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     let expanded = quote! {
+        #(#attrs)*
         #visibility #sig {
             let workflow_name = #workflow_name;
 
             // Start workflow
-            #first_arg_name.start(workflow_name, #input_arg).await?;
+            #first_arg_name.start().await?;
 
             // Execute body
             let result: #output_type = async { #block }.await;
