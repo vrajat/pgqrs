@@ -162,16 +162,13 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
                 pgqrs::workflow::StepResult::Skipped(val) => Ok(val),
                 pgqrs::workflow::StepResult::Execute(guard) => {
                     // Execute the original function body and capture the result
-                    let result: #output_type = #block;
+                    let result: #output_type = async { #block }.await;
 
                     match &result {
                         Ok(val) => guard.success(val).await?,
                         Err(e) => {
-                            // Serialize the error in a simple structured format to preserve details
-                            let message = e.to_string();
-                            let escaped = message.replace('"', "\\\"");
-                            let structured_error = format!("{{\"error\":\"{}\"}}", escaped);
-                            guard.fail(structured_error).await?
+                            // Pass the error string directly. guard.fail handles serialization.
+                            guard.fail(e.to_string()).await?
                         },
                     }
 
