@@ -54,7 +54,7 @@ use syn::{parse_macro_input, ItemFn};
 /// The step identifier used by the workflow engine is derived from the function
 /// name:
 ///
-/// ```rust
+/// ```rust,ignore
 /// let fn_name = &input_fn.sig.ident;
 /// let step_id = fn_name.to_string(); // step ID is the function name
 /// ```
