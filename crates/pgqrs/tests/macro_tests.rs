@@ -50,8 +50,18 @@ async fn test_macro_workflow() -> anyhow::Result<()> {
     assert_eq!(res.msg, "start, step1_done");
 
     // Start verification:
-    // If start was not called, step_one would fail due to FK constraint (assuming it exists)
-    // or workflow would not be in DB.
+    // Verify that the workflow is marked as SUCCESS in the database
+    let row: (String, serde_json::Value) = sqlx::query_as(
+        "SELECT status::text, output FROM pgqrs_workflows WHERE workflow_id = $1"
+    )
+    .bind(workflow_id)
+    .fetch_one(&pool)
+    .await?;
+
+    assert_eq!(row.0, "SUCCESS");
+
+    let db_output: TestData = serde_json::from_value(row.1)?;
+    assert_eq!(db_output.msg, "start, step1_done");
 
     Ok(())
 }
