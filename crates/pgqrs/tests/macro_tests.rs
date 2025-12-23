@@ -76,14 +76,20 @@ async fn test_macro_suite() -> anyhow::Result<()> {
 
     // --- CASE 0: Creation State (Pending) ---
     {
-        let input = TestData { msg: "pending_check".to_string() };
+        let input = TestData {
+            msg: "pending_check".to_string(),
+        };
         let workflow = Workflow::create(pool.clone(), "pending_wf", &input).await?;
         let workflow_id = workflow.id();
 
         // Verify status is PENDING immediately after creation
         let workflows = pgqrs::Workflows::new(pool.clone());
         let record = workflows.get(workflow_id).await?;
-        assert_eq!(record.status, pgqrs::workflow::WorkflowStatus::Pending, "Workflow should be PENDING upon creation");
+        assert_eq!(
+            record.status,
+            pgqrs::workflow::WorkflowStatus::Pending,
+            "Workflow should be PENDING upon creation"
+        );
     }
 
     // --- CASE 1: Successful Workflow (with multi-arg step) ---
@@ -108,7 +114,9 @@ async fn test_macro_suite() -> anyhow::Result<()> {
     // --- CASE 2: Step Idempotency (Retry logic) ---
     {
         // 1. Create context
-        let input = TestData { msg: "idempotency".to_string() };
+        let input = TestData {
+            msg: "idempotency".to_string(),
+        };
         let workflow = Workflow::create(pool.clone(), "idempotency_wf", &input).await?;
         let workflow_id = workflow.id();
 
@@ -127,7 +135,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
 
         // 4. Run step second time -> Should return TAMPERED value
         let res2 = step_side_effect(&workflow, "run2").await?;
-        assert_eq!(res2.msg, "tampered_value", "Step should have returned cached (tampered) result from DB");
+        assert_eq!(
+            res2.msg, "tampered_value",
+            "Step should have returned cached (tampered) result from DB"
+        );
     }
 
     // --- CASE 3: Step Failure ---
@@ -161,7 +172,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
 
         let res = workflow_fail_at_end(&workflow, &input).await;
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err().to_string(), "workflow failed intentionally");
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "workflow failed intentionally"
+        );
 
         // Verify persistence
         let workflows = pgqrs::Workflows::new(pool.clone());

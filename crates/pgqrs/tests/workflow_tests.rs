@@ -88,7 +88,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     workflow.start().await?;
 
     // Verify Workflow Failure Logic
-    let input_fail = TestData { msg: "fail".to_string() };
+    let input_fail = TestData {
+        msg: "fail".to_string(),
+    };
     let wf_fail = Workflow::create(pool.clone(), "fail_wf", &input_fail).await?;
     wf_fail.start().await?;
     wf_fail

@@ -2,8 +2,6 @@ use crate::error::Result;
 use serde::Serialize;
 use sqlx::PgPool;
 
-
-
 const SQL_CREATE_WORKFLOW: &str = r#"
 INSERT INTO pgqrs_workflows (name, status, input)
 VALUES ($1, 'PENDING'::pgqrs_workflow_status, $2)
@@ -74,30 +72,32 @@ impl Workflow {
     /// Transitions status from PENDING to RUNNING.
     pub async fn start(&self) -> Result<()> {
         // Try to transition to RUNNING
-        let result = sqlx::query_as::<_, (crate::workflow::WorkflowStatus, Option<serde_json::Value>)>(SQL_START_WORKFLOW)
-                .bind(self.id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to start workflow {}: {}", self.id, e),
-                })?;
+        let result = sqlx::query_as::<
+            _,
+            (crate::workflow::WorkflowStatus, Option<serde_json::Value>),
+        >(SQL_START_WORKFLOW)
+        .bind(self.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to start workflow {}: {}", self.id, e),
+        })?;
 
         // If no row update, check current status
         if result.is_none() {
-             let status: Option<crate::workflow::WorkflowStatus> = sqlx::query_scalar(
-                "SELECT status FROM pgqrs_workflows WHERE workflow_id = $1"
-             )
-             .bind(self.id)
-             .fetch_optional(&self.pool)
-             .await
-             .ok()
-             .flatten();
+            let status: Option<crate::workflow::WorkflowStatus> =
+                sqlx::query_scalar("SELECT status FROM pgqrs_workflows WHERE workflow_id = $1")
+                    .bind(self.id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .ok()
+                    .flatten();
 
-             if let Some(crate::workflow::WorkflowStatus::Error) = status {
-                 return Err(crate::error::Error::ValidationFailed {
-                     reason: format!("Workflow {} is in terminal ERROR state", self.id),
-                 });
-             }
+            if let Some(crate::workflow::WorkflowStatus::Error) = status {
+                return Err(crate::error::Error::ValidationFailed {
+                    reason: format!("Workflow {} is in terminal ERROR state", self.id),
+                });
+            }
         }
 
         Ok(())

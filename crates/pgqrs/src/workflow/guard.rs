@@ -4,7 +4,6 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::PgPool;
 
-
 const SQL_ACQUIRE_STEP: &str = r#"
 INSERT INTO pgqrs_workflow_steps (workflow_id, step_id, status, started_at)
 VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, NOW())
