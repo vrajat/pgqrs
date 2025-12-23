@@ -1,18 +1,17 @@
 use crate::error::Result;
 use serde::Serialize;
 use sqlx::PgPool;
-use uuid::Uuid;
+
+const SQL_CREATE_WORKFLOW: &str = r#"
+INSERT INTO pgqrs_workflows (name, status, input)
+VALUES ($1, 'PENDING'::pgqrs_workflow_status, $2)
+RETURNING workflow_id
+"#;
 
 const SQL_START_WORKFLOW: &str = r#"
-INSERT INTO pgqrs_workflows (workflow_id, name, status, input, created_at, updated_at)
-VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, $3, NOW(), NOW())
-ON CONFLICT (workflow_id) DO UPDATE
-SET status = CASE
-    WHEN pgqrs_workflows.status = 'SUCCESS' THEN 'SUCCESS'::pgqrs_workflow_status
-    WHEN pgqrs_workflows.status = 'ERROR' THEN 'ERROR'::pgqrs_workflow_status
-    ELSE 'RUNNING'::pgqrs_workflow_status
-END,
-updated_at = NOW()
+UPDATE pgqrs_workflows
+SET status = 'RUNNING'::pgqrs_workflow_status, updated_at = NOW()
+WHERE workflow_id = $1 AND status = 'PENDING'::pgqrs_workflow_status
 RETURNING status, error
 "#;
 
@@ -30,18 +29,36 @@ WHERE workflow_id = $1
 
 /// Handle for a durable workflow execution.
 pub struct Workflow {
-    id: Uuid,
+    id: i64,
     pool: PgPool,
 }
 
 impl Workflow {
     /// Create a new workflow instance connected to the database.
-    pub fn new(pool: PgPool, id: Uuid) -> Self {
+    ///
+    /// This is used when the ID is already known (e.g. loaded from DB).
+    pub fn new(pool: PgPool, id: i64) -> Self {
         Self { id, pool }
     }
 
+    /// Create a new workflow in the database.
+    pub async fn create<T: Serialize>(pool: PgPool, name: &str, input: &T) -> Result<Self> {
+        let input_json = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
+
+        let id: i64 = sqlx::query_scalar(SQL_CREATE_WORKFLOW)
+            .bind(name)
+            .bind(input_json)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to create workflow {}: {}", name, e),
+            })?;
+
+        Ok(Self { id, pool })
+    }
+
     /// Get the workflow ID.
-    pub fn id(&self) -> Uuid {
+    pub fn id(&self) -> i64 {
         self.id
     }
 
@@ -50,38 +67,43 @@ impl Workflow {
         &self.pool
     }
 
-    /// Initialize or resume the workflow execution.
+    /// Start the workflow execution.
     ///
-    /// Persists the workflow metadata to `pgqrs_workflows`.
-    /// - If fresh: Inserts RUNNING.
-    /// - If running/pending: Updates timestamp, keeps RUNNING.
-    /// - If SUCCESS/ERROR (terminal): Returns success (idempotent) or error (if failed).
-    pub async fn start<T: Serialize>(&self, name: &str, input: &T) -> Result<()> {
-        let input_json = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
+    /// Transitions status from PENDING to RUNNING.
+    ///
+    /// # Behavior
+    ///
+    /// - **Idempotent**: If the workflow is already `RUNNING` or `SUCCESS`, this method succeeds without changes.
+    /// - **Error**: If the workflow is in the `ERROR` state, this method returns a `ValidationFailed` error.
+    pub async fn start(&self) -> Result<()> {
+        // Try to transition to RUNNING
+        let result = sqlx::query_as::<
+            _,
+            (crate::workflow::WorkflowStatus, Option<serde_json::Value>),
+        >(SQL_START_WORKFLOW)
+        .bind(self.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to start workflow {}: {}", self.id, e),
+        })?;
 
-        // UPSERT and return declared status
-        let row: (crate::workflow::WorkflowStatus, Option<serde_json::Value>) =
-            sqlx::query_as(SQL_START_WORKFLOW)
-                .bind(self.id)
-                .bind(name)
-                .bind(input_json)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to start workflow {}: {}", self.id, e),
-                })?;
+        // If no row update, check current status
+        if result.is_none() {
+            let status: Option<crate::workflow::WorkflowStatus> =
+                sqlx::query_scalar("SELECT status FROM pgqrs_workflows WHERE workflow_id = $1")
+                    .bind(self.id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| crate::error::Error::Connection {
+                        message: format!("Failed to check status for workflow {}: {}", self.id, e),
+                    })?;
 
-        let (status, error) = row;
-
-        // If explicitly in ERROR state, return failure
-        if status == crate::workflow::WorkflowStatus::Error {
-            let error_val = error.unwrap_or(serde_json::Value::Null);
-            return Err(crate::error::Error::ValidationFailed {
-                reason: format!(
-                    "Workflow {} is in terminal ERROR state: {}",
-                    self.id, error_val
-                ),
-            });
+            if let Some(crate::workflow::WorkflowStatus::Error) = status {
+                return Err(crate::error::Error::ValidationFailed {
+                    reason: format!("Workflow {} is in terminal ERROR state", self.id),
+                });
+            }
         }
 
         Ok(())

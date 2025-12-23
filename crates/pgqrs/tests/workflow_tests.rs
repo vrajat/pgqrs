@@ -1,7 +1,6 @@
 use pgqrs::workflow::{StepGuard, StepResult};
 use pgqrs::{Admin, Config, Workflow};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 mod common;
 
@@ -20,17 +19,20 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     admin.install().await?;
 
     let pool = admin.pool.clone();
-    let workflow_id = Uuid::new_v4();
-    let workflow = Workflow::new(pool.clone(), workflow_id);
 
     // Start workflow
     let input = TestData {
         msg: "start".to_string(),
     };
-    workflow.start("test_wf", &input).await?;
+    // Use create to get valid ID
+    let workflow = Workflow::create(pool.clone(), "test_wf", &input).await?;
+    let workflow_id = workflow.id();
+
+    workflow.start().await?;
 
     // Step 1: Run
     let step1_id = "step1";
+    // step_id is String in macro, but &str here. acquire takes &str.
     let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step1_id).await?;
 
     match step_res {
@@ -83,12 +85,14 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     // Restart Workflow (should adhere to SUCCESS terminal state)
     // Currently start() on SUCCESS behaves like update (idempotent success or keeps success).
     // Our refactor returns Ok(()) but updates nothing if already SUCCESS.
-    workflow.start("test_wf", &input).await?;
+    workflow.start().await?;
 
     // Verify Workflow Failure Logic
-    let wf_fail_id = Uuid::new_v4();
-    let wf_fail = Workflow::new(pool.clone(), wf_fail_id);
-    wf_fail.start("fail_wf", &input).await?;
+    let input_fail = TestData {
+        msg: "fail".to_string(),
+    };
+    let wf_fail = Workflow::create(pool.clone(), "fail_wf", &input_fail).await?;
+    wf_fail.start().await?;
     wf_fail
         .fail(TestData {
             msg: "failed".to_string(),
@@ -96,7 +100,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         .await?;
 
     // Restart Failed Workflow (should fail because ERROR is terminal)
-    let res = wf_fail.start("fail_wf", &input).await;
+    let res = wf_fail.start().await;
     assert!(
         res.is_err(),
         "Workflow start should fail if currently ERROR"

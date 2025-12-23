@@ -7,10 +7,12 @@ pub mod pgqrs_archive;
 pub mod pgqrs_messages;
 pub mod pgqrs_queues;
 pub mod pgqrs_workers;
+pub mod pgqrs_workflows;
 pub mod table;
 
 pub use pgqrs_archive::Archive;
 pub use pgqrs_messages::{Messages, NewMessage};
 pub use pgqrs_queues::{NewQueue, Queues};
 pub use pgqrs_workers::{NewWorker, Workers};
+pub use pgqrs_workflows::{NewWorkflow, WorkflowRecord, Workflows};
 pub use table::Table;

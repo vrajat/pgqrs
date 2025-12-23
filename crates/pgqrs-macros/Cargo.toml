@@ -1,0 +1,15 @@
+[package]
+name = "pgqrs-macros"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macro support crate for pgqrs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vrajat/pgqrs"
+homepage = "https://github.com/vrajat/pgqrs#readme"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
