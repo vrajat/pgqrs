@@ -2,6 +2,9 @@ import pytest
 import pgqrs
 import asyncio
 
+from pgqrs import PyWorkflow
+from pgqrs.decorators import workflow, step
+
 # Constants for ports as requested
 PRODUCER_PORT = 8100
 CONSUMER_PORT = 8200
@@ -359,7 +362,7 @@ async def test_worker_lifecycle(postgres_dsn, schema):
 
     # 1. Create Consumer (which is a Worker)
     # MUST pass admin, not dsn string
-    consumer = pgqrs.Consumer(admin, queue, "worker_host", 1)
+    _ = pgqrs.Consumer(admin, queue, "worker_host", 1)
 
     # 2. Check Status
     workers = await admin.get_workers()
@@ -376,8 +379,8 @@ async def test_worker_list_status(postgres_dsn, schema):
     queue_name = "worker_test_queue"
     await admin.create_queue(queue_name)
 
-    producer = pgqrs.Producer(admin, queue_name, "prod_host", 5000)
-    consumer = pgqrs.Consumer(admin, queue_name, "cons_host", 5001)
+    _ = pgqrs.Producer(admin, queue_name, "prod_host", 5000)
+    _ = pgqrs.Consumer(admin, queue_name, "cons_host", 5001)
 
     # Ensure workers are registered
     # Producer registration happens on new()
@@ -467,7 +470,89 @@ async def test_archive_advanced_methods(postgres_dsn, schema):
     # Verify gone
     assert await archive.count() == 0
 
-    # 6. Test DLQ (optional, if we can simulate failure easily)
-    # We won't simulate DLQ logic here to keep it simple, verifying API existence was the main goal.
+    # Testing Archive DLQ count is fine as 0 initially
     dlq_count = await archive.dlq_count(5)
     assert dlq_count == 0
+
+# --- Durable Workflow Tests ---
+
+@step
+async def step1(ctx: PyWorkflow, msg: str):
+    print(f"  [Step 1] Executing with msg: {msg}")
+    return f"processed_{msg}"
+
+@step
+async def step2(ctx: PyWorkflow, val: str):
+    print(f"  [Step 2] Executing with val: {val}")
+    return f"step2_{val}"
+
+@workflow
+async def simple_wf(ctx: PyWorkflow, arg: str):
+    # Basic workflow: Step 1 -> Step 2
+    res1 = await step1(ctx, arg)
+    res2 = await step2(ctx, res1)
+    return res2
+
+@pytest.mark.asyncio
+async def test_workflow_execution(postgres_dsn, schema):
+    """
+    Test basic durable workflow execution.
+    """
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+
+    wf_name = "simple_wf"
+    wf_arg = "test_data"
+    wf_ctx = await admin.create_workflow(wf_name, wf_arg)
+
+    result = await simple_wf(wf_ctx, wf_arg)
+    assert result == "step2_processed_test_data"
+
+    # Verify workflow status is Success?
+    # Currently PyWorkflow doesn't expose status getter easily without querying DB,
+    # but successful return implies success.
+
+
+# Helpers for crash recovery test
+async def crashing_workflow_runner(ctx: PyWorkflow, arg: str):
+    """
+    Simulates a workflow that starts, matches step 1, but then 'crashes' (raises exception)
+    before completing step 2, specifically WITHOUT calling ctx.fail() or ctx.success().
+    This leaves the workflow in RUNNING state, mimicking a process crash.
+    """
+    # Manually start (usually handled by @workflow)
+    await ctx.start()
+
+    # Run step 1 (should succeed)
+    # Run step 1 (should succeed)
+    _ = await step1(ctx, arg)
+
+    # Crash!
+    # Raising error here escapes without calling ctx.fail() (because no @workflow decorator)
+    raise ZeroDivisionError("Simulated Process Crash")
+
+@pytest.mark.asyncio
+async def test_workflow_crash_recovery(postgres_dsn, schema):
+    """
+    Test workflow recovery/resume after a simulated process crash.
+    """
+    admin = pgqrs.Admin(postgres_dsn, schema=schema)
+    await admin.install()
+
+    wf_name = "crash_wf"
+    wf_arg = "crash_data"
+    wf_ctx = await admin.create_workflow(wf_name, wf_arg)
+
+    # 1. Run until crash (Step 1 succeeds, then crash)
+    with pytest.raises(ZeroDivisionError):
+        await crashing_workflow_runner(wf_ctx, wf_arg)
+
+    # 2. Resume workflow using the standard @workflow decorated function
+    # It should:
+    # - Call start() (Idempotent for RUNNING)
+    # - Call step1() (Should SKIP as it's already done)
+    # - Call step2() (Should EXECUTE)
+    # - Complete successfully
+    result = await simple_wf(wf_ctx, wf_arg)
+
+    assert result == "step2_processed_crash_data"

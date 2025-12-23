@@ -10,6 +10,7 @@ use rust_pgqrs::types::{
     ArchivedMessage as RustArchivedMessage, QueueInfo as RustQueueInfo,
     QueueMessage as RustQueueMessage, WorkerStatus,
 };
+use rust_pgqrs::workflow::{StepResult, Workflow as RustWorkflow};
 use rust_pgqrs::{Admin as RustAdmin, Consumer as RustConsumer, Producer as RustProducer};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -713,6 +714,27 @@ impl Admin {
             Ok(count)
         })
     }
+
+    fn create_workflow<'a>(
+        &self,
+        py: Python<'a>,
+        name: String,
+        arg: PyObject,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_arg = py_to_json(arg.as_ref(py))?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let admin = inner.lock().await;
+            let workflow = RustWorkflow::create(admin.pool.clone(), &name, &json_arg)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            Ok(PyWorkflow {
+                inner: Arc::new(workflow),
+            })
+        })
+    }
 }
 
 // Data Types Wrappers
@@ -864,8 +886,147 @@ impl From<PyWorkerStatus> for WorkerStatus {
     }
 }
 
+#[pyclass]
+struct PyStepGuard {
+    inner: Option<rust_pgqrs::workflow::StepGuard>, // Option to allow taking it out
+}
+
+#[pymethods]
+impl PyStepGuard {
+    fn success<'a>(&mut self, py: Python<'a>, val: PyObject) -> PyResult<&'a PyAny> {
+        let guard = self
+            .inner
+            .take()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("StepGuard already used"))?;
+        let json_val = py_to_json(val.as_ref(py))?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            guard
+                .success(&json_val)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn fail<'a>(&mut self, py: Python<'a>, err: String) -> PyResult<&'a PyAny> {
+        let guard = self
+            .inner
+            .take()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("StepGuard already used"))?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            guard
+                .fail(&err)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(())
+        })
+    }
+}
+
+struct InternalStepResult {
+    inner: StepResult<serde_json::Value>,
+}
+
+impl IntoPy<PyObject> for InternalStepResult {
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self.inner {
+            StepResult::Skipped(val) => {
+                let py_val = json_to_py(py, &val).unwrap_or(py.None());
+                PyStepResult {
+                    status: "SKIPPED".to_string(),
+                    value: Some(py_val),
+                    guard: None,
+                }
+                .into_py(py)
+            }
+            StepResult::Execute(guard) => {
+                let py_guard = PyStepGuard { inner: Some(guard) };
+                let guard_obj = Py::new(py, py_guard).unwrap().to_object(py);
+                PyStepResult {
+                    status: "EXECUTE".to_string(),
+                    value: None,
+                    guard: Some(guard_obj),
+                }
+                .into_py(py)
+            }
+        }
+    }
+}
+
+#[pyclass]
+struct PyStepResult {
+    #[pyo3(get)]
+    status: String, // "SKIPPED" or "EXECUTE"
+    #[pyo3(get)]
+    value: Option<PyObject>,
+    #[pyo3(get)]
+    guard: Option<PyObject>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct PyWorkflow {
+    inner: Arc<RustWorkflow>,
+}
+
+#[pymethods]
+impl PyWorkflow {
+    fn id(&self) -> i64 {
+        self.inner.id()
+    }
+
+    fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .start()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn success<'a>(&self, py: Python<'a>, val: PyObject) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_val = py_to_json(val.as_ref(py))?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .success(&json_val)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn fail<'a>(&self, py: Python<'a>, err: String) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .fail(&err)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let result =
+                rust_pgqrs::workflow::StepGuard::acquire(inner.pool(), inner.id(), &step_id)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            Ok(InternalStepResult { inner: result })
+        })
+    }
+}
+
 #[pymodule]
-fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Producer>()?;
     m.add_class::<Consumer>()?;
     m.add_class::<Admin>()?;
@@ -879,5 +1040,11 @@ fn pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<WorkerInfo>()?;
     m.add_class::<PyWorkerStatus>()?;
     m.add_class::<PyConfig>()?;
+
+    // Workflow classes
+    m.add_class::<PyWorkflow>()?;
+    m.add_class::<PyStepGuard>()?;
+    m.add_class::<PyStepResult>()?;
+
     Ok(())
 }
