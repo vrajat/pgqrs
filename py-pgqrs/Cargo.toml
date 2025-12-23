@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [lib]
-name = "pgqrs"
+name = "_pgqrs"
 crate-type = ["cdylib"]
 
 [dependencies]
