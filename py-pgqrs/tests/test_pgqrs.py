@@ -524,7 +524,6 @@ async def crashing_workflow_runner(ctx: PyWorkflow, arg: str):
     await ctx.start()
 
     # Run step 1 (should succeed)
-    # Run step 1 (should succeed)
     _ = await step1(ctx, arg)
 
     # Crash!

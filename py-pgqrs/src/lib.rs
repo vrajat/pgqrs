@@ -715,6 +715,19 @@ impl Admin {
         })
     }
 
+    /// Creates a new workflow execution.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     The name of the workflow type.
+    /// arg : object
+    ///     The argument for the workflow execution (must be JSON serializable).
+    ///
+    /// Returns
+    /// -------
+    /// PyWorkflow
+    ///     A handle to the created workflow.
     fn create_workflow<'a>(
         &self,
         py: Python<'a>,
@@ -886,6 +899,10 @@ impl From<PyWorkerStatus> for WorkerStatus {
     }
 }
 
+/// A guard representing an exclusively acquired step execution.
+///
+/// This object is used to mark a step as successfully completed or failed.
+/// It holds a lock or state that ensures only one worker executes this step.
 #[pyclass]
 struct PyStepGuard {
     inner: Option<rust_pgqrs::workflow::StepGuard>, // Option to allow taking it out
@@ -933,7 +950,10 @@ impl IntoPy<PyObject> for InternalStepResult {
     fn into_py(self, py: Python<'_>) -> PyObject {
         match self.inner {
             StepResult::Skipped(val) => {
-                let py_val = json_to_py(py, &val).unwrap_or(py.None());
+                let py_val = json_to_py(py, &val).unwrap_or_else(|e| {
+                    eprintln!("Failed to convert JSON value to Python object: {}", e);
+                    py.None()
+                });
                 PyStepResult {
                     status: "SKIPPED".to_string(),
                     value: Some(py_val),
@@ -943,7 +963,9 @@ impl IntoPy<PyObject> for InternalStepResult {
             }
             StepResult::Execute(guard) => {
                 let py_guard = PyStepGuard { inner: Some(guard) };
-                let guard_obj = Py::new(py, py_guard).unwrap().to_object(py);
+                let guard_obj = Py::new(py, py_guard)
+                    .expect("failed to create PyStepGuard Python object")
+                    .to_object(py);
                 PyStepResult {
                     status: "EXECUTE".to_string(),
                     value: None,
@@ -955,6 +977,9 @@ impl IntoPy<PyObject> for InternalStepResult {
     }
 }
 
+/// The result of an attempt to acquire a workflow step.
+///
+/// Contains the decision on whether to execute the step or skip it (if already completed).
 #[pyclass]
 struct PyStepResult {
     #[pyo3(get)]
@@ -965,6 +990,9 @@ struct PyStepResult {
     guard: Option<PyObject>,
 }
 
+/// A handle to a durable workflow execution.
+///
+/// Used to manage the lifecycle of a workflow instance and its steps.
 #[pyclass]
 #[derive(Clone)]
 struct PyWorkflow {
@@ -977,6 +1005,9 @@ impl PyWorkflow {
         self.inner.id()
     }
 
+    /// Starts the workflow execution.
+    ///
+    /// Transitions the workflow to the RUNNING state. Idempotent.
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -988,6 +1019,12 @@ impl PyWorkflow {
         })
     }
 
+    /// Marks the workflow as successfully completed.
+    ///
+    /// Parameters
+    /// ----------
+    /// val : object
+    ///     The return value of the workflow.
     fn success<'a>(&self, py: Python<'a>, val: PyObject) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let json_val = py_to_json(val.as_ref(py))?;
@@ -1001,6 +1038,12 @@ impl PyWorkflow {
         })
     }
 
+    /// Marks the workflow as failed.
+    ///
+    /// Parameters
+    /// ----------
+    /// err : str
+    ///     The error message describing the failure.
     fn fail<'a>(&self, py: Python<'a>, err: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -1012,6 +1055,17 @@ impl PyWorkflow {
         })
     }
 
+    /// Acquires a step for execution.
+    ///
+    /// Parameters
+    /// ----------
+    /// step_id : str
+    ///     The unique identifier for the step within this workflow.
+    ///
+    /// Returns
+    /// -------
+    /// PyStepResult
+    ///     The result containing execution status (EXECUTE or SKIPPED).
     fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {

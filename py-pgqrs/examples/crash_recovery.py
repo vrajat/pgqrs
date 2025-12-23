@@ -51,47 +51,7 @@ async def run_resumable_workflow(dsn):
 
     # In a real scenario, we would reload the workflow by ID.
     # But here we pass the SAME context (or create new handle for same ID if possible).
-    # Since `create_workflow` creates a NEW row, we can't use it to 'resume'.
-    # We need `load_workflow`?
-    # Admin doesn't strictly have `load_workflow` in Python bindings yet?
-    # Wait, `Admin` has `get_workflow`? No.
-    # But we can reuse the `wf_ctx` handle! The handle has the ID.
-    # When we call `my_workflow(wf_ctx, ...)` again, logic is:
-    # 1. Start -> Idempotent (transitions to RUNNING if not running).
-    # 2. Step 1 -> Checks DB. Should be SUCCESS. Returns SKIPPED.
-    # 3. Step 2 -> Checks DB. PENDING/ERROR? If ERROR, acquire resets to RUNNING.
-    # 4. Step 2 Logic -> Runs (FAIL_ONCE=False) -> Success.
-
-    # However, `my_workflow` calls `ctx.start()`.
-    # `handle.rs`: `start()` checks status. If ERROR, it fails with "ValidationFailed".
-    # If the workflow itself is failed (because step failed?), we need to reset it?
-    # `StepGuard` failure DOES mark step as ERROR.
-    # Does it mark workflow as ERROR?
-    # The decorator `@workflow` catches exception and calls `ctx.fail()`.
-    # So workflow status becomes ERROR.
-    # Resuming an ERROR workflow requires manual intervention or specific API?
-    # `start()` implementation fails if status is ERROR.
-
-    # So to resume, we probably need to clear the error status?
-    # Or `retry` logic?
-    # `pgqrs` currently handles crashes (process death).
-    # If process dies, workflow stays RUNNING (stale).
-    # `start()` on RUNNING is idempotent.
-    # So creating a "Crash" means NOT calling `ctx.fail()`.
-
-    # Let's simulate CRASH (incomplete execution) rather than logic error.
-    # Run 1 will raise SystemExit or something caught but NOT calling ctx.fail?
-    # No, raising exception in `retry_logic_wrapper`...
-    # I can just return early or break?
-    pass
-
-    # Let's override the decorator behavior for testing? No.
-    # I will modify Step 2 to throw exception, but I will catch it OUTSIDE the decorator?
-    # Wait, decorator catches exception and calls fail.
-    # If I want to simulate process crash, I should throw an exception that decorator doesn't catch?
-    # BaseException?
-    # Or just Mock the fail call?
-    pass
+    # Re-running `my_workflow` with the same context will leverage idempotency.
 
 async def test_crash_recovery(dsn):
     admin = Admin(dsn, None)

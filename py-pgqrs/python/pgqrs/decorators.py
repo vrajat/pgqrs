@@ -27,7 +27,7 @@ def workflow(func):
         except Exception as e:
             # Failure
             await ctx.fail(str(e))
-            raise e
+            raise
 
     return wrapper
 
@@ -63,7 +63,7 @@ def step(func):
                 return result
             except Exception as e:
                 await guard.fail(str(e))
-                raise e
+                raise
         else:
             raise RuntimeError(f"Unknown step status: {step_result.status}")
 
