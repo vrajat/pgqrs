@@ -66,7 +66,7 @@ pub use crate::worker::{Admin, Consumer, Producer, Worker, WorkerHandle};
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
 pub use crate::rate_limit::RateLimitStatus;
-pub use crate::tables::{Archive, NewWorker, Table, Workers};
+pub use crate::tables::{Archive, NewWorker, Table, WorkflowRecord, Workers, Workflows};
 pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
 pub use crate::validation::ValidationConfig;
 pub use crate::workflow::{StepGuard, StepResult, Workflow};

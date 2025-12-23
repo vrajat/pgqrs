@@ -51,16 +51,12 @@ async fn test_macro_workflow() -> anyhow::Result<()> {
 
     // Start verification:
     // Verify that the workflow is marked as SUCCESS in the database
-    let row: (String, serde_json::Value) = sqlx::query_as(
-        "SELECT status::text, output FROM pgqrs_workflows WHERE workflow_id = $1"
-    )
-    .bind(workflow_id)
-    .fetch_one(&pool)
-    .await?;
+    let workflows = pgqrs::Workflows::new(pool.clone());
+    let record = workflows.get(workflow_id).await?;
 
-    assert_eq!(row.0, "SUCCESS");
+    assert_eq!(record.status, pgqrs::workflow::WorkflowStatus::Success);
 
-    let db_output: TestData = serde_json::from_value(row.1)?;
+    let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
     assert_eq!(db_output.msg, "start, step1_done");
 
     Ok(())
