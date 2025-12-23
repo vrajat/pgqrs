@@ -70,6 +70,11 @@ impl Workflow {
     /// Start the workflow execution.
     ///
     /// Transitions status from PENDING to RUNNING.
+    ///
+    /// # Behavior
+    ///
+    /// - **Idempotent**: If the workflow is already `RUNNING` or `SUCCESS`, this method succeeds without changes.
+    /// - **Error**: If the workflow is in the `ERROR` state, this method returns a `ValidationFailed` error.
     pub async fn start(&self) -> Result<()> {
         // Try to transition to RUNNING
         let result = sqlx::query_as::<
@@ -90,8 +95,9 @@ impl Workflow {
                     .bind(self.id)
                     .fetch_optional(&self.pool)
                     .await
-                    .ok()
-                    .flatten();
+                    .map_err(|e| crate::error::Error::Connection {
+                        message: format!("Failed to check status for workflow {}: {}", self.id, e),
+                    })?;
 
             if let Some(crate::workflow::WorkflowStatus::Error) = status {
                 return Err(crate::error::Error::ValidationFailed {

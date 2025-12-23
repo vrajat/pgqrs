@@ -266,8 +266,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
-    let fn_name = &input_fn.sig.ident;
-    let workflow_name = fn_name.to_string();
+
     let attrs = &input_fn.attrs;
 
     // Identify first argument (workflow context)
@@ -332,7 +331,7 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #(#attrs)*
         #visibility #sig {
-            let workflow_name = #workflow_name;
+
 
             // Start workflow
             #first_arg_name.start().await?;
