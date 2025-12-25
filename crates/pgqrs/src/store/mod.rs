@@ -4,9 +4,7 @@
 //! enabling pgqrs to support multiple database backends (Postgres, SQLite, Turso).
 
 use crate::tables::{NewQueue, NewWorkflow, WorkflowRecord};
-use crate::types::{
-    ArchivedMessage, MessageID, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus,
-};
+use crate::types::{ArchivedMessage, MessageID, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Duration;
 use serde_json::Value;
@@ -162,10 +160,7 @@ pub trait ArchiveStore: Send + Sync {
 pub trait WorkflowStore: Send + Sync {
     type Error;
 
-    async fn insert(
-        &self,
-        data: NewWorkflow,
-    ) -> std::result::Result<WorkflowRecord, Self::Error>;
+    async fn insert(&self, data: NewWorkflow) -> std::result::Result<WorkflowRecord, Self::Error>;
     async fn get(&self, id: i64) -> std::result::Result<WorkflowRecord, Self::Error>;
     async fn list(&self) -> std::result::Result<Vec<WorkflowRecord>, Self::Error>;
     async fn count(&self) -> std::result::Result<i64, Self::Error>;
