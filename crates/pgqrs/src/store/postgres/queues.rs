@@ -1,4 +1,5 @@
 
+use crate::error::{Error, Result};
 use crate::store::QueueStore;
 use crate::types::{NewQueue, QueueInfo};
 use sqlx::PgPool;
@@ -43,7 +44,7 @@ const CHECK_QUEUE_EXISTS: &str = r#"
 
 #[async_trait::async_trait]
 impl QueueStore for PostgresQueueStore {
-    type Error = sqlx::Error;
+    type Error = Error;
 
     async fn get_by_name(&self, name: &str) -> Result<QueueInfo, Self::Error> {
         sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)

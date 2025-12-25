@@ -1,6 +1,7 @@
 //! Postgres implementation of the Store trait.
 
 use crate::store::{Store, QueueStore, MessageStore, WorkerStore, ArchiveStore};
+use crate::error::Error;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ impl PostgresStore {
 
 #[async_trait::async_trait]
 impl Store for PostgresStore {
-    type Error = sqlx::Error;
+    type Error = Error;
 
     type QueueStore = queues::PostgresQueueStore;
     type MessageStore = messages::PostgresMessageStore;

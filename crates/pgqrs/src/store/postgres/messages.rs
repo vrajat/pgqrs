@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::store::MessageStore;
 use crate::types::QueueMessage;
 use chrono::{Duration, Utc};
@@ -79,7 +79,7 @@ const RELEASE_SPECIFIC_MESSAGES: &str = r#"
 
 #[async_trait::async_trait]
 impl MessageStore for PostgresMessageStore {
-    type Error = sqlx::Error;
+    type Error = Error;
 
     async fn get(&self, id: i64) -> Result<QueueMessage, Self::Error> {
         sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)

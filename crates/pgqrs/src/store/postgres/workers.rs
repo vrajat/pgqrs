@@ -1,3 +1,4 @@
+use crate::error::{Error, Result};
 use crate::store::WorkerStore;
 use crate::types::{WorkerInfo, WorkerStatus};
 use chrono::{Duration, Utc};
@@ -70,7 +71,7 @@ const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
 
 #[async_trait::async_trait]
 impl WorkerStore for PostgresWorkerStore {
-    type Error = sqlx::Error;
+    type Error = Error;
 
     async fn register(
         &self,

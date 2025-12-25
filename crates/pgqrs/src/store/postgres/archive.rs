@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::store::ArchiveStore;
 use crate::types::ArchivedMessage;
 use sqlx::PgPool;
@@ -76,7 +76,7 @@ const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
 
 #[async_trait::async_trait]
 impl ArchiveStore for PostgresArchiveStore {
-    type Error = sqlx::Error;
+    type Error = Error;
 
     async fn archive_message(
         &self,
