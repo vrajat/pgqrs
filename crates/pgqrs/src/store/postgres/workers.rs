@@ -100,16 +100,16 @@ impl WorkerStore for PostgresWorkerStore {
                         .await?;
                     Ok(worker)
                 }
-                WorkerStatus::Suspended => {
-                     return Err(sqlx::Error::Protocol(format!("Worker {}:{}:{:?} is suspended", hostname, port, queue_id)));
-                }
-                WorkerStatus::Ready => {
-                     return Err(sqlx::Error::Protocol(format!("Worker {}:{}:{:?} is already running", hostname, port, queue_id)));
-                }
+                WorkerStatus::Suspended => Err(Error::ValidationFailed {
+                    reason: format!("Worker {}:{}:{:?} is suspended", hostname, port, queue_id),
+                }),
+                WorkerStatus::Ready => Err(Error::ValidationFailed {
+                    reason: format!("Worker {}:{}:{:?} is already running", hostname, port, queue_id),
+                }),
             }
         } else {
-             // Create new
-             let worker = sqlx::query_as::<_, WorkerInfo>(INSERT_WORKER)
+            // Create new
+            let worker = sqlx::query_as::<_, WorkerInfo>(INSERT_WORKER)
                 .bind(hostname)
                 .bind(port)
                 .bind(queue_id)
@@ -118,7 +118,7 @@ impl WorkerStore for PostgresWorkerStore {
                 .bind(WorkerStatus::Ready)
                 .fetch_one(&self.pool)
                 .await?;
-             Ok(worker)
+            Ok(worker)
         }
     }
 
@@ -136,7 +136,7 @@ impl WorkerStore for PostgresWorkerStore {
             .execute(&self.pool)
             .await?;
         if result.rows_affected() == 0 {
-            return Err(sqlx::Error::RowNotFound);
+            return Err(Error::WorkerNotFound { id: worker_id });
         }
         Ok(())
     }
@@ -164,10 +164,12 @@ impl WorkerStore for PostgresWorkerStore {
             .await?;
 
         if result.rows_affected() == 0 {
-             // Could be because it doesn't exist or not in Ready state.
-             // We return RowNotFound implies invalid transition context effectively.
-             // Or we could check specific state to be more descriptive but let's stick to simple first.
-             return Err(sqlx::Error::RowNotFound);
+            // Either doesn't exist or not in Ready state
+            return Err(Error::InvalidStateTransition {
+                from: "unknown".to_string(),
+                to: "suspended".to_string(),
+                reason: "Worker not found or not in Ready state".to_string(),
+            });
         }
         Ok(())
     }
@@ -179,7 +181,11 @@ impl WorkerStore for PostgresWorkerStore {
             .await?;
 
         if result.rows_affected() == 0 {
-             return Err(sqlx::Error::RowNotFound);
+             return Err(Error::InvalidStateTransition {
+                from: "unknown".to_string(),
+                to: "ready".to_string(),
+                reason: "Worker not found or not in Suspended state".to_string(),
+            });
         }
         Ok(())
     }
@@ -191,7 +197,11 @@ impl WorkerStore for PostgresWorkerStore {
             .await?;
 
         if result.rows_affected() == 0 {
-             return Err(sqlx::Error::RowNotFound);
+             return Err(Error::InvalidStateTransition {
+                from: "unknown".to_string(),
+                to: "stopped".to_string(),
+                reason: "Worker not found or not in Suspended state".to_string(),
+            });
         }
         Ok(())
     }
