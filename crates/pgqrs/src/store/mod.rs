@@ -13,24 +13,36 @@ use serde_json::Value;
 /// and transaction management.
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
+    /// The error type returned by store operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// The repository type for queue operations.
     type QueueStore: QueueStore<Error = Self::Error>;
+    /// The repository type for message operations.
     type MessageStore: MessageStore<Error = Self::Error>;
+    /// The repository type for worker operations.
     type WorkerStore: WorkerStore<Error = Self::Error>;
+    /// The repository type for archive operations.
     type ArchiveStore: ArchiveStore<Error = Self::Error>;
+    /// The repository type for workflow operations.
     type WorkflowStore: WorkflowStore<Error = Self::Error>;
 
+    /// Get access to the queue repository.
     fn queues(&self) -> &Self::QueueStore;
+    /// Get access to the message repository.
     fn messages(&self) -> &Self::MessageStore;
+    /// Get access to the worker repository.
     fn workers(&self) -> &Self::WorkerStore;
+    /// Get access to the archive repository.
     fn archive(&self) -> &Self::ArchiveStore;
+    /// Get access to the workflow repository.
     fn workflows(&self) -> &Self::WorkflowStore;
 }
 
 /// Repository for managing queues.
 #[async_trait]
 pub trait QueueStore: Send + Sync {
+    /// The error type returned by queue operations.
     type Error;
 
     /// Get queue information by name
@@ -48,6 +60,7 @@ pub trait QueueStore: Send + Sync {
 /// Repository for managing messages.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
+    /// The error type returned by message operations.
     type Error;
 
     /// Enqueue a single message
@@ -111,6 +124,7 @@ pub trait MessageStore: Send + Sync {
 /// Repository for managing workers.
 #[async_trait]
 pub trait WorkerStore: Send + Sync {
+    /// The error type returned by worker operations.
     type Error;
 
     /// Register a new worker
@@ -144,6 +158,7 @@ pub trait WorkerStore: Send + Sync {
 /// Repository for managing archived messages.
 #[async_trait]
 pub trait ArchiveStore: Send + Sync {
+    /// The error type returned by archive operations.
     type Error;
 
     /// Archive a specific message
@@ -183,6 +198,7 @@ pub trait ArchiveStore: Send + Sync {
 /// Repository for managing workflows.
 #[async_trait]
 pub trait WorkflowStore: Send + Sync {
+    /// The error type returned by workflow operations.
     type Error;
 
     /// Insert a new workflow

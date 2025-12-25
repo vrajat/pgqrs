@@ -93,24 +93,29 @@ impl ArchiveStore for PostgresArchiveStore {
 
     async fn archive_batch(&self, msg_ids: &[i64]) -> Result<Vec<bool>, Self::Error> {
         if msg_ids.is_empty() {
-             return Ok(vec![]);
+            return Ok(vec![]);
         }
 
         let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
-             .bind(msg_ids)
-             .fetch_all(&self.pool)
-             .await?;
+            .bind(msg_ids)
+            .fetch_all(&self.pool)
+            .await?;
 
         let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
         let result = msg_ids
-             .iter()
-             .map(|id| archived_set.contains(id))
-             .collect();
+            .iter()
+            .map(|id| archived_set.contains(id))
+            .collect();
         Ok(result)
     }
 
-    async fn list_dlq_messages(&self, max_attempts: i32, limit: i64, offset: i64) -> Result<Vec<ArchivedMessage>, Self::Error> {
-         sqlx::query_as::<_, ArchivedMessage>(LIST_DLQ_MESSAGES)
+    async fn list_dlq_messages(
+        &self,
+        max_attempts: i32,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchivedMessage>, Self::Error> {
+        sqlx::query_as::<_, ArchivedMessage>(LIST_DLQ_MESSAGES)
             .bind(max_attempts)
             .bind(limit)
             .bind(offset)
@@ -119,25 +124,30 @@ impl ArchiveStore for PostgresArchiveStore {
     }
 
     async fn dlq_count(&self, max_attempts: i32) -> Result<i64, Self::Error> {
-         sqlx::query_scalar(COUNT_DLQ_MESSAGES)
+        sqlx::query_scalar(COUNT_DLQ_MESSAGES)
             .bind(max_attempts)
             .fetch_one(&self.pool)
             .await
     }
 
-    async fn list_by_worker(&self, worker_id: i64, limit: i64, offset: i64) -> Result<Vec<ArchivedMessage>, Self::Error> {
-         sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_LIST_WITH_WORKER)
-             .bind(worker_id)
-             .bind(limit)
-             .bind(offset)
-             .fetch_all(&self.pool)
-             .await
+    async fn list_by_worker(
+        &self,
+        worker_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchivedMessage>, Self::Error> {
+        sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_LIST_WITH_WORKER)
+            .bind(worker_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
     }
 
     async fn count_by_worker(&self, worker_id: i64) -> Result<i64, Self::Error> {
-         sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
-             .bind(worker_id)
-             .fetch_one(&self.pool)
-             .await
+        sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
     }
 }
