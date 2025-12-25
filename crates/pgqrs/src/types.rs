@@ -26,6 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self};
 use tabled::Tabled;
 
+/// Unique message identifier
+pub type MessageID = i64;
+
 /// A message in the queue
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
 pub struct QueueMessage {

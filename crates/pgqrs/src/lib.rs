@@ -51,6 +51,7 @@
 pub mod config;
 pub mod error;
 mod rate_limit;
+pub mod store;
 pub mod tables;
 pub mod types;
 mod validation;
