@@ -1,4 +1,3 @@
-
 //! Postgres implementation of the Store trait.
 
 use crate::store::{Store, QueueStore, MessageStore, WorkerStore, ArchiveStore};

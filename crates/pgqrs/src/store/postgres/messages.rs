@@ -1,4 +1,3 @@
-
 use crate::error::Result;
 use crate::store::MessageStore;
 use crate::types::QueueMessage;
