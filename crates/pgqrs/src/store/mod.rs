@@ -4,7 +4,7 @@
 //! enabling pgqrs to support multiple database backends (Postgres, SQLite, Turso).
 
 use crate::tables::{NewQueue, NewWorkflow, WorkflowRecord};
-use crate::types::{ArchivedMessage, MessageID, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
+use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Duration;
 use serde_json::Value;
@@ -26,22 +26,26 @@ pub trait Store: Clone + Send + Sync + 'static {
     fn workers(&self) -> &Self::WorkerStore;
     fn archive(&self) -> &Self::ArchiveStore;
     fn workflows(&self) -> &Self::WorkflowStore;
-
-    // TODO: Transaction management to be added when needed
-    // async fn begin(&self) -> Result<Box<dyn Transaction<Error = Self::Error>>>;
 }
 
+/// Repository for managing queues.
 #[async_trait]
 pub trait QueueStore: Send + Sync {
     type Error;
 
+    /// Get queue information by name
     async fn get_by_name(&self, name: &str) -> std::result::Result<QueueInfo, Self::Error>;
+    /// Insert a new queue
     async fn insert(&self, data: NewQueue) -> std::result::Result<QueueInfo, Self::Error>;
+    /// Check if a queue exists
     async fn exists(&self, name: &str) -> std::result::Result<bool, Self::Error>;
+    /// Delete a queue by name
     async fn delete_by_name(&self, name: &str) -> std::result::Result<u64, Self::Error>;
+    /// List all queues
     async fn list(&self) -> std::result::Result<Vec<QueueInfo>, Self::Error>;
 }
 
+/// Repository for managing messages.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
     type Error;
@@ -53,7 +57,7 @@ pub trait MessageStore: Send + Sync {
         worker_id: i64,
         payload: &Value,
         delay_seconds: Option<u32>,
-    ) -> std::result::Result<MessageID, Self::Error>;
+    ) -> std::result::Result<i64, Self::Error>;
 
     /// Enqueue multiple messages
     async fn enqueue_batch(
@@ -61,7 +65,7 @@ pub trait MessageStore: Send + Sync {
         queue_id: i64,
         worker_id: i64,
         payloads: &[Value],
-    ) -> std::result::Result<Vec<MessageID>, Self::Error>;
+    ) -> std::result::Result<Vec<i64>, Self::Error>;
 
     /// Dequeue messages
     async fn dequeue(
@@ -104,10 +108,12 @@ pub trait MessageStore: Send + Sync {
     ) -> std::result::Result<Vec<bool>, Self::Error>;
 }
 
+/// Repository for managing workers.
 #[async_trait]
 pub trait WorkerStore: Send + Sync {
     type Error;
 
+    /// Register a new worker
     async fn register(
         &self,
         queue_id: Option<i64>, // None for admin
@@ -115,8 +121,11 @@ pub trait WorkerStore: Send + Sync {
         port: i32,
     ) -> std::result::Result<WorkerInfo, Self::Error>;
 
+    /// Get status of a worker
     async fn get_status(&self, worker_id: i64) -> std::result::Result<WorkerStatus, Self::Error>;
+    /// Send a heartbeat for a worker
     async fn heartbeat(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
+    /// Check if a worker is healthy
     async fn is_healthy(
         &self,
         worker_id: i64,
@@ -124,45 +133,66 @@ pub trait WorkerStore: Send + Sync {
     ) -> std::result::Result<bool, Self::Error>;
 
     // Lifecycle Transitions
+    /// Suspend a worker
     async fn suspend(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
+    /// Resume a worker
     async fn resume(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
+    /// Shutdown a worker
     async fn shutdown(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
 }
 
+/// Repository for managing archived messages.
 #[async_trait]
 pub trait ArchiveStore: Send + Sync {
     type Error;
 
+    /// Archive a specific message
     async fn archive_message(
         &self,
         msg_id: i64,
+        worker_id: i64,
     ) -> std::result::Result<Option<ArchivedMessage>, Self::Error>;
+
+    /// Archive a batch of messages
     async fn archive_batch(&self, msg_ids: &[i64]) -> std::result::Result<Vec<bool>, Self::Error>;
 
     // Read methods
+    /// List DLQ messages
     async fn list_dlq_messages(
         &self,
         max_attempts: i32,
         limit: i64,
         offset: i64,
     ) -> std::result::Result<Vec<ArchivedMessage>, Self::Error>;
+
+    /// Count DLQ messages
     async fn dlq_count(&self, max_attempts: i32) -> std::result::Result<i64, Self::Error>;
+
+    /// List archived messages by worker
     async fn list_by_worker(
         &self,
         worker_id: i64,
         limit: i64,
         offset: i64,
     ) -> std::result::Result<Vec<ArchivedMessage>, Self::Error>;
+
+    /// Count archived messages by worker
     async fn count_by_worker(&self, worker_id: i64) -> std::result::Result<i64, Self::Error>;
 }
 
+/// Repository for managing workflows.
 #[async_trait]
 pub trait WorkflowStore: Send + Sync {
     type Error;
 
+    /// Insert a new workflow
     async fn insert(&self, data: NewWorkflow) -> std::result::Result<WorkflowRecord, Self::Error>;
+    /// Get a workflow by ID
     async fn get(&self, id: i64) -> std::result::Result<WorkflowRecord, Self::Error>;
+    /// List all workflows
     async fn list(&self) -> std::result::Result<Vec<WorkflowRecord>, Self::Error>;
+    /// Count workflows
     async fn count(&self) -> std::result::Result<i64, Self::Error>;
+    /// Delete a workflow by ID
     async fn delete(&self, id: i64) -> std::result::Result<u64, Self::Error>;
 }

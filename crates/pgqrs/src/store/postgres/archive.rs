@@ -19,7 +19,7 @@ impl PostgresArchiveStore {
 const ARCHIVE_MESSAGE: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_messages
-        WHERE id = $1
+        WHERE id = $1 AND consumer_worker_id = $2
         RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
     )
     INSERT INTO pgqrs_archive
@@ -79,24 +79,14 @@ const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
 impl ArchiveStore for PostgresArchiveStore {
     type Error = sqlx::Error;
 
-    async fn archive_message(&self, msg_id: i64) -> Result<Option<ArchivedMessage>, Self::Error> {
-        // The original implementation restricted deletion by consumer_worker_id in the Consumer struct.
-        // In the generic store, we might not always enforce that if called from admin context?
-        // However, looking at the SQL in `consumer.rs`, it had `WHERE id = $1 AND consumer_worker_id = $2`.
-        // The trait currently only accepts `msg_id`.
-        // This implies the Store level operation is "sudo" (admin-like) or we assume ownership check happened above.
-        // WAIT: The consumer calls `archive` on itself.
-        // If we want to support Consumer-safe archiving, we should probably pass `worker_id` or handle it in the Consumer logic
-        // by checking ownership first?
-        // Or we should update the trait to take optional `worker_id` for ownership check.
-        // Given current trait signature `archive_message(msg_id)`, I will use the ID-only query.
-        // This effectively makes the Store implementation "Admin-level" access.
-        // The `Consumer` generic implementation (Phase 2) will act as the gatekeeper if needed,
-        // but `Consumer` usually archives its own messages.
-        // Actually, for a pure store, `archive_message(id)` is fine. Authorization is a layer above.
-
+    async fn archive_message(
+        &self,
+        msg_id: i64,
+        worker_id: i64,
+    ) -> Result<Option<ArchivedMessage>, Self::Error> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
+            .bind(worker_id)
             .fetch_optional(&self.pool)
             .await?;
         Ok(result)

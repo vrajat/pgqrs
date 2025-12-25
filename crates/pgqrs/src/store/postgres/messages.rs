@@ -1,19 +1,21 @@
 
 use crate::error::Result;
 use crate::store::MessageStore;
-use crate::types::{MessageID, QueueMessage};
+use crate::types::QueueMessage;
 use chrono::{Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
+
 #[derive(Clone, Debug)]
 pub struct PostgresMessageStore {
     pool: PgPool,
+    max_read_ct: u32,
 }
 
 impl PostgresMessageStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, max_read_ct: u32) -> Self {
+        Self { pool, max_read_ct }
     }
 }
 
@@ -93,7 +95,7 @@ impl MessageStore for PostgresMessageStore {
         worker_id: i64,
         payload: &Value,
         delay_seconds: Option<u32>,
-    ) -> Result<MessageID, Self::Error> {
+    ) -> Result<i64, Self::Error> {
         let now = Utc::now();
         let vt = fast_calc_vt(now, delay_seconds);
 
@@ -114,7 +116,7 @@ impl MessageStore for PostgresMessageStore {
         queue_id: i64,
         worker_id: i64,
         payloads: &[Value],
-    ) -> Result<Vec<MessageID>, Self::Error> {
+    ) -> Result<Vec<i64>, Self::Error> {
         let now = Utc::now();
         let vt = now; // No delay support in batch enqueue currently (as per producer.rs implementation)
 
@@ -137,23 +139,10 @@ impl MessageStore for PostgresMessageStore {
         limit: usize,
         vt_seconds: u32,
     ) -> Result<Vec<QueueMessage>, Self::Error> {
-        // TODO: max_read_ct config is missing from arguments.
-        // For now hardcoding or we might need to update trait to accept fetch options.
-        // The trait has `limit`, `vt_seconds`.
-        // `read_ct` limit is usually config based.
-        // We will assume a default or high limit if not passed.
-        // Or wait, the generic trait `dequeue` params are `queue_id, worker_id, limit, vt_seconds`.
-        // The SQL uses `$3` for `read_ct < $3`.
-        // I will use a reasonable default like 10 (or maybe -1/max int if ignored?).
-        // In existing code, it comes from `config.max_read_ct` which defaults to 3 or something.
-        // I'll hardcode 10 for now as it's not passed in trait.
-        // Ideally trait should take `options` struct.
-        let max_read_ct = 10;
-
         let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(queue_id)
             .bind(limit as i64)
-            .bind(max_read_ct)
+            .bind(self.max_read_ct as i32)
             .bind(vt_seconds as i32)
             .bind(worker_id)
             .fetch_all(&self.pool)

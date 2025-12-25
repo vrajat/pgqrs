@@ -11,9 +11,9 @@ pub mod workers;
 pub mod workflows;
 pub mod archive;
 
+
 #[derive(Clone, Debug)]
 pub struct PostgresStore {
-    pool: PgPool,
     queues: Arc<queues::PostgresQueueStore>,
     messages: Arc<messages::PostgresMessageStore>,
     workers: Arc<workers::PostgresWorkerStore>,
@@ -22,11 +22,10 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, max_read_ct: u32) -> Self {
         Self {
-            pool: pool.clone(),
             queues: Arc::new(queues::PostgresQueueStore::new(pool.clone())),
-            messages: Arc::new(messages::PostgresMessageStore::new(pool.clone())),
+            messages: Arc::new(messages::PostgresMessageStore::new(pool.clone(), max_read_ct)),
             workers: Arc::new(workers::PostgresWorkerStore::new(pool.clone())),
             archive: Arc::new(archive::PostgresArchiveStore::new(pool.clone())),
             workflows: Arc::new(workflows::PostgresWorkflowStore::new(pool)),
@@ -64,6 +63,3 @@ impl Store for PostgresStore {
         &self.workflows
     }
 }
-
-// Ensure the submodules are accessible appropriately
-// (We will create these files next)

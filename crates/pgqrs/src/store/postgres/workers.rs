@@ -1,5 +1,4 @@
 
-use crate::error::Result;
 use crate::store::WorkerStore;
 use crate::types::{WorkerInfo, WorkerStatus};
 use chrono::{Duration, Utc};
@@ -102,31 +101,10 @@ impl WorkerStore for PostgresWorkerStore {
                     Ok(worker)
                 }
                 WorkerStatus::Suspended => {
-                    // Conflict
-                     // We need to map this error in the Store layer or letting sqlx error bubble up
-                     // isn't precise enough for logic control.
-                     // However, the trait defines Error = Self::Error (sqlx::Error).
-                     // We should probably return a custom error wrapped in sqlx::Error::Protocol if generic
-                     // or rely on a convention.
-                     // The existing implementation returns crate::Error::WorkerSuspended.
-                     // Since we are inside generic implementation where Error is sqlx::Error, we can't return crate::Error directly?
-                     // Wait, `crate::error::Result` in `src/store/mod.rs` wraps generic error?
-                     // No, `crate::error::Result` is `Result<T, crate::Error>`.
-                     // The trait signature says: `Result<WorkerInfo, Self::Error>`.
-                     // This means `Self::Error` MUST be convertible to what the caller expects?
-                     // Or wait, the trait definition in `mod.rs` uses `Result<..., Self::Error>`?
-                     // `async fn register(...) -> Result<WorkerInfo, Self::Error>;`
-                     // Yes.
-                     // But strictly speaking `crate::Result` is usually `Result<T, crate::Error>`.
-                     // In `mod.rs` I wrote `Result<QueueInfo, Self::Error>`.
-                     // So `Self::Error` is the error type.
-                     // So I return `sqlx::Error`.
-                     // I'll construct a custom sqlx error message.
-                     return Err(sqlx::Error::WorkerCrashed(format!("Worker {}:{}:{:?} is suspended", hostname, port, queue_id)));
+                     return Err(sqlx::Error::Protocol(format!("Worker {}:{}:{:?} is suspended", hostname, port, queue_id)));
                 }
                 WorkerStatus::Ready => {
-                     // Conflict
-                     return Err(sqlx::Error::WorkerCrashed(format!("Worker {}:{}:{:?} is already running", hostname, port, queue_id)));
+                     return Err(sqlx::Error::Protocol(format!("Worker {}:{}:{:?} is already running", hostname, port, queue_id)));
                 }
             }
         } else {
