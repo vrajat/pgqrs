@@ -77,6 +77,24 @@ const RELEASE_SPECIFIC_MESSAGES: &str = r#"
     RETURNING id;
 "#;
 
+const COUNT_WORKER_MESSAGES: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1
+"#;
+
+const DLQ_BATCH: &str = r#"
+    WITH archived_msgs AS (
+        DELETE FROM pgqrs_messages
+        WHERE read_ct >= $1
+        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    )
+    INSERT INTO pgqrs_archive
+        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
+    SELECT
+        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
+    FROM archived_msgs
+    RETURNING original_msg_id;
+"#;
+
 #[async_trait::async_trait]
 impl MessageStore for PostgresMessageStore {
     type Error = Error;
@@ -219,6 +237,22 @@ impl MessageStore for PostgresMessageStore {
             .iter()
             .map(|id| released_set.contains(id))
             .collect();
+        Ok(result)
+    }
+
+    async fn count_active_by_worker(&self, worker_id: i64) -> Result<i64, Self::Error> {
+        let count: i64 = sqlx::query_scalar(COUNT_WORKER_MESSAGES)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn move_to_dlq(&self, max_read_ct: u32) -> Result<Vec<i64>, Self::Error> {
+        let result: Vec<i64> = sqlx::query_scalar(DLQ_BATCH)
+            .bind(max_read_ct as i32)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(result)
     }
 }

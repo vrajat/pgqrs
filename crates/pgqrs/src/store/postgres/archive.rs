@@ -74,6 +74,22 @@ const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
     SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = $1
 "#;
 
+const REPLAY_FROM_DLQ: &str = r#"
+    WITH archived_msg AS (
+        DELETE FROM pgqrs_archive
+        WHERE id = $1
+          -- Only replay if not currently owned by a consumer and not already dequeued
+          AND consumer_worker_id IS NULL
+          AND dequeued_at IS NULL
+        RETURNING original_msg_id, queue_id, payload, enqueued_at, vt, read_ct
+    )
+    INSERT INTO pgqrs_messages
+        (id, queue_id, payload, enqueued_at, vt, read_ct)
+    SELECT original_msg_id, queue_id, payload, enqueued_at, NOW(), read_ct
+    FROM archived_msg
+    RETURNING id, queue_id, payload, enqueued_at, vt, read_ct;
+"#;
+
 #[async_trait::async_trait]
 impl ArchiveStore for PostgresArchiveStore {
     type Error = Error;
@@ -149,5 +165,16 @@ impl ArchiveStore for PostgresArchiveStore {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
+    }
+
+    async fn replay_message(&self, archived_id: i64) -> Result<Option<crate::types::QueueMessage>, Self::Error> {
+        let rec = sqlx::query_as(REPLAY_FROM_DLQ)
+            .bind(archived_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| Error::Connection {
+                message: format!("Failed to replay message from DLQ: {}", e),
+            })?;
+        Ok(rec)
     }
 }

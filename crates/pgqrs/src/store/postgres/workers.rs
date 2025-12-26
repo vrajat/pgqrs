@@ -69,6 +69,52 @@ const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
     RETURNING id
 "#;
 
+const GET_WORKER_HEALTH_GLOBAL: &str = r#"
+    SELECT
+        'Global' as queue_name,
+        COUNT(*) as total_workers,
+        COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
+        COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
+        COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
+        COUNT(*) FILTER (WHERE heartbeat_at < NOW() - make_interval(secs => $1::double precision)) as stale_workers
+    FROM pgqrs_workers;
+"#;
+
+const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
+    SELECT
+        COALESCE(q.queue_name, 'Unknown') as queue_name,
+        COUNT(w.id) as total_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
+        COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - make_interval(secs => $1::double precision)) as stale_workers
+    FROM pgqrs_workers w
+    LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+    GROUP BY q.queue_name;
+"#;
+
+const PURGE_OLD_WORKERS: &str = r#"
+    DELETE FROM pgqrs_workers
+    WHERE status = 'stopped'
+      AND heartbeat_at < $1
+      AND id NOT IN (
+          SELECT DISTINCT worker_id
+          FROM (
+              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+              UNION
+              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
+          ) refs
+      )
+"#;
+
+const COUNT_WORKER_MESSAGES: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1
+"#;
+
 #[async_trait::async_trait]
 impl WorkerStore for PostgresWorkerStore {
     type Error = Error;
@@ -205,4 +251,48 @@ impl WorkerStore for PostgresWorkerStore {
         }
         Ok(())
     }
+
+    async fn health_stats(
+        &self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<crate::types::WorkerHealthStats>, Self::Error> {
+        let timeout_seconds = heartbeat_timeout.num_seconds() as f64;
+
+        let stats = if group_by_queue {
+            sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_BY_QUEUE)
+                .bind(timeout_seconds)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_GLOBAL)
+                .bind(timeout_seconds)
+                .fetch_all(&self.pool)
+                .await
+        };
+
+        stats.map_err(|e| Error::Connection {
+            message: format!("Failed to get worker health stats: {}", e),
+        })
+    }
+
+    async fn purge_stopped(&self, max_age: chrono::Duration) -> Result<u64, Self::Error> {
+        let threshold = Utc::now() - max_age;
+
+        let result = sqlx::query(PURGE_OLD_WORKERS)
+            .bind(threshold)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn count_pending_messages(&self, worker_id: i64) -> Result<i64, Self::Error> {
+        let count: i64 = sqlx::query_scalar(COUNT_WORKER_MESSAGES)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+}
 }

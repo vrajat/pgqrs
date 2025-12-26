@@ -16,6 +16,12 @@ pub trait Store: Clone + Send + Sync + 'static {
     /// The error type returned by store operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Initialize the storage backend (e.g. run migrations)
+    async fn install(&self) -> std::result::Result<(), Self::Error>;
+
+    /// Verify the storage backend health and schema integrity
+    async fn verify(&self) -> std::result::Result<(), Self::Error>;
+
     /// The repository type for queue operations.
     type QueueStore: QueueStore<Error = Self::Error>;
     /// The repository type for message operations.
@@ -55,6 +61,20 @@ pub trait QueueStore: Send + Sync {
     async fn delete_by_name(&self, name: &str) -> std::result::Result<u64, Self::Error>;
     /// List all queues
     async fn list(&self) -> std::result::Result<Vec<QueueInfo>, Self::Error>;
+
+    /// Purge all messages from a queue by name
+    async fn purge(&self, name: &str) -> std::result::Result<(), Self::Error>;
+
+    /// Get metrics for a specific queue
+    async fn metrics(
+        &self,
+        name: &str,
+    ) -> std::result::Result<crate::types::QueueMetrics, Self::Error>;
+
+    /// Get metrics for all queues
+    async fn list_metrics(
+        &self,
+    ) -> std::result::Result<Vec<crate::types::QueueMetrics>, Self::Error>;
 }
 
 /// Repository for managing messages.
@@ -119,6 +139,13 @@ pub trait MessageStore: Send + Sync {
         ids: &[i64],
         worker_id: i64,
     ) -> std::result::Result<Vec<bool>, Self::Error>;
+
+    /// Count active messages held by a specific worker
+    async fn count_active_by_worker(&self, worker_id: i64)
+        -> std::result::Result<i64, Self::Error>;
+
+    /// Move messages exceeding max read count to DLQ (archive)
+    async fn move_to_dlq(&self, max_read_ct: u32) -> std::result::Result<Vec<i64>, Self::Error>;
 }
 
 /// Repository for managing workers.
@@ -146,6 +173,10 @@ pub trait WorkerStore: Send + Sync {
         max_age: Duration,
     ) -> std::result::Result<bool, Self::Error>;
 
+    /// Count messages currently held by a worker
+    async fn count_pending_messages(&self, worker_id: i64)
+        -> std::result::Result<i64, Self::Error>;
+
     // Lifecycle Transitions
     /// Suspend a worker
     async fn suspend(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
@@ -153,6 +184,19 @@ pub trait WorkerStore: Send + Sync {
     async fn resume(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
     /// Shutdown a worker
     async fn shutdown(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
+
+    /// Get health statistics for workers
+    async fn health_stats(
+        &self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> std::result::Result<Vec<crate::types::WorkerHealthStats>, Self::Error>;
+
+    /// Purge workers that have been stopped for longer than max_age
+    async fn purge_stopped(
+        &self,
+        max_age: chrono::Duration,
+    ) -> std::result::Result<u64, Self::Error>;
 }
 
 /// Repository for managing archived messages.
@@ -193,6 +237,12 @@ pub trait ArchiveStore: Send + Sync {
 
     /// Count archived messages by worker
     async fn count_by_worker(&self, worker_id: i64) -> std::result::Result<i64, Self::Error>;
+
+    /// Replay an archived message back to the active queue (DLQ replay)
+    async fn replay_message(
+        &self,
+        archived_id: i64,
+    ) -> std::result::Result<Option<crate::types::QueueMessage>, Self::Error>;
 }
 
 /// Repository for managing workflows.
