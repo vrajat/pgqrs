@@ -78,6 +78,7 @@ const REPLAY_FROM_DLQ: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_archive
         WHERE id = $1
+          -- Only replay if not currently owned by a consumer and not already dequeued
           AND consumer_worker_id IS NULL
           AND dequeued_at IS NULL
         RETURNING original_msg_id, queue_id, payload, enqueued_at, vt, read_ct

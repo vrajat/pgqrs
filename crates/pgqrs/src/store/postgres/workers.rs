@@ -73,11 +73,10 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
     SELECT
         'Global' as queue_name,
         COUNT(*) as total_workers,
-        COUNT(*) FILTER (WHERE status = 'ready') as active_workers, -- mapped to ready field in struct if exists, or use alias as needed. Wait, struct uses ready_workers?
         COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
         COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
         COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
-        COUNT(*) FILTER (WHERE heartbeat_at < NOW() - $1::interval) as stale_workers
+        COUNT(*) FILTER (WHERE heartbeat_at < NOW() - make_interval(secs => $1::double precision)) as stale_workers
     FROM pgqrs_workers;
 "#;
 
@@ -88,7 +87,7 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
         COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
         COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
-        COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - $1::interval) as stale_workers
+        COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - make_interval(secs => $1::double precision)) as stale_workers
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
     GROUP BY q.queue_name;
@@ -110,6 +109,10 @@ const PURGE_OLD_WORKERS: &str = r#"
               SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
           ) refs
       )
+"#;
+
+const COUNT_WORKER_MESSAGES: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1
 "#;
 
 #[async_trait::async_trait]
@@ -254,16 +257,16 @@ impl WorkerStore for PostgresWorkerStore {
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
     ) -> Result<Vec<crate::types::WorkerHealthStats>, Self::Error> {
-        let interval_str = format!("{} seconds", heartbeat_timeout.num_seconds());
+        let timeout_seconds = heartbeat_timeout.num_seconds() as f64;
 
         let stats = if group_by_queue {
             sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_BY_QUEUE)
-                .bind(&interval_str)
+                .bind(timeout_seconds)
                 .fetch_all(&self.pool)
                 .await
         } else {
             sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_GLOBAL)
-                .bind(&interval_str)
+                .bind(timeout_seconds)
                 .fetch_all(&self.pool)
                 .await
         };
@@ -273,8 +276,8 @@ impl WorkerStore for PostgresWorkerStore {
         })
     }
 
-    async fn purge_stale(&self, heartbeat_timeout: chrono::Duration) -> Result<u64, Self::Error> {
-        let threshold = Utc::now() - heartbeat_timeout;
+    async fn purge_stopped(&self, max_age: chrono::Duration) -> Result<u64, Self::Error> {
+        let threshold = Utc::now() - max_age;
 
         let result = sqlx::query(PURGE_OLD_WORKERS)
             .bind(threshold)
@@ -282,6 +285,14 @@ impl WorkerStore for PostgresWorkerStore {
             .await?;
 
         Ok(result.rows_affected())
+    }
+
+    async fn count_pending_messages(&self, worker_id: i64) -> Result<i64, Self::Error> {
+        let count: i64 = sqlx::query_scalar(COUNT_WORKER_MESSAGES)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
     }
 }
 }

@@ -173,6 +173,12 @@ pub trait WorkerStore: Send + Sync {
         max_age: Duration,
     ) -> std::result::Result<bool, Self::Error>;
 
+    /// Count messages currently held by a worker
+    async fn count_pending_messages(
+        &self,
+        worker_id: i64,
+    ) -> std::result::Result<i64, Self::Error>;
+
     // Lifecycle Transitions
     /// Suspend a worker
     async fn suspend(&self, worker_id: i64) -> std::result::Result<(), Self::Error>;
@@ -188,10 +194,10 @@ pub trait WorkerStore: Send + Sync {
         group_by_queue: bool,
     ) -> std::result::Result<Vec<crate::types::WorkerHealthStats>, Self::Error>;
 
-    /// Purge stale stopped workers
-    async fn purge_stale(
+    /// Purge workers that have been stopped for longer than max_age
+    async fn purge_stopped(
         &self,
-        heartbeat_timeout: chrono::Duration,
+        max_age: chrono::Duration,
     ) -> std::result::Result<u64, Self::Error>;
 }
 
