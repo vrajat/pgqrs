@@ -174,10 +174,8 @@ pub trait WorkerStore: Send + Sync {
     ) -> std::result::Result<bool, Self::Error>;
 
     /// Count messages currently held by a worker
-    async fn count_pending_messages(
-        &self,
-        worker_id: i64,
-    ) -> std::result::Result<i64, Self::Error>;
+    async fn count_pending_messages(&self, worker_id: i64)
+        -> std::result::Result<i64, Self::Error>;
 
     // Lifecycle Transitions
     /// Suspend a worker
