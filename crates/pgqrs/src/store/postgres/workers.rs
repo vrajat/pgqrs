@@ -69,6 +69,49 @@ const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
     RETURNING id
 "#;
 
+const GET_WORKER_HEALTH_GLOBAL: &str = r#"
+    SELECT
+        'Global' as queue_name,
+        COUNT(*) as total_workers,
+        COUNT(*) FILTER (WHERE status = 'ready') as active_workers, -- mapped to ready field in struct if exists, or use alias as needed. Wait, struct uses ready_workers?
+        COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
+        COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
+        COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
+        COUNT(*) FILTER (WHERE heartbeat_at < NOW() - $1::interval) as stale_workers
+    FROM pgqrs_workers;
+"#;
+
+const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
+    SELECT
+        COALESCE(q.queue_name, 'Unknown') as queue_name,
+        COUNT(w.id) as total_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
+        COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - $1::interval) as stale_workers
+    FROM pgqrs_workers w
+    LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+    GROUP BY q.queue_name;
+"#;
+
+const PURGE_OLD_WORKERS: &str = r#"
+    DELETE FROM pgqrs_workers
+    WHERE status = 'stopped'
+      AND heartbeat_at < $1
+      AND id NOT IN (
+          SELECT DISTINCT worker_id
+          FROM (
+              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+              UNION
+              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
+          ) refs
+      )
+"#;
+
 #[async_trait::async_trait]
 impl WorkerStore for PostgresWorkerStore {
     type Error = Error;
@@ -205,4 +248,40 @@ impl WorkerStore for PostgresWorkerStore {
         }
         Ok(())
     }
+
+    async fn health_stats(
+        &self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<crate::types::WorkerHealthStats>, Self::Error> {
+        let interval_str = format!("{} seconds", heartbeat_timeout.num_seconds());
+
+        let stats = if group_by_queue {
+            sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_BY_QUEUE)
+                .bind(&interval_str)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query_as::<_, crate::types::WorkerHealthStats>(GET_WORKER_HEALTH_GLOBAL)
+                .bind(&interval_str)
+                .fetch_all(&self.pool)
+                .await
+        };
+
+        stats.map_err(|e| Error::Connection {
+            message: format!("Failed to get worker health stats: {}", e),
+        })
+    }
+
+    async fn purge_stale(&self, heartbeat_timeout: chrono::Duration) -> Result<u64, Self::Error> {
+        let threshold = Utc::now() - heartbeat_timeout;
+
+        let result = sqlx::query(PURGE_OLD_WORKERS)
+            .bind(threshold)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+}
 }
