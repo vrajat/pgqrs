@@ -1012,3 +1012,9 @@
   background-color: transparent;
   border-radius: 0 0 0.2rem 0.2rem;
 }
+
+/* Code block word wrapping */
+.md-typeset pre>code {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}

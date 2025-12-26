@@ -38,6 +38,14 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     [:octicons-arrow-right-24: Worker Management](worker-management.md)
 
+-   :material-sync:{ .lg .middle } **Durable Workflows**
+
+    ---
+
+    Build crash-resistant, resumable multi-step workflows.
+
+    [:octicons-arrow-right-24: Durable Workflows](durable-workflows.md)
+
 </div>
 
 ## Quick Reference
@@ -48,6 +56,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 | [Batch Processing](batch-processing.md) | High throughput, many messages |
 | [Delayed Messages](delayed-messages.md) | Scheduled tasks, reminders, deferred work |
 | [Worker Management](worker-management.md) | Production deployment, scaling |
+| [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
 
 ## Prerequisites
 
