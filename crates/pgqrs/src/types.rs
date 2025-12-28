@@ -408,3 +408,12 @@ impl fmt::Display for WorkerStats {
         )
     }
 }
+
+/// Result of purging stale workers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerPurgeResult {
+    /// Number of workers purged
+    pub workers_purged: u64,
+    /// Number of messages released from purged workers
+    pub messages_released: u64,
+}

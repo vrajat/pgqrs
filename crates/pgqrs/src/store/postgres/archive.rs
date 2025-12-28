@@ -1,14 +1,14 @@
 use crate::error::{Error, Result};
-use crate::store::ArchiveStore;
+use crate::store::ArchiveTable;
 use crate::types::ArchivedMessage;
 use sqlx::PgPool;
 
 #[derive(Clone, Debug)]
-pub struct PostgresArchiveStore {
+pub struct PostgresArchiveTable {
     pool: PgPool,
 }
 
-impl PostgresArchiveStore {
+impl PostgresArchiveTable {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -75,14 +75,47 @@ const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
 "#;
 
 #[async_trait::async_trait]
-impl ArchiveStore for PostgresArchiveStore {
-    type Error = Error;
+impl ArchiveTable for PostgresArchiveTable {
+    // === CRUD Operations ===
+
+    async fn get(&self, id: i64) -> Result<ArchivedMessage> {
+        sqlx::query_as::<_, ArchivedMessage>(
+            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at FROM pgqrs_archive WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await.map_err(Into::into)
+    }
+
+    async fn list(&self) -> Result<Vec<ArchivedMessage>> {
+        sqlx::query_as::<_, ArchivedMessage>(
+            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at FROM pgqrs_archive ORDER BY archived_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await.map_err(Into::into)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive")
+            .fetch_one(&self.pool)
+            .await.map_err(Into::into)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM pgqrs_archive WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    // === Archive-Specific Business Operations ===
 
     async fn archive_message(
         &self,
         msg_id: i64,
         worker_id: i64,
-    ) -> Result<Option<ArchivedMessage>, Self::Error> {
+    ) -> Result<Option<ArchivedMessage>> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
             .bind(worker_id)
@@ -91,7 +124,7 @@ impl ArchiveStore for PostgresArchiveStore {
         Ok(result)
     }
 
-    async fn archive_batch(&self, msg_ids: &[i64]) -> Result<Vec<bool>, Self::Error> {
+    async fn archive_batch(&self, msg_ids: &[i64]) -> Result<Vec<bool>> {
         if msg_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -114,20 +147,20 @@ impl ArchiveStore for PostgresArchiveStore {
         max_attempts: i32,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<ArchivedMessage>, Self::Error> {
+    ) -> Result<Vec<ArchivedMessage>> {
         sqlx::query_as::<_, ArchivedMessage>(LIST_DLQ_MESSAGES)
             .bind(max_attempts)
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
-            .await
+            .await.map_err(Into::into)
     }
 
-    async fn dlq_count(&self, max_attempts: i32) -> Result<i64, Self::Error> {
+    async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
         sqlx::query_scalar(COUNT_DLQ_MESSAGES)
             .bind(max_attempts)
             .fetch_one(&self.pool)
-            .await
+            .await.map_err(Into::into)
     }
 
     async fn list_by_worker(
@@ -135,19 +168,19 @@ impl ArchiveStore for PostgresArchiveStore {
         worker_id: i64,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<ArchivedMessage>, Self::Error> {
+    ) -> Result<Vec<ArchivedMessage>> {
         sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_LIST_WITH_WORKER)
             .bind(worker_id)
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
-            .await
+            .await.map_err(Into::into)
     }
 
-    async fn count_by_worker(&self, worker_id: i64) -> Result<i64, Self::Error> {
+    async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
         sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
             .bind(worker_id)
             .fetch_one(&self.pool)
-            .await
+            .await.map_err(Into::into)
     }
 }

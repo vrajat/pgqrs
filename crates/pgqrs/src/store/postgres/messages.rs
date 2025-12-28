@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::store::MessageStore;
+use crate::store::MessageTable;
 use crate::types::QueueMessage;
 use chrono::{Duration, Utc};
 use serde_json::Value;
@@ -7,12 +7,12 @@ use sqlx::PgPool;
 
 
 #[derive(Clone, Debug)]
-pub struct PostgresMessageStore {
+pub struct PostgresMessageTable {
     pool: PgPool,
     max_read_ct: u32,
 }
 
-impl PostgresMessageStore {
+impl PostgresMessageTable {
     pub fn new(pool: PgPool, max_read_ct: u32) -> Self {
         Self { pool, max_read_ct }
     }
@@ -78,15 +78,51 @@ const RELEASE_SPECIFIC_MESSAGES: &str = r#"
 "#;
 
 #[async_trait::async_trait]
-impl MessageStore for PostgresMessageStore {
-    type Error = Error;
+impl MessageTable for PostgresMessageTable {
+    // === CRUD Operations ===
 
-    async fn get(&self, id: i64) -> Result<QueueMessage, Self::Error> {
+    async fn insert(&self, data: crate::tables::NewMessage) -> Result<QueueMessage> {
+        // Insert and then fetch the complete message
+        let id = self.enqueue(
+            data.queue_id,
+            data.producer_worker_id.unwrap_or(0),
+            &data.payload,
+            None,
+        ).await?;
+        self.get(id).await.map_err(Into::into)
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueMessage> {
         sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
-            .await
+            .await.map_err(Into::into)
     }
+
+    async fn list(&self) -> Result<Vec<QueueMessage>> {
+        sqlx::query_as::<_, QueueMessage>(
+            "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages ORDER BY id DESC"
+        )
+        .fetch_all(&self.pool)
+        .await.map_err(Into::into)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
+            .fetch_one(&self.pool)
+            .await.map_err(Into::into)
+    }
+
+    async fn delete(&self, id: i64) -> Result<bool> {
+        let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(rows_affected > 0)
+    }
+
+    // === Message-Specific Business Operations ===
 
     async fn enqueue(
         &self,
@@ -94,7 +130,7 @@ impl MessageStore for PostgresMessageStore {
         worker_id: i64,
         payload: &Value,
         delay_seconds: Option<u32>,
-    ) -> Result<i64, Self::Error> {
+    ) -> Result<i64> {
         let now = Utc::now();
         let vt = fast_calc_vt(now, delay_seconds);
 
@@ -115,7 +151,7 @@ impl MessageStore for PostgresMessageStore {
         queue_id: i64,
         worker_id: i64,
         payloads: &[Value],
-    ) -> Result<Vec<i64>, Self::Error> {
+    ) -> Result<Vec<i64>> {
         let now = Utc::now();
         let vt = now; // No delay support in batch enqueue currently (as per producer.rs implementation)
 
@@ -137,7 +173,7 @@ impl MessageStore for PostgresMessageStore {
         worker_id: i64,
         limit: usize,
         vt_seconds: u32,
-    ) -> Result<Vec<QueueMessage>, Self::Error> {
+    ) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(queue_id)
             .bind(limit as i64)
@@ -150,16 +186,7 @@ impl MessageStore for PostgresMessageStore {
         Ok(messages)
     }
 
-    async fn delete(&self, id: i64) -> Result<bool, Self::Error> {
-        let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
-            .bind(id)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
-        Ok(rows_affected > 0)
-    }
-
-    async fn delete_batch(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>, Self::Error> {
+    async fn delete_batch(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(ids)
             .bind(worker_id)
@@ -179,7 +206,7 @@ impl MessageStore for PostgresMessageStore {
         id: i64,
         worker_id: i64,
         additional_seconds: u32,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<bool> {
         let rows_affected = sqlx::query(EXTEND_MESSAGE_VT)
             .bind(id)
             .bind(worker_id)
@@ -194,7 +221,7 @@ impl MessageStore for PostgresMessageStore {
         &self,
         id: i64,
         worker_id: i64,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<bool> {
         let result = self.release_batch(&[id], worker_id).await?;
         Ok(result.first().copied().unwrap_or(false))
     }
@@ -203,7 +230,7 @@ impl MessageStore for PostgresMessageStore {
         &self,
         ids: &[i64],
         worker_id: i64,
-    ) -> Result<Vec<bool>, Self::Error> {
+    ) -> Result<Vec<bool>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -220,6 +247,15 @@ impl MessageStore for PostgresMessageStore {
             .map(|id| released_set.contains(id))
             .collect();
         Ok(result)
+    }
+
+    async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1"
+        )
+        .bind(worker_id)
+        .fetch_one(&self.pool)
+        .await.map_err(Into::into)
     }
 }
 

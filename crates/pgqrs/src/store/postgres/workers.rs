@@ -1,15 +1,15 @@
 use crate::error::{Error, Result};
-use crate::store::WorkerStore;
+use crate::store::WorkerTable;
 use crate::types::{WorkerInfo, WorkerStatus};
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
 
 #[derive(Clone, Debug)]
-pub struct PostgresWorkerStore {
+pub struct PostgresWorkerTable {
     pool: PgPool,
 }
 
-impl PostgresWorkerStore {
+impl PostgresWorkerTable {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -70,15 +70,51 @@ const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
 "#;
 
 #[async_trait::async_trait]
-impl WorkerStore for PostgresWorkerStore {
-    type Error = Error;
+impl WorkerTable for PostgresWorkerTable {
+    // === CRUD Operations ===
+
+    async fn insert(&self, data: crate::tables::NewWorker) -> Result<WorkerInfo> {
+        // Use register method which handles the logic
+        self.register(data.queue_id, &data.hostname, data.port).await.map_err(Into::into)
+    }
+
+    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+        sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await.map_err(Into::into)
+    }
+
+    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+        sqlx::query_as::<_, WorkerInfo>(
+            "SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers ORDER BY id DESC"
+        )
+        .fetch_all(&self.pool)
+        .await.map_err(Into::into)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workers")
+            .fetch_one(&self.pool)
+            .await.map_err(Into::into)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM pgqrs_workers WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    // === Worker-Specific Business Operations ===
 
     async fn register(
         &self,
         queue_id: Option<i64>,
         hostname: &str,
         port: i32,
-    ) -> Result<WorkerInfo, Self::Error> {
+    ) -> Result<WorkerInfo> {
         let now = Utc::now();
 
         // Check if worker exists
@@ -122,7 +158,7 @@ impl WorkerStore for PostgresWorkerStore {
         }
     }
 
-    async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus, Self::Error> {
+    async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus> {
         let status: WorkerStatus = sqlx::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
             .bind(worker_id)
             .fetch_one(&self.pool)
@@ -130,7 +166,7 @@ impl WorkerStore for PostgresWorkerStore {
         Ok(status)
     }
 
-    async fn heartbeat(&self, worker_id: i64) -> Result<(), Self::Error> {
+    async fn heartbeat(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(UPDATE_HEARTBEAT)
             .bind(worker_id)
             .execute(&self.pool)
@@ -141,7 +177,7 @@ impl WorkerStore for PostgresWorkerStore {
         Ok(())
     }
 
-    async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> Result<bool, Self::Error> {
+    async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> Result<bool> {
         // Implementation from lifecycle.rs
         let row: Option<chrono::DateTime<Utc>> = sqlx::query_scalar("SELECT heartbeat_at FROM pgqrs_workers WHERE id = $1")
             .bind(worker_id)
@@ -157,7 +193,7 @@ impl WorkerStore for PostgresWorkerStore {
         }
     }
 
-    async fn suspend(&self, worker_id: i64) -> Result<(), Self::Error> {
+    async fn suspend(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(TRANSITION_READY_TO_SUSPENDED)
             .bind(worker_id)
             .execute(&self.pool)
@@ -174,7 +210,7 @@ impl WorkerStore for PostgresWorkerStore {
         Ok(())
     }
 
-    async fn resume(&self, worker_id: i64) -> Result<(), Self::Error> {
+    async fn resume(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(TRANSITION_SUSPENDED_TO_READY)
             .bind(worker_id)
             .execute(&self.pool)
@@ -190,7 +226,7 @@ impl WorkerStore for PostgresWorkerStore {
         Ok(())
     }
 
-    async fn shutdown(&self, worker_id: i64) -> Result<(), Self::Error> {
+    async fn shutdown(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(TRANSITION_SUSPENDED_TO_STOPPED)
             .bind(worker_id)
             .execute(&self.pool)
@@ -204,5 +240,19 @@ impl WorkerStore for PostgresWorkerStore {
             });
         }
         Ok(())
+    }
+
+    async fn health_stats(&self, _timeout: Duration) -> Result<crate::types::WorkerHealthStats> {
+        // TODO: Implement health stats calculation
+        todo!("Implement health_stats()")
+    }
+
+    async fn count_pending_messages(&self, worker_id: i64) -> Result<i64> {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1 AND vt > NOW()"
+        )
+        .bind(worker_id)
+        .fetch_one(&self.pool)
+        .await.map_err(Into::into)
     }
 }
