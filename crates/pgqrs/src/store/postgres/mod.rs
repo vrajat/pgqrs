@@ -119,4 +119,12 @@ impl Store for PostgresStore {
              StepResult::Skipped(_) => Ok(None),
          }
     }
+
+    async fn create_workflow<T: serde::Serialize + Send + Sync>(
+        &self,
+        name: &str,
+        input: &T,
+    ) -> crate::error::Result<Self::Workflow> {
+        PostgresWorkflow::create(self.pool.clone(), name, input).await
+    }
 }

@@ -105,43 +105,6 @@ impl StepGuard {
             completed: false,
         }))
     }
-
-    /// Mark the step as successfully completed and persist the output.
-    pub async fn success<T: Serialize>(mut self, output: T) -> Result<()> {
-        let output_json =
-            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
-
-        sqlx::query(SQL_STEP_SUCCESS)
-            .bind(self.workflow_id)
-            .bind(&self.step_id)
-            .bind(output_json)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to mark step {} as success: {}", self.step_id, e),
-            })?;
-
-        self.completed = true;
-        Ok(())
-    }
-
-    /// Mark the step as failed and persist the error.
-    pub async fn fail<E: Serialize>(mut self, error: E) -> Result<()> {
-        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
-
-        sqlx::query(SQL_STEP_FAIL)
-            .bind(self.workflow_id)
-            .bind(&self.step_id)
-            .bind(error_json)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to mark step {} as error: {}", self.step_id, e),
-            })?;
-
-        self.completed = true;
-        Ok(())
-    }
 }
 
 impl Drop for StepGuard {
@@ -170,13 +133,43 @@ impl Drop for StepGuard {
         }
     }
 }
+
 #[async_trait]
 impl crate::store::StepGuard for StepGuard {
-    async fn success(self, output: &serde_json::Value) -> Result<()> {
-        self.success(output).await
+    /// Mark the step as successfully completed and persist the output.
+    async fn success<T: Serialize + Send + Sync>(mut self, output: T) -> Result<()> {
+        let output_json =
+            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
+
+        sqlx::query(SQL_STEP_SUCCESS)
+            .bind(self.workflow_id)
+            .bind(&self.step_id)
+            .bind(output_json)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to mark step {} as success: {}", self.step_id, e),
+            })?;
+
+        self.completed = true;
+        Ok(())
     }
 
-    async fn fail(self, error: &serde_json::Value) -> Result<()> {
-        self.fail(error).await
+    /// Mark the step as failed and persist the error.
+    async fn fail<E: Serialize + Send + Sync>(mut self, error: E) -> Result<()> {
+        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
+
+        sqlx::query(SQL_STEP_FAIL)
+            .bind(self.workflow_id)
+            .bind(&self.step_id)
+            .bind(error_json)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to mark step {} as error: {}", self.step_id, e),
+            })?;
+
+        self.completed = true;
+        Ok(())
     }
 }

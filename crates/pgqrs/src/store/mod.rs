@@ -3,11 +3,11 @@
 //! This module defines the [`Store`] trait and its associated repositories,
 //! enabling pgqrs to support multiple database backends (Postgres, SQLite, Turso).
 
-use crate::Config;
+use crate::rate_limit::RateLimitStatus;
 use crate::tables::{NewQueue, NewWorkflow, WorkflowRecord};
 use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
 use crate::validation::ValidationConfig;
-use crate::rate_limit::RateLimitStatus;
+use crate::Config;
 use async_trait::async_trait;
 use chrono::Duration;
 use serde_json::Value;
@@ -42,7 +42,11 @@ pub trait Admin: Worker {
     async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::types::QueueMetrics>;
     async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::types::QueueMetrics>>;
     async fn system_stats(&self) -> crate::error::Result<crate::types::SystemStats>;
-    async fn worker_health_stats(&self, heartbeat_timeout: Duration, group_by_queue: bool) -> crate::error::Result<Vec<crate::types::WorkerHealthStats>>;
+    async fn worker_health_stats(
+        &self,
+        heartbeat_timeout: Duration,
+        group_by_queue: bool,
+    ) -> crate::error::Result<Vec<crate::types::WorkerHealthStats>>;
 }
 
 /// Producer interface for enqueueing messages.
@@ -50,7 +54,11 @@ pub trait Admin: Worker {
 pub trait Producer: Worker {
     async fn get_message_by_id(&self, msg_id: i64) -> crate::error::Result<QueueMessage>;
     async fn enqueue(&self, payload: &Value) -> crate::error::Result<QueueMessage>;
-    async fn enqueue_delayed(&self, payload: &Value, delay_seconds: u32) -> crate::error::Result<QueueMessage>;
+    async fn enqueue_delayed(
+        &self,
+        payload: &Value,
+        delay_seconds: u32,
+    ) -> crate::error::Result<QueueMessage>;
     async fn batch_enqueue(&self, payloads: &[Value]) -> crate::error::Result<Vec<QueueMessage>>;
 
     // Internal but public method in source
@@ -73,9 +81,17 @@ pub trait Consumer: Worker {
     async fn dequeue(&self) -> crate::error::Result<Vec<QueueMessage>>;
     async fn dequeue_many(&self, limit: usize) -> crate::error::Result<Vec<QueueMessage>>;
     async fn dequeue_delay(&self, vt: u32) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn dequeue_many_with_delay(
+        &self,
+        limit: usize,
+        vt: u32,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
 
-    async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> crate::error::Result<bool>;
+    async fn extend_visibility(
+        &self,
+        message_id: i64,
+        additional_seconds: u32,
+    ) -> crate::error::Result<bool>;
 
     async fn delete(&self, message_id: i64) -> crate::error::Result<bool>;
     async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
@@ -91,15 +107,15 @@ pub trait Consumer: Worker {
 pub trait Workflow: Send + Sync {
     fn id(&self) -> i64;
     async fn start(&self) -> crate::error::Result<()>;
-    async fn success(&self, output: &Value) -> crate::error::Result<()>;
-    async fn fail(&self, error: &Value) -> crate::error::Result<()>;
+    async fn success<T: serde::Serialize + Send + Sync>(&self, output: T) -> crate::error::Result<()>;
+    async fn fail<T: serde::Serialize + Send + Sync>(&self, error: T) -> crate::error::Result<()>;
 }
 
 /// Interface for a workflow step execution guard.
 #[async_trait]
 pub trait StepGuard: Send + Sync {
-    async fn success(self, output: &Value) -> crate::error::Result<()>;
-    async fn fail(self, error: &Value) -> crate::error::Result<()>;
+    async fn success<T: serde::Serialize + Send + Sync>(self, output: T) -> crate::error::Result<()>;
+    async fn fail<T: serde::Serialize + Send + Sync>(self, error: T) -> crate::error::Result<()>;
 }
 
 /// Main store trait that provides access to entity-specific repositories
@@ -143,16 +159,39 @@ pub trait Store: Clone + Send + Sync + 'static {
     async fn admin(&self, config: &Config) -> crate::error::Result<Self::Admin>;
 
     /// Get a producer interface for a specific queue with worker identity.
-    async fn producer(&self, queue: &str, hostname: &str, port: i32, config: &Config) -> crate::error::Result<Self::Producer>;
+    async fn producer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Self::Producer>;
 
     /// Get a consumer interface for a specific queue with worker identity.
-    async fn consumer(&self, queue: &str, hostname: &str, port: i32, config: &Config) -> crate::error::Result<Self::Consumer>;
+    async fn consumer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Self::Consumer>;
 
     /// Get a workflow handle.
     fn workflow(&self, id: i64) -> Self::Workflow;
 
     /// Acquire a step execution guard.
-    async fn acquire_step(&self, workflow_id: i64, step_id: &str) -> crate::error::Result<Option<Self::StepGuard>>;
+    async fn acquire_step(
+        &self,
+        workflow_id: i64,
+        step_id: &str,
+    ) -> crate::error::Result<Option<Self::StepGuard>>;
+
+    /// Create a new workflow execution.
+    async fn create_workflow<T: serde::Serialize + Send + Sync>(
+        &self,
+        name: &str,
+        input: &T,
+    ) -> crate::error::Result<Self::Workflow>;
 }
 
 /// Repository for managing queues.
@@ -206,11 +245,7 @@ pub trait MessageTable: Send + Sync {
     async fn delete(&self, id: i64) -> crate::error::Result<bool>;
 
     /// Delete multiple messages
-    async fn delete_batch(
-        &self,
-        ids: &[i64],
-        worker_id: i64,
-    ) -> crate::error::Result<Vec<bool>>;
+    async fn delete_batch(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
 
     /// Extend visibility timeout
     async fn extend_visibility(
@@ -224,11 +259,7 @@ pub trait MessageTable: Send + Sync {
     async fn release(&self, id: i64, worker_id: i64) -> crate::error::Result<bool>;
 
     /// Release multiple messages
-    async fn release_batch(
-        &self,
-        ids: &[i64],
-        worker_id: i64,
-    ) -> crate::error::Result<Vec<bool>>;
+    async fn release_batch(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
 }
 
 /// Repository for managing workers.
@@ -247,11 +278,7 @@ pub trait WorkerTable: Send + Sync {
     /// Send a heartbeat for a worker
     async fn heartbeat(&self, worker_id: i64) -> crate::error::Result<()>;
     /// Check if a worker is healthy
-    async fn is_healthy(
-        &self,
-        worker_id: i64,
-        max_age: Duration,
-    ) -> crate::error::Result<bool>;
+    async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> crate::error::Result<bool>;
 
     // CRUD methods
     async fn get(&self, id: i64) -> crate::error::Result<WorkerInfo>;

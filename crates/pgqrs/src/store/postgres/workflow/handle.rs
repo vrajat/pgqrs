@@ -34,13 +34,6 @@ pub struct Workflow {
 }
 
 impl Workflow {
-    /// Create a new workflow instance connected to the database.
-    ///
-    /// This is used when the ID is already known (e.g. loaded from DB).
-    pub fn new(pool: PgPool, id: i64) -> Self {
-        Self { id, pool }
-    }
-
     /// Create a new workflow in the database.
     pub async fn create<T: Serialize>(pool: PgPool, name: &str, input: &T) -> Result<Self> {
         let input_json = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
@@ -57,9 +50,18 @@ impl Workflow {
         Ok(Self { id, pool })
     }
 
-    /// Get the workflow ID.
-    pub fn id(&self) -> i64 {
-        self.id
+    /// Create a new workflow instance connected to the database.
+    ///
+    /// This is used when the ID is already known (e.g. loaded from DB).
+    pub fn new(pool: PgPool, id: i64) -> Self {
+        Self { id, pool }
+    }
+}
+
+#[async_trait]
+impl crate::store::Workflow for Workflow {
+    fn id(&self) -> i64 {
+         self.id
     }
 
     /// Start the workflow execution.
@@ -70,7 +72,7 @@ impl Workflow {
     ///
     /// - **Idempotent**: If the workflow is already `RUNNING` or `SUCCESS`, this method succeeds without changes.
     /// - **Error**: If the workflow is in the `ERROR` state, this method returns a `ValidationFailed` error.
-    pub async fn start(&self) -> Result<()> {
+    async fn start(&self) -> Result<()> {
         // Try to transition to RUNNING
         let result = sqlx::query_as::<
             _,
@@ -105,7 +107,7 @@ impl Workflow {
     }
 
     /// Mark the workflow as successfully completed.
-    pub async fn success<T: Serialize>(&self, output: T) -> Result<()> {
+    async fn success<T: Serialize + Send + Sync>(&self, output: T) -> Result<()> {
         let output_json =
             serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
 
@@ -122,7 +124,7 @@ impl Workflow {
     }
 
     /// Mark the workflow as failed.
-    pub async fn fail<E: Serialize>(&self, error: E) -> Result<()> {
+    async fn fail<E: Serialize + Send + Sync>(&self, error: E) -> Result<()> {
         let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(SQL_WORKFLOW_FAIL)
@@ -135,23 +137,5 @@ impl Workflow {
             })?;
 
         Ok(())
-    }
-}
-#[async_trait]
-impl crate::store::Workflow for Workflow {
-    fn id(&self) -> i64 {
-         self.id
-    }
-
-    async fn start(&self) -> Result<()> {
-        self.start().await
-    }
-
-    async fn success(&self, output: &serde_json::Value) -> Result<()> {
-        self.success(output).await
-    }
-
-    async fn fail(&self, error: &serde_json::Value) -> Result<()> {
-        self.fail(error).await
     }
 }
