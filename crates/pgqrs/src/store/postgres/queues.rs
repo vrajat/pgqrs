@@ -1,4 +1,3 @@
-
 use crate::error::Result;
 use crate::store::QueueTable;
 use crate::tables::NewQueue;
@@ -69,26 +68,30 @@ impl QueueTable for PostgresQueueTable {
         sqlx::query_as::<_, QueueInfo>(INSERT_QUEUE)
             .bind(data.queue_name)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: i64) -> Result<QueueInfo> {
         sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn list(&self) -> Result<Vec<QueueInfo>> {
         sqlx::query_as::<_, QueueInfo>(LIST_QUEUES)
             .fetch_all(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn count(&self) -> Result<i64> {
         sqlx::query_scalar(COUNT_QUEUES)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
@@ -105,14 +108,16 @@ impl QueueTable for PostgresQueueTable {
         sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn exists(&self, name: &str) -> Result<bool> {
         sqlx::query_scalar(CHECK_QUEUE_EXISTS)
             .bind(name)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete_by_name(&self, name: &str) -> Result<u64> {

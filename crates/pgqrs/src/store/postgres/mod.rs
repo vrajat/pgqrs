@@ -37,6 +37,13 @@ impl PostgresStore {
             pool,
         }
     }
+
+    /// Get access to the underlying PgPool.
+    ///
+    /// **Note:** This is a temporary accessor for legacy code. New code should use Store trait methods.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 }
 
 #[async_trait]

@@ -13,7 +13,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 /// `AnyStore` wraps different database implementations and provides
 /// a unified interface via the `Store` trait. This allows backend
 /// selection at runtime based on DSN or configuration.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AnyStore {
     /// PostgreSQL backend
     Postgres(PostgresStore),
@@ -95,7 +95,10 @@ impl AnyStore {
                 .connect(&config.dsn)
                 .await?;
 
-            Ok(AnyStore::Postgres(PostgresStore::new(pool, config.max_read_ct as u32)))
+            Ok(AnyStore::Postgres(PostgresStore::new(
+                pool,
+                config.max_read_ct as u32,
+            )))
         } else {
             Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
@@ -245,6 +248,22 @@ impl Store for AnyStore {
             AnyStore::Sqlite(s) => s.backend_name(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.backend_name(),
+        }
+    }
+}
+
+impl AnyStore {
+    /// Get access to the underlying database pool.
+    ///
+    /// **Note:** This is a temporary accessor for legacy code that uses raw SQL.
+    /// New code should use the Store trait methods instead.
+    pub fn pool(&self) -> &PgPool {
+        match self {
+            AnyStore::Postgres(s) => s.pool(),
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(_) => panic!("SQLite backend doesn't expose pool"),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(_) => panic!("Turso backend doesn't expose pool"),
         }
     }
 }

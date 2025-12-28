@@ -29,14 +29,13 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
-use crate::tables::{Archive, Messages, Queues, Table, Workers};
+use crate::store::{AnyStore, Store};
+use crate::tables::NewWorker;
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
-use crate::worker::{Worker, WorkerLifecycle};
+use crate::worker::Worker;
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -172,16 +171,10 @@ const PURGE_OLD_WORKERS: &str = r#"
 /// Implements the [`Worker`] trait for lifecycle management.
 /// Call `register()` after `install()` to register Admin as a worker.
 pub struct Admin {
-    pub pool: PgPool,
-    pub config: Config,
-    pub queues: Queues,
-    pub messages: Messages,
-    pub archive: Archive,
-    pub workers: Workers,
+    store: AnyStore,
+    config: Config,
     /// Worker info for this Admin instance (set after calling register())
     worker_info: Option<WorkerInfo>,
-    /// Worker lifecycle manager
-    lifecycle: WorkerLifecycle,
 }
 
 impl Admin {
@@ -195,39 +188,12 @@ impl Admin {
     /// # Returns
     /// A new `Admin` instance.
     pub async fn new(config: &Config) -> Result<Self> {
-        // Create the search_path setting
-        let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
-
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .after_connect(move |conn, _meta| {
-                let sql = search_path_sql.clone();
-                Box::pin(async move {
-                    sqlx::query(&sql).execute(conn).await?;
-                    Ok(())
-                })
-            })
-            .connect(&config.dsn)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?;
-
-        let workers = Workers::new(pool.clone());
-        let queues = Queues::new(pool.clone());
-        let messages = Messages::new(pool.clone());
-        let archive = Archive::new(pool.clone());
-        let lifecycle = WorkerLifecycle::new(pool.clone());
+        let store = AnyStore::connect_with_config(config).await?;
 
         Ok(Self {
-            pool,
+            store,
             config: config.clone(),
-            queues,
-            messages,
-            archive,
-            workers,
             worker_info: None,
-            lifecycle,
         })
     }
 
@@ -256,7 +222,7 @@ impl Admin {
             queue_id: None,
         };
 
-        let worker_info = self.workers.insert(new_worker).await?;
+        let worker_info = self.store.workers().insert(new_worker).await?;
 
         tracing::debug!(
             "Registered Admin as worker {} (hostname: {}, port: {})",
@@ -280,14 +246,7 @@ impl Admin {
     /// # Returns
     /// Ok if installation (or validation) succeeds, error otherwise.
     pub async fn install(&self) -> Result<()> {
-        // Run migrations using sqlx
-        MIGRATOR
-            .run(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Migration failed: {}", e),
-            })?;
-        Ok(())
+        self.store.install().await
     }
 
     /// Verify that pgqrs installation is valid and healthy.
@@ -436,7 +395,7 @@ impl Admin {
         };
 
         // Use the queues table insert function
-        self.queues.insert(new_queue).await
+        self.store.queues().insert(new_queue).await
     }
 
     /// Get a [`QueueInfo`] instance for a given queue name.
@@ -448,7 +407,7 @@ impl Admin {
     /// [`QueueInfo`] instance for the queue.
     pub async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
         // Get queue info to get the queue_id
-        self.queues.get_by_name(name).await
+        self.store.queues().get_by_name(name).await
     }
 
     /// Delete a queue from the database.
@@ -507,8 +466,8 @@ impl Admin {
         }
 
         // Check referential integrity using table methods
-        let messages_count = self.messages.count_for_fk(queue_id, &mut tx).await?;
-        let archive_count = self.archive.count_for_fk(queue_id, &mut tx).await?;
+        let messages_count = self.store.messages().count_for_fk(queue_id, &mut tx).await?;
+        let archive_count = self.store.archive().count_for_fk(queue_id, &mut tx).await?;
         let total_references = messages_count + archive_count;
 
         if total_references > 0 {
@@ -565,9 +524,9 @@ impl Admin {
             name: name.to_string(),
         })?;
 
-        self.messages.delete_by_fk(queue_id, &mut tx).await?;
-        self.archive.delete_by_fk(queue_id, &mut tx).await?;
-        self.workers.delete_by_fk(queue_id, &mut tx).await?;
+        self.store.messages().delete_by_fk(queue_id, &mut tx).await?;
+        self.store.archive().delete_by_fk(queue_id, &mut tx).await?;
+        self.store.workers().delete_by_fk(queue_id, &mut tx).await?;
 
         tx.commit()
             .await
@@ -582,7 +541,7 @@ impl Admin {
     pub async fn dlq(&self) -> Result<Vec<i64>> {
         let result: Vec<i64> = sqlx::query_scalar(DLQ_BATCH)
             .bind(self.config.max_read_ct)
-            .fetch_all(&self.pool)
+            .fetch_all(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to move messages to DLQ: {}", e),
@@ -723,12 +682,12 @@ impl Admin {
     /// # Returns
     /// [`QueueMetrics`] for the queue.
     pub async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
-        let queue_info = self.queues.get_by_name(name).await?;
+        let queue_info = self.store.queues().get_by_name(name).await?;
 
         let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_QUEUE_METRICS)
             .bind(queue_info.id)
             .bind(name) // Pass name to be returned in the struct
-            .fetch_one(&self.pool)
+            .fetch_one(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get metrics for queue {}: {}", name, e),
@@ -743,7 +702,7 @@ impl Admin {
     /// Vector of [`QueueMetrics`] for all queues.
     pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_ALL_QUEUES_METRICS)
-            .fetch_all(&self.pool)
+            .fetch_all(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get all queues metrics: {}", e),
@@ -757,14 +716,7 @@ impl Admin {
     /// # Returns
     /// [`SystemStats`] containing system-wide metrics.
     pub async fn system_stats(&self) -> Result<SystemStats> {
-        let stats = sqlx::query_as::<_, SystemStats>(Self::GET_SYSTEM_STATS)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get system stats: {}", e),
-            })?;
-
-        Ok(stats)
+        self.store.get_system_stats().await
     }
 
     /// Get worker health statistics.
@@ -787,12 +739,12 @@ impl Admin {
         let stats = if group_by_queue {
             sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_BY_QUEUE)
                 .bind(interval_str)
-                .fetch_all(&self.pool)
+                .fetch_all(self.store.pool())
                 .await
         } else {
             sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_GLOBAL)
                 .bind(interval_str)
-                .fetch_all(&self.pool)
+                .fetch_all(self.store.pool())
                 .await
         };
 
@@ -818,7 +770,7 @@ impl Admin {
         worker_id: i64,
     ) -> Result<Vec<crate::types::QueueMessage>> {
         // First validate the worker is not an admin (admin workers have queue_id = None)
-        let worker = self.workers.get(worker_id).await?;
+        let worker = self.store.workers().get(worker_id).await?;
         if worker.queue_id.is_none() {
             return Err(crate::error::Error::InvalidWorkerType {
                 message: format!(
@@ -830,7 +782,7 @@ impl Admin {
 
         let messages = sqlx::query_as::<_, crate::types::QueueMessage>(GET_WORKER_MESSAGES)
             .bind(worker_id)
-            .fetch_all(&self.pool)
+            .fetch_all(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to get messages for worker {}: {}", worker_id, e),
@@ -854,7 +806,7 @@ impl Admin {
     /// Returns `crate::error::Error` if database operations fail
     pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         // Validate the worker is not an admin
-        let worker = self.workers.get(worker_id).await?;
+        let worker = self.store.workers().get(worker_id).await?;
         if worker.queue_id.is_none() {
             return Err(crate::error::Error::InvalidWorkerType {
                 message: format!(
@@ -866,7 +818,7 @@ impl Admin {
 
         let result = sqlx::query(RELEASE_WORKER_MESSAGES)
             .bind(worker_id)
-            .execute(&self.pool)
+            .execute(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to release messages for worker {}: {}", worker_id, e),
@@ -985,7 +937,7 @@ impl Admin {
 
         let result = sqlx::query(PURGE_OLD_WORKERS)
             .bind(threshold)
-            .execute(&self.pool)
+            .execute(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
@@ -1004,7 +956,7 @@ impl Admin {
     async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
         let row = sqlx::query_scalar::<_, i64>(CHECK_WORKER_REFERENCES)
             .bind(worker_id)
-            .fetch_one(&self.pool)
+            .fetch_one(self.store.pool())
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
@@ -1033,7 +985,7 @@ impl Admin {
             });
         }
 
-        self.workers.delete(worker_id).await
+        self.store.workers().delete(worker_id).await
     }
 
     /// Get worker statistics
@@ -1044,8 +996,8 @@ impl Admin {
     /// # Returns
     /// Worker statistics for the queue
     pub async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
-        let queue_id = self.queues.get_by_name(queue_name).await?.id;
-        let workers = self.workers.filter_by_fk(queue_id).await?;
+        let queue_id = self.store.queues().get_by_name(queue_name).await?.id;
+        let workers = self.store.workers().filter_by_fk(queue_id).await?;
 
         let total_workers = workers.len() as u32;
         let ready_workers = workers
@@ -1152,7 +1104,7 @@ impl Admin {
     /// Returns `PgqrsError` if the admin is not registered or deletion fails
     pub async fn delete_self(&self) -> Result<()> {
         let worker_id = self.worker_id();
-        self.workers.delete(worker_id).await?;
+        self.store.workers().delete(worker_id).await?;
         Ok(())
     }
 }

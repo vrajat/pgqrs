@@ -5,7 +5,6 @@ use chrono::{Duration, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 
-
 #[derive(Clone, Debug)]
 pub struct PostgresMessageTable {
     pool: PgPool,
@@ -83,12 +82,14 @@ impl MessageTable for PostgresMessageTable {
 
     async fn insert(&self, data: crate::tables::NewMessage) -> Result<QueueMessage> {
         // Insert and then fetch the complete message
-        let id = self.enqueue(
-            data.queue_id,
-            data.producer_worker_id.unwrap_or(0),
-            &data.payload,
-            None,
-        ).await?;
+        let id = self
+            .enqueue(
+                data.queue_id,
+                data.producer_worker_id.unwrap_or(0),
+                &data.payload,
+                None,
+            )
+            .await?;
         self.get(id).await.map_err(Into::into)
     }
 
@@ -96,7 +97,8 @@ impl MessageTable for PostgresMessageTable {
         sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn list(&self) -> Result<Vec<QueueMessage>> {
@@ -110,7 +112,8 @@ impl MessageTable for PostgresMessageTable {
     async fn count(&self) -> Result<i64> {
         sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete(&self, id: i64) -> Result<bool> {
@@ -194,10 +197,7 @@ impl MessageTable for PostgresMessageTable {
             .await?;
 
         let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
-        let result = ids
-            .iter()
-            .map(|id| deleted_set.contains(id))
-            .collect();
+        let result = ids.iter().map(|id| deleted_set.contains(id)).collect();
         Ok(result)
     }
 
@@ -217,20 +217,12 @@ impl MessageTable for PostgresMessageTable {
         Ok(rows_affected > 0)
     }
 
-    async fn release(
-        &self,
-        id: i64,
-        worker_id: i64,
-    ) -> Result<bool> {
+    async fn release(&self, id: i64, worker_id: i64) -> Result<bool> {
         let result = self.release_batch(&[id], worker_id).await?;
         Ok(result.first().copied().unwrap_or(false))
     }
 
-    async fn release_batch(
-        &self,
-        ids: &[i64],
-        worker_id: i64,
-    ) -> Result<Vec<bool>> {
+    async fn release_batch(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -242,20 +234,16 @@ impl MessageTable for PostgresMessageTable {
             .await?;
 
         let released_set: std::collections::HashSet<i64> = released_ids.into_iter().collect();
-        let result = ids
-            .iter()
-            .map(|id| released_set.contains(id))
-            .collect();
+        let result = ids.iter().map(|id| released_set.contains(id)).collect();
         Ok(result)
     }
 
     async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
-        sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1"
-        )
-        .bind(worker_id)
-        .fetch_one(&self.pool)
-        .await.map_err(Into::into)
+        sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1")
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
     }
 }
 

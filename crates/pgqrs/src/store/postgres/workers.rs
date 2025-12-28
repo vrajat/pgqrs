@@ -75,14 +75,17 @@ impl WorkerTable for PostgresWorkerTable {
 
     async fn insert(&self, data: crate::tables::NewWorker) -> Result<WorkerInfo> {
         // Use register method which handles the logic
-        self.register(data.queue_id, &data.hostname, data.port).await.map_err(Into::into)
+        self.register(data.queue_id, &data.hostname, data.port)
+            .await
+            .map_err(Into::into)
     }
 
     async fn get(&self, id: i64) -> Result<WorkerInfo> {
         sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn list(&self) -> Result<Vec<WorkerInfo>> {
@@ -96,7 +99,8 @@ impl WorkerTable for PostgresWorkerTable {
     async fn count(&self) -> Result<i64> {
         sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workers")
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
@@ -140,7 +144,10 @@ impl WorkerTable for PostgresWorkerTable {
                     reason: format!("Worker {}:{}:{:?} is suspended", hostname, port, queue_id),
                 }),
                 WorkerStatus::Ready => Err(Error::ValidationFailed {
-                    reason: format!("Worker {}:{}:{:?} is already running", hostname, port, queue_id),
+                    reason: format!(
+                        "Worker {}:{}:{:?} is already running",
+                        hostname, port, queue_id
+                    ),
                 }),
             }
         } else {
@@ -159,10 +166,11 @@ impl WorkerTable for PostgresWorkerTable {
     }
 
     async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus> {
-        let status: WorkerStatus = sqlx::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
-            .bind(worker_id)
-            .fetch_one(&self.pool)
-            .await?;
+        let status: WorkerStatus =
+            sqlx::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
+                .bind(worker_id)
+                .fetch_one(&self.pool)
+                .await?;
         Ok(status)
     }
 
@@ -179,10 +187,11 @@ impl WorkerTable for PostgresWorkerTable {
 
     async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> Result<bool> {
         // Implementation from lifecycle.rs
-        let row: Option<chrono::DateTime<Utc>> = sqlx::query_scalar("SELECT heartbeat_at FROM pgqrs_workers WHERE id = $1")
-            .bind(worker_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row: Option<chrono::DateTime<Utc>> =
+            sqlx::query_scalar("SELECT heartbeat_at FROM pgqrs_workers WHERE id = $1")
+                .bind(worker_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         match row {
             Some(last_heartbeat) => {
@@ -217,7 +226,7 @@ impl WorkerTable for PostgresWorkerTable {
             .await?;
 
         if result.rows_affected() == 0 {
-             return Err(Error::InvalidStateTransition {
+            return Err(Error::InvalidStateTransition {
                 from: "unknown".to_string(),
                 to: "ready".to_string(),
                 reason: "Worker not found or not in Suspended state".to_string(),
@@ -233,7 +242,7 @@ impl WorkerTable for PostgresWorkerTable {
             .await?;
 
         if result.rows_affected() == 0 {
-             return Err(Error::InvalidStateTransition {
+            return Err(Error::InvalidStateTransition {
                 from: "unknown".to_string(),
                 to: "stopped".to_string(),
                 reason: "Worker not found or not in Suspended state".to_string(),
@@ -249,10 +258,11 @@ impl WorkerTable for PostgresWorkerTable {
 
     async fn count_pending_messages(&self, worker_id: i64) -> Result<i64> {
         sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1 AND vt > NOW()"
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1 AND vt > NOW()",
         )
         .bind(worker_id)
         .fetch_one(&self.pool)
-        .await.map_err(Into::into)
+        .await
+        .map_err(Into::into)
     }
 }

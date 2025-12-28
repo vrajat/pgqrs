@@ -236,14 +236,10 @@ pub trait ArchiveTable: Send + Sync {
 
     // === Archive-Specific Business Operations ===
 
-
     /// Archive a specific message atomically (delete from messages + insert here)
     /// Returns None if message not found or not owned by worker
-    async fn archive_message(
-        &self,
-        msg_id: i64,
-        worker_id: i64,
-    ) -> Result<Option<ArchivedMessage>>;
+    async fn archive_message(&self, msg_id: i64, worker_id: i64)
+        -> Result<Option<ArchivedMessage>>;
 
     /// Archive a batch of messages
     async fn archive_batch(&self, msg_ids: &[i64]) -> Result<Vec<bool>>;
@@ -293,7 +289,6 @@ pub trait WorkflowTable: Send + Sync {
 
     /// Delete a workflow by ID
     async fn delete(&self, id: i64) -> Result<u64>;
-
 
     // Workflow-specific operations can be added here as needed
 }

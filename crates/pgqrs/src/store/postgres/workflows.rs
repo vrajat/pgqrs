@@ -1,4 +1,3 @@
-
 use crate::error::{Error, Result};
 use crate::store::WorkflowTable;
 use crate::tables::{NewWorkflow, WorkflowRecord};
@@ -40,7 +39,6 @@ const DELETE_WORKFLOW: &str = "DELETE FROM pgqrs_workflows WHERE workflow_id = $
 
 #[async_trait::async_trait]
 impl WorkflowTable for PostgresWorkflowTable {
-
     async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
         let row = sqlx::query_as::<_, WorkflowRecord>(INSERT_WORKFLOW)
             .bind(data.name)

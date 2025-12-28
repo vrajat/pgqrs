@@ -98,7 +98,8 @@ impl ArchiveTable for PostgresArchiveTable {
     async fn count(&self) -> Result<i64> {
         sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive")
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
@@ -135,10 +136,7 @@ impl ArchiveTable for PostgresArchiveTable {
             .await?;
 
         let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
-        let result = msg_ids
-            .iter()
-            .map(|id| archived_set.contains(id))
-            .collect();
+        let result = msg_ids.iter().map(|id| archived_set.contains(id)).collect();
         Ok(result)
     }
 
@@ -153,14 +151,16 @@ impl ArchiveTable for PostgresArchiveTable {
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
         sqlx::query_scalar(COUNT_DLQ_MESSAGES)
             .bind(max_attempts)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn list_by_worker(
@@ -174,13 +174,15 @@ impl ArchiveTable for PostgresArchiveTable {
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 
     async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
         sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
             .bind(worker_id)
             .fetch_one(&self.pool)
-            .await.map_err(Into::into)
+            .await
+            .map_err(Into::into)
     }
 }
