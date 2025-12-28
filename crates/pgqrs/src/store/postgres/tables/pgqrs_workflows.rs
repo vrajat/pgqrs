@@ -1,27 +1,11 @@
 use crate::error::Result;
-
 use crate::workflow::WorkflowStatus;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{FromRow, PgPool};
 
-#[derive(Debug, FromRow, Clone)]
-pub struct WorkflowRecord {
-    pub workflow_id: i64,
-    pub name: String,
-    pub status: WorkflowStatus,
-    pub input: Option<Value>,
-    pub output: Option<Value>,
-    pub error: Option<Value>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub executor_id: Option<String>,
-}
-
-pub struct NewWorkflow {
-    pub name: String,
-    pub input: Option<Value>,
-}
+// Import shared types instead of redefining them
+pub use crate::tables::{NewWorkflow, WorkflowRecord};
 
 #[derive(Debug, Clone)]
 pub struct Workflows {

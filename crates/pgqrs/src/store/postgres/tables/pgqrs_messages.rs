@@ -4,11 +4,10 @@
 //! Complex operations like dequeue with worker assignment and visibility timeout management remain in queue.rs.
 
 use crate::error::Result;
-use crate::error::Result;
 use crate::types::QueueMessage;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use async_trait::async_trait;
 
 // SQL constants for message table operations
 const INSERT_MESSAGE: &str = r#"
@@ -91,6 +90,7 @@ pub struct Messages {
     pub pool: PgPool,
 }
 
+impl Messages {
     /// Create a new Messages instance.
     ///
     /// # Arguments
@@ -339,11 +339,7 @@ impl crate::store::MessageTable for Messages {
         self.count_pending_filtered(queue_id, None).await
     }
 
-    async fn count_pending_filtered(
-        &self,
-        queue_id: i64,
-        worker_id: Option<i64>,
-    ) -> Result<i64> {
+    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
         let count = match worker_id {
             Some(wid) => {
                 sqlx::query_scalar::<_, i64>(
@@ -400,7 +396,6 @@ impl crate::store::MessageTable for Messages {
         Ok(results)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

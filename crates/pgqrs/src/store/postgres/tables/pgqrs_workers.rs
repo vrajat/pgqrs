@@ -125,6 +125,7 @@ pub struct Workers {
     pub pool: PgPool,
 }
 
+impl Workers {
     /// Create a new Workers instance.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }

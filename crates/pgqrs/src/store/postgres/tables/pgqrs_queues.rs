@@ -4,10 +4,9 @@
 //! Complex operations like referential integrity checks and transaction management remain in admin.rs.
 
 use crate::error::Result;
-use crate::error::Result;
 use crate::types::QueueInfo;
-use sqlx::PgPool;
 use async_trait::async_trait;
+use sqlx::PgPool;
 
 // SQL constants for queue table operations
 const INSERT_QUEUE: &str = r#"
@@ -159,7 +158,7 @@ impl crate::store::QueueTable for Queues {
 
     /// Get a queue by name.
     async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
-         let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
+        let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_one(&self.pool)
             .await
@@ -190,7 +189,7 @@ impl crate::store::QueueTable for Queues {
 
     /// Delete a queue by name.
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
-         let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
+        let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
             .bind(name)
             .execute(&self.pool)
             .await

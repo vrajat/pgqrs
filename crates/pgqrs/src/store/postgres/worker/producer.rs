@@ -23,10 +23,11 @@
 //! ```
 
 use crate::error::Result;
-use crate::tables::{Messages, Table};
+use crate::store::MessageTable;
+use crate::store::postgres::tables::Messages;
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
-use crate::worker::{Worker, WorkerLifecycle};
+use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -110,6 +111,46 @@ impl Producer {
         })
     }
 
+    pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
+        self.validator.rate_limit_status()
+    }
+}
+
+#[async_trait]
+impl crate::store::Worker for Producer {
+    fn worker_id(&self) -> i64 {
+        self.worker_info.id
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.lifecycle.heartbeat(self.worker_info.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.lifecycle
+            .is_healthy(self.worker_info.id, max_age)
+            .await
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.lifecycle.get_status(self.worker_info.id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        self.lifecycle.suspend(self.worker_info.id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        self.lifecycle.resume(self.worker_info.id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        self.lifecycle.shutdown(self.worker_info.id).await
+    }
+}
+
+#[async_trait]
+impl crate::store::Producer for Producer {
     /// Retrieve a message by its ID from the queue.
     ///
     /// This is useful for producers to verify that messages were enqueued correctly.
@@ -140,7 +181,7 @@ impl Producer {
     /// - `ValidationFailed` for structure/content violations
     /// - `PayloadTooLarge` if payload exceeds size limits
     /// - `RateLimited` if rate limits are exceeded
-    pub async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
+    async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
         // Use enqueue_delayed with 0 delay - it already includes validation
         self.enqueue_delayed(payload, 0).await
     }
@@ -159,7 +200,7 @@ impl Producer {
     ///
     /// # Errors
     /// Returns validation errors if the payload fails validation rules.
-    pub async fn enqueue_delayed(
+    async fn enqueue_delayed(
         &self,
         payload: &serde_json::Value,
         delay_seconds: u32,
@@ -189,7 +230,7 @@ impl Producer {
     /// Returns validation errors if any payload fails validation rules.
     /// The database transaction is atomic - either all messages are enqueued or none are.
     /// Rate limiting is also atomic - tokens are only consumed if the entire batch succeeds.
-    pub async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
+    async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
         // Validate all payloads atomically (including rate limiting)
         self.validator.validate_batch(payloads)?;
 
@@ -236,13 +277,13 @@ impl Producer {
         use crate::tables::NewMessage;
 
         let new_message = NewMessage {
-            queue_id: self.queue_info.id,
-            payload: payload.clone(),
-            read_ct: 0,
-            enqueued_at: now,
-            vt,
-            producer_worker_id: Some(self.worker_info.id),
-            consumer_worker_id: None,
+                queue_id: self.queue_info.id,
+                payload: payload.clone(),
+                read_ct: 0,
+                enqueued_at: now,
+                vt,
+                producer_worker_id: Some(self.worker_info.id),
+                consumer_worker_id: None,
         };
 
         let message = self.messages.insert(new_message).await?;
@@ -253,10 +294,7 @@ impl Producer {
     ///
     /// # Arguments
     /// * `archived_msg_id` - The ID of the archived message to replay
-    pub async fn replay_dlq(
-        &self,
-        archived_msg_id: i64,
-    ) -> crate::error::Result<Option<crate::types::QueueMessage>> {
+    async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
         let rec = sqlx::query_as(REPLAY_FROM_DLQ)
             .bind(archived_msg_id)
             .fetch_optional(&self.pool)
@@ -267,84 +305,11 @@ impl Producer {
         Ok(rec)
     }
 
-    pub fn validation_config(&self) -> &crate::validation::ValidationConfig {
+    fn validation_config(&self) -> &crate::validation::ValidationConfig {
         &self.config.validation_config
     }
 
-    pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
-        self.validator.rate_limit_status()
-    }
-}
-
-#[async_trait]
-impl Worker for Producer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
-    }
-
-    async fn heartbeat(&self) -> Result<()> {
-        self.lifecycle.heartbeat(self.worker_info.id).await
-    }
-
-    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle
-            .is_healthy(self.worker_info.id, max_age)
-            .await
-    }
-
-    async fn status(&self) -> Result<WorkerStatus> {
-        self.lifecycle.get_status(self.worker_info.id).await
-    }
-
-    async fn suspend(&self) -> Result<()> {
-        self.lifecycle.suspend(self.worker_info.id).await
-    }
-
-    async fn resume(&self) -> Result<()> {
-        self.lifecycle.resume(self.worker_info.id).await
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        self.lifecycle.shutdown(self.worker_info.id).await
-    }
-}
-
-#[async_trait]
-impl crate::store::Producer for Producer {
-    async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        self.get_message_by_id(msg_id).await
-    }
-
-    async fn enqueue(&self, payload: &serde_json::Value) -> Result<QueueMessage> {
-        self.enqueue(payload).await
-    }
-
-    async fn enqueue_delayed(&self, payload: &serde_json::Value, delay_seconds: u32) -> Result<QueueMessage> {
-        self.enqueue_delayed(payload, delay_seconds).await
-    }
-
-    async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
-        self.batch_enqueue(payloads).await
-    }
-
-    async fn insert_message(
-        &self,
-        payload: &serde_json::Value,
-        now: chrono::DateTime<chrono::Utc>,
-        vt: chrono::DateTime<chrono::Utc>,
-    ) -> Result<i64> {
-        self.insert_message(payload, now, vt).await
-    }
-
-    async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        self.replay_dlq(archived_msg_id).await
-    }
-
-    fn validation_config(&self) -> &crate::validation::ValidationConfig {
-        self.validation_config()
-    }
-
     fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
-        self.rate_limit_status()
+        self.validator.rate_limit_status()
     }
 }

@@ -29,10 +29,11 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
+use crate::store::Worker;
 use crate::tables::{Archive, Messages, Queues, Table, Workers};
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
-use crate::worker::{Worker, WorkerLifecycle};
+use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -166,6 +167,71 @@ const PURGE_OLD_WORKERS: &str = r#"
       )
 "#;
 
+const GET_QUEUE_METRICS: &str = r#"
+    SELECT
+        q.queue_name as name,
+        COUNT(m.id) as total_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
+        MAX(m.enqueued_at) as newest_message
+    FROM pgqrs_queues q
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    WHERE q.id = $1
+    GROUP BY q.id, q.queue_name
+"#;
+
+const GET_ALL_QUEUES_METRICS: &str = r#"
+    SELECT
+        q.queue_name as name,
+        COUNT(m.id) as total_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
+        MAX(m.enqueued_at) as newest_message
+    FROM pgqrs_queues q
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    GROUP BY q.id, q.queue_name
+"#;
+
+const GET_SYSTEM_STATS: &str = r#"
+    SELECT
+        (SELECT COUNT(*) FROM pgqrs_queues) as total_queues,
+        (SELECT COUNT(*) FROM pgqrs_workers) as total_workers,
+        (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready') as active_workers,
+        (SELECT COUNT(*) FROM pgqrs_messages) as total_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL) as pending_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
+        '0.5.0' as schema_version
+"#;
+
+const GET_WORKER_HEALTH_GLOBAL: &str = r#"
+    SELECT
+        'Global' as queue_name,
+        COUNT(*) as total_workers,
+        COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
+        COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
+        COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
+        COUNT(*) FILTER (WHERE status = 'ready' AND heartbeat_at < NOW() - $1::interval) as stale_workers
+    FROM pgqrs_workers
+"#;
+
+const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
+    SELECT
+        COALESCE(q.queue_name, 'Admin') as queue_name,
+        COUNT(w.id) as total_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'ready' AND w.heartbeat_at < NOW() - $1::interval) as stale_workers
+    FROM pgqrs_workers w
+    LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+    GROUP BY q.queue_name
+"#;
+
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 ///
@@ -228,576 +294,6 @@ impl Admin {
             workers,
             worker_info: None,
             lifecycle,
-        })
-    }
-
-    /// Register this Admin instance as a worker.
-    ///
-    /// Register this Admin as a worker in the database.
-    ///
-    /// Call this after `install()` to register the Admin as a worker.
-    /// This enables the Worker trait methods (suspend, resume, shutdown).
-    ///
-    /// # Arguments
-    /// * `hostname` - Hostname identifier for this admin instance
-    /// * `port` - Port identifier for this admin instance
-    ///
-    /// # Returns
-    /// The WorkerInfo for this Admin.
-    pub async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
-        if let Some(ref worker_info) = self.worker_info {
-            return Ok(worker_info.clone());
-        }
-
-        use crate::tables::pgqrs_workers::NewWorker;
-        let new_worker = NewWorker {
-            hostname: hostname.clone(),
-            port,
-            queue_id: None,
-        };
-
-        let worker_info = self.workers.insert(new_worker).await?;
-
-        tracing::debug!(
-            "Registered Admin as worker {} (hostname: {}, port: {})",
-            worker_info.id,
-            hostname,
-            port
-        );
-
-        self.worker_info = Some(worker_info.clone());
-        Ok(worker_info)
-    }
-
-    /// Install pgqrs schema and infrastructure in the database.
-    ///
-    /// **Important**: The schema must be created before running install.
-    /// Use your preferred method to create the schema, for example:
-    /// ```sql
-    /// CREATE SCHEMA IF NOT EXISTS my_schema;
-    /// ```
-    ///
-    /// # Returns
-    /// Ok if installation (or validation) succeeds, error otherwise.
-    pub async fn install(&self) -> Result<()> {
-        // Run migrations using sqlx
-        MIGRATOR
-            .run(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Migration failed: {}", e),
-            })?;
-        Ok(())
-    }
-
-    /// Verify that pgqrs installation is valid and healthy.
-    ///
-    /// This method checks that all required infrastructure is in place:
-    /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)
-    /// - Referential integrity is maintained (all foreign keys are valid)
-    ///
-    /// # Returns
-    /// Ok if installation is valid, error otherwise.
-    pub async fn verify(&self) -> Result<()> {
-        // Begin a read-only transaction for all verification queries
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
-
-        // Category 1: Check existence of all required tables
-        let required_tables = [
-            ("pgqrs_queues", "Queue repository table"),
-            ("pgqrs_workers", "Worker repository table"),
-            ("pgqrs_messages", "Unified messages table"),
-            ("pgqrs_archive", "Unified archive table"),
-        ];
-
-        for (table_name, description) in &required_tables {
-            let table_exists = sqlx::query_scalar::<_, bool>(CHECK_TABLE_EXISTS)
-                .bind(table_name)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to check {} existence: {}", description, e),
-                })?;
-
-            if !table_exists {
-                return Err(crate::error::Error::Connection {
-                    message: format!("{} ('{}') does not exist", description, table_name),
-                });
-            }
-        }
-
-        // Category 2: Validate referential integrity using left outer joins
-
-        // Check that all messages have valid queue_id references
-        let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to check message referential integrity: {}", e),
-            })?;
-
-        if orphaned_messages > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Found {} messages with invalid queue_id references",
-                    orphaned_messages
-                ),
-            });
-        }
-
-        // Check that all messages with producer_worker_id or consumer_worker_id have valid worker references
-        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to check message worker referential integrity: {}",
-                    e
-                ),
-            })?;
-
-        if orphaned_message_workers > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
-                    orphaned_message_workers
-                ),
-            });
-        }
-
-        // Check that all archived messages have valid queue_id references
-        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to check archive referential integrity: {}", e),
-            })?;
-
-        if orphaned_archive_queues > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Found {} archived messages with invalid queue_id references",
-                    orphaned_archive_queues
-                ),
-            });
-        }
-
-        // Check that all archived messages with producer_worker_id or consumer_worker_id have valid worker references
-        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to check archive worker referential integrity: {}",
-                    e
-                ),
-            })?;
-
-        if orphaned_archive_workers > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
-                    orphaned_archive_workers
-                ),
-            });
-        }
-
-        // Commit the transaction (ensures consistency of all checks)
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit transaction: {}", e),
-            })?;
-
-        Ok(())
-    }
-
-    /// Create a new queue in the database.
-    ///
-    /// This method creates a new queue by inserting a record into the pgqrs_queues table.
-    /// All messages for this queue will be stored in the unified pgqrs_messages table.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue to create
-    ///
-    /// # Returns
-    /// The created [`QueueInfo`] instance.
-    pub async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
-        // Create new queue data
-        use crate::tables::NewQueue;
-        let new_queue = NewQueue {
-            queue_name: name.to_string(),
-        };
-
-        // Use the queues table insert function
-        self.queues.insert(new_queue).await
-    }
-
-    /// Get a [`QueueInfo`] instance for a given queue name.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue
-    ///
-    /// # Returns
-    /// [`QueueInfo`] instance for the queue.
-    pub async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
-        // Get queue info to get the queue_id
-        self.queues.get_by_name(name).await
-    }
-
-    /// Delete a queue from the database.
-    ///
-    /// A queue can only be deleted if there are no references in messages or archive.
-    /// This prevents data orphaning by ensuring referential integrity is maintained.
-    /// The operation runs in a transaction with row-level locking to ensure atomicity
-    /// and prevent concurrent modifications during the deletion process.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue to delete
-    ///
-    /// # Returns
-    /// Ok if deletion succeeds, error if queue has messages/archives or other error.
-    pub async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
-        // Start a transaction for atomic deletion with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
-
-        // Lock the queue row for exclusive access and get queue_id
-        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_DELETE)
-            .bind(&queue_info.queue_name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to lock queue '{}': {}", queue_info.queue_name, e),
-            })?;
-
-        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
-            name: queue_info.queue_name.clone(),
-        })?;
-
-        // Check for active workers assigned to this queue
-        let ready_workers = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Ready)
-            .await?;
-        let suspended_workers = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
-            .await?;
-        let active_workers = ready_workers + suspended_workers;
-
-        if active_workers > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
-                    queue_info.queue_name, active_workers
-                ),
-            });
-        }
-
-        // Check referential integrity using table methods
-        let messages_count = self.messages.count_for_fk(queue_id, &mut tx).await?;
-        let archive_count = self.archive.count_for_fk(queue_id, &mut tx).await?;
-        let total_references = messages_count + archive_count;
-
-        if total_references > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
-                    "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
-                    queue_info.queue_name, total_references
-                ),
-            });
-        }
-
-        // Safe to delete - no references exist and we have exclusive lock
-        Queues::delete_by_name_tx(&queue_info.queue_name, &mut tx).await?;
-
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit queue deletion: {}", e),
-            })?;
-
-        tracing::debug!("Successfully deleted queue '{}'", queue_info.queue_name);
-        Ok(())
-    }
-
-    /// Purge all messages from a queue, but keep the queue itself.
-    /// Note: This only purges the active queue, not the archive table.
-    /// Use `purge_archive` to purge archived messages.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue to purge
-    ///
-    /// # Returns
-    /// Ok if purge succeeds, error otherwise.
-    pub async fn purge_queue(&self, name: &str) -> Result<()> {
-        // Start a transaction for atomic purge with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
-
-        // Lock the queue row for data modification and get queue_id
-        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_UPDATE)
-            .bind(name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to lock queue '{}': {}", name, e),
-            })?;
-
-        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
-            name: name.to_string(),
-        })?;
-
-        self.messages.delete_by_fk(queue_id, &mut tx).await?;
-        self.archive.delete_by_fk(queue_id, &mut tx).await?;
-        self.workers.delete_by_fk(queue_id, &mut tx).await?;
-
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit queue purge: {}", e),
-            })?;
-
-        tracing::debug!("Successfully purged queue '{}'", name);
-        Ok(())
-    }
-
-    pub async fn dlq(&self) -> Result<Vec<i64>> {
-        let result: Vec<i64> = sqlx::query_scalar(DLQ_BATCH)
-            .bind(self.config.max_read_ct)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to move messages to DLQ: {}", e),
-            })?;
-
-        Ok(result)
-    }
-
-    const GET_QUEUE_METRICS: &str = r#"
-        WITH queue_counts AS (
-            SELECT
-                COUNT(*) as total_messages,
-                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
-                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages,
-                MIN(enqueued_at) FILTER (WHERE vt <= NOW()) as oldest_pending_message,
-                MAX(enqueued_at) as newest_message
-            FROM pgqrs_messages
-            WHERE queue_id = $1
-        ),
-        archive_counts AS (
-            SELECT COUNT(*) as archived_messages
-            FROM pgqrs_archive
-            WHERE queue_id = $1
-        )
-        SELECT
-            $2 as name,
-            COALESCE(qc.total_messages, 0) as total_messages,
-            COALESCE(qc.pending_messages, 0) as pending_messages,
-            COALESCE(qc.locked_messages, 0) as locked_messages,
-            COALESCE(ac.archived_messages, 0) as archived_messages,
-            qc.oldest_pending_message,
-            qc.newest_message
-        FROM queue_counts qc
-        CROSS JOIN archive_counts ac;
-    "#;
-
-    const GET_ALL_QUEUES_METRICS: &str = r#"
-        WITH queue_counts AS (
-            SELECT
-                queue_id,
-                COUNT(*) as total_messages,
-                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
-                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages,
-                MIN(enqueued_at) FILTER (WHERE vt <= NOW()) as oldest_pending_message,
-                MAX(enqueued_at) as newest_message
-            FROM pgqrs_messages
-            GROUP BY queue_id
-        ),
-        archive_counts AS (
-            SELECT queue_id, COUNT(*) as archived_messages
-            FROM pgqrs_archive
-            GROUP BY queue_id
-        )
-        SELECT
-            q.queue_name as name,
-            COALESCE(qc.total_messages, 0) as total_messages,
-            COALESCE(qc.pending_messages, 0) as pending_messages,
-            COALESCE(qc.locked_messages, 0) as locked_messages,
-            COALESCE(ac.archived_messages, 0) as archived_messages,
-            qc.oldest_pending_message,
-            qc.newest_message
-        FROM pgqrs_queues q
-        LEFT JOIN queue_counts qc ON q.id = qc.queue_id
-        LEFT JOIN archive_counts ac ON q.id = ac.queue_id;
-    "#;
-
-    const GET_SYSTEM_STATS: &str = r#"
-        WITH message_counts AS (
-            SELECT
-                COUNT(*) as total_messages,
-                COUNT(*) FILTER (WHERE vt <= NOW()) as pending_messages,
-                COUNT(*) FILTER (WHERE vt > NOW()) as locked_messages
-            FROM pgqrs_messages
-        ),
-        archive_counts AS (
-            SELECT COUNT(*) as archived_messages
-            FROM pgqrs_archive
-        ),
-        queue_counts AS (
-            SELECT COUNT(*) as total_queues
-            FROM pgqrs_queues
-        ),
-        worker_counts AS (
-            SELECT
-                COUNT(*) as total_workers,
-                COUNT(*) FILTER (WHERE status = 'ready') as active_workers
-            FROM pgqrs_workers
-        ),
-        schema_info AS (
-           SELECT version::text as schema_version FROM _sqlx_migrations ORDER BY version DESC LIMIT 1
-        )
-        SELECT
-            qc.total_queues,
-            wc.total_workers,
-            wc.active_workers,
-            mc.total_messages,
-            mc.pending_messages,
-            mc.locked_messages,
-            ac.archived_messages,
-            COALESCE(si.schema_version, 'Unknown') as schema_version
-        FROM message_counts mc
-        CROSS JOIN archive_counts ac
-        CROSS JOIN queue_counts qc
-        CROSS JOIN worker_counts wc
-        LEFT JOIN schema_info si ON TRUE;
-
-    "#;
-
-    const GET_WORKER_HEALTH_GLOBAL: &str = r#"
-        SELECT
-            'Global' as queue_name,
-            COUNT(*) as total_workers,
-            COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
-            COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
-            COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
-            COUNT(*) FILTER (WHERE heartbeat_at < NOW() - $1::interval) as stale_workers
-        FROM pgqrs_workers;
-    "#;
-
-    const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
-        SELECT
-            COALESCE(q.queue_name, 'Unknown') as queue_name,
-            COUNT(w.id) as total_workers,
-            COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
-            COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
-            COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
-            COUNT(w.id) FILTER (WHERE w.heartbeat_at < NOW() - $1::interval) as stale_workers
-        FROM pgqrs_workers w
-        LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
-        GROUP BY q.queue_name;
-    "#;
-
-    /// Get metrics for a specific queue.
-    ///
-    /// # Arguments
-    /// * `name` - Name of the queue
-    ///
-    /// # Returns
-    /// [`QueueMetrics`] for the queue.
-    pub async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
-        let queue_info = self.queues.get_by_name(name).await?;
-
-        let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_QUEUE_METRICS)
-            .bind(queue_info.id)
-            .bind(name) // Pass name to be returned in the struct
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get metrics for queue {}: {}", name, e),
-            })?;
-
-        Ok(metrics)
-    }
-
-    /// Get metrics for all queues managed by pgqrs.
-    ///
-    /// # Returns
-    /// Vector of [`QueueMetrics`] for all queues.
-    pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
-        let metrics = sqlx::query_as::<_, QueueMetrics>(Self::GET_ALL_QUEUES_METRICS)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get all queues metrics: {}", e),
-            })?;
-
-        Ok(metrics)
-    }
-
-    /// Get system-wide statistics.
-    ///
-    /// # Returns
-    /// [`SystemStats`] containing system-wide metrics.
-    pub async fn system_stats(&self) -> Result<SystemStats> {
-        let stats = sqlx::query_as::<_, SystemStats>(Self::GET_SYSTEM_STATS)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get system stats: {}", e),
-            })?;
-
-        Ok(stats)
-    }
-
-    /// Get worker health statistics.
-    ///
-    /// # Arguments
-    /// * `heartbeat_timeout` - Duration to consider a worker as stale.
-    /// * `group_by_queue` - If true, returns stats per queue. Otherwise global stats.
-    ///
-    /// # Returns
-    /// A vector of [`WorkerHealthStats`] containing either global statistics or per-queue statistics,
-    /// depending on the value of `group_by_queue`.
-    pub async fn worker_health_stats(
-        &self,
-        heartbeat_timeout: chrono::Duration,
-        group_by_queue: bool,
-    ) -> Result<Vec<WorkerHealthStats>> {
-        // Convert heartbeat_timeout to a string for interval (e.g., '60 seconds')
-        let interval_str = format!("{} seconds", heartbeat_timeout.num_seconds());
-
-        let stats = if group_by_queue {
-            sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_BY_QUEUE)
-                .bind(interval_str)
-                .fetch_all(&self.pool)
-                .await
-        } else {
-            sqlx::query_as::<_, WorkerHealthStats>(Self::GET_WORKER_HEALTH_GLOBAL)
-                .bind(interval_str)
-                .fetch_all(&self.pool)
-                .await
-        };
-
-        stats.map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to get worker health stats: {}", e),
         })
     }
 
@@ -1101,7 +597,7 @@ impl Admin {
 }
 
 #[async_trait]
-impl Worker for Admin {
+impl crate::store::Worker for Admin {
     fn worker_id(&self) -> i64 {
         self.worker_info
             .as_ref()
@@ -1139,115 +635,384 @@ impl Worker for Admin {
     }
 }
 
-impl Admin {
-    /// Delete this admin worker from the database.
-    ///
-    /// Admin workers can delete themselves since they don't hold messages.
-    /// The admin must be stopped before calling this method.
-    ///
-    /// # Returns
-    /// Ok if deletion succeeds
-    ///
-    /// # Errors
-    /// Returns `PgqrsError` if the admin is not registered or deletion fails
-    pub async fn delete_self(&self) -> Result<()> {
-        let worker_id = self.worker_id();
-        self.workers.delete(worker_id).await?;
-        Ok(())
-    }
-}
-#[async_trait]
-impl Worker for Admin {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.as_ref().map(|w| w.id).unwrap_or(0) // Default to 0? Or error? Admin lifecycle starts after registration?
-        // Admin operations often run without registration. Worker trait might be optional for some?
-        // But trait definition returns i64.
-    }
-
-    async fn status(&self) -> Result<WorkerStatus> {
-        let id = self.worker_id();
-        if id == 0 { return Ok(WorkerStatus::Stopped); } // Not registered
-        self.lifecycle.get_status(id).await
-    }
-
-    async fn heartbeat(&self) -> Result<()> {
-        let id = self.worker_id();
-        if id == 0 { return Ok(()); }
-        self.lifecycle.heartbeat(id).await
-    }
-
-    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        let id = self.worker_id();
-        if id == 0 { return Ok(true); } // Unregistered admin is "healthy"
-        self.lifecycle.is_healthy(id, max_age).await
-    }
-
-    async fn suspend(&self) -> Result<()> {
-         let id = self.worker_id();
-         if id == 0 { return Ok(()); }
-         self.lifecycle.suspend(id).await
-    }
-
-    async fn resume(&self) -> Result<()> {
-         let id = self.worker_id();
-         if id == 0 { return Ok(()); }
-         self.lifecycle.resume(id).await
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        let id = self.worker_id();
-        if id == 0 { return Ok(()); }
-        self.lifecycle.shutdown(id).await
-    }
-}
-
 #[async_trait]
 impl crate::store::Admin for Admin {
+    /// Install pgqrs schema and infrastructure in the database.
+    ///
+    /// **Important**: The schema must be created before running install.
+    /// Use your preferred method to create the schema, for example:
+    /// ```sql
+    /// CREATE SCHEMA IF NOT EXISTS my_schema;
+    /// ```
+    ///
+    /// # Returns
+    /// Ok if installation (or validation) succeeds, error otherwise.
     async fn install(&self) -> Result<()> {
-        self.install().await
+        // Run migrations using sqlx
+        MIGRATOR
+            .run(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Migration failed: {}", e),
+            })?;
+        Ok(())
     }
 
+    /// Verify that pgqrs installation is valid and healthy.
+    ///
+    /// This method checks that all required infrastructure is in place:
+    /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)
+    /// - Referential integrity is maintained (all foreign keys are valid)
+    ///
+    /// # Returns
+    /// Ok if installation is valid, error otherwise.
     async fn verify(&self) -> Result<()> {
-        self.verify().await
+        // Begin a read-only transaction for all verification queries
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Category 1: Check existence of all required tables
+        let required_tables = [
+            ("pgqrs_queues", "Queue repository table"),
+            ("pgqrs_workers", "Worker repository table"),
+            ("pgqrs_messages", "Unified messages table"),
+            ("pgqrs_archive", "Unified archive table"),
+        ];
+
+        for (table_name, description) in &required_tables {
+            let table_exists = sqlx::query_scalar::<_, bool>(CHECK_TABLE_EXISTS)
+                .bind(table_name)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: format!("Failed to check {} existence: {}", description, e),
+                })?;
+
+            if !table_exists {
+                return Err(crate::error::Error::Connection {
+                    message: format!("{} ('{}') does not exist", description, table_name),
+                });
+            }
+        }
+
+        // Category 2: Validate referential integrity using left outer joins
+
+        // Check that all messages have valid queue_id references
+        let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to check message referential integrity: {}", e),
+            })?;
+
+        if orphaned_messages > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Found {} messages with invalid queue_id references",
+                    orphaned_messages
+                ),
+            });
+        }
+
+        // Check that all messages with producer_worker_id or consumer_worker_id have valid worker references
+        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to check message worker referential integrity: {}",
+                    e
+                ),
+            })?;
+
+        if orphaned_message_workers > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
+                    orphaned_message_workers
+                ),
+            });
+        }
+
+        // Check that all archived messages have valid queue_id references
+        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to check archive referential integrity: {}", e),
+            })?;
+
+        if orphaned_archive_queues > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Found {} archived messages with invalid queue_id references",
+                    orphaned_archive_queues
+                ),
+            });
+        }
+
+        // Check that all archived messages with producer_worker_id or consumer_worker_id have valid worker references
+        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to check archive worker referential integrity: {}",
+                    e
+                ),
+            })?;
+
+        if orphaned_archive_workers > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
+                    orphaned_archive_workers
+                ),
+            });
+        }
+
+        // Commit the transaction (ensures consistency of all checks)
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit transaction: {}", e),
+            })?;
+
+        Ok(())
     }
 
+    /// Register this Admin instance as a worker.
     async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
-        self.register(hostname, port).await
+        if let Some(ref worker_info) = self.worker_info {
+            return Ok(worker_info.clone());
+        }
+
+        use crate::tables::pgqrs_workers::NewWorker;
+        let new_worker = NewWorker {
+            hostname: hostname.clone(),
+            port,
+            queue_id: None,
+        };
+
+        let worker_info = self.workers.insert(new_worker).await?;
+
+        tracing::debug!(
+            "Registered Admin as worker {} (hostname: {}, port: {})",
+            worker_info.id,
+            hostname,
+            port
+        );
+
+        self.worker_info = Some(worker_info.clone());
+        Ok(worker_info)
     }
 
+    /// Create a new queue in the database.
     async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
-        self.create_queue(name).await
+        // Create new queue data
+        use crate::tables::NewQueue;
+        let new_queue = NewQueue {
+            queue_name: name.to_string(),
+        };
+
+        // Use the queues table insert function
+        self.queues.insert(new_queue).await
     }
 
+    /// Get a [`QueueInfo`] instance for a given queue name.
     async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
-        self.get_queue(name).await
+        // Get queue info to get the queue_id
+        self.queues.get_by_name(name).await
     }
 
+    /// Delete a queue from the database.
     async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
-        self.delete_queue(queue_info).await
+        // Start a transaction for atomic deletion with row locking
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock the queue row for exclusive access and get queue_id
+        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_DELETE)
+            .bind(&queue_info.queue_name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to lock queue '{}': {}", queue_info.queue_name, e),
+            })?;
+
+        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
+            name: queue_info.queue_name.clone(),
+        })?;
+
+        // Check for active workers assigned to this queue
+        let ready_workers = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Ready)
+            .await?;
+        let suspended_workers = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
+            .await?;
+        let active_workers = ready_workers + suspended_workers;
+
+        if active_workers > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
+                    queue_info.queue_name, active_workers
+                ),
+            });
+        }
+
+        // Check referential integrity using table methods
+        let messages_count = self.messages.count_for_fk(queue_id, &mut tx).await?;
+        let archive_count = self.archive.count_for_fk(queue_id, &mut tx).await?;
+        let total_references = messages_count + archive_count;
+
+        if total_references > 0 {
+            return Err(crate::error::Error::Connection {
+                message: format!(
+                    "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
+                    queue_info.queue_name, total_references
+                ),
+            });
+        }
+
+        // Safe to delete - no references exist and we have exclusive lock
+        Queues::delete_by_name_tx(&queue_info.queue_name, &mut tx).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit queue deletion: {}", e),
+            })?;
+
+        tracing::debug!("Successfully deleted queue '{}'", queue_info.queue_name);
+        Ok(())
     }
 
+    /// Purge all messages from a queue, but keep the queue itself.
     async fn purge_queue(&self, name: &str) -> Result<()> {
-        self.purge_queue(name).await
+        // Start a transaction for atomic purge with row locking
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // Lock the queue row for data modification and get queue_id
+        let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_UPDATE)
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to lock queue '{}': {}", name, e),
+            })?;
+
+        let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
+            name: name.to_string(),
+        })?;
+
+        self.messages.delete_by_fk(queue_id, &mut tx).await?;
+        self.archive.delete_by_fk(queue_id, &mut tx).await?;
+        self.workers.delete_by_fk(queue_id, &mut tx).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit queue purge: {}", e),
+            })?;
+
+        tracing::debug!("Successfully purged queue '{}'", name);
+        Ok(())
     }
 
     async fn dlq(&self) -> Result<Vec<i64>> {
-        self.dlq().await
+        let result: Vec<i64> = sqlx::query_scalar(DLQ_BATCH)
+            .bind(self.config.max_read_ct)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to move messages to DLQ: {}", e),
+            })?;
+
+        Ok(result)
     }
 
+    /// Get metrics for a specific queue.
     async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
-        self.queue_metrics(name).await
+        let queue_info = self.queues.get_by_name(name).await?;
+
+        let metrics = sqlx::query_as::<_, QueueMetrics>(GET_QUEUE_METRICS)
+            .bind(queue_info.id)
+            .bind(name) // Pass name to be returned in the struct
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get metrics for queue {}: {}", name, e),
+            })?;
+
+        Ok(metrics)
     }
 
+    /// Get metrics for all queues managed by pgqrs.
     async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
-        self.all_queues_metrics().await
+        let metrics = sqlx::query_as::<_, QueueMetrics>(GET_ALL_QUEUES_METRICS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get all queues metrics: {}", e),
+            })?;
+
+        Ok(metrics)
     }
 
+    /// Get system-wide statistics.
     async fn system_stats(&self) -> Result<SystemStats> {
-        self.system_stats().await
+        let stats = sqlx::query_as::<_, SystemStats>(GET_SYSTEM_STATS)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get system stats: {}", e),
+            })?;
+
+        Ok(stats)
     }
 
-    async fn worker_health_stats(&self, heartbeat_timeout: chrono::Duration, group_by_queue: bool) -> Result<Vec<WorkerHealthStats>> {
-        self.worker_health_stats(heartbeat_timeout, group_by_queue).await
+    async fn worker_health_stats(
+        &self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<WorkerHealthStats>> {
+        // Convert heartbeat_timeout to a string for interval (e.g., '60 seconds')
+        let interval_str = format!("{} seconds", heartbeat_timeout.num_seconds());
+
+        let stats = if group_by_queue {
+            sqlx::query_as::<_, WorkerHealthStats>(GET_WORKER_HEALTH_BY_QUEUE)
+                .bind(interval_str)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query_as::<_, WorkerHealthStats>(GET_WORKER_HEALTH_GLOBAL)
+                .bind(interval_str)
+                .fetch_all(&self.pool)
+                .await
+        };
+
+        stats.map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to get worker health stats: {}", e),
+        })
     }
 }

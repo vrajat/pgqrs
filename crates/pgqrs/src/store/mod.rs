@@ -5,12 +5,16 @@
 
 use crate::rate_limit::RateLimitStatus;
 use crate::tables::{NewQueue, NewWorkflow, WorkflowRecord};
-use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
+use crate::types::{
+    ArchivedMessage, NewArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus,
+};
 use crate::validation::ValidationConfig;
 use crate::Config;
 use async_trait::async_trait;
 use chrono::Duration;
 use serde_json::Value;
+
+pub mod postgres;
 
 /// Trait defining the interface for all worker types.
 #[async_trait]
@@ -107,14 +111,20 @@ pub trait Consumer: Worker {
 pub trait Workflow: Send + Sync {
     fn id(&self) -> i64;
     async fn start(&self) -> crate::error::Result<()>;
-    async fn success<T: serde::Serialize + Send + Sync>(&self, output: T) -> crate::error::Result<()>;
+    async fn success<T: serde::Serialize + Send + Sync>(
+        &self,
+        output: T,
+    ) -> crate::error::Result<()>;
     async fn fail<T: serde::Serialize + Send + Sync>(&self, error: T) -> crate::error::Result<()>;
 }
 
 /// Interface for a workflow step execution guard.
 #[async_trait]
 pub trait StepGuard: Send + Sync {
-    async fn success<T: serde::Serialize + Send + Sync>(self, output: T) -> crate::error::Result<()>;
+    async fn success<T: serde::Serialize + Send + Sync>(
+        self,
+        output: T,
+    ) -> crate::error::Result<()>;
     async fn fail<T: serde::Serialize + Send + Sync>(self, error: T) -> crate::error::Result<()>;
 }
 
@@ -197,119 +207,126 @@ pub trait Store: Clone + Send + Sync + 'static {
 /// Repository for managing queues.
 #[async_trait]
 pub trait QueueTable: Send + Sync {
-    /// Get queue information by name
-    async fn get_by_name(&self, name: &str) -> crate::error::Result<QueueInfo>;
-    /// Insert a new queue
+    // Methods from Table
     async fn insert(&self, data: NewQueue) -> crate::error::Result<QueueInfo>;
-    /// Check if a queue exists
-    async fn exists(&self, name: &str) -> crate::error::Result<bool>;
-    /// Delete a queue by name
-    async fn delete_by_name(&self, name: &str) -> crate::error::Result<u64>;
-    /// List all queues
+    async fn get(&self, id: i64) -> crate::error::Result<QueueInfo>;
     async fn list(&self) -> crate::error::Result<Vec<QueueInfo>>;
+    async fn count(&self) -> crate::error::Result<i64>;
+    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+
+    // Queue-specific methods from src/tables/pgqrs_queues.rs
+    async fn get_by_name(&self, name: &str) -> crate::error::Result<QueueInfo>;
+    async fn exists(&self, name: &str) -> crate::error::Result<bool>;
+    async fn delete_by_name(&self, name: &str) -> crate::error::Result<u64>;
 }
 
 /// Repository for managing messages.
 #[async_trait]
 pub trait MessageTable: Send + Sync {
-    /// Enqueue a single message
-    async fn enqueue(
-        &self,
-        queue_id: i64,
-        worker_id: i64,
-        payload: &Value,
-        delay_seconds: Option<u32>,
-    ) -> crate::error::Result<i64>;
+    // Methods from Table
+    async fn insert(&self, data: crate::tables::NewMessage) -> crate::error::Result<QueueMessage>;
+    async fn get(&self, id: i64) -> crate::error::Result<QueueMessage>;
+    async fn list(&self) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn count(&self) -> crate::error::Result<i64>;
+    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
 
-    /// Enqueue multiple messages
-    async fn enqueue_batch(
+    // Message-specific methods from src/tables/pgqrs_messages.rs
+    async fn batch_insert(
         &self,
         queue_id: i64,
-        worker_id: i64,
-        payloads: &[Value],
+        payloads: &[serde_json::Value],
+        params: crate::tables::pgqrs_messages::BatchInsertParams,
     ) -> crate::error::Result<Vec<i64>>;
 
-    /// Dequeue messages
-    async fn dequeue(
+    async fn get_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<QueueMessage>>;
+
+    async fn update_visibility_timeout(
         &self,
-        queue_id: i64,
-        worker_id: i64,
-        limit: usize,
-        vt_seconds: u32,
-    ) -> crate::error::Result<Vec<QueueMessage>>;
+        id: i64,
+        vt: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<u64>;
 
-    /// Get a message by ID
-    async fn get(&self, id: i64) -> crate::error::Result<QueueMessage>;
-
-    /// Delete a message by ID
-    async fn delete(&self, id: i64) -> crate::error::Result<bool>;
-
-    /// Delete multiple messages
-    async fn delete_batch(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
-
-    /// Extend visibility timeout
     async fn extend_visibility(
         &self,
         id: i64,
         worker_id: i64,
         additional_seconds: u32,
-    ) -> crate::error::Result<bool>;
+    ) -> crate::error::Result<u64>;
 
-    /// Release a message (return to queue)
-    async fn release(&self, id: i64, worker_id: i64) -> crate::error::Result<bool>;
+    async fn extend_visibility_batch(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> crate::error::Result<Vec<bool>>;
 
-    /// Release multiple messages
-    async fn release_batch(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
+    async fn release_messages_by_ids(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+    ) -> crate::error::Result<Vec<bool>>;
+
+    async fn count_pending(&self, queue_id: i64) -> crate::error::Result<i64>;
+
+    async fn count_pending_filtered(
+        &self,
+        queue_id: i64,
+        worker_id: Option<i64>,
+    ) -> crate::error::Result<i64>;
+
+    async fn delete_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<bool>>;
 }
 
 /// Repository for managing workers.
 #[async_trait]
 pub trait WorkerTable: Send + Sync {
-    /// Register a new worker
-    async fn register(
-        &self,
-        queue_id: Option<i64>, // None for admin
-        hostname: &str,
-        port: i32,
-    ) -> crate::error::Result<WorkerInfo>;
-
-    /// Get status of a worker
-    async fn get_status(&self, worker_id: i64) -> crate::error::Result<WorkerStatus>;
-    /// Send a heartbeat for a worker
-    async fn heartbeat(&self, worker_id: i64) -> crate::error::Result<()>;
-    /// Check if a worker is healthy
-    async fn is_healthy(&self, worker_id: i64, max_age: Duration) -> crate::error::Result<bool>;
-
-    // CRUD methods
+    // Methods from Table
+    async fn insert(&self, data: crate::tables::NewWorker) -> crate::error::Result<WorkerInfo>;
     async fn get(&self, id: i64) -> crate::error::Result<WorkerInfo>;
     async fn list(&self) -> crate::error::Result<Vec<WorkerInfo>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerInfo>>;
 
-    // Lifecycle Transitions
-    /// Suspend a worker
-    async fn suspend(&self, worker_id: i64) -> crate::error::Result<()>;
-    /// Resume a worker
-    async fn resume(&self, worker_id: i64) -> crate::error::Result<()>;
-    /// Shutdown a worker
-    async fn shutdown(&self, worker_id: i64) -> crate::error::Result<()>;
+    // Worker-specific methods from src/tables/pgqrs_workers.rs
+    async fn count_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> crate::error::Result<i64>;
+
+    async fn count_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> crate::error::Result<i64>;
+
+    async fn list_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> crate::error::Result<Vec<WorkerInfo>>;
+
+    async fn list_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> crate::error::Result<Vec<WorkerInfo>>;
 }
 
 /// Repository for managing archived messages.
 #[async_trait]
 pub trait ArchiveTable: Send + Sync {
-    /// Archive a specific message
-    async fn archive_message(
-        &self,
-        msg_id: i64,
-        worker_id: i64,
-    ) -> crate::error::Result<Option<ArchivedMessage>>;
+    // Methods from Table
+    async fn insert(&self, data: NewArchivedMessage) -> crate::error::Result<ArchivedMessage>;
+    async fn get(&self, id: i64) -> crate::error::Result<ArchivedMessage>;
+    async fn list(&self) -> crate::error::Result<Vec<ArchivedMessage>>;
+    async fn count(&self) -> crate::error::Result<i64>;
+    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<ArchivedMessage>>;
 
-    /// Archive a batch of messages
-    async fn archive_batch(&self, msg_ids: &[i64]) -> crate::error::Result<Vec<bool>>;
-
-    // Read methods
-    /// List DLQ messages
+    // Archive-specific methods from src/tables/pgqrs_archive.rs
     async fn list_dlq_messages(
         &self,
         max_attempts: i32,
@@ -317,10 +334,8 @@ pub trait ArchiveTable: Send + Sync {
         offset: i64,
     ) -> crate::error::Result<Vec<ArchivedMessage>>;
 
-    /// Count DLQ messages
     async fn dlq_count(&self, max_attempts: i32) -> crate::error::Result<i64>;
 
-    /// List archived messages by worker
     async fn list_by_worker(
         &self,
         worker_id: i64,
@@ -328,21 +343,20 @@ pub trait ArchiveTable: Send + Sync {
         offset: i64,
     ) -> crate::error::Result<Vec<ArchivedMessage>>;
 
-    /// Count archived messages by worker
     async fn count_by_worker(&self, worker_id: i64) -> crate::error::Result<i64>;
+
+    async fn delete_by_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
+
+    async fn replay_message(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>>;
 }
 
 /// Repository for managing workflows.
 #[async_trait]
 pub trait WorkflowTable: Send + Sync {
-    /// Insert a new workflow
+    // Methods from Table
     async fn insert(&self, data: NewWorkflow) -> crate::error::Result<WorkflowRecord>;
-    /// Get a workflow by ID
     async fn get(&self, id: i64) -> crate::error::Result<WorkflowRecord>;
-    /// List all workflows
     async fn list(&self) -> crate::error::Result<Vec<WorkflowRecord>>;
-    /// Count workflows
     async fn count(&self) -> crate::error::Result<i64>;
-    /// Delete a workflow by ID
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 }

@@ -63,7 +63,8 @@ WHERE consumer_worker_id = $1
 
 use crate::error::Result;
 use crate::tables::table::Table;
-use crate::types::{ArchivedMessage, NewArchivedMessage};
+use crate::types::{ArchivedMessage, NewArchivedMessage, QueueMessage};
+use async_trait::async_trait;
 use sqlx::PgPool;
 
 /// Archive table CRUD operations for pgqrs.

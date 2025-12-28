@@ -26,9 +26,10 @@
 //! ```
 
 use crate::error::Result;
-use crate::tables::Messages;
+use crate::store::postgres::tables::Messages;
+use crate::store::MessageTable;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
-use crate::worker::{Worker, WorkerLifecycle};
+use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -72,21 +73,28 @@ const ARCHIVE_BATCH: &str = r#"
     RETURNING original_msg_id;
 "#;
 
-/// Read available messages from queue (with SKIP LOCKED)
-/// Select messages for worker with lock
-pub const DEQUEUE_MESSAGES: &str = r#"
-    UPDATE pgqrs_messages t
-    SET consumer_worker_id = $5, vt = NOW() + make_interval(secs => $4::double precision), read_ct = read_ct + 1, dequeued_at = NOW()
-    FROM (
+const DEQUEUE_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = NOW() + make_interval(secs => $3::double precision),
+        read_ct = read_ct + 1,
+        dequeued_at = NOW(),
+        consumer_worker_id = $4
+    WHERE id IN (
         SELECT id
         FROM pgqrs_messages
-        WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND read_ct < $3
-        ORDER BY id ASC
+        WHERE queue_id = $1
+          AND (vt IS NULL OR vt <= NOW())
+          AND consumer_worker_id IS NULL
+        ORDER BY enqueued_at ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
-    ) selected
-    WHERE t.id = selected.id
-    RETURNING t.id, t.queue_id, t.producer_worker_id, t.consumer_worker_id, t.payload, t.vt, t.enqueued_at, t.read_ct, t.dequeued_at;
+    )
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+"#;
+
+const DELETE_MESSAGE_OWNED: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = $1 AND consumer_worker_id = $2
 "#;
 
 /// Consumer interface for a specific queue.
@@ -129,48 +137,81 @@ impl Consumer {
         );
 
         Ok(Self {
-            pool,
+            pool: pool.clone(),
             queue_info: queue_info.clone(),
             worker_info,
             config: config.clone(),
             lifecycle,
         })
     }
+}
 
-    /// Read up to `limit` messages from the queue, using the default visibility timeout.
-    ///
-    /// # Arguments
-    /// * `limit` - Maximum number of messages to read
-    ///
-    /// # Returns
-    /// Vector of messages read from the queue.
-    pub async fn dequeue(&self) -> Result<Vec<QueueMessage>> {
+#[async_trait]
+impl crate::store::Worker for Consumer {
+    fn worker_id(&self) -> i64 {
+        self.worker_info.id
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.lifecycle.heartbeat(self.worker_info.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.lifecycle
+            .is_healthy(self.worker_info.id, max_age)
+            .await
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.lifecycle.get_status(self.worker_info.id).await
+    }
+
+    /// Suspend this consumer (transition from Ready to Suspended).
+    async fn suspend(&self) -> Result<()> {
+        self.lifecycle.suspend(self.worker_info.id).await
+    }
+
+    /// Resume this consumer (transition from Suspended to Ready).
+    async fn resume(&self) -> Result<()> {
+        self.lifecycle.resume(self.worker_info.id).await
+    }
+
+    /// Gracefully shutdown this consumer.
+    async fn shutdown(&self) -> Result<()> {
+        // Check if consumer has pending messages
+        let pending_count = self
+            .lifecycle
+            .count_pending_messages(self.worker_info.id)
+            .await?;
+
+        if pending_count > 0 {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
+                count: pending_count as u64,
+                reason: "Consumer must release all messages before shutdown".to_string(),
+            });
+        }
+
+        self.lifecycle.shutdown(self.worker_info.id).await
+    }
+}
+
+#[async_trait]
+impl crate::store::Consumer for Consumer {
+    async fn dequeue(&self) -> Result<Vec<QueueMessage>> {
         self.dequeue_many(1).await
     }
 
-    pub async fn dequeue_many(&self, limit: usize) -> Result<Vec<QueueMessage>> {
+    async fn dequeue_many(&self, limit: usize) -> Result<Vec<QueueMessage>> {
         self.dequeue_many_with_delay(limit, VISIBILITY_TIMEOUT)
             .await
     }
 
-    pub async fn dequeue_delay(&self, vt: u32) -> Result<Vec<QueueMessage>> {
+    async fn dequeue_delay(&self, vt: u32) -> Result<Vec<QueueMessage>> {
         self.dequeue_many_with_delay(1, vt).await
     }
 
-    /// Read up to `limit` messages from the queue, with a custom visibility timeout.
-    ///
-    /// # Arguments
-    /// * `vt` - Visibility timeout (seconds)
-    /// * `limit` - Maximum number of messages to read
-    ///
-    /// # Returns
-    /// Vector of messages read from the queue.
-    pub async fn dequeue_many_with_delay(
-        &self,
-        limit: usize,
-        vt: u32,
-    ) -> Result<Vec<QueueMessage>> {
-        let result = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
+    async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
             .bind(self.queue_info.id)
             .bind(limit as i64)
             .bind(self.config.max_read_ct)
@@ -181,14 +222,10 @@ impl Consumer {
             .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
-        Ok(result)
+        Ok(messages)
     }
 
-    pub async fn extend_visibility(
-        &self,
-        message_id: i64,
-        additional_seconds: u32,
-    ) -> Result<bool> {
+    async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
         let messages = Messages::new(self.pool.clone());
         let rows_affected = messages
             .extend_visibility(message_id, self.worker_info.id, additional_seconds)
@@ -196,43 +233,21 @@ impl Consumer {
         Ok(rows_affected > 0)
     }
 
-    /// Permanently delete a message from the queue.
-    ///
-    /// This method removes the message with the specified `message_id` from the `pgqrs_messages` table.
-    /// Unlike [`archive`](Self::archive), which moves messages to an archive table for potential recovery or auditing,
-    /// this method deletes the message permanently and it cannot be recovered.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_id` - The ID of the message to delete.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(true)` if a message was deleted, or `Ok(false)` if no message with the given ID was found.
-    /// Returns an error if the database operation fails.
-    pub async fn delete(&self, message_id: i64) -> Result<bool> {
-        let rows_affected =
-            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
-                .bind(message_id)
-                .bind(self.worker_info.id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: e.to_string(),
-                })?
-                .rows_affected();
+    async fn delete(&self, message_id: i64) -> Result<bool> {
+        let rows_affected = sqlx::query(DELETE_MESSAGE_OWNED)
+            .bind(message_id)
+            .bind(self.worker_info.id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: e.to_string(),
+            })?
+            .rows_affected();
 
         Ok(rows_affected > 0)
     }
 
-    /// Remove a batch of messages from the queue.
-    ///
-    /// # Arguments
-    /// * `message_ids` - Vector of message IDs to delete
-    ///
-    /// # Returns
-    /// Vector of booleans indicating success for each message (same order as input).
-    pub async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
+    async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
             .bind(self.worker_info.id)
@@ -251,17 +266,7 @@ impl Consumer {
         Ok(result)
     }
 
-    /// Archive a single message (PREFERRED over delete for data retention).
-    ///
-    /// Moves message from active queue to archive table with tracking metadata.
-    /// This is an atomic operation that deletes from the queue and inserts into archive.
-    ///
-    /// # Arguments
-    /// * `msg_id` - ID of the message to archive
-    ///
-    /// # Returns
-    /// True if message was successfully archived, false if message was not found
-    pub async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
+    async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
             .bind(self.worker_info.id)
@@ -274,17 +279,7 @@ impl Consumer {
         Ok(result)
     }
 
-    /// Archive multiple messages in a single transaction.
-    ///
-    /// More efficient than individual archive calls. Atomically moves messages
-    /// from active queue to archive table.
-    ///
-    /// # Arguments
-    /// * `msg_ids` - Vector of message IDs to archive
-    ///
-    /// # Returns
-    /// Vector of booleans indicating success for each message (same order as input).
-    pub async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
+    async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
         if msg_ids.is_empty() {
             return Ok(vec![]);
         }
@@ -307,128 +302,12 @@ impl Consumer {
         Ok(result)
     }
 
-    /// Release messages currently held by this consumer.
-    ///
-    /// This makes the messages available for other consumers to pick up.
-    ///
-    /// # Arguments
-    /// * `message_ids` - Message IDs to release. Only messages held by this consumer will be released.
-    ///
-    /// # Returns
-    /// Number of messages released.
-    pub async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
+    async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
         let messages = Messages::new(self.pool.clone());
         let results = messages
             .release_messages_by_ids(message_ids, self.worker_info.id)
             .await?;
         // Count how many were successfully released
         Ok(results.into_iter().filter(|&released| released).count() as u64)
-    }
-}
-
-#[async_trait]
-impl Worker for Consumer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
-    }
-
-    async fn heartbeat(&self) -> Result<()> {
-        self.lifecycle.heartbeat(self.worker_info.id).await
-    }
-
-    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle
-            .is_healthy(self.worker_info.id, max_age)
-            .await
-    }
-
-    async fn status(&self) -> Result<WorkerStatus> {
-        self.lifecycle.get_status(self.worker_info.id).await
-    }
-
-    /// Suspend this consumer (transition from Ready to Suspended).
-    ///
-    /// # Preconditions
-    /// - Consumer must be in `Ready` state
-    ///
-    /// # Returns
-    /// Ok if suspension succeeds, error if consumer is in wrong state.
-    async fn suspend(&self) -> Result<()> {
-        self.lifecycle.suspend(self.worker_info.id).await
-    }
-
-    /// Resume this consumer (transition from Suspended to Ready).
-    async fn resume(&self) -> Result<()> {
-        self.lifecycle.resume(self.worker_info.id).await
-    }
-
-    /// Gracefully shutdown this consumer.
-    ///
-    /// # Preconditions
-    /// - Consumer must be in Suspended state
-    /// - Consumer must have no pending (held) messages
-    ///
-    /// Use `release_messages()` to release held messages before calling `shutdown()`.
-    ///
-    /// # Returns
-    /// Ok if shutdown completes successfully
-    async fn shutdown(&self) -> Result<()> {
-        // Check if consumer has pending messages
-        let pending_count = self
-            .lifecycle
-            .count_pending_messages(self.worker_info.id)
-            .await?;
-
-        if pending_count > 0 {
-            return Err(crate::error::Error::WorkerHasPendingMessages {
-                count: pending_count as u64,
-                reason: "Consumer must release all messages before shutdown".to_string(),
-            });
-        }
-
-        self.lifecycle.shutdown(self.worker_info.id).await
-    }
-}
-
-#[async_trait]
-impl crate::store::Consumer for Consumer {
-    async fn dequeue(&self) -> Result<Vec<QueueMessage>> {
-        self.dequeue().await
-    }
-
-    async fn dequeue_many(&self, limit: usize) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many(limit).await
-    }
-
-    async fn dequeue_delay(&self, vt: u32) -> Result<Vec<QueueMessage>> {
-        self.dequeue_delay(vt).await
-    }
-
-    async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
-        self.dequeue_many_with_delay(limit, vt).await
-    }
-
-    async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
-        self.extend_visibility(message_id, additional_seconds).await
-    }
-
-    async fn delete(&self, message_id: i64) -> Result<bool> {
-        self.delete(message_id).await
-    }
-
-    async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
-        self.delete_many(message_ids).await
-    }
-
-    async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-        self.archive(msg_id).await
-    }
-
-    async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
-        self.archive_many(msg_ids).await
-    }
-
-    async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
-        self.release_messages(message_ids).await
     }
 }

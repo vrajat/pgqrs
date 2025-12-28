@@ -1,5 +1,6 @@
 use super::WorkflowStatus;
 use crate::error::Result;
+use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -137,7 +138,10 @@ impl Drop for StepGuard {
 #[async_trait]
 impl crate::store::StepGuard for StepGuard {
     /// Mark the step as successfully completed and persist the output.
-    async fn success<T: Serialize + Send + Sync>(mut self, output: T) -> Result<()> {
+    async fn success<T: serde::Serialize + Send + Sync>(
+        mut self,
+        output: T,
+    ) -> crate::error::Result<()> {
         let output_json =
             serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
 
@@ -156,7 +160,10 @@ impl crate::store::StepGuard for StepGuard {
     }
 
     /// Mark the step as failed and persist the error.
-    async fn fail<E: Serialize + Send + Sync>(mut self, error: E) -> Result<()> {
+    async fn fail<E: serde::Serialize + Send + Sync>(
+        mut self,
+        error: E,
+    ) -> crate::error::Result<()> {
         let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
 
         sqlx::query(SQL_STEP_FAIL)
