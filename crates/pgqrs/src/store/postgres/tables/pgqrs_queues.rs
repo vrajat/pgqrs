@@ -4,9 +4,10 @@
 //! Complex operations like referential integrity checks and transaction management remain in admin.rs.
 
 use crate::error::Result;
-use crate::tables::table::Table;
+use crate::error::Result;
 use crate::types::QueueInfo;
 use sqlx::PgPool;
+use async_trait::async_trait;
 
 // SQL constants for queue table operations
 const INSERT_QUEUE: &str = r#"
@@ -70,50 +71,6 @@ impl Queues {
         Self { pool }
     }
 
-    /// Get a queue by name.
-    ///
-    /// # Arguments
-    /// * `name` - Queue name to retrieve
-    ///
-    /// # Returns
-    /// The queue record
-    pub async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
-        let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
-            .bind(name)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| match e {
-                sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
-                    name: name.to_string(),
-                },
-                _ => crate::error::Error::Connection {
-                    message: format!("Failed to get queue '{}': {}", name, e),
-                },
-            })?;
-
-        Ok(queue)
-    }
-
-    /// Delete a queue by name.
-    ///
-    /// # Arguments
-    /// * `name` - Queue name to delete
-    ///
-    /// # Returns
-    /// Number of rows affected (should be 1 if successful)
-    pub async fn delete_by_name(&self, name: &str) -> Result<u64> {
-        let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
-            .bind(name)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete queue '{}': {}", name, e),
-            })?
-            .rows_affected();
-
-        Ok(rows_affected)
-    }
-
     /// Delete a queue by name using a transaction.
     ///
     /// # Arguments
@@ -137,15 +94,89 @@ impl Queues {
 
         Ok(rows_affected)
     }
+}
+
+#[async_trait]
+impl crate::store::QueueTable for Queues {
+    async fn insert(&self, data: crate::tables::NewQueue) -> Result<QueueInfo> {
+        let queue = sqlx::query_as::<_, QueueInfo>(INSERT_QUEUE)
+            .bind(data.queue_name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to create queue: {}", e),
+            })?;
+        Ok(queue)
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueInfo> {
+        let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_ID)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
+                    name: format!("ID {}", id),
+                },
+                _ => crate::error::Error::Connection {
+                    message: format!("Failed to get queue {}: {}", id, e),
+                },
+            })?;
+        Ok(queue)
+    }
+
+    async fn list(&self) -> Result<Vec<QueueInfo>> {
+        let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to list queues: {}", e),
+            })?;
+        Ok(queues)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_queues")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to count queues: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let rows_affected = sqlx::query(DELETE_QUEUE_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to delete queue {}: {}", id, e),
+            })?
+            .rows_affected();
+        Ok(rows_affected)
+    }
+
+    /// Get a queue by name.
+    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
+         let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
+                    name: name.to_string(),
+                },
+                _ => crate::error::Error::Connection {
+                    message: format!("Failed to get queue '{}': {}", name, e),
+                },
+            })?;
+
+        Ok(queue)
+    }
 
     /// Check if a queue exists by name.
-    ///
-    /// # Arguments
-    /// * `name` - Queue name to check
-    ///
-    /// # Returns
-    /// True if queue exists, false otherwise
-    pub async fn exists(&self, name: &str) -> Result<bool> {
+    async fn exists(&self, name: &str) -> Result<bool> {
         let exists: bool = sqlx::query_scalar(CHECK_QUEUE_EXISTS)
             .bind(name)
             .fetch_one(&self.pool)
@@ -156,59 +187,19 @@ impl Queues {
 
         Ok(exists)
     }
-}
-
-#[async_trait]
-impl crate::store::QueueTable for Queues {
-    /// Get a queue by name.
-    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
-        self.get_by_name(name).await
-    }
-
-    /// Insert a new queue record.
-    async fn insert(&self, data: NewQueue) -> Result<QueueInfo> {
-        let queue = sqlx::query_as::<_, QueueInfo>(INSERT_QUEUE)
-            .bind(&data.queue_name)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                // Check if this is a unique constraint violation (queue already exists)
-                if let sqlx::Error::Database(db_err) = &e {
-                    if db_err.code().as_deref() == Some("23505") {
-                        // PostgreSQL unique violation code
-                        return crate::error::Error::QueueAlreadyExists {
-                            name: data.queue_name.clone(),
-                        };
-                    }
-                }
-                crate::error::Error::Connection {
-                    message: format!("Failed to insert queue '{}': {}", data.queue_name, e),
-                }
-            })?;
-
-        Ok(queue)
-    }
-
-    /// Check if a queue exists by name.
-    async fn exists(&self, name: &str) -> Result<bool> {
-        self.exists(name).await
-    }
 
     /// Delete a queue by name.
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
-        self.delete_by_name(name).await
-    }
-
-    /// List all queues.
-    async fn list(&self) -> Result<Vec<QueueInfo>> {
-        let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
-            .fetch_all(&self.pool)
+         let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
+            .bind(name)
+            .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list queues: {}", e),
-            })?;
+                message: format!("Failed to delete queue '{}': {}", name, e),
+            })?
+            .rows_affected();
 
-        Ok(queues)
+        Ok(rows_affected)
     }
 }
 

@@ -83,110 +83,6 @@ impl Archive {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-
-    /// List messages that failed permanently (DLQ filter on archive)
-    ///
-    /// # Arguments
-    /// * `max_attempts` - The maximum number of allowed attempts before a message is considered failed
-    /// * `limit` - Maximum number of messages to return
-    /// * `offset` - Number of messages to skip
-    pub async fn list_dlq_messages(
-        &self,
-        max_attempts: i32,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<ArchivedMessage>> {
-        let messages: Vec<ArchivedMessage> = sqlx::query_as(LIST_DLQ_MESSAGES)
-            .bind(max_attempts)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list DLQ messages: {}", e),
-            })?;
-        Ok(messages)
-    }
-
-    /// Count messages in DLQ (failed messages in archive)
-    ///
-    /// # Arguments
-    /// * `max_attempts` - The maximum number of allowed attempts before a message is considered failed
-    pub async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(COUNT_DLQ_MESSAGES)
-            .bind(max_attempts)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count DLQ messages: {}", e),
-            })?;
-        Ok(count)
-    }
-
-    /// List archived messages for a worker.
-    ///
-    /// # Arguments
-    /// * `worker_id` - Optional worker ID filter
-    /// * `limit` - Maximum number of messages to return
-    /// * `offset` - Number of messages to skip
-    ///
-    /// # Returns
-    /// Vector of archived messages
-    pub async fn list_by_worker(
-        &self,
-        worker_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<ArchivedMessage>> {
-        let messages = sqlx::query_as(ARCHIVE_LIST_WITH_WORKER)
-            .bind(worker_id)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(messages)
-    }
-
-    /// Count archived messages with optional filtering.
-    ///
-    /// # Arguments
-    /// * `worker_id` - Optional worker ID filter
-    ///
-    /// # Returns
-    /// Count of archived messages matching the criteria
-    pub async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
-            .bind(worker_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count archived messages for worker {}: {}",
-                    worker_id, e
-                ),
-            })?;
-        Ok(count)
-    }
-
-    /// Delete archived messages with optional filtering.
-    ///
-    /// # Arguments
-    /// * `worker_id` - Optional worker ID filter
-    ///
-    /// # Returns
-    /// Number of archived messages deleted
-    pub async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
-        let result = sqlx::query(ARCHIVE_DELETE_WITH_WORKER)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete archived messages: {}", e),
-            })?;
-
-        Ok(result.rows_affected())
-    }
 }
 
 // SQL constants for Table trait implementation
@@ -225,18 +121,9 @@ const ARCHIVE_PURGE_QUEUE: &str = r#"
     WHERE queue_id = $1
 "#;
 
-impl Table for Archive {
-    type Entity = ArchivedMessage;
-    type NewEntity = NewArchivedMessage;
-
-    /// Insert a new archived message.
-    ///
-    /// # Arguments
-    /// * `data` - New archived message data
-    ///
-    /// # Returns
-    /// The archived message record with generated ID and archived_at timestamp
-    async fn insert(&self, data: Self::NewEntity) -> Result<Self::Entity> {
+#[async_trait]
+impl crate::store::ArchiveTable for Archive {
+    async fn insert(&self, data: NewArchivedMessage) -> Result<ArchivedMessage> {
         use chrono::Utc;
 
         let archived_at = Utc::now();
@@ -272,14 +159,7 @@ impl Table for Archive {
         })
     }
 
-    /// Get an archived message by ID.
-    ///
-    /// # Arguments
-    /// * `id` - Archive ID to retrieve
-    ///
-    /// # Returns
-    /// The archived message record
-    async fn get(&self, id: i64) -> Result<Self::Entity> {
+    async fn get(&self, id: i64) -> Result<ArchivedMessage> {
         let archive = sqlx::query_as::<_, ArchivedMessage>(GET_ARCHIVE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -291,11 +171,7 @@ impl Table for Archive {
         Ok(archive)
     }
 
-    /// List all archived messages.
-    ///
-    /// # Returns
-    /// List of all archived messages ordered by archived time (newest first)
-    async fn list(&self) -> Result<Vec<Self::Entity>> {
+    async fn list(&self) -> Result<Vec<ArchivedMessage>> {
         let archives = sqlx::query_as::<_, ArchivedMessage>(LIST_ALL_ARCHIVE)
             .fetch_all(&self.pool)
             .await
@@ -306,14 +182,31 @@ impl Table for Archive {
         Ok(archives)
     }
 
-    /// Filter archived messages by queue ID.
-    ///
-    /// # Arguments
-    /// * `queue_id` - Queue ID to filter by
-    ///
-    /// # Returns
-    /// List of archived messages for the specified queue
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<Self::Entity>> {
+    async fn count(&self) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_archive";
+        let count = sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to count archived messages: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let rows_affected = sqlx::query(DELETE_ARCHIVE_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to delete archived message {}: {}", id, e),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<ArchivedMessage>> {
         let archives = sqlx::query_as::<_, ArchivedMessage>(LIST_ARCHIVE_BY_QUEUE)
             .bind(queue_id)
             .fetch_all(&self.pool)
@@ -328,91 +221,99 @@ impl Table for Archive {
         Ok(archives)
     }
 
-    /// Count all archived messages.
-    ///
-    /// # Returns
-    /// Total number of archived messages in the table
-    async fn count(&self) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM pgqrs_archive";
-        let count = sqlx::query_scalar(query)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count archived messages: {}", e),
-            })?;
-        Ok(count)
-    }
-
-    /// Count archived messages by queue ID.
-    ///
-    /// # Arguments
-    /// * `queue_id` - Queue ID to count archived messages for
-    ///
-    /// # Returns
-    /// Number of archived messages in the specified queue
-    async fn count_for_fk<'a, 'b: 'a>(
-        &self,
-        queue_id: i64,
-        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1";
-        let count = sqlx::query_scalar(query)
-            .bind(queue_id)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count archived messages for queue {}: {}",
-                    queue_id, e
-                ),
-            })?;
-        Ok(count)
-    }
-
-    /// Delete an archived message by ID.
-    ///
-    /// # Arguments
-    /// * `id` - Archive ID to delete
-    ///
-    /// # Returns
-    /// Number of rows affected (should be 1 if successful)
-    async fn delete(&self, id: i64) -> Result<u64> {
-        let rows_affected = sqlx::query(DELETE_ARCHIVE_BY_ID)
-            .bind(id)
+    async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
+        let result = sqlx::query(ARCHIVE_DELETE_WITH_WORKER)
+            .bind(worker_id)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete archived message {}: {}", id, e),
-            })?
-            .rows_affected();
+                message: format!("Failed to delete archived messages: {}", e),
+            })?;
 
-        Ok(rows_affected)
+        Ok(result.rows_affected())
     }
 
-    /// Delete archived messages by queue ID within a transaction.
-    ///
-    /// # Arguments
-    /// * `queue_id` - Queue ID to delete archived messages for
-    /// * `tx` - Mutable reference to an active SQL transaction
-    /// # Returns
-    /// Number of rows affected
-    async fn delete_by_fk<'a, 'b: 'a>(
+    async fn list_dlq_messages(
         &self,
-        queue_id: i64,
-        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<u64> {
-        let rows_affected = sqlx::query(ARCHIVE_PURGE_QUEUE)
-            .bind(queue_id)
-            .execute(&mut **tx)
+        max_attempts: i32,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchivedMessage>> {
+        let messages: Vec<ArchivedMessage> = sqlx::query_as(LIST_DLQ_MESSAGES)
+            .bind(max_attempts)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to list DLQ messages: {}", e),
+            })?;
+        Ok(messages)
+    }
+
+    async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(COUNT_DLQ_MESSAGES)
+            .bind(max_attempts)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to count DLQ messages: {}", e),
+            })?;
+        Ok(count)
+    }
+
+    async fn list_by_worker(
+        &self,
+        worker_id: i64,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ArchivedMessage>> {
+        let messages = sqlx::query_as(ARCHIVE_LIST_WITH_WORKER)
+            .bind(worker_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(messages)
+    }
+
+    async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(ARCHIVE_COUNT_WITH_WORKER)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: format!(
-                    "Failed to delete archived messages for queue {}: {}",
-                    queue_id, e
+                    "Failed to count archived messages for worker {}: {}",
+                    worker_id, e
                 ),
-            })?
-            .rows_affected();
-        Ok(rows_affected)
+            })?;
+        Ok(count)
+    }
+
+    async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
+        // Replay: Move from archive back to messages
+        let msg = sqlx::query_as::<_, QueueMessage>(r#"
+            WITH archived AS (
+                DELETE FROM pgqrs_archive WHERE id = $1 RETURNING *
+            )
+            INSERT INTO pgqrs_messages (
+                queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id
+            )
+            SELECT
+                queue_id, payload, 0, NOW(), NOW(), producer_worker_id
+            FROM archived
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+        "#)
+        .bind(msg_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to replay message {}: {}", msg_id, e)
+        })?;
+
+        Ok(msg)
     }
 }
 

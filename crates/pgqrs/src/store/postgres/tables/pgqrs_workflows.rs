@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::tables::table::Table;
+
 use crate::workflow::WorkflowStatus;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -81,11 +81,6 @@ impl crate::store::WorkflowTable for Workflows {
         Ok(rows)
     }
 
-    async fn filter_by_fk(&self, _foreign_key_value: i64) -> Result<Vec<WorkflowRecord>> {
-        // Workflows don't have FKs to filter by yet
-        Ok(vec![])
-    }
-
     async fn count(&self) -> Result<i64> {
         let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
             .fetch_one(&self.pool)
@@ -94,14 +89,6 @@ impl crate::store::WorkflowTable for Workflows {
                 message: format!("Failed to count workflows: {}", e),
             })?;
         Ok(count)
-    }
-
-    async fn count_for_fk<'a, 'b: 'a>(
-        &self,
-        _foreign_key_value: i64,
-        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<i64> {
-        Ok(0)
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
@@ -114,13 +101,5 @@ impl crate::store::WorkflowTable for Workflows {
             })?
             .rows_affected();
         Ok(rows_affected)
-    }
-
-    async fn delete_by_fk<'a, 'b: 'a>(
-        &self,
-        _foreign_key_value: i64,
-        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<u64> {
-        Ok(0)
     }
 }
