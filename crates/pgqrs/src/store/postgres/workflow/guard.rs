@@ -2,7 +2,6 @@ use super::WorkflowStatus;
 use crate::error::Result;
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use sqlx::PgPool;
 
 const SQL_ACQUIRE_STEP: &str = r#"
@@ -138,17 +137,11 @@ impl Drop for StepGuard {
 #[async_trait]
 impl crate::store::StepGuard for StepGuard {
     /// Mark the step as successfully completed and persist the output.
-    async fn success<T: serde::Serialize + Send + Sync>(
-        mut self,
-        output: T,
-    ) -> crate::error::Result<()> {
-        let output_json =
-            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
-
+    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
         sqlx::query(SQL_STEP_SUCCESS)
             .bind(self.workflow_id)
             .bind(&self.step_id)
-            .bind(output_json)
+            .bind(output)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -159,17 +152,11 @@ impl crate::store::StepGuard for StepGuard {
         Ok(())
     }
 
-    /// Mark the step as failed and persist the error.
-    async fn fail<E: serde::Serialize + Send + Sync>(
-        mut self,
-        error: E,
-    ) -> crate::error::Result<()> {
-        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
-
+    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {
         sqlx::query(SQL_STEP_FAIL)
             .bind(self.workflow_id)
             .bind(&self.step_id)
-            .bind(error_json)
+            .bind(error)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {

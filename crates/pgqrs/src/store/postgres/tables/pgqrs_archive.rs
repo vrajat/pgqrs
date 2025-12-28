@@ -62,7 +62,6 @@ WHERE consumer_worker_id = $1
 "#;
 
 use crate::error::Result;
-use crate::tables::table::Table;
 use crate::types::{ArchivedMessage, NewArchivedMessage, QueueMessage};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -115,11 +114,6 @@ const LIST_ARCHIVE_BY_QUEUE: &str = r#"
 const DELETE_ARCHIVE_BY_ID: &str = r#"
     DELETE FROM pgqrs_archive
     WHERE id = $1
-"#;
-
-const ARCHIVE_PURGE_QUEUE: &str = r#"
-    DELETE FROM pgqrs_archive
-    WHERE queue_id = $1
 "#;
 
 #[async_trait]

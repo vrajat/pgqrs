@@ -29,7 +29,7 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::Worker;
+
 use crate::tables::{Archive, Messages, Queues, Table, Workers};
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};

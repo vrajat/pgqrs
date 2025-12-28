@@ -1,8 +1,5 @@
 use crate::error::Result;
-use crate::workflow::WorkflowStatus;
-use chrono::{DateTime, Utc};
-use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::PgPool;
 
 // Import shared types instead of redefining them
 pub use crate::tables::{NewWorkflow, WorkflowRecord};
@@ -15,6 +12,50 @@ pub struct Workflows {
 impl Workflows {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn complete_workflow(
+        executor: &mut sqlx::PgConnection,
+        id: i64,
+        output: serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflows
+            SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, updated_at = NOW()
+            WHERE workflow_id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(output)
+        .execute(executor)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to complete workflow {}: {}", id, e),
+        })?;
+        Ok(())
+    }
+
+    pub async fn fail_workflow(
+        executor: &mut sqlx::PgConnection,
+        id: i64,
+        error: serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflows
+            SET status = 'ERROR'::pgqrs_workflow_status, error = $2, updated_at = NOW()
+            WHERE workflow_id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(error)
+        .execute(executor)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to fail workflow {}: {}", id, e),
+        })?;
+        Ok(())
     }
 }
 

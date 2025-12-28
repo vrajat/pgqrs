@@ -1,6 +1,5 @@
 //! Postgres implementation of the Store trait.
 
-use crate::error::Result;
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
     Producer as ProducerTrait, QueueTable, StepGuard as StepGuardTrait, Store, WorkerTable,
@@ -39,7 +38,7 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-    pub fn new(pool: PgPool, config: &Config) -> Self {
+    pub fn new(pool: PgPool, _config: &Config) -> Self {
         Self {
             queues: Arc::new(PostgresQueueTable::new(pool.clone())),
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
@@ -58,40 +57,29 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
-    type QueueTable = PostgresQueueTable;
-    type MessageTable = PostgresMessageTable;
-    type WorkerTable = PostgresWorkerTable;
-    type ArchiveTable = PostgresArchiveTable;
-    type WorkflowTable = PostgresWorkflowTable;
-
-    type Admin = PostgresAdmin;
-    type Producer = PostgresProducer;
-    type Consumer = PostgresConsumer;
-    type Workflow = PostgresWorkflow;
-    type StepGuard = PostgresStepGuard;
-
-    fn queues(&self) -> &Self::QueueTable {
+    fn queues(&self) -> &dyn QueueTable {
         self.queues.as_ref()
     }
 
-    fn messages(&self) -> &Self::MessageTable {
+    fn messages(&self) -> &dyn MessageTable {
         self.messages.as_ref()
     }
 
-    fn workers(&self) -> &Self::WorkerTable {
+    fn workers(&self) -> &dyn WorkerTable {
         self.workers.as_ref()
     }
 
-    fn archive(&self) -> &Self::ArchiveTable {
+    fn archive(&self) -> &dyn ArchiveTable {
         self.archive.as_ref()
     }
 
-    fn workflows(&self) -> &Self::WorkflowTable {
+    fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
 
-    async fn admin(&self, config: &Config) -> crate::error::Result<Self::Admin> {
-        PostgresAdmin::new(config).await
+    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
+        let admin = PostgresAdmin::new(config).await?;
+        Ok(Box::new(admin))
     }
 
     async fn producer(
@@ -100,9 +88,11 @@ impl Store for PostgresStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Self::Producer> {
+    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        PostgresProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await
+        let producer =
+            PostgresProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+        Ok(Box::new(producer))
     }
 
     async fn consumer(
@@ -111,26 +101,28 @@ impl Store for PostgresStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Self::Consumer> {
+    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        PostgresConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await
+        let consumer =
+            PostgresConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+        Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, id: i64) -> Self::Workflow {
-        PostgresWorkflow::new(self.pool.clone(), id)
+    fn workflow(&self, id: i64) -> Box<dyn WorkflowTrait> {
+        Box::new(PostgresWorkflow::new(self.pool.clone(), id))
     }
 
     async fn acquire_step(
         &self,
         workflow_id: i64,
         step_id: &str,
-    ) -> crate::error::Result<Option<Self::StepGuard>> {
+    ) -> crate::error::Result<Option<Box<dyn StepGuardTrait>>> {
         use crate::store::postgres::workflow::guard::StepResult;
         let result =
             PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
                 .await?;
         match result {
-            StepResult::Execute(guard) => Ok(Some(guard)),
+            StepResult::Execute(guard) => Ok(Some(Box::new(guard))),
             StepResult::Skipped(_) => Ok(None),
         }
     }
@@ -139,7 +131,16 @@ impl Store for PostgresStore {
         &self,
         name: &str,
         input: &T,
-    ) -> crate::error::Result<Self::Workflow> {
-        PostgresWorkflow::create(self.pool.clone(), name, input).await
+    ) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+        let workflow = PostgresWorkflow::create(self.pool.clone(), name, input).await?;
+        Ok(Box::new(workflow))
+    }
+
+    fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
+        crate::store::ConcurrencyModel::MultiProcess
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "postgres"
     }
 }

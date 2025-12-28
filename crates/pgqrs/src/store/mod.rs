@@ -14,6 +14,16 @@ use async_trait::async_trait;
 use chrono::Duration;
 use serde_json::Value;
 
+/// Concurrency model supported by the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConcurrencyModel {
+    /// Backend supports multiple processes accessing the store concurrently.
+    MultiProcess,
+    /// Backend supports only a single process accessing the store.
+    SingleProcess,
+}
+
+pub mod any;
 pub mod postgres;
 
 /// Trait defining the interface for all worker types.
@@ -109,64 +119,93 @@ pub trait Consumer: Worker {
 /// Interface for a durable workflow execution handle.
 #[async_trait]
 pub trait Workflow: Send + Sync {
+    /// Get the workflow ID.
     fn id(&self) -> i64;
-    async fn start(&self) -> crate::error::Result<()>;
-    async fn success<T: serde::Serialize + Send + Sync>(
-        &self,
-        output: T,
-    ) -> crate::error::Result<()>;
-    async fn fail<T: serde::Serialize + Send + Sync>(&self, error: T) -> crate::error::Result<()>;
+
+    /// Start the workflow execution.
+    async fn start(&mut self) -> crate::error::Result<()>;
+
+    /// Complete the workflow successfully with a value.
+    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
+
+    /// Fail the workflow with an error value.
+    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
 }
 
-/// Interface for a workflow step execution guard.
+/// Extension trait for Workflow to provide generic convenience methods.
+#[async_trait]
+pub trait WorkflowExt: Workflow {
+    /// Complete the workflow successfully with a serializable output.
+    async fn success<T: serde::Serialize + Send + Sync>(
+        &mut self,
+        output: &T,
+    ) -> crate::error::Result<()> {
+        let value = serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
+        self.complete(value).await
+    }
+
+    /// Fail the workflow with a serializable error.
+    async fn fail<T: serde::Serialize + Send + Sync>(
+        &mut self,
+        error: &T,
+    ) -> crate::error::Result<()> {
+        let value = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
+        self.fail_with_json(value).await
+    }
+}
+// Automatically implement Extension on anything that implements Workflow
+impl<T: ?Sized + Workflow> WorkflowExt for T {}
+
+/// A guard for a workflow step execution.
 #[async_trait]
 pub trait StepGuard: Send + Sync {
-    async fn success<T: serde::Serialize + Send + Sync>(
-        self,
-        output: T,
-    ) -> crate::error::Result<()>;
-    async fn fail<T: serde::Serialize + Send + Sync>(self, error: T) -> crate::error::Result<()>;
+    /// Complete the step successfully.
+    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
+
+    /// Fail the step.
+    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
 }
 
+/// Extension trait for StepGuard to provide generic convenience methods.
+#[async_trait]
+pub trait StepGuardExt: StepGuard {
+    /// Complete the step successfully with a serializable output.
+    async fn success<T: serde::Serialize + Send + Sync>(
+        &mut self,
+        output: &T,
+    ) -> crate::error::Result<()> {
+        let value = serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
+        self.complete(value).await
+    }
+
+    /// Fail the step with a serializable error.
+    async fn fail<T: serde::Serialize + Send + Sync>(
+        &mut self,
+        error: &T,
+    ) -> crate::error::Result<()> {
+        let value = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
+        self.fail_with_json(value).await
+    }
+}
+impl<T: ?Sized + StepGuard> StepGuardExt for T {}
 /// Main store trait that provides access to entity-specific repositories
 /// and transaction management.
 #[async_trait]
+#[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
-    /// The repository type for queue operations.
-    type QueueTable: QueueTable;
-    /// The repository type for message operations.
-    type MessageTable: MessageTable;
-    /// The repository type for worker operations.
-    type WorkerTable: WorkerTable;
-    /// The repository type for archive operations.
-    type ArchiveTable: ArchiveTable;
-    /// The repository type for workflow operations.
-    type WorkflowTable: WorkflowTable;
-
-    /// The type implementing the Admin interface.
-    type Admin: Admin;
-    /// The type implementing the Producer interface.
-    type Producer: Producer;
-    /// The type implementing the Consumer interface.
-    type Consumer: Consumer;
-    /// The type implementing the Workflow interface.
-    type Workflow: Workflow;
-    /// The type implementing the StepGuard interface.
-    type StepGuard: StepGuard;
-
     /// Get access to the queue repository.
-    fn queues(&self) -> &Self::QueueTable;
+    fn queues(&self) -> &dyn QueueTable;
     /// Get access to the message repository.
-    fn messages(&self) -> &Self::MessageTable;
+    fn messages(&self) -> &dyn MessageTable;
     /// Get access to the worker repository.
-    fn workers(&self) -> &Self::WorkerTable;
+    fn workers(&self) -> &dyn WorkerTable;
     /// Get access to the archive repository.
-    fn archive(&self) -> &Self::ArchiveTable;
+    fn archive(&self) -> &dyn ArchiveTable;
     /// Get access to the workflow repository.
-    fn workflows(&self) -> &Self::WorkflowTable;
+    fn workflows(&self) -> &dyn WorkflowTable;
 
     /// Get an admin worker interface.
-    async fn admin(&self, config: &Config) -> crate::error::Result<Self::Admin>;
+    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>>;
 
     /// Get a producer interface for a specific queue with worker identity.
     async fn producer(
@@ -175,7 +214,7 @@ pub trait Store: Clone + Send + Sync + 'static {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Self::Producer>;
+    ) -> crate::error::Result<Box<dyn Producer>>;
 
     /// Get a consumer interface for a specific queue with worker identity.
     async fn consumer(
@@ -184,24 +223,30 @@ pub trait Store: Clone + Send + Sync + 'static {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Self::Consumer>;
+    ) -> crate::error::Result<Box<dyn Consumer>>;
 
     /// Get a workflow handle.
-    fn workflow(&self, id: i64) -> Self::Workflow;
+    fn workflow(&self, id: i64) -> Box<dyn Workflow>;
 
     /// Acquire a step execution guard.
     async fn acquire_step(
         &self,
         workflow_id: i64,
         step_id: &str,
-    ) -> crate::error::Result<Option<Self::StepGuard>>;
+    ) -> crate::error::Result<Option<Box<dyn StepGuard>>>;
 
     /// Create a new workflow execution.
     async fn create_workflow<T: serde::Serialize + Send + Sync>(
         &self,
         name: &str,
         input: &T,
-    ) -> crate::error::Result<Self::Workflow>;
+    ) -> crate::error::Result<Box<dyn Workflow>>;
+
+    /// Returns the concurrency model supported by this backend.
+    fn concurrency_model(&self) -> ConcurrencyModel;
+
+    /// Returns the backend name (e.g., "postgres", "sqlite", "turso")
+    fn backend_name(&self) -> &'static str;
 }
 
 /// Repository for managing queues.

@@ -7,7 +7,7 @@ use crate::error::Result;
 
 use crate::types::{WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use sqlx::PgPool;
 
 // SQL constants for worker table operations
@@ -41,11 +41,6 @@ const DELETE_WORKER_BY_ID: &str = r#"
     WHERE id = $1
 "#;
 
-const DELETE_WORKERS_BY_QUEUE: &str = r#"
-    DELETE FROM pgqrs_workers
-    WHERE queue_id = $1
-"#;
-
 const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
@@ -63,50 +58,6 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
 "#;
 
 // --- Lifecycle SQL from lifecycle.rs ---
-
-const FIND_WORKER_BY_HOST_PORT: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-    FROM pgqrs_workers
-    WHERE hostname = $1 AND port = $2
-"#;
-
-const RESET_WORKER_TO_READY: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'ready', queue_id = $2, started_at = NOW(), heartbeat_at = NOW(), shutdown_at = NULL
-    WHERE id = $1 AND status = 'stopped'
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-"#;
-
-const TRANSITION_READY_TO_SUSPENDED: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'suspended'
-    WHERE id = $1 AND status = 'ready'
-    RETURNING id
-"#;
-
-const TRANSITION_SUSPENDED_TO_READY: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'ready'
-    WHERE id = $1 AND status = 'suspended'
-    RETURNING id
-"#;
-
-const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'stopped', shutdown_at = $2
-    WHERE id = $1 AND status = 'suspended'
-    RETURNING id
-"#;
-
-const GET_WORKER_STATUS: &str = r#"
-    SELECT status FROM pgqrs_workers WHERE id = $1
-"#;
-
-const UPDATE_HEARTBEAT: &str = r#"
-    UPDATE pgqrs_workers
-    SET heartbeat_at = $1
-    WHERE id = $2
-"#;
 
 /// Input data for creating a new worker
 #[derive(Debug)]
@@ -318,6 +269,7 @@ impl crate::store::WorkerTable for Workers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tables::Table;
 
     #[test]
     fn test_new_worker_creation() {

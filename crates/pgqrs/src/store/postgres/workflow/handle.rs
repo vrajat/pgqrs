@@ -16,18 +16,6 @@ WHERE workflow_id = $1 AND status = 'PENDING'::pgqrs_workflow_status
 RETURNING status, error
 "#;
 
-const SQL_WORKFLOW_SUCCESS: &str = r#"
-UPDATE pgqrs_workflows
-SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, updated_at = NOW()
-WHERE workflow_id = $1
-"#;
-
-const SQL_WORKFLOW_FAIL: &str = r#"
-UPDATE pgqrs_workflows
-SET status = 'ERROR'::pgqrs_workflow_status, error = $2, updated_at = NOW()
-WHERE workflow_id = $1
-"#;
-
 /// Handle for a durable workflow execution.
 pub struct Workflow {
     id: i64,
@@ -73,7 +61,7 @@ impl crate::store::Workflow for Workflow {
     ///
     /// - **Idempotent**: If the workflow is already `RUNNING` or `SUCCESS`, this method succeeds without changes.
     /// - **Error**: If the workflow is in the `ERROR` state, this method returns a `ValidationFailed` error.
-    async fn start(&self) -> crate::error::Result<()> {
+    async fn start(&mut self) -> crate::error::Result<()> {
         // Try to transition to RUNNING
         let result = sqlx::query_as::<
             _,
@@ -108,37 +96,37 @@ impl crate::store::Workflow for Workflow {
     }
 
     /// Mark the workflow as successfully completed.
-    async fn success<T: serde::Serialize + Send + Sync>(
-        &self,
-        output: T,
-    ) -> crate::error::Result<()> {
-        let output_json =
-            serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
-
-        sqlx::query(SQL_WORKFLOW_SUCCESS)
-            .bind(self.id)
-            .bind(output_json)
-            .execute(&self.pool)
+    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
+        let mut conn = self
+            .pool
+            .acquire()
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to complete workflow {}: {}", self.id, e),
+                message: e.to_string(),
             })?;
 
-        Ok(())
+        crate::store::postgres::tables::pgqrs_workflows::Workflows::complete_workflow(
+            &mut conn, self.id, output,
+        )
+        .await
     }
 
-    /// Mark the workflow as failed.
-    async fn fail<E: serde::Serialize + Send + Sync>(&self, error: E) -> crate::error::Result<()> {
-        let error_json = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
-
-        sqlx::query(SQL_WORKFLOW_FAIL)
-            .bind(self.id)
-            .bind(error_json)
-            .execute(&self.pool)
+    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {
+        let mut conn = self
+            .pool
+            .acquire()
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to fail workflow {}: {}", self.id, e),
+                message: e.to_string(),
             })?;
+
+        crate::store::postgres::tables::pgqrs_workflows::Workflows::fail_workflow(
+            &mut conn, self.id, error,
+        )
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to fail workflow {}: {}", self.id, e),
+        })?;
 
         Ok(())
     }
