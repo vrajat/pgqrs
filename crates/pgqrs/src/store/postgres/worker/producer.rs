@@ -23,8 +23,8 @@
 //! ```
 
 use crate::error::Result;
-use crate::store::MessageTable;
 use crate::store::postgres::tables::Messages;
+use crate::store::MessageTable;
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
 use crate::worker::WorkerLifecycle;
@@ -277,13 +277,13 @@ impl crate::store::Producer for Producer {
         use crate::tables::NewMessage;
 
         let new_message = NewMessage {
-                queue_id: self.queue_info.id,
-                payload: payload.clone(),
-                read_ct: 0,
-                enqueued_at: now,
-                vt,
-                producer_worker_id: Some(self.worker_info.id),
-                consumer_worker_id: None,
+            queue_id: self.queue_info.id,
+            payload: payload.clone(),
+            read_ct: 0,
+            enqueued_at: now,
+            vt,
+            producer_worker_id: Some(self.worker_info.id),
+            consumer_worker_id: None,
         };
 
         let message = self.messages.insert(new_message).await?;
