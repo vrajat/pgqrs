@@ -1,7 +1,7 @@
 # API Proposal: sqlx-Inspired Functional Interface for pgqrs
 
-**Date:** 2024-12-29  
-**Author:** pgqrs Team  
+**Date:** 2024-12-29
+**Author:** pgqrs Team
 **Status:** Draft Proposal
 
 ---
@@ -62,14 +62,41 @@ pgqrs operations fall into 5 categories:
 
 The 5 underlying tables:
 1. `pgqrs_queues` - queue definitions
-2. `pgqrs_messages` - active messages  
+2. `pgqrs_messages` - active messages
 3. `pgqrs_workers` - worker registrations
 4. `pgqrs_archive` - processed messages
 5. `pgqrs_workflows` / `pgqrs_workflow_steps` - workflow state
 
 **Initial focus:** Queue ops and Workflow ops get the new ergonomic API. The right ergonomics for other categories will be informed by actual usage.
 
-### 3.2 Tier 1: Core Queue Operations
+### 3.2 Store Initialization
+
+```rust
+// Core entry point - connect to database
+pub async fn connect(dsn: &str) -> Result<Store>;
+pub async fn connect_with(config: Config) -> Result<Store>;
+```
+
+**Usage:**
+
+```rust
+// Simple connection (DSN-based backend selection)
+let store = pgqrs::connect("postgres://localhost/mydb").await?;
+let store = pgqrs::connect("sqlite://./local.db").await?;
+
+// With configuration options
+let store = pgqrs::connect_with(
+    Config::new("postgres://localhost/mydb")
+        .max_connections(10)
+        .schema("myapp")
+).await?;
+```
+
+The `Store` returned supports both API patterns:
+- Passed to builders: `pgqrs::enqueue(&msg).to("q").execute(&store)`
+- Called directly: `store.enqueue("q", &msg)`
+
+### 3.3 Core Queue Operations
 
 pgqrs will support **both** patterns like sqlx:
 
@@ -81,16 +108,16 @@ pgqrs will support **both** patterns like sqlx:
 pub mod pgqrs {
     /// Message production (queue terminology)
     pub fn enqueue<T: Serialize>(message: &T) -> EnqueueBuilder<T>;
-    
+
     /// Message consumption (queue terminology)
     pub fn dequeue() -> DequeueBuilder;
-    
+
     /// Batch enqueue
     pub fn enqueue_batch<T: Serialize>(messages: &[T]) -> EnqueueBatchBuilder<T>;
 }
 ```
 
-### 3.2 Pattern 2: Store Trait Methods
+### 3.4 Direct Methods on Store
 
 ```rust
 // Methods directly on Store (like sqlx's Executor trait)
@@ -101,13 +128,13 @@ impl AnyStore {
         queue: &str,
         message: &T,
     ) -> Result<MessageId>;
-    
+
     /// Direct dequeue without builder
     pub async fn dequeue<T: DeserializeOwned>(
         &self,
         queue: &str,
     ) -> Result<Option<Message<T>>>;
-    
+
     /// Direct batch enqueue
     pub async fn enqueue_batch<T: Serialize>(
         &self,
@@ -132,7 +159,7 @@ pgqrs::enqueue(&order)
 store.enqueue("orders", &order).await?;
 ```
 
-### 3.3 EnqueueBuilder - Message Production
+### 3.5 EnqueueBuilder - Message Production
 
 ```rust
 // Simple enqueue
@@ -173,29 +200,29 @@ impl<'a, T: Serialize> EnqueueBuilder<'a, T> {
         self.queue = Some(queue.to_string());
         self
     }
-    
+
     pub fn priority(mut self, priority: Priority) -> Self {
         self.priority = Some(priority);
         self
     }
-    
+
     pub fn delay(mut self, delay: Duration) -> Self {
         self.delay = Some(delay);
         self
     }
-    
+
     pub fn metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self
     }
-    
+
     /// Execute against any Store implementation
     pub async fn execute<S: Store>(self, store: &S) -> Result<MessageId> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
-        
+
         // Get or create a transient producer
         let producer = store.transient_producer(&queue).await?;
-        
+
         // Build envelope
         let envelope = MessageEnvelope {
             payload: serde_json::to_value(self.message)?,
@@ -203,13 +230,13 @@ impl<'a, T: Serialize> EnqueueBuilder<'a, T> {
             scheduled_at: self.delay.map(|d| Utc::now() + d),
             metadata: self.metadata,
         };
-        
+
         producer.enqueue(&envelope).await
     }
 }
 ```
 
-### 3.4 DequeueBuilder - Message Consumption
+### 3.6 DequeueBuilder - Message Consumption
 
 ```rust
 // Dequeue single message
@@ -251,31 +278,31 @@ impl DequeueBuilder {
         self.queue = Some(queue.to_string());
         self
     }
-    
+
     pub fn batch(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
-    
+
     pub fn visibility_timeout(mut self, timeout: Duration) -> Self {
         self.visibility_timeout = Some(timeout);
         self
     }
-    
+
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<Message>> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
         let consumer = store.transient_consumer(&queue).await?;
         consumer.dequeue(1, self.visibility_timeout).await.map(|v| v.into_iter().next())
     }
-    
+
     /// Fetch batch of messages
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<Message>> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
         let consumer = store.transient_consumer(&queue).await?;
         consumer.dequeue(self.batch_size, self.visibility_timeout).await
     }
-    
+
     /// Stream messages continuously
     pub fn stream<'s, S: Store + 's>(
         self,
@@ -286,7 +313,7 @@ impl DequeueBuilder {
 }
 ```
 
-### 3.5 AdminBuilder - Queue Administration
+### 3.7 AdminBuilder - Queue Administration
 
 ```rust
 // Create queue
@@ -315,7 +342,7 @@ pgqrs::admin()
     .await?;
 ```
 
-### 3.6 WorkflowBuilder - Workflow Operations
+### 3.8 WorkflowBuilder - Workflow Operations
 
 ```rust
 // Create and start workflow
@@ -350,11 +377,11 @@ To support transient operations, the `Store` trait gains two new methods:
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
     // Existing methods...
-    
+
     /// Create a transient producer (no worker registration)
     /// Used for one-off sends where worker lifecycle is not needed
     async fn transient_producer(&self, queue: &str) -> Result<Box<dyn Producer>>;
-    
+
     /// Create a transient consumer (no worker registration)
     /// Used for one-off receives where worker lifecycle is not needed
     async fn transient_consumer(&self, queue: &str) -> Result<Box<dyn Consumer>>;
@@ -411,29 +438,29 @@ struct OrderCreated {
 async fn main() -> Result<()> {
     // Connect to database
     let store = AnyStore::connect("postgres://localhost/myapp").await?;
-    
+
     // Setup (one-time)
     pgqrs::admin().install().execute(&store).await?;
     pgqrs::admin().create_queue("orders").execute(&store).await?;
-    
+
     // === Pattern 1: Builder API (more options) ===
     let order = OrderCreated {
         order_id: "ORD-123".into(),
         customer_id: "CUST-456".into(),
         total: 99.99,
     };
-    
+
     let msg_id = pgqrs::enqueue(&order)
         .to("orders")
         .priority(Priority::High)
         .execute(&store)
         .await?;
-    
+
     println!("Enqueued message: {}", msg_id);
-    
+
     // === Pattern 2: Direct Store methods (simpler) ===
     let msg_id = store.enqueue("orders", &order).await?;
-    
+
     // Dequeue using builder (with options)
     if let Some(msg) = pgqrs::dequeue()
         .from("orders")
@@ -443,17 +470,17 @@ async fn main() -> Result<()> {
     {
         let order: OrderCreated = msg.payload()?;
         println!("Processing order: {}", order.order_id);
-        
+
         process_order(&order).await?;
         msg.ack().await?;
     }
-    
+
     // Dequeue using direct method (simple case)
     if let Some(msg) = store.dequeue::<OrderCreated>("orders").await? {
         process_order(&msg.payload).await?;
         msg.ack().await?;
     }
-    
+
     Ok(())
 }
 ```
