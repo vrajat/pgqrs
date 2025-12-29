@@ -92,226 +92,139 @@ let store = pgqrs::connect_with(
 ).await?;
 ```
 
-The `Store` returned supports both API patterns:
-- Passed to builders: `pgqrs::enqueue(&msg).to("q").execute(&store)`
-- Called directly: `store.enqueue("q", &msg)`
+The `Store` returned is used to create workers or passed to high-level functions.
 
-### 3.3 Core Queue Operations
+### 3.3 Two-Level API Structure
 
-pgqrs will support **both** patterns like sqlx:
+pgqrs provides two API levels:
 
-1. **Builder pattern** - `pgqrs::enqueue()` functional entry points
-2. **Direct methods** - Methods directly on `Store`
+| Level | Functions | Worker Lifecycle | Use Case |
+|-------|-----------|------------------|----------|
+| **High-level** | `produce`, `consume` | Ephemeral (auto-managed) | Scripts, one-off ops, simple apps |
+| **Low-level** | `enqueue`, `dequeue`, `archive` | Long-running (you manage) | High-volume, production workers |
 
 ```rust
-// Core entry points in `pgqrs` crate root
+// High-level API entry points
 pub mod pgqrs {
-    /// Message production (queue terminology)
-    pub fn enqueue<T: Serialize>(message: &T) -> EnqueueBuilder<T>;
+    // Ephemeral producer: register → enqueue → cleanup
+    pub async fn produce<T: Serialize>(store: &Store, queue: &str, msg: &T) -> Result<MessageId>;
+    pub async fn produce_batch<T: Serialize>(store: &Store, queue: &str, msgs: &[T]) -> Result<Vec<MessageId>>;
 
-    /// Message consumption (queue terminology)
-    pub fn dequeue() -> DequeueBuilder;
+    // Ephemeral consumer: register → dequeue → process → archive → cleanup
+    pub async fn consume<F, Fut>(store: &Store, queue: &str, handler: F) -> Result<()>
+    where
+        F: FnOnce(Message) -> Fut,
+        Fut: Future<Output = Result<()>>;
 
-    /// Batch enqueue
-    pub fn enqueue_batch<T: Serialize>(messages: &[T]) -> EnqueueBatchBuilder<T>;
+    pub async fn consume_batch<F, Fut>(store: &Store, queue: &str, batch_size: usize, handler: F) -> Result<()>
+    where
+        F: FnOnce(Vec<Message>) -> Fut,
+        Fut: Future<Output = Result<()>>;
+}
+
+// Low-level API entry points (take worker reference)
+pub mod pgqrs {
+    // Requires a Producer (you manage lifecycle)
+    pub async fn enqueue<T: Serialize>(producer: &dyn Producer, msg: &T) -> Result<MessageId>;
+    pub async fn enqueue_batch<T: Serialize>(producer: &dyn Producer, msgs: &[T]) -> Result<Vec<MessageId>>;
+
+    // Requires a Consumer (you manage lifecycle)
+    pub async fn dequeue(consumer: &dyn Consumer, batch_size: usize) -> Result<Vec<Message>>;
+    pub async fn archive(consumer: &dyn Consumer, msg: &Message) -> Result<()>;
+    pub async fn archive_batch(consumer: &dyn Consumer, msgs: &[Message]) -> Result<()>;
 }
 ```
 
-### 3.4 Direct Methods on Store
+### 3.4 High-Level API: produce / consume
+
+**produce** - Creates ephemeral producer, enqueues message(s), cleans up:
 
 ```rust
-// Methods directly on Store (like sqlx's Executor trait)
-impl AnyStore {
-    /// Direct enqueue without builder
-    pub async fn enqueue<T: Serialize>(
-        &self,
-        queue: &str,
-        message: &T,
-    ) -> Result<MessageId>;
+// Single message
+pgqrs::produce(&store, "orders", &order).await?;
 
-    /// Direct dequeue without builder
-    pub async fn dequeue<T: DeserializeOwned>(
-        &self,
-        queue: &str,
-    ) -> Result<Option<Message<T>>>;
-
-    /// Direct batch enqueue
-    pub async fn enqueue_batch<T: Serialize>(
-        &self,
-        queue: &str,
-        messages: &[T],
-    ) -> Result<Vec<MessageId>>;
-}
+// Batch
+pgqrs::produce_batch(&store, "orders", &[order1, order2, order3]).await?;
 ```
 
-**Usage comparison:**
+**consume** - Creates ephemeral consumer, dequeues, runs handler, archives on success:
 
 ```rust
-// Builder pattern (more options)
-pgqrs::enqueue(&order)
-    .to("orders")
-    .priority(Priority::High)
-    .delay(Duration::from_secs(30))
-    .execute(&store)
-    .await?;
+// Single message
+pgqrs::consume(&store, "orders", |msg| async {
+    let order: Order = msg.payload()?;
+    process_order(&order).await?;
+    Ok(())  // Success → auto-archive
+}).await?;
 
-// Direct method (simpler, fewer options)
-store.enqueue("orders", &order).await?;
+// Batch
+pgqrs::consume_batch(&store, "orders", 10, |msgs| async {
+    for msg in msgs {
+        let order: Order = msg.payload()?;
+        process_order(&order).await?;
+    }
+    Ok(())  // Success → auto-archive all
+}).await?;
 ```
 
-### 3.5 EnqueueBuilder - Message Production
+**Behavior on error:**
+- If handler returns `Err`, message is NOT archived (stays in queue for retry)
+- Ephemeral consumer is cleaned up regardless
+
+### 3.5 Low-Level API: enqueue / dequeue / archive
+
+For high-volume production workers with explicit lifecycle management:
 
 ```rust
-// Simple enqueue
-pgqrs::enqueue(&my_payload)
-    .to("email-queue")
-    .execute(&store)
-    .await?;
+// Create long-running producer
+let producer = store.producer("orders").await?;
 
-// With options
-pgqrs::enqueue(&my_payload)
-    .to("email-queue")
-    .priority(Priority::High)
-    .delay(Duration::from_secs(30))
-    .metadata(json!({"source": "api"}))
-    .execute(&store)
-    .await?;
+// Enqueue messages (producer handles heartbeat)
+pgqrs::enqueue(&producer, &order1).await?;
+pgqrs::enqueue(&producer, &order2).await?;
+pgqrs::enqueue_batch(&producer, &[order3, order4]).await?;
 
-// Batch enqueue
-pgqrs::enqueue_batch(&[msg1, msg2, msg3])
-    .to("email-queue")
-    .execute(&store)
-    .await?;
+// Cleanup when done
+producer.shutdown().await?;
 ```
 
-**Builder Implementation:**
-
 ```rust
-pub struct EnqueueBuilder<'a, T> {
-    message: &'a T,
-    queue: Option<String>,
-    priority: Option<Priority>,
-    delay: Option<Duration>,
-    metadata: Option<Value>,
+// Create long-running consumer
+let consumer = store.consumer("orders").await?;
+
+loop {
+    // You manage heartbeat
+    consumer.heartbeat().await?;
+
+    // Dequeue
+    let msgs = pgqrs::dequeue(&consumer, 10).await?;
+
+    for msg in &msgs {
+        match process_message(msg).await {
+            Ok(_) => pgqrs::archive(&consumer, msg).await?,
+            Err(e) => {
+                // Message stays in queue, will be retried or DLQ'd
+                log::error!("Failed to process: {}", e);
+            }
+        }
+    }
 }
 
-impl<'a, T: Serialize> EnqueueBuilder<'a, T> {
-    pub fn to(mut self, queue: &str) -> Self {
-        self.queue = Some(queue.to_string());
-        self
-    }
-
-    pub fn priority(mut self, priority: Priority) -> Self {
-        self.priority = Some(priority);
-        self
-    }
-
-    pub fn delay(mut self, delay: Duration) -> Self {
-        self.delay = Some(delay);
-        self
-    }
-
-    pub fn metadata(mut self, metadata: Value) -> Self {
-        self.metadata = Some(metadata);
-        self
-    }
-
-    /// Execute against any Store implementation
-    pub async fn execute<S: Store>(self, store: &S) -> Result<MessageId> {
-        let queue = self.queue.ok_or(Error::MissingQueue)?;
-
-        // Get or create an ephemeral producer (auto-managed lifecycle)
-        let producer = store.ephemeral_producer(&queue).await?;
-
-        // Build envelope
-        let envelope = MessageEnvelope {
-            payload: serde_json::to_value(self.message)?,
-            priority: self.priority.unwrap_or_default(),
-            scheduled_at: self.delay.map(|d| Utc::now() + d),
-            metadata: self.metadata,
-        };
-
-        producer.enqueue(&envelope).await
-    }
-}
+// Cleanup
+consumer.shutdown().await?;
 ```
 
-### 3.6 DequeueBuilder - Message Consumption
+### 3.6 Comparison: High-Level vs Low-Level
 
-```rust
-// Dequeue single message
-let msg = pgqrs::dequeue()
-    .from("email-queue")
-    .fetch_one(&store)
-    .await?;
-
-// Dequeue batch
-let messages = pgqrs::dequeue()
-    .from("email-queue")
-    .batch(10)
-    .visibility_timeout(Duration::from_secs(60))
-    .fetch_all(&store)
-    .await?;
-
-// Streaming dequeue with auto-ack
-pgqrs::dequeue()
-    .from("email-queue")
-    .stream(&store)
-    .try_for_each(|msg| async {
-        process(msg.payload()).await?;
-        msg.ack().await
-    })
-    .await?;
-```
-
-**Builder Implementation:**
-
-```rust
-pub struct DequeueBuilder {
-    queue: Option<String>,
-    batch_size: usize,
-    visibility_timeout: Option<Duration>,
-}
-
-impl DequeueBuilder {
-    pub fn from(mut self, queue: &str) -> Self {
-        self.queue = Some(queue.to_string());
-        self
-    }
-
-    pub fn batch(mut self, size: usize) -> Self {
-        self.batch_size = size;
-        self
-    }
-
-    pub fn visibility_timeout(mut self, timeout: Duration) -> Self {
-        self.visibility_timeout = Some(timeout);
-        self
-    }
-
-    /// Fetch one message
-    pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<Message>> {
-        let queue = self.queue.ok_or(Error::MissingQueue)?;
-        let consumer = store.ephemeral_consumer(&queue).await?;
-        consumer.dequeue(1, self.visibility_timeout).await.map(|v| v.into_iter().next())
-    }
-
-    /// Fetch batch of messages
-    pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<Message>> {
-        let queue = self.queue.ok_or(Error::MissingQueue)?;
-        let consumer = store.ephemeral_consumer(&queue).await?;
-        consumer.dequeue(self.batch_size, self.visibility_timeout).await
-    }
-
-    /// Stream messages continuously
-    pub fn stream<'s, S: Store + 's>(
-        self,
-        store: &'s S,
-    ) -> impl Stream<Item = Result<Message>> + 's {
-        // Implementation using async_stream or similar
-    }
-}
-```
+| Aspect | High-Level (`produce`/`consume`) | Low-Level (`enqueue`/`dequeue`/`archive`) |
+|--------|----------------------------------|-------------------------------------------|
+| Worker creation | Auto (ephemeral) | Manual (`store.producer()`) |
+| Heartbeat | Auto (background) | Manual (`worker.heartbeat()`) |
+| Cleanup | Auto (on completion) | Manual (`worker.shutdown()`) |
+| Archive | Auto (on handler success) | Manual (`pgqrs::archive()`) |
+| Error handling | Return `Err` → message stays | You decide |
+| Use case | Scripts, simple apps | Production workers |
+| Overhead | Higher (per-operation) | Lower (amortized) |
 
 ### 3.7 AdminBuilder - Queue Administration
 
@@ -402,69 +315,60 @@ With proper worker tracking:
 - Operations (ack, nack, extend) verify worker is still valid
 - When zombie A tries to ack() at t6, it fails because A's worker_id was invalidated
 
-### 4.3 Implications for the Ergonomic API
+### 4.3 Implications for the API
 
-**The ergonomic API must still register workers.** The difference is lifecycle management, not registration:
+**The high-level API (`produce`/`consume`) must still register workers.** The difference is lifecycle management, not registration:
 
 ```rust
-// Long-running worker (existing pattern) - explicit lifecycle
+// Low-level API - explicit lifecycle
 let consumer = store.consumer("orders").await?;
 loop {
     consumer.heartbeat().await?;  // Manual heartbeat
-    let msgs = consumer.dequeue(10).await?;
-    // ...
+    let msgs = pgqrs::dequeue(&consumer, 10).await?;
+    for msg in &msgs {
+        process(msg).await?;
+        pgqrs::archive(&consumer, msg).await?;
+    }
 }
 consumer.shutdown().await?;  // Manual cleanup
 
-// Ergonomic API - managed lifecycle
-let msg = pgqrs::dequeue()
-    .from("orders")
-    .fetch_one(&store)  // Registers ephemeral worker internally
-    .await?;
-// Worker auto-cleaned up when msg is acked/dropped
+// High-level API - managed lifecycle
+pgqrs::consume(&store, "orders", |msg| async {
+    process(&msg).await
+}).await?;
+// Ephemeral worker auto-registered, heartbeat auto-managed, cleanup automatic
 ```
 
-### 4.4 Ephemeral Workers (Not Transient)
+### 4.4 Ephemeral Workers (Internal Detail)
 
-Instead of "transient workers" (no registration), we use **ephemeral workers**:
+The high-level functions (`produce`, `consume`) internally create **ephemeral workers**:
 
 | Aspect | Long-running Worker | Ephemeral Worker |
 |--------|---------------------|------------------|
 | Registration | Yes | Yes |
 | Heartbeat | Manual (`worker.heartbeat()`) | Auto (background task) |
-| Cleanup | Manual (`worker.shutdown()`) | Auto (on drop/ack) |
+| Cleanup | Manual (`worker.shutdown()`) | Auto (on completion) |
 | Ownership tracking | Yes | Yes |
 | Health check | Yes | Yes |
-| Use case | High-volume consumers | One-off operations, scripts |
+| Use case | High-volume production | One-off operations, scripts |
 
-```rust
-#[async_trait]
-pub trait Store: Clone + Send + Sync + 'static {
-    // Existing methods...
-
-    /// Create an ephemeral producer (auto-managed lifecycle)
-    /// Registers a worker, but handles heartbeat/cleanup automatically
-    async fn ephemeral_producer(&self, queue: &str) -> Result<Box<dyn Producer>>;
-
-    /// Create an ephemeral consumer (auto-managed lifecycle)  
-    /// Registers a worker, but handles heartbeat/cleanup automatically
-    async fn ephemeral_consumer(&self, queue: &str) -> Result<Box<dyn Consumer>>;
-}
-```
-
-**Implementation:**
+**Implementation (internal):**
 - Ephemeral workers register with a short TTL (e.g., 60s)
 - Background task sends heartbeat while operation is in progress
-- Worker is deregistered when operation completes or message is acked
+- Worker is deregistered when operation completes
 - If process crashes, health check cleans up after TTL expires
+
+This is an implementation detail - users just call `pgqrs::produce()` or `pgqrs::consume()`.
 
 ---
 
 ## 5. Comparison with sqlx
 
-| sqlx Pattern | pgqrs Builder | pgqrs Direct |
-|-------------|---------------|---------------|
-| `sqlx::query("SQL")` | `pgqrs::enqueue(&msg)` | - |
+| sqlx Pattern | pgqrs High-Level | pgqrs Low-Level |
+|-------------|------------------|-----------------|
+| `sqlx::query("SQL")` | `pgqrs::produce(&store, q, &msg)` | `pgqrs::enqueue(&producer, &msg)` |
+| `pool.execute(sql)` | `pgqrs::produce(...)` | `pgqrs::enqueue(...)` |
+| `pool.fetch_one(sql)` | `pgqrs::consume(...)` | `pgqrs::dequeue(...)` |
 | `.bind(value)` | `.to("queue").priority(High)` | - |
 | `.fetch_one(&pool)` | `.execute(&store)` | `store.enqueue("q", &msg)` |
 | `pool.execute(sql)` | - | `store.enqueue("q", &msg)` |
@@ -488,7 +392,7 @@ pub trait Store: Clone + Send + Sync + 'static {
 ## 6. Full Example
 
 ```rust
-use pgqrs::{AnyStore, enqueue, dequeue, admin, step};
+use pgqrs;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -501,49 +405,67 @@ struct OrderCreated {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Connect to database
-    let store = AnyStore::connect("postgres://localhost/myapp").await?;
+    let store = pgqrs::connect("postgres://localhost/myapp").await?;
 
     // Setup (one-time)
     pgqrs::admin().install().execute(&store).await?;
     pgqrs::admin().create_queue("orders").execute(&store).await?;
 
-    // === Pattern 1: Builder API (more options) ===
     let order = OrderCreated {
         order_id: "ORD-123".into(),
         customer_id: "CUST-456".into(),
         total: 99.99,
     };
 
-    let msg_id = pgqrs::enqueue(&order)
-        .to("orders")
-        .priority(Priority::High)
-        .execute(&store)
-        .await?;
+    // === High-level API (ephemeral workers, simple) ===
 
-    println!("Enqueued message: {}", msg_id);
+    // Produce: creates ephemeral producer, enqueues, cleans up
+    pgqrs::produce(&store, "orders", &order).await?;
 
-    // === Pattern 2: Direct Store methods (simpler) ===
-    let msg_id = store.enqueue("orders", &order).await?;
-
-    // Dequeue using builder (with options)
-    if let Some(msg) = pgqrs::dequeue()
-        .from("orders")
-        .visibility_timeout(Duration::from_secs(30))
-        .fetch_one(&store)
-        .await?
-    {
+    // Consume: creates ephemeral consumer, dequeues, processes, archives
+    pgqrs::consume(&store, "orders", |msg| async {
         let order: OrderCreated = msg.payload()?;
         println!("Processing order: {}", order.order_id);
-
         process_order(&order).await?;
-        msg.ack().await?;
+        Ok(())  // Success → message archived
+    }).await?;
+
+    // Batch versions
+    pgqrs::produce_batch(&store, "orders", &[order1, order2]).await?;
+
+    pgqrs::consume_batch(&store, "orders", 10, |msgs| async {
+        for msg in msgs {
+            process_order(&msg.payload()?).await?;
+        }
+        Ok(())
+    }).await?;
+
+    // === Low-level API (long-running workers, production) ===
+
+    // Create workers with explicit lifecycle
+    let producer = store.producer("orders").await?;
+    let consumer = store.consumer("orders").await?;
+
+    // Enqueue with worker reference
+    pgqrs::enqueue(&producer, &order).await?;
+    pgqrs::enqueue_batch(&producer, &[order1, order2]).await?;
+
+    // Consume with explicit control
+    loop {
+        consumer.heartbeat().await?;
+
+        let msgs = pgqrs::dequeue(&consumer, 10).await?;
+        for msg in &msgs {
+            match process_order(&msg.payload()?).await {
+                Ok(_) => pgqrs::archive(&consumer, msg).await?,
+                Err(e) => log::error!("Failed: {}", e),  // Will retry
+            }
+        }
     }
 
-    // Dequeue using direct method (simple case)
-    if let Some(msg) = store.dequeue::<OrderCreated>("orders").await? {
-        process_order(&msg.payload).await?;
-        msg.ack().await?;
-    }
+    // Cleanup
+    producer.shutdown().await?;
+    consumer.shutdown().await?;
 
     Ok(())
 }
@@ -584,45 +506,46 @@ let msg: OrderCreated = pgqrs::receive::<OrderCreated>()
 The new APIs are additive - existing code continues to work:
 
 ```rust
-// Old API (still works for long-running workers)
+// Old API (still works)
 let producer = store.producer("orders").await?;
 producer.enqueue(&msg).await?;
 
-// New Builder API
-pgqrs::enqueue(&msg).to("orders").execute(&store).await?;
+// New high-level API
+pgqrs::produce(&store, "orders", &msg).await?;
 
-// New Direct API
-store.enqueue("orders", &msg).await?;
+// New low-level API
+pgqrs::enqueue(&producer, &msg).await?;
 ```
 
 Teams can choose the appropriate style:
 
 | Use Case | Recommended API |
 |----------|------------------|
-| Long-running workers | `store.producer()` / `store.consumer()` |
-| One-off operations | `store.enqueue()` / `store.dequeue()` |
-| Operations with options | `pgqrs::enqueue().priority().delay()` |
+| Scripts, one-off ops | `pgqrs::produce()` / `pgqrs::consume()` |
+| Production workers | `store.producer()` + `pgqrs::enqueue()` |
+| Admin operations | `pgqrs::admin().install()...` |
 
 ---
 
 ## 9. Implementation Plan
 
-### Phase 1: Core APIs
-1. Implement direct methods: `store.enqueue()`, `store.dequeue()`
-2. Implement `EnqueueBuilder` and `pgqrs::enqueue()`
-3. Implement `DequeueBuilder` and `pgqrs::dequeue()`
+### Phase 1: High-Level Queue API
+1. Implement `pgqrs::produce()` / `pgqrs::produce_batch()`
+2. Implement `pgqrs::consume()` / `pgqrs::consume_batch()`
+3. Implement ephemeral worker infrastructure
 
-### Phase 2: Admin Builders
-1. Implement `AdminBuilder` and `pgqrs::admin()`
+### Phase 2: Low-Level Queue API
+1. Implement `pgqrs::enqueue()` / `pgqrs::enqueue_batch()`
+2. Implement `pgqrs::dequeue()`
+3. Implement `pgqrs::archive()` / `pgqrs::archive_batch()`
+
+### Phase 3: Admin API
+1. Implement `pgqrs::admin()` builder
 2. Add shortcuts for common operations
 
-### Phase 3: Workflow Builders
-1. Implement `WorkflowBuilder` and `pgqrs::workflow()`
-2. Implement `StepBuilder` and `pgqrs::step()`
-
-### Phase 4: Streaming
-1. Add `DequeueBuilder::stream()` with proper backpressure
-2. Consider integration with `tokio-stream`
+### Phase 4: Workflow API
+1. Implement `pgqrs::workflow()` builder
+2. Implement `pgqrs::step()` builder
 
 ---
 
