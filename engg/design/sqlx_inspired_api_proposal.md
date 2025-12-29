@@ -67,9 +67,49 @@ The 5 underlying tables:
 4. `pgqrs_archive` - processed messages
 5. `pgqrs_workflows` / `pgqrs_workflow_steps` - workflow state
 
-**Initial focus:** Queue ops and Workflow ops get the new ergonomic API. The right ergonomics for other categories will be informed by actual usage.
+### 3.2 API Tiering (What Gets Top-Level Exposure)
 
-### 3.2 Store Initialization
+Not all operations should be exposed at the crate root. A flat `pgqrs::*` namespace with everything would be overwhelming. We use a **tiered hierarchy**:
+
+| Tier | Namespace | Categories | Frequency | Example |
+|------|-----------|------------|-----------|---------|
+| **Tier 1** | `pgqrs::` | Queue ops | 90% of usage | `pgqrs::produce()`, `pgqrs::consume()` |
+| **Tier 2** | `pgqrs::workflow::` | Workflow ops | Common for workflow users | `pgqrs::workflow::step()` (deferred) |
+| **Tier 3** | `pgqrs::admin()`, `store.*` | Admin, Worker, Table ops | Rare/specialized | `pgqrs::admin().install()` |
+
+**Design Principle:** Only the most common operations get top-level exposure (`pgqrs::fn`). Everything else is namespaced or uses builder/object patterns.
+
+```rust
+// Tier 1: Top-level (core queue ops - 90% of usage)
+pgqrs::produce(&store, "orders", &order).await?;
+pgqrs::consume(&store, "orders", |msg| async { ... }).await?;
+
+// Also Tier 1: Low-level queue ops (take worker reference)
+pgqrs::enqueue(&producer, &order).await?;
+pgqrs::dequeue(&consumer, 10).await?;
+pgqrs::archive(&consumer, &msg).await?;
+
+// Tier 2: Namespaced (workflows - deferred)
+pgqrs::workflow::create(&store, &input).await?;
+pgqrs::workflow::step(&store, wf_id, "validate", || async { ... }).await?;
+
+// Tier 3: Builder pattern (admin - rare)
+pgqrs::admin().install().execute(&store).await?;
+pgqrs::admin().create_queue("orders").execute(&store).await?;
+
+// Tier 3: Object-based (worker lifecycle, table access - specialized)
+let consumer = store.consumer("orders").await?;
+consumer.heartbeat().await?;
+consumer.shutdown().await?;
+store.tables().messages().list(100).await?;  // Direct table access
+```
+
+**Rationale for each tier:**
+- **Tier 1 (top-level):** Queue operations are the primary use case. Developers reach for these constantly. Zero friction.
+- **Tier 2 (namespaced):** Workflows are a distinct feature. Users who need them will import `pgqrs::workflow::*`. Keeps root namespace clean.
+- **Tier 3 (builder/object):** Admin ops are one-time setup. Worker lifecycle is framework-level. Table access is debugging. These don't need shorthand.
+
+### 3.3 Store Initialization
 
 ```rust
 // Core entry point - connect to database
@@ -94,7 +134,7 @@ let store = pgqrs::connect_with(
 
 The `Store` returned is used to create workers or passed to high-level functions.
 
-### 3.3 Two-Level API Structure
+### 3.4 Two-Level API Structure
 
 pgqrs provides two API levels:
 
@@ -135,7 +175,7 @@ pub mod pgqrs {
 }
 ```
 
-### 3.4 High-Level API: produce / consume
+### 3.5 High-Level API: produce / consume
 
 **produce** - Creates ephemeral producer, enqueues message(s), cleans up:
 
@@ -171,7 +211,7 @@ pgqrs::consume_batch(&store, "orders", 10, |msgs| async {
 - If handler returns `Err`, message is NOT archived (stays in queue for retry)
 - Ephemeral consumer is cleaned up regardless
 
-### 3.5 Low-Level API: enqueue / dequeue / archive
+### 3.6 Low-Level API: enqueue / dequeue / archive
 
 For high-volume production workers with explicit lifecycle management:
 
@@ -214,7 +254,7 @@ loop {
 consumer.shutdown().await?;
 ```
 
-### 3.6 Comparison: High-Level vs Low-Level
+### 3.7 Comparison: High-Level vs Low-Level
 
 | Aspect | High-Level (`produce`/`consume`) | Low-Level (`enqueue`/`dequeue`/`archive`) |
 |--------|----------------------------------|-------------------------------------------|
@@ -226,7 +266,7 @@ consumer.shutdown().await?;
 | Use case | Scripts, simple apps | Production workers |
 | Overhead | Higher (per-operation) | Lower (amortized) |
 
-### 3.7 Admin API
+### 3.8 Admin API
 
 Admin operations are idempotent DDL-like operations with no message ownership concerns. No two-level API needed - just takes `&store`:
 
@@ -251,11 +291,7 @@ pgqrs::admin()
     .await?;
 ```
 
-### 3.8 Workflow API (Deferred)
-
-Workflow API design is deferred to a separate task. There are similar zombie/ownership considerations for workflow steps that need to be addressed.
-
-**Current placeholder API:**
+### 3.9 Workflow API (Deferred)
 
 ```rust
 // Create and start workflow
