@@ -220,8 +220,8 @@ impl<'a, T: Serialize> EnqueueBuilder<'a, T> {
     pub async fn execute<S: Store>(self, store: &S) -> Result<MessageId> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
 
-        // Get or create a transient producer
-        let producer = store.transient_producer(&queue).await?;
+        // Get or create an ephemeral producer (auto-managed lifecycle)
+        let producer = store.ephemeral_producer(&queue).await?;
 
         // Build envelope
         let envelope = MessageEnvelope {
@@ -292,14 +292,14 @@ impl DequeueBuilder {
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<Message>> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
-        let consumer = store.transient_consumer(&queue).await?;
+        let consumer = store.ephemeral_consumer(&queue).await?;
         consumer.dequeue(1, self.visibility_timeout).await.map(|v| v.into_iter().next())
     }
 
     /// Fetch batch of messages
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<Message>> {
         let queue = self.queue.ok_or(Error::MissingQueue)?;
-        let consumer = store.transient_consumer(&queue).await?;
+        let consumer = store.ephemeral_consumer(&queue).await?;
         consumer.dequeue(self.batch_size, self.visibility_timeout).await
     }
 
@@ -369,30 +369,94 @@ pgqrs::workflow_complete(workflow_id)
 
 ---
 
-## 4. Store Trait Extensions
+## 4. Worker Registration (Why Transient Workers Don't Work)
 
-To support transient operations, the `Store` trait gains two new methods:
+### 4.1 The Zombie Worker Problem
+
+Consider this scenario without worker tracking:
+
+```
+t0: Consumer A dequeues message M (visibility_timeout = 30s)
+t1: Consumer A becomes stuck or network partitioned
+t2: Health check detects A unhealthy → M moves to DLQ
+t3: Admin replays M → M back in queue
+t4: Consumer B dequeues M
+t5: Consumer A wakes up, thinks it owns M
+t6: Consumer A calls ack() - succeeds! (no ownership check)
+t7: Consumer B is now in inconsistent state
+```
+
+**This is a fundamental distributed systems problem.** Without worker registration:
+- No ownership tracking (`locked_by_worker_id`)
+- No health check (no heartbeat)
+- No invalidation mechanism
+- Zombie workers can corrupt state
+
+### 4.2 How Worker Registration Solves This
+
+With proper worker tracking:
+- Every consumer has a registered `worker_id`
+- Messages record `locked_by_worker_id` when dequeued
+- Workers send heartbeats to prove liveness
+- Health check invalidates unhealthy workers
+- Operations (ack, nack, extend) verify worker is still valid
+- When zombie A tries to ack() at t6, it fails because A's worker_id was invalidated
+
+### 4.3 Implications for the Ergonomic API
+
+**The ergonomic API must still register workers.** The difference is lifecycle management, not registration:
+
+```rust
+// Long-running worker (existing pattern) - explicit lifecycle
+let consumer = store.consumer("orders").await?;
+loop {
+    consumer.heartbeat().await?;  // Manual heartbeat
+    let msgs = consumer.dequeue(10).await?;
+    // ...
+}
+consumer.shutdown().await?;  // Manual cleanup
+
+// Ergonomic API - managed lifecycle
+let msg = pgqrs::dequeue()
+    .from("orders")
+    .fetch_one(&store)  // Registers ephemeral worker internally
+    .await?;
+// Worker auto-cleaned up when msg is acked/dropped
+```
+
+### 4.4 Ephemeral Workers (Not Transient)
+
+Instead of "transient workers" (no registration), we use **ephemeral workers**:
+
+| Aspect | Long-running Worker | Ephemeral Worker |
+|--------|---------------------|------------------|
+| Registration | Yes | Yes |
+| Heartbeat | Manual (`worker.heartbeat()`) | Auto (background task) |
+| Cleanup | Manual (`worker.shutdown()`) | Auto (on drop/ack) |
+| Ownership tracking | Yes | Yes |
+| Health check | Yes | Yes |
+| Use case | High-volume consumers | One-off operations, scripts |
 
 ```rust
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
     // Existing methods...
 
-    /// Create a transient producer (no worker registration)
-    /// Used for one-off sends where worker lifecycle is not needed
-    async fn transient_producer(&self, queue: &str) -> Result<Box<dyn Producer>>;
+    /// Create an ephemeral producer (auto-managed lifecycle)
+    /// Registers a worker, but handles heartbeat/cleanup automatically
+    async fn ephemeral_producer(&self, queue: &str) -> Result<Box<dyn Producer>>;
 
-    /// Create a transient consumer (no worker registration)
-    /// Used for one-off receives where worker lifecycle is not needed
-    async fn transient_consumer(&self, queue: &str) -> Result<Box<dyn Consumer>>;
+    /// Create an ephemeral consumer (auto-managed lifecycle)  
+    /// Registers a worker, but handles heartbeat/cleanup automatically
+    async fn ephemeral_consumer(&self, queue: &str) -> Result<Box<dyn Consumer>>;
 }
 ```
 
-**Implementation Notes:**
-- Transient workers use worker_id = 0 (or a special sentinel)
-- They don't participate in heartbeat/health checking
-- Suitable for CLI tools, scripts, and simple applications
-- Not suitable for high-volume production consumers (use full workers instead)
+**Implementation:**
+- Ephemeral workers register with a short TTL (e.g., 60s)
+- Background task sends heartbeat while operation is in progress
+- Worker is deregistered when operation completes or message is acked
+- If process crashes, health check cleans up after TTL expires
 
 ---
 
@@ -567,7 +631,7 @@ Teams can choose the appropriate style:
 1. ~~**Naming:** `pgqrs::send` vs `pgqrs::enqueue` vs `pgqrs::publish`?~~ **Resolved:** Use `enqueue`/`dequeue` (queue terminology)
 2. ~~**One API or two?**~~ **Resolved:** Both builder and direct methods (like sqlx)
 3. **Error types:** Should builder errors be distinct from execution errors?
-4. **Connection pooling:** How do transient operations interact with pool limits?
+4. **Ephemeral worker limits:** Should there be a cap on concurrent ephemeral workers?
 5. **Telemetry:** Should builders support injecting tracing spans?
 
 ---
