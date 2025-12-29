@@ -48,30 +48,45 @@ This proposal adapts **both** patterns for pgqrs queue and workflow operations.
 
 ## 3. Proposed API
 
+### 3.1 API Surface Area
+
+pgqrs operations fall into 5 categories:
+
+| Category | Operations | Typical User |
+|----------|------------|--------------|
+| **Queue ops** | enqueue, dequeue, batch, DLQ replay/purge, visibility | App developer |
+| **Workflow ops** | create, step, complete, fail | App developer (workflow users) |
+| **Worker ops** | heartbeat, suspend, resume, shutdown | Framework/operator |
+| **Admin ops** | install, verify, create_queue, delete_queue | DevOps/setup |
+| **Table ops** | Direct access to 5 tables | Debugging/advanced |
+
+The 5 underlying tables:
+1. `pgqrs_queues` - queue definitions
+2. `pgqrs_messages` - active messages  
+3. `pgqrs_workers` - worker registrations
+4. `pgqrs_archive` - processed messages
+5. `pgqrs_workflows` / `pgqrs_workflow_steps` - workflow state
+
+**Initial focus:** Queue ops and Workflow ops get the new ergonomic API. The right ergonomics for other categories will be informed by actual usage.
+
+### 3.2 Tier 1: Core Queue Operations
+
 pgqrs will support **both** patterns like sqlx:
 
 1. **Builder pattern** - `pgqrs::enqueue()` functional entry points
-2. **Trait pattern** - Methods directly on `Store`
-
-### 3.1 Pattern 1: Builder Entry Points
+2. **Direct methods** - Methods directly on `Store`
 
 ```rust
 // Core entry points in `pgqrs` crate root
 pub mod pgqrs {
-    /// Queue administration
-    pub fn admin() -> AdminBuilder;
-    
     /// Message production (queue terminology)
     pub fn enqueue<T: Serialize>(message: &T) -> EnqueueBuilder<T>;
     
     /// Message consumption (queue terminology)
     pub fn dequeue() -> DequeueBuilder;
     
-    /// Workflow operations
-    pub fn workflow<I: Serialize>(input: &I) -> WorkflowBuilder<I>;
-    
-    /// Step execution
-    pub fn step(step_id: &str) -> StepBuilder;
+    /// Batch enqueue
+    pub fn enqueue_batch<T: Serialize>(messages: &[T]) -> EnqueueBatchBuilder<T>;
 }
 ```
 
