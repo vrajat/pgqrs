@@ -19,16 +19,20 @@ producer.enqueue(&my_message).await?;
 producer.shutdown().await?; // Must clean up
 ```
 
-**sqlx's approach** offers a more ergonomic pattern for database operations:
+**sqlx provides two patterns:**
 
 ```rust
-// sqlx - query returns an executor-accepting builder
+// Pattern 1: Builder (functional entry point)
 sqlx::query("SELECT * FROM users")
     .fetch_all(&pool)
     .await?;
+
+// Pattern 2: Executor trait (methods directly on pool)
+pool.fetch_one("SELECT * FROM users").await?;
+pool.execute("DELETE FROM users").await?;
 ```
 
-This proposal adapts sqlx's pattern for queue and workflow operations.
+This proposal adapts **both** patterns for pgqrs queue and workflow operations.
 
 ---
 
@@ -44,7 +48,12 @@ This proposal adapts sqlx's pattern for queue and workflow operations.
 
 ## 3. Proposed API
 
-### 3.1 Entry Points
+pgqrs will support **both** patterns like sqlx:
+
+1. **Builder pattern** - `pgqrs::enqueue()` functional entry points
+2. **Trait pattern** - Methods directly on `Store`
+
+### 3.1 Pattern 1: Builder Entry Points
 
 ```rust
 // Core entry points in `pgqrs` crate root
@@ -52,11 +61,11 @@ pub mod pgqrs {
     /// Queue administration
     pub fn admin() -> AdminBuilder;
     
-    /// Message production
-    pub fn send<T: Serialize>(message: &T) -> SendBuilder<T>;
+    /// Message production (queue terminology)
+    pub fn enqueue<T: Serialize>(message: &T) -> EnqueueBuilder<T>;
     
-    /// Message consumption
-    pub fn receive() -> ReceiveBuilder;
+    /// Message consumption (queue terminology)
+    pub fn dequeue() -> DequeueBuilder;
     
     /// Workflow operations
     pub fn workflow<I: Serialize>(input: &I) -> WorkflowBuilder<I>;
@@ -66,17 +75,59 @@ pub mod pgqrs {
 }
 ```
 
-### 3.2 SendBuilder - Message Production
+### 3.2 Pattern 2: Store Trait Methods
 
 ```rust
-// Simple send
-pgqrs::send(&my_payload)
+// Methods directly on Store (like sqlx's Executor trait)
+impl AnyStore {
+    /// Direct enqueue without builder
+    pub async fn enqueue<T: Serialize>(
+        &self,
+        queue: &str,
+        message: &T,
+    ) -> Result<MessageId>;
+    
+    /// Direct dequeue without builder
+    pub async fn dequeue<T: DeserializeOwned>(
+        &self,
+        queue: &str,
+    ) -> Result<Option<Message<T>>>;
+    
+    /// Direct batch enqueue
+    pub async fn enqueue_batch<T: Serialize>(
+        &self,
+        queue: &str,
+        messages: &[T],
+    ) -> Result<Vec<MessageId>>;
+}
+```
+
+**Usage comparison:**
+
+```rust
+// Builder pattern (more options)
+pgqrs::enqueue(&order)
+    .to("orders")
+    .priority(Priority::High)
+    .delay(Duration::from_secs(30))
+    .execute(&store)
+    .await?;
+
+// Direct method (simpler, fewer options)
+store.enqueue("orders", &order).await?;
+```
+
+### 3.3 EnqueueBuilder - Message Production
+
+```rust
+// Simple enqueue
+pgqrs::enqueue(&my_payload)
     .to("email-queue")
     .execute(&store)
     .await?;
 
 // With options
-pgqrs::send(&my_payload)
+pgqrs::enqueue(&my_payload)
     .to("email-queue")
     .priority(Priority::High)
     .delay(Duration::from_secs(30))
@@ -84,8 +135,8 @@ pgqrs::send(&my_payload)
     .execute(&store)
     .await?;
 
-// Batch send
-pgqrs::send_batch(&[msg1, msg2, msg3])
+// Batch enqueue
+pgqrs::enqueue_batch(&[msg1, msg2, msg3])
     .to("email-queue")
     .execute(&store)
     .await?;
@@ -94,7 +145,7 @@ pgqrs::send_batch(&[msg1, msg2, msg3])
 **Builder Implementation:**
 
 ```rust
-pub struct SendBuilder<'a, T> {
+pub struct EnqueueBuilder<'a, T> {
     message: &'a T,
     queue: Option<String>,
     priority: Option<Priority>,
@@ -102,7 +153,7 @@ pub struct SendBuilder<'a, T> {
     metadata: Option<Value>,
 }
 
-impl<'a, T: Serialize> SendBuilder<'a, T> {
+impl<'a, T: Serialize> EnqueueBuilder<'a, T> {
     pub fn to(mut self, queue: &str) -> Self {
         self.queue = Some(queue.to_string());
         self
@@ -143,25 +194,25 @@ impl<'a, T: Serialize> SendBuilder<'a, T> {
 }
 ```
 
-### 3.3 ReceiveBuilder - Message Consumption
+### 3.4 DequeueBuilder - Message Consumption
 
 ```rust
-// Receive single message
-let msg = pgqrs::receive()
+// Dequeue single message
+let msg = pgqrs::dequeue()
     .from("email-queue")
     .fetch_one(&store)
     .await?;
 
-// Receive batch
-let messages = pgqrs::receive()
+// Dequeue batch
+let messages = pgqrs::dequeue()
     .from("email-queue")
     .batch(10)
     .visibility_timeout(Duration::from_secs(60))
     .fetch_all(&store)
     .await?;
 
-// Streaming receive with auto-ack
-pgqrs::receive()
+// Streaming dequeue with auto-ack
+pgqrs::dequeue()
     .from("email-queue")
     .stream(&store)
     .try_for_each(|msg| async {
@@ -174,13 +225,13 @@ pgqrs::receive()
 **Builder Implementation:**
 
 ```rust
-pub struct ReceiveBuilder {
+pub struct DequeueBuilder {
     queue: Option<String>,
     batch_size: usize,
     visibility_timeout: Option<Duration>,
 }
 
-impl ReceiveBuilder {
+impl DequeueBuilder {
     pub fn from(mut self, queue: &str) -> Self {
         self.queue = Some(queue.to_string());
         self
@@ -220,7 +271,7 @@ impl ReceiveBuilder {
 }
 ```
 
-### 3.4 AdminBuilder - Queue Administration
+### 3.5 AdminBuilder - Queue Administration
 
 ```rust
 // Create queue
@@ -249,7 +300,7 @@ pgqrs::admin()
     .await?;
 ```
 
-### 3.5 WorkflowBuilder - Workflow Operations
+### 3.6 WorkflowBuilder - Workflow Operations
 
 ```rust
 // Create and start workflow
@@ -305,14 +356,23 @@ pub trait Store: Clone + Send + Sync + 'static {
 
 ## 5. Comparison with sqlx
 
-| sqlx Pattern | pgqrs Equivalent |
-|-------------|------------------|
-| `sqlx::query("SQL")` | `pgqrs::send(&msg)` |
-| `.bind(value)` | `.to("queue").priority(High)` |
-| `.fetch_one(&pool)` | `.execute(&store)` |
-| `.fetch_all(&pool)` | `.execute(&store)` (batch) |
+| sqlx Pattern | pgqrs Builder | pgqrs Direct |
+|-------------|---------------|---------------|
+| `sqlx::query("SQL")` | `pgqrs::enqueue(&msg)` | - |
+| `.bind(value)` | `.to("queue").priority(High)` | - |
+| `.fetch_one(&pool)` | `.execute(&store)` | `store.enqueue("q", &msg)` |
+| `pool.execute(sql)` | - | `store.enqueue("q", &msg)` |
+| `pool.fetch_one(sql)` | - | `store.dequeue("q")` |
 
-**Key Differences:**
+**Naming Rationale:**
+
+| Domain | Term | Rationale |
+|--------|------|------------|
+| Queue | `enqueue`/`dequeue` | ✅ Matches pgqrs domain (queue library) |
+| Messaging | `send`/`receive` | ❌ Generic, less precise |
+| Pub/Sub | `publish`/`subscribe` | ❌ Wrong model (pgqrs is not pub/sub) |
+
+**Key Differences from sqlx:**
 - sqlx operates on raw SQL; pgqrs operates on typed messages
 - sqlx returns rows; pgqrs returns message IDs or messages
 - pgqrs includes queue semantics (visibility, DLQ, etc.)
@@ -322,7 +382,7 @@ pub trait Store: Clone + Send + Sync + 'static {
 ## 6. Full Example
 
 ```rust
-use pgqrs::{AnyStore, send, receive, admin, step};
+use pgqrs::{AnyStore, enqueue, dequeue, admin, step};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -341,23 +401,26 @@ async fn main() -> Result<()> {
     pgqrs::admin().install().execute(&store).await?;
     pgqrs::admin().create_queue("orders").execute(&store).await?;
     
-    // Send message (producer side)
+    // === Pattern 1: Builder API (more options) ===
     let order = OrderCreated {
         order_id: "ORD-123".into(),
         customer_id: "CUST-456".into(),
         total: 99.99,
     };
     
-    let msg_id = pgqrs::send(&order)
+    let msg_id = pgqrs::enqueue(&order)
         .to("orders")
-        .priority(Priority::Normal)
+        .priority(Priority::High)
         .execute(&store)
         .await?;
     
     println!("Enqueued message: {}", msg_id);
     
-    // Receive message (consumer side)
-    if let Some(msg) = pgqrs::receive()
+    // === Pattern 2: Direct Store methods (simpler) ===
+    let msg_id = store.enqueue("orders", &order).await?;
+    
+    // Dequeue using builder (with options)
+    if let Some(msg) = pgqrs::dequeue()
         .from("orders")
         .visibility_timeout(Duration::from_secs(30))
         .fetch_one(&store)
@@ -366,8 +429,13 @@ async fn main() -> Result<()> {
         let order: OrderCreated = msg.payload()?;
         println!("Processing order: {}", order.order_id);
         
-        // Process and acknowledge
         process_order(&order).await?;
+        msg.ack().await?;
+    }
+    
+    // Dequeue using direct method (simple case)
+    if let Some(msg) = store.dequeue::<OrderCreated>("orders").await? {
+        process_order(&msg.payload).await?;
         msg.ack().await?;
     }
     
@@ -407,29 +475,36 @@ let msg: OrderCreated = pgqrs::receive::<OrderCreated>()
 
 ## 8. Migration Path
 
-The functional API is additive - existing code continues to work:
+The new APIs are additive - existing code continues to work:
 
 ```rust
-// Old API (still works)
+// Old API (still works for long-running workers)
 let producer = store.producer("orders").await?;
 producer.enqueue(&msg).await?;
 
-// New API (coexists)
-pgqrs::send(&msg).to("orders").execute(&store).await?;
+// New Builder API
+pgqrs::enqueue(&msg).to("orders").execute(&store).await?;
+
+// New Direct API
+store.enqueue("orders", &msg).await?;
 ```
 
-Teams can migrate gradually or use both styles based on use case:
-- **Workers (long-running):** Use existing `store.consumer()` API
-- **Scripts/CLI/One-offs:** Use new `pgqrs::send()` / `pgqrs::receive()` API
+Teams can choose the appropriate style:
+
+| Use Case | Recommended API |
+|----------|------------------|
+| Long-running workers | `store.producer()` / `store.consumer()` |
+| One-off operations | `store.enqueue()` / `store.dequeue()` |
+| Operations with options | `pgqrs::enqueue().priority().delay()` |
 
 ---
 
 ## 9. Implementation Plan
 
-### Phase 1: Core Builders
-1. Implement `SendBuilder` and `pgqrs::send()`
-2. Implement `ReceiveBuilder` and `pgqrs::receive()`
-3. Add `transient_producer` / `transient_consumer` to Store trait
+### Phase 1: Core APIs
+1. Implement direct methods: `store.enqueue()`, `store.dequeue()`
+2. Implement `EnqueueBuilder` and `pgqrs::enqueue()`
+3. Implement `DequeueBuilder` and `pgqrs::dequeue()`
 
 ### Phase 2: Admin Builders
 1. Implement `AdminBuilder` and `pgqrs::admin()`
@@ -440,27 +515,32 @@ Teams can migrate gradually or use both styles based on use case:
 2. Implement `StepBuilder` and `pgqrs::step()`
 
 ### Phase 4: Streaming
-1. Add `ReceiveBuilder::stream()` with proper backpressure
+1. Add `DequeueBuilder::stream()` with proper backpressure
 2. Consider integration with `tokio-stream`
 
 ---
 
 ## 10. Open Questions
 
-1. **Naming:** `pgqrs::send` vs `pgqrs::enqueue` vs `pgqrs::publish`?
-2. **Error types:** Should builder errors be distinct from execution errors?
-3. **Connection pooling:** How do transient workers interact with pool limits?
-4. **Telemetry:** Should builders support injecting tracing spans?
+1. ~~**Naming:** `pgqrs::send` vs `pgqrs::enqueue` vs `pgqrs::publish`?~~ **Resolved:** Use `enqueue`/`dequeue` (queue terminology)
+2. ~~**One API or two?**~~ **Resolved:** Both builder and direct methods (like sqlx)
+3. **Error types:** Should builder errors be distinct from execution errors?
+4. **Connection pooling:** How do transient operations interact with pool limits?
+5. **Telemetry:** Should builders support injecting tracing spans?
 
 ---
 
 ## 11. Summary
 
-This proposal introduces a sqlx-inspired functional API for pgqrs that:
+This proposal introduces sqlx-inspired APIs for pgqrs:
 
-- Reduces boilerplate for simple operations
-- Maintains type safety through builders
-- Coexists with the existing worker-based API
-- Follows Rust idioms for fluent interfaces
+**Two new patterns:**
+1. **Builder pattern:** `pgqrs::enqueue(&msg).to("q").priority(High).execute(&store)`
+2. **Direct pattern:** `store.enqueue("q", &msg)`
 
-The implementation is straightforward given the existing trait infrastructure, and can be rolled out incrementally.
+**Key decisions:**
+- Use queue terminology: `enqueue`/`dequeue` (not send/receive)
+- Support both patterns like sqlx (builder + executor trait)
+- Coexist with existing worker-based API for long-running consumers
+
+The implementation leverages existing trait infrastructure and can be rolled out incrementally.

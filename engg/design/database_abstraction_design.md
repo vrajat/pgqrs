@@ -78,11 +78,6 @@ This document specifies the design for supporting multiple database backends (Po
 │       fn archive(&self) -> &dyn ArchiveTable;                           │
 │       fn workflows(&self) -> &dyn WorkflowTable;                        │
 │                                                                         │
-│       // Cross-table operations (transactions managed internally)       │
-│       async fn install(&self) -> Result<()>;                            │
-│       async fn verify(&self) -> Result<()>;                             │
-│       async fn dlq_batch(&self, max_attempts: i32) -> Result<Vec<i64>>; │
-│       // ... more cross-table operations                                │
 │   }                                                                     │
 │                                                                         │
 │   Implementations: PostgresStore, SqliteStore, TursoStore               │
