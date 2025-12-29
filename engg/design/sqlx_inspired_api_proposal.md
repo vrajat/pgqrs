@@ -226,9 +226,17 @@ consumer.shutdown().await?;
 | Use case | Scripts, simple apps | Production workers |
 | Overhead | Higher (per-operation) | Lower (amortized) |
 
-### 3.7 AdminBuilder - Queue Administration
+### 3.7 Admin API
+
+Admin operations are idempotent DDL-like operations with no message ownership concerns. No two-level API needed - just takes `&store`:
 
 ```rust
+// Install schema
+pgqrs::admin().install().execute(&store).await?;
+
+// Verify installation
+pgqrs::admin().verify().execute(&store).await?;
+
 // Create queue
 pgqrs::admin()
     .create_queue("email-queue")
@@ -241,21 +249,13 @@ pgqrs::admin()
     .delete_queue("old-queue")
     .execute(&store)
     .await?;
-
-// Install schema
-pgqrs::admin()
-    .install()
-    .execute(&store)
-    .await?;
-
-// Verify installation
-pgqrs::admin()
-    .verify()
-    .execute(&store)
-    .await?;
 ```
 
-### 3.8 WorkflowBuilder - Workflow Operations
+### 3.8 Workflow API (Deferred)
+
+Workflow API design is deferred to a separate task. There are similar zombie/ownership considerations for workflow steps that need to be addressed.
+
+**Current placeholder API:**
 
 ```rust
 // Create and start workflow
