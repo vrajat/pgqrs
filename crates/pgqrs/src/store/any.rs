@@ -35,7 +35,7 @@ impl AnyStore {
     /// ```no_run
     /// # use pgqrs::{store::any::AnyStore, Config};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let config = Config::from_dsn("postgresql://localhost/mydb")?;
+    /// let config = Config::from_dsn("postgresql://localhost/mydb");
     /// let store = AnyStore::connect(&config).await?;
     /// # Ok(())
     /// # }
@@ -113,6 +113,12 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
+    fn pool(&self) -> sqlx::PgPool {
+        match self {
+            AnyStore::Postgres(s) => s.pool().clone(),
+        }
+    }
+
     fn config(&self) -> &Config {
         match self {
             AnyStore::Postgres(s) => s.config(),

@@ -21,6 +21,7 @@ pub use tables::tables;
 // Lower-level builders (for future use)
 mod dequeue;
 mod enqueue;
+mod worker_handle;
 
 // Re-export builders for advanced use
 pub use admin::AdminBuilder;
@@ -29,3 +30,5 @@ pub use dequeue::DequeueBuilder;
 pub use enqueue::EnqueueBuilder;
 pub use producer::ProducerBuilder;
 pub use tables::TablesBuilder;
+
+pub use worker_handle::worker_handle;

@@ -1,7 +1,6 @@
 use pgqrs::{
-    tables::{Messages, Queues},
-    worker::Worker,
-    Admin, Consumer, Producer, Table,
+    store::{AnyStore, Store},
+    Table,
 };
 use serde_json::json;
 
@@ -11,49 +10,52 @@ const TEST_QUEUE_PGBOUNCER_LIST: &str = "test_pgbouncer_list_path";
 
 mod common;
 
-async fn create_admin() -> pgqrs::admin::Admin {
+async fn create_test_setup() -> AnyStore {
     let database_url = common::get_pgbouncer_dsn(Some("pgqrs_pgbouncer_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_pgbouncer_test")
         .expect("Failed to create config with pgbouncer test schema");
-    Admin::new(&config).await.expect("Failed to create Admin")
+
+    AnyStore::connect(&config)
+        .await
+        .expect("Failed to connect to pgbouncer")
 }
 
 #[tokio::test]
 async fn test_pgbouncer_happy_path() {
-    let admin = create_admin().await;
+    let store = create_test_setup().await;
 
     // Verify the installation works through PgBouncer
-    admin
+    pgqrs::admin(&store)
         .verify()
         .await
         .expect("Verify should succeed through PgBouncer");
 
     // Create a queue through PgBouncer
-    let queue_result = admin.create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
+    let queue_result = pgqrs::admin(&store).create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
     }
     let queue_info = queue_result.unwrap();
-    let producer = Producer::new(
-        admin.pool.clone(),
-        &queue_info,
+
+    // Create producer/consumer using the builder API
+    let producer = pgqrs::producer(
         "pgbouncer_test_producer",
         3000,
-        &admin.config,
+        &queue_info.queue_name,
     )
+    .create(&store)
     .await
     .expect("Failed to create producer through PgBouncer");
-    let consumer = Consumer::new(
-        admin.pool.clone(),
-        &queue_info,
+
+    let consumer = pgqrs::consumer(
         "pgbouncer_test_consumer",
         3001,
-        &admin.config,
+        &queue_info.queue_name,
     )
+    .create(&store)
     .await
     .expect("Failed to create consumer through PgBouncer");
-    let messages = Messages::new(admin.pool.clone());
 
     // Send a message through PgBouncer
     let test_message = json!({
@@ -62,13 +64,15 @@ async fn test_pgbouncer_happy_path() {
         "timestamp": "2023-01-01T00:00:00Z"
     });
 
-    producer
-        .enqueue(&test_message)
+    pgqrs::enqueue(&test_message)
+        .worker(&*producer)
+        .execute(&store)
         .await
         .expect("Failed to enqueue message through PgBouncer");
 
     // Verify we have a pending message
-    let pending_count = messages
+    let pending_count = pgqrs::tables(&store)
+        .messages()
         .count_pending(queue_info.id)
         .await
         .expect("Failed to get pending count through PgBouncer");
@@ -76,8 +80,10 @@ async fn test_pgbouncer_happy_path() {
     assert_eq!(pending_count, 1, "Should have exactly one pending message");
 
     // Read the message through PgBouncer
-    let messages_list = consumer
-        .dequeue()
+    let messages_list = pgqrs::dequeue()
+        .worker(&*consumer)
+        .batch(1)
+        .fetch_all(&store)
         .await
         .expect("Failed to read messages through PgBouncer");
 
@@ -96,7 +102,8 @@ async fn test_pgbouncer_happy_path() {
         .expect("Failed to dequeue message through PgBouncer");
 
     // Verify the message is gone from the main queue
-    let pending_count_after = messages
+    let pending_count_after = pgqrs::tables(&store)
+        .messages()
         .count_pending(queue_info.id)
         .await
         .expect("Failed to get pending count after dequeue");
@@ -108,24 +115,24 @@ async fn test_pgbouncer_happy_path() {
 
     let _ = producer.suspend().await;
     let _ = producer.shutdown().await;
-    admin
+    pgqrs::admin(&store)
         .delete_worker(producer.worker_id())
         .await
         .expect("Failed to delete producer worker");
 
     let _ = consumer.suspend().await;
     let _ = consumer.shutdown().await;
-    admin
+    pgqrs::admin(&store)
         .delete_worker(consumer.worker_id())
         .await
         .expect("Failed to delete consumer worker");
 
-    let queue_info = admin
+    let queue_info = pgqrs::admin(&store)
         .get_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
         .await
         .expect("Failed to get queue info through PgBouncer");
     // Cleanup: delete the queue through PgBouncer
-    admin
+    pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");
@@ -135,17 +142,18 @@ async fn test_pgbouncer_happy_path() {
 
 #[tokio::test]
 async fn test_pgbouncer_queue_list() {
-    let admin = create_admin().await;
+    let store = create_test_setup().await;
 
     // Create a test queue
-    let _queue = admin
+    // Recreate admin builder for each call as it consumes self
+    let _queue = pgqrs::admin(&store)
         .create_queue(TEST_QUEUE_PGBOUNCER_LIST)
         .await
         .expect("Failed to create queue through PgBouncer");
 
-    let queue_obj = Queues::new(admin.pool.clone());
-    // List queues to verify it shows up
-    let queues = queue_obj
+    // Use store.queues() instead of manual instantiation
+    let queues = store
+        .queues()
         .list()
         .await
         .expect("Failed to list queues through PgBouncer");
@@ -162,7 +170,7 @@ async fn test_pgbouncer_queue_list() {
     assert_eq!(queue_info.queue_name, TEST_QUEUE_PGBOUNCER_LIST);
 
     // Cleanup
-    admin
+    pgqrs::admin(&store)
         .delete_queue(queue_info)
         .await
         .expect("Failed to delete queue through PgBouncer");

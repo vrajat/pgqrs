@@ -1,4 +1,5 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Admin, Config, Table, Workflow};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Workflow};
+
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -70,9 +71,9 @@ async fn test_macro_suite() -> anyhow::Result<()> {
     let schema = "macro_test_suite_v3";
     let dsn = common::get_postgres_dsn(Some(schema)).await;
     let config = Config::from_dsn_with_schema(&dsn, schema)?;
-    let admin = Admin::new(&config).await?;
-    admin.install().await?;
-    let pool = admin.pool.clone();
+    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    pgqrs::admin(&store).install().await?;
+    let pool = store.pool();
 
     // --- CASE 0: Creation State (Pending) ---
     {
@@ -83,8 +84,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let workflow_id = workflow.id();
 
         // Verify status is PENDING immediately after creation
-        let workflows = pgqrs::Workflows::new(pool.clone());
-        let record = workflows.get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
         assert_eq!(
             record.status,
             pgqrs::workflow::WorkflowStatus::Pending,
@@ -104,8 +104,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         assert_eq!(res.msg, "start, step1_done, multi: arg");
 
         // Verify persisting SUCCESS
-        let workflows = pgqrs::Workflows::new(pool.clone());
-        let record = workflows.get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
         assert_eq!(record.status, pgqrs::workflow::WorkflowStatus::Success);
         let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
         assert_eq!(db_output.msg, "start, step1_done, multi: arg");
@@ -130,7 +129,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         sqlx::query("UPDATE pgqrs_workflow_steps SET output = $1 WHERE workflow_id = $2 AND step_id = 'step_side_effect'")
             .bind(tampered_json)
             .bind(workflow_id)
-            .execute(&pool)
+            .execute(pool)
             .await?;
 
         // 4. Run step second time -> Should return TAMPERED value
@@ -154,8 +153,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
         // Verify persistence
-        let workflows = pgqrs::Workflows::new(pool.clone());
-        let record = workflows.get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
         assert_eq!(record.status, pgqrs::workflow::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");
@@ -178,8 +176,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         );
 
         // Verify persistence
-        let workflows = pgqrs::Workflows::new(pool.clone());
-        let record = workflows.get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
         assert_eq!(record.status, pgqrs::workflow::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");

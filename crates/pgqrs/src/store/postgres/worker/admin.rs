@@ -336,161 +336,6 @@ impl Admin {
         Ok(messages)
     }
 
-    /// Release messages from a specific worker (for shutdown)
-    ///
-    /// Only valid for queue workers (producers/consumers), not admin workers.
-    ///
-    /// # Arguments
-    /// * `worker_id` - The worker whose messages should be released
-    ///
-    /// # Returns
-    /// Number of messages released
-    ///
-    /// # Errors
-    /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
-    /// Returns `crate::error::Error` if database operations fail
-    pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
-        // Validate the worker is not an admin
-        let worker = self.workers.get(worker_id).await?;
-        if worker.queue_id.is_none() {
-            return Err(crate::error::Error::InvalidWorkerType {
-                message: format!(
-                    "Cannot release messages for admin worker {}. Admin workers do not hold messages.",
-                    worker_id
-                ),
-            });
-        }
-
-        let result = sqlx::query(RELEASE_WORKER_MESSAGES)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to release messages for worker {}: {}", worker_id, e),
-            })?;
-
-        Ok(result.rows_affected())
-    }
-
-    /// Reclaim messages from zombie consumers.
-    ///
-    /// Identifies consumers that are in `Ready` or `Suspended` state but have not
-    /// sent a heartbeat within the specified duration (or default config).
-    /// For each zombie consumer found:
-    /// 1. Releases all held messages back to the pending queue.
-    /// 2. Marks the consumer as `Stopped`.
-    ///
-    /// # Arguments
-    /// * `queue_id` - ID of the queue to check
-    /// * `older_than` - Optional override for heartbeat timeout
-    ///
-    /// # Returns
-    /// Total number of messages released
-    pub async fn reclaim_messages(
-        &self,
-        queue_id: i64,
-        older_than: Option<chrono::Duration>,
-    ) -> Result<u64> {
-        let timeout = older_than
-            .unwrap_or_else(|| chrono::Duration::seconds(self.config.heartbeat_interval as i64));
-
-        // Start a transaction for the entire reclamation process
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
-
-        // 1. Find zombie workers using the transaction
-        let zombies = self
-            .workers
-            .list_zombies_for_queue_tx(queue_id, timeout, &mut tx)
-            .await?;
-
-        if zombies.is_empty() {
-            tx.commit()
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to commit empty transaction: {}", e),
-                })?;
-            return Ok(0);
-        }
-
-        let mut total_released = 0;
-
-        // Process each zombie
-        for zombie in zombies {
-            tracing::info!(
-                "Reclaiming messages from zombie worker {} (last heartbeat: {:?})",
-                zombie.id,
-                zombie.heartbeat_at
-            );
-
-            // 2. Release messages
-            let result = sqlx::query(RELEASE_ZOMBIE_MESSAGES)
-                .bind(zombie.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!(
-                        "Failed to release messages for zombie worker {}: {}",
-                        zombie.id, e
-                    ),
-                })?;
-
-            let released = result.rows_affected();
-            total_released += released;
-
-            // 3. Mark worker as stopped
-            sqlx::query(SHUTDOWN_ZOMBIE_WORKER)
-                .bind(zombie.id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
-                })?;
-
-            if released > 0 {
-                tracing::info!(
-                    "Released {} messages from zombie worker {}",
-                    released,
-                    zombie.id
-                );
-            }
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit zombie cleanup: {}", e),
-            })?;
-
-        Ok(total_released)
-    }
-
-    /// Remove stopped workers older than specified duration
-    ///
-    /// # Arguments
-    /// * `older_than` - Duration threshold for worker removal
-    ///
-    /// # Returns
-    /// Number of workers removed
-    pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
-        let threshold = chrono::Utc::now() - older_than;
-
-        let result = sqlx::query(PURGE_OLD_WORKERS)
-            .bind(threshold)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?;
-
-        Ok(result.rows_affected())
-    }
-
     /// Check if a worker has any associated messages or archives
     ///
     /// # Arguments
@@ -531,69 +376,6 @@ impl Admin {
         }
 
         self.workers.delete(worker_id).await
-    }
-
-    /// Get worker statistics
-    ///
-    /// # Arguments
-    /// * `queue_name` - Name of the queue to get stats for
-    ///
-    /// # Returns
-    /// Worker statistics for the queue
-    pub async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
-        let queue_id = self.queues.get_by_name(queue_name).await?.id;
-        let workers = self.workers.filter_by_fk(queue_id).await?;
-
-        let total_workers = workers.len() as u32;
-        let ready_workers = workers
-            .iter()
-            .filter(|w| w.status == crate::types::WorkerStatus::Ready)
-            .count() as u32;
-        let stopped_workers = workers
-            .iter()
-            .filter(|w| w.status == crate::types::WorkerStatus::Stopped)
-            .count() as u32;
-        let suspended_workers = workers
-            .iter()
-            .filter(|w| w.status == crate::types::WorkerStatus::Suspended)
-            .count() as u32;
-
-        // Get message counts per worker
-        let mut total_messages = 0u64;
-
-        for worker in &workers {
-            let messages = self.get_worker_messages(worker.id).await?;
-            total_messages += messages.len() as u64;
-        }
-
-        let average_messages_per_worker = if total_workers > 0 {
-            total_messages as f64 / total_workers as f64
-        } else {
-            0.0
-        };
-
-        let now = chrono::Utc::now();
-        let oldest_worker_age = workers
-            .iter()
-            .map(|w| now.signed_duration_since(w.started_at))
-            .max()
-            .unwrap_or(chrono::Duration::zero());
-
-        let newest_heartbeat_age = workers
-            .iter()
-            .map(|w| now.signed_duration_since(w.heartbeat_at))
-            .min()
-            .unwrap_or(chrono::Duration::zero());
-
-        Ok(crate::types::WorkerStats {
-            total_workers,
-            ready_workers,
-            suspended_workers,
-            stopped_workers,
-            average_messages_per_worker,
-            oldest_worker_age,
-            newest_heartbeat_age,
-        })
     }
 }
 
@@ -785,6 +567,184 @@ impl crate::store::Admin for Admin {
             })?;
 
         Ok(())
+    }
+
+    async fn reclaim_messages(
+        &self,
+        queue_id: i64,
+        older_than: Option<chrono::Duration>,
+    ) -> Result<u64> {
+        let timeout = older_than
+            .unwrap_or_else(|| chrono::Duration::seconds(self.config.heartbeat_interval as i64));
+
+        // Start a transaction for the entire reclamation process
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to begin transaction: {}", e),
+            })?;
+
+        // 1. Find zombie workers using the transaction
+        let zombies = self
+            .workers
+            .list_zombies_for_queue_tx(queue_id, timeout, &mut tx)
+            .await?;
+
+        if zombies.is_empty() {
+            tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit empty transaction: {}", e),
+            })?;
+            return Ok(0);
+        }
+
+        let mut total_released = 0;
+
+        // Process each zombie
+        for zombie in zombies {
+            tracing::info!(
+                "Reclaiming messages from zombie worker {} (last heartbeat: {:?})",
+                zombie.id,
+                zombie.heartbeat_at
+            );
+
+            // 2. Release messages
+            let result = sqlx::query(RELEASE_ZOMBIE_MESSAGES)
+                .bind(zombie.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to release messages for zombie worker {}: {}",
+                    zombie.id, e
+                ),
+                })?;
+
+            let released = result.rows_affected();
+            total_released += released;
+
+            // 3. Mark worker as stopped
+            sqlx::query(SHUTDOWN_ZOMBIE_WORKER)
+                .bind(zombie.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
+                })?;
+
+            if released > 0 {
+                tracing::info!(
+                    "Released {} messages from zombie worker {}",
+                    released,
+                    zombie.id
+                );
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to commit zombie cleanup: {}", e),
+            })?;
+
+        Ok(total_released)
+    }
+
+    async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+        let queue_id = self.queues.get_by_name(queue_name).await?.id;
+        let workers = self.workers.filter_by_fk(queue_id).await?;
+
+        let total_workers = workers.len() as u32;
+        let ready_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Ready)
+            .count() as u32;
+        let stopped_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Stopped)
+            .count() as u32;
+        let suspended_workers = workers
+            .iter()
+            .filter(|w| w.status == crate::types::WorkerStatus::Suspended)
+            .count() as u32;
+
+        // Get message counts per worker
+        let mut total_messages = 0u64;
+
+        for worker in &workers {
+            let messages = self.get_worker_messages(worker.id).await?;
+            total_messages += messages.len() as u64;
+        }
+
+        let average_messages_per_worker = if total_workers > 0 {
+            total_messages as f64 / total_workers as f64
+        } else {
+            0.0
+        };
+
+        let now = chrono::Utc::now();
+        let oldest_worker_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.started_at))
+            .max()
+            .unwrap_or(chrono::Duration::zero());
+
+        let newest_heartbeat_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.heartbeat_at))
+            .min()
+            .unwrap_or(chrono::Duration::zero());
+
+        Ok(crate::types::WorkerStats {
+            total_workers,
+            ready_workers,
+            suspended_workers,
+            stopped_workers,
+            average_messages_per_worker,
+            oldest_worker_age,
+            newest_heartbeat_age,
+        })
+    }
+
+    async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
+        let threshold = chrono::Utc::now() - older_than;
+
+        let result = sqlx::query(PURGE_OLD_WORKERS)
+            .bind(threshold)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: e.to_string(),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Release messages from a specific worker (for shutdown)
+    ///
+    /// Only valid for queue workers (producers/consumers), not admin workers.
+    ///
+    /// # Arguments
+    /// * `worker_id` - The worker whose messages should be released
+    ///
+    /// # Returns
+    /// Number of messages released
+    ///
+    /// # Errors
+    /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
+    /// Returns `crate::error::Error` if database operations fail
+    async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
+        let result = sqlx::query(RELEASE_WORKER_MESSAGES)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to release messages for worker {}: {}", worker_id, e),
+            })?;
+        Ok(result.rows_affected())
     }
 
     /// Register this Admin instance as a worker.

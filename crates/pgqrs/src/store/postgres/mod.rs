@@ -59,6 +59,10 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
+    fn pool(&self) -> sqlx::PgPool {
+        self.pool.clone()
+    }
+
     fn config(&self) -> &Config {
         &self.config
     }

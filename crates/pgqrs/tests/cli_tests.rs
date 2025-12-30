@@ -54,9 +54,8 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 mod common;
 
 use pgqrs::{
+    store::AnyStore,
     types::{ArchivedMessage, QueueInfo, QueueMessage},
-    worker::Worker,
-    Consumer, Producer, Table,
 };
 use serde::de::DeserializeOwned;
 use std::process::Command;
@@ -112,21 +111,29 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Send message using a Producer
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (sent_message, producer_worker_id): (QueueMessage, i64) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
-        let producer = Producer::new(
-            pgqrs_admin.pool.clone(),
-            &created_queue,
+        let store = AnyStore::connect(&config).await.unwrap();
+        let producer = pgqrs::producer(
             "test_cli_create_send_dequeue_delete_producer_host",
             8080,
-            &pgqrs_admin.config,
+            queue_name,
         )
+        .create(&store)
         .await
         .expect("Failed to create producer");
-        let msg = producer
-            .enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
+
+        let msg_id = pgqrs::enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
+            .worker(&*producer)
+            .execute(&store)
             .await
             .unwrap();
-        (msg, producer.worker_id())
+
+        // Fetch the message to return full object (for tests)
+        let messages = pgqrs::tables(&store)
+            .messages()
+            .get_by_ids(&[msg_id])
+            .await
+            .unwrap();
+        (messages[0].clone(), producer.worker_id())
     });
     assert_eq!(
         sent_message.payload,
@@ -148,16 +155,16 @@ fn test_cli_create_send_dequeue_delete_queue() {
 
     // Dequeue message using a Consumer
     let (dequeued_messages, consumer_worker_id): (Vec<QueueMessage>, i64) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
-        let consumer = Consumer::new(
-            pgqrs_admin.pool.clone(),
-            &created_queue,
+        let store = AnyStore::connect(&config).await.unwrap();
+        let consumer = pgqrs::consumer(
             "test_cli_create_send_dequeue_delete_consumer_host",
             8081,
-            &pgqrs_admin.config,
+            queue_name,
         )
+        .create(&store)
         .await
         .expect("Failed to create consumer");
+
         let msgs = consumer.dequeue().await.unwrap();
         (msgs, consumer.worker_id())
     });
@@ -202,70 +209,74 @@ fn test_cli_archive_functionality() {
     // Send a test message using a Producer
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let _sent_message: QueueMessage = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
-        let producer = Producer::new(
-            pgqrs_admin.pool.clone(),
-            &created_queue,
+    let _sent_message: i64 = rt.block_on(async {
+        let store = AnyStore::connect(&config).await.unwrap();
+        let producer = pgqrs::producer(
             "test_cli_archive_functionality_producer_host",
             8080,
-            &pgqrs_admin.config,
+            queue_name,
         )
+        .create(&store)
         .await
         .expect("Failed to create producer");
-        producer
-            .enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
+
+        pgqrs::enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
+            .worker(&*producer)
+            .execute(&store)
             .await
             .unwrap()
     });
 
     // Dequeue and archive using a Consumer
-    let (dequeued_messages, consumer): (Vec<QueueMessage>, Consumer) = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
-        let consumer = Consumer::new(
-            pgqrs_admin.pool.clone(),
-            &created_queue,
+    // We cannot return Box<dyn Consumer> out of block_on easily if it's not Send + Sync + 'static (it is, but type erasure)
+    // Actually we can just do everything inside block_on for simplicity
+    rt.block_on(async {
+        let store = AnyStore::connect(&config).await.unwrap();
+        let consumer = pgqrs::consumer(
             "test_cli_archive_functionality_consumer_host",
             8081,
-            &pgqrs_admin.config,
+            queue_name,
         )
+        .create(&store)
         .await
         .expect("Failed to create consumer");
-        let msgs = consumer.dequeue().await.unwrap();
-        (msgs, consumer)
+
+        let dequeued_messages = consumer.dequeue().await.unwrap();
+
+        assert_eq!(
+            dequeued_messages.len(),
+            1,
+            "Expected 1 dequeued message, found {}",
+            dequeued_messages.len()
+        );
+        let dequeued_message = &dequeued_messages[0];
+        assert_eq!(dequeued_message.payload["test"], "archive_message");
+
+        assert!(dequeued_message.vt > chrono::Utc::now());
+
+        // Archive the dequeued message using the same consumer
+        let archive: Option<ArchivedMessage> =
+            consumer.archive(dequeued_message.id).await.unwrap();
+
+        assert!(
+            archive.is_some(),
+            "Expected archived message to be returned, found None"
+        );
+        let archived_message = archive.unwrap();
+        assert_eq!(archived_message.original_msg_id, dequeued_message.id);
+
+        let archived_list: Vec<ArchivedMessage> = pgqrs::tables(&store)
+            .archive()
+            .filter_by_fk(created_queue.id)
+            .await
+            .unwrap();
+
+        assert!(
+            archived_list.len() == 1,
+            "Expected 1 archived message, found {}",
+            archived_list.len()
+        );
     });
-    assert_eq!(
-        dequeued_messages.len(),
-        1,
-        "Expected 1 dequeued message, found {}",
-        dequeued_messages.len()
-    );
-    let dequeued_message = &dequeued_messages[0];
-    assert_eq!(dequeued_message.payload["test"], "archive_message");
-
-    assert!(dequeued_message.vt > chrono::Utc::now());
-
-    // Archive the dequeued message using the same consumer
-    let archive: Option<ArchivedMessage> =
-        rt.block_on(async { consumer.archive(dequeued_message.id).await.unwrap() });
-
-    assert!(
-        archive.is_some(),
-        "Expected archived message to be returned, found None"
-    );
-    let archived_message = archive.unwrap();
-    assert_eq!(archived_message.original_msg_id, dequeued_message.id);
-
-    let archived_list: Vec<ArchivedMessage> = rt.block_on(async {
-        let pgqrs_admin = pgqrs::admin::Admin::new(&config).await.unwrap();
-        let pgqrs_archive = pgqrs::tables::Archive::new(pgqrs_admin.pool.clone());
-        pgqrs_archive.filter_by_fk(created_queue.id).await.unwrap()
-    });
-    assert!(
-        archived_list.len() == 1,
-        "Expected 1 archived message, found {}",
-        archived_list.len()
-    );
 
     // Clean up
     run_cli_command_expect_success(&db_url, &["queue", "purge", queue_name]);

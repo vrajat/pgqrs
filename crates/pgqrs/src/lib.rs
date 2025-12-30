@@ -64,7 +64,7 @@ pub mod builders;
 // Re-export Tier 1 high-level functions at crate root
 pub use builders::{
     admin, consume, consume_batch, consumer, dequeue, enqueue, produce, produce_batch, producer,
-    tables,
+    tables, worker_handle,
 };
 
 // Re-export worker types and modules at crate root for convenience

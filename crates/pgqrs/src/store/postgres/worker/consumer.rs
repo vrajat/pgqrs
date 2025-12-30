@@ -111,7 +111,7 @@ pub struct Consumer {
     pub pool: PgPool,
     queue_info: crate::types::QueueInfo,
     /// Configuration for the queue
-    config: crate::config::Config,
+    _config: crate::config::Config,
     /// Worker information for this consumer
     worker_info: crate::types::WorkerInfo,
     /// Worker lifecycle manager
@@ -140,7 +140,7 @@ impl Consumer {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
             worker_info,
-            config: config.clone(),
+            _config: config.clone(),
             lifecycle,
         })
     }
@@ -165,7 +165,7 @@ impl Consumer {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
             worker_info,
-            config: config.clone(),
+            _config: config.clone(),
             lifecycle,
         })
     }

@@ -1,5 +1,6 @@
+use pgqrs::store::AnyStore;
 use pgqrs::workflow::{StepGuard, StepResult};
-use pgqrs::{Admin, Config, Workflow};
+use pgqrs::{Config, Workflow};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -9,16 +10,21 @@ struct TestData {
     msg: String,
 }
 
-#[tokio::test]
-async fn test_workflow_lifecycle() -> anyhow::Result<()> {
+async fn create_store() -> AnyStore {
     let schema = "workflow_test";
     let dsn = common::get_postgres_dsn(Some(schema)).await;
-    let config = Config::from_dsn_with_schema(&dsn, schema)?;
+    let config = Config::from_dsn_with_schema(dsn, schema).expect("Failed to create config");
+    AnyStore::connect(&config)
+        .await
+        .expect("Failed to connect store")
+}
 
-    let admin = Admin::new(&config).await?;
-    admin.install().await?;
+#[tokio::test]
+async fn test_workflow_lifecycle() -> anyhow::Result<()> {
+    let store = create_store().await;
+    pgqrs::admin(&store).install().await?;
 
-    let pool = admin.pool.clone();
+    let pool = store.pool();
 
     // Start workflow
     let input = TestData {
@@ -33,7 +39,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     // Step 1: Run
     let step1_id = "step1";
     // step_id is String in macro, but &str here. acquire takes &str.
-    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step1_id).await?;
+    let step_res = StepGuard::acquire::<TestData>(pool, workflow_id, step1_id).await?;
 
     match step_res {
         StepResult::Execute(guard) => {
@@ -46,7 +52,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     }
 
     // Step 1: Rerun (should skip)
-    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step1_id).await?;
+    let step_res = StepGuard::acquire::<TestData>(pool, workflow_id, step1_id).await?;
     match step_res {
         StepResult::Skipped(val) => {
             assert_eq!(val.msg, "step1_done");
@@ -56,7 +62,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
 
     // Step 2: Drop (Panic simulation)
     let step2_id = "step2";
-    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await?;
+    let step_res = StepGuard::acquire::<TestData>(pool, workflow_id, step2_id).await?;
     match step_res {
         StepResult::Execute(guard) => {
             // Explicitly drop without calling success/fail
@@ -69,7 +75,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Step 2: Rerun (should be ERROR state because of drop)
-    let step_res = StepGuard::acquire::<TestData>(&pool, workflow_id, step2_id).await;
+    let step_res = StepGuard::acquire::<TestData>(pool, workflow_id, step2_id).await;
     assert!(
         step_res.is_err(),
         "Step 2 should be in terminal ERROR state after drop"

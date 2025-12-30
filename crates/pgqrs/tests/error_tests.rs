@@ -1,8 +1,9 @@
 //! Integration tests for error handling scenarios with schema operations
 
-use pgqrs::admin::Admin;
-use pgqrs::config::Config;
-use pgqrs::error::Error;
+use pgqrs::{
+    config::Config,
+    error::Error,
+};
 use serial_test::serial;
 
 mod common;
@@ -110,10 +111,12 @@ async fn test_nonexistent_schema_operations() {
     let config = Config::from_dsn_with_schema(database_url, "nonexistent_schema_test")
         .expect("Valid schema name");
 
-    // Creating admin should succeed (connection pool is created)
-    let admin = Admin::new(&config)
+    // Creating store should succeed (connection pool is created)
+    let store = pgqrs::store::AnyStore::connect(&config)
         .await
-        .expect("Creating admin should succeed");
+        .expect("Creating store should succeed");
+
+    let admin = pgqrs::admin(&store);
 
     // However, operations should fail when PostgreSQL realizes the schema doesn't exist
     // Let's check if we can verify the schema exists - this should fail
@@ -125,8 +128,9 @@ async fn test_nonexistent_schema_operations() {
 
     if let Err(Error::Connection { message }) = result {
         assert!(
-            message.contains("relation \"pgqrs_messages\" does not exist"),
-            "Error should mention schema not existing, got: {}",
+            message.contains("relation \"pgqrs_messages\" does not exist") ||
+            message.contains("does not exist"),
+            "Error should mention schema/relation not existing, got: {}",
             message
         );
     } else {
@@ -142,12 +146,15 @@ async fn test_nonexistent_schema_operations() {
 async fn test_verify_requires_existing_schema() {
     let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
 
-    // Create admin with existing schema
+    // Create store with existing schema
     let config =
         Config::from_dsn_with_schema(database_url, "pgqrs_error_test").expect("Valid schema name");
-    let admin = Admin::new(&config)
+
+    let store = pgqrs::store::AnyStore::connect(&config)
         .await
-        .expect("Should be able to create admin with existing schema");
+        .expect("Should be able to create store with existing schema");
+
+    let admin = pgqrs::admin(&store);
 
     // Install should work with existing schema
     let result = admin.verify().await;

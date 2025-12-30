@@ -8,15 +8,16 @@ use serde::Serialize;
 ///
 /// # Example
 /// ```rust,no_run
-/// # use pgqrs::{produce, Config, AnyStore};
+/// # use pgqrs::{produce, Config};
+/// # use pgqrs::store::AnyStore;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let config = Config::from_dsn("postgres://localhost/mydb")?;
+/// let config = Config::from_dsn("postgres://localhost/mydb");
 /// let store = AnyStore::connect(&config).await?;
 ///
 /// // Simple produce
 /// let msg_id = pgqrs::produce(&"order data")
 ///     .to("orders")
-///     .execute(&store, &config)
+///     .execute(&store)
 ///     .await?;
 /// # Ok(())
 /// # }

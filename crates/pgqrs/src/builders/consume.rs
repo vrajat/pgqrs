@@ -9,19 +9,20 @@ use std::future::Future;
 ///
 /// # Example
 /// ```rust,no_run
-/// # use pgqrs::{consume, Config, AnyStore};
+/// # use pgqrs::{consume, Config};
+/// # use pgqrs::store::AnyStore;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let config = Config::from_dsn("postgres://localhost/mydb")?;
+/// let config = Config::from_dsn("postgres://localhost/mydb");
 /// let store = AnyStore::connect(&config).await?;
 ///
 /// // Simple consume
 /// pgqrs::consume()
 ///     .from("orders")
-///     .handler(|msg| async move {
+///     .handler(|msg: pgqrs::types::QueueMessage| async move {
 ///         println!("Processing: {:?}", msg.payload);
 ///         Ok(())
 ///     })
-///     .execute(&store, &config)
+///     .execute(&store)
 ///     .await?;
 /// # Ok(())
 /// # }

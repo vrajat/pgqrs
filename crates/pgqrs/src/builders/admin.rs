@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::store::Store;
-use crate::types::{QueueInfo, WorkerInfo};
+use crate::types::WorkerInfo;
 
 /// Builder for admin operations.
 ///
@@ -38,13 +38,18 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Create a new queue
-    pub async fn create_queue(self, name: &str) -> Result<QueueInfo> {
+    pub async fn create_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.create_queue(name).await
     }
 
+    pub async fn get_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
+        // Use the store's queue table directly as it's the standard way to get queue info
+        self.store.queues().get_by_name(name).await
+    }
+
     /// Delete a queue
-    pub async fn delete_queue(self, queue_info: &QueueInfo) -> Result<()> {
+    pub async fn delete_queue(self, queue_info: &crate::types::QueueInfo) -> crate::error::Result<()> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.delete_queue(queue_info).await
     }
@@ -80,6 +85,62 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     ) -> Result<Vec<crate::types::QueueMessage>> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.get_worker_messages(worker_id).await
+    }
+
+    /// Reclaim messages from zombie consumers
+    pub async fn reclaim_messages(
+        self,
+        queue_id: i64,
+        older_than: Option<chrono::Duration>,
+    ) -> Result<u64> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.reclaim_messages(queue_id, older_than).await
+    }
+
+    /// Get worker statistics for a queue
+    pub async fn worker_stats(self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.worker_stats(queue_name).await
+    }
+
+    /// Purge old workers
+    pub async fn purge_old_workers(self, older_than: chrono::Duration) -> Result<u64> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.purge_old_workers(older_than).await
+    }
+
+    /// Get metrics for a specific queue
+    pub async fn queue_metrics(self, queue_name: &str) -> Result<crate::types::QueueMetrics> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.queue_metrics(queue_name).await
+    }
+
+    /// Get metrics for all queues
+    pub async fn all_queues_metrics(self) -> Result<Vec<crate::types::QueueMetrics>> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.all_queues_metrics().await
+    }
+
+    /// Get system stats
+    pub async fn system_stats(self) -> Result<crate::types::SystemStats> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.system_stats().await
+    }
+
+    /// Get worker health stats
+    pub async fn worker_health_stats(
+        self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<crate::types::WorkerHealthStats>> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.worker_health_stats(heartbeat_timeout, group_by_queue).await
+    }
+
+    /// Release messages locked by a worker
+    pub async fn release_worker_messages(self, worker_id: i64) -> Result<u64> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.release_worker_messages(worker_id).await
     }
 }
 

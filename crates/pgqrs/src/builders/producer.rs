@@ -33,7 +33,10 @@ impl<'a> ProducerBuilder<'a> {
 /// ```rust,no_run
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let store = pgqrs::connect("postgres://localhost/mydb").await?;
+/// use pgqrs::Config;
+/// use pgqrs::store::AnyStore;
+/// let config = Config::from_dsn("postgres://localhost/mydb");
+/// let store = AnyStore::connect(&config).await?;
 /// let producer = pgqrs::producer("localhost", 3000, "orders").create(&store).await?;
 /// # Ok(())
 /// # }

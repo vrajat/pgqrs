@@ -68,6 +68,10 @@ pub trait Admin: Worker {
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
     async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
     async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn reclaim_messages(&self, queue_id: i64, older_than: Option<Duration>) -> crate::error::Result<u64>;
+    async fn worker_stats(&self, queue_name: &str) -> crate::error::Result<crate::types::WorkerStats>;
+    async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64>;
+    async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
 }
 
 /// Producer interface for enqueueing messages.
@@ -200,6 +204,9 @@ impl<T: ?Sized + StepGuard> StepGuardExt for T {}
 #[async_trait]
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
+    /// Get the underlying connection pool.
+    fn pool(&self) -> sqlx::PgPool;
+
     /// Get the configuration for this store
     fn config(&self) -> &Config;
 
