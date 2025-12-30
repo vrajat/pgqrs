@@ -13,9 +13,9 @@ async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(Some("pgqrs_lib_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_test")
         .expect("Failed to create config with lib_test schema");
-    pgqrs::store::AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store")
+        .expect("Failed to connect using pgqrs::connect_with_config()")
 }
 
 #[tokio::test]
@@ -24,30 +24,6 @@ async fn verify() {
     // Verify should succeed (using custom schema "pgqrs_lib_test")
     let result = pgqrs::admin(&store).verify().await;
     assert!(result.is_ok(), "Verify should succeed: {:?}", result);
-}
-
-#[tokio::test]
-async fn test_connect_function() {
-    // Test the new pgqrs::connect() convenience function
-    let database_url = common::get_postgres_dsn(Some("pgqrs_connect_test")).await;
-
-    let store = pgqrs::connect(&database_url)
-        .await
-        .expect("Failed to connect using pgqrs::connect()");
-
-    // Install schema
-    pgqrs::admin(&store)
-        .install()
-        .await
-        .expect("Failed to install schema");
-
-    // Verify the connection works
-    let result = pgqrs::admin(&store).verify().await;
-    assert!(
-        result.is_ok(),
-        "Verify should succeed after connect: {:?}",
-        result
-    );
 }
 
 #[tokio::test]

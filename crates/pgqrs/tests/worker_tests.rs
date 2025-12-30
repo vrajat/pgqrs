@@ -13,7 +13,7 @@ async fn create_store() -> AnyStore {
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_worker_test")
         .expect("Failed to create config with worker_test schema");
 
-    let store = AnyStore::connect(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to connect to store");
 
