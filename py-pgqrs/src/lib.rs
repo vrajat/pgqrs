@@ -407,7 +407,7 @@ fn consume<'a>(
             match res {
                 Ok(_) => {
                     consumer
-                        .delete(msg.id)
+                        .archive(msg.id)
                         .await
                         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 }
