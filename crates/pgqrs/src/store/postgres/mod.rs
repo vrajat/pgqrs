@@ -30,6 +30,7 @@ use crate::config::Config;
 #[derive(Debug, Clone)]
 pub struct PostgresStore {
     pool: PgPool,
+    config: Config,
     queues: Arc<PostgresQueueTable>,
     messages: Arc<PostgresMessageTable>,
     workers: Arc<PostgresWorkerTable>,
@@ -38,14 +39,15 @@ pub struct PostgresStore {
 }
 
 impl PostgresStore {
-    pub fn new(pool: PgPool, _config: &Config) -> Self {
+    pub fn new(pool: PgPool, config: &Config) -> Self {
         Self {
+            pool: pool.clone(),
+            config: config.clone(),
             queues: Arc::new(PostgresQueueTable::new(pool.clone())),
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
             archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
-            workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
-            pool,
+            workflows: Arc::new(PostgresWorkflowTable::new(pool)),
         }
     }
 
@@ -57,6 +59,10 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
+    fn config(&self) -> &Config {
+        &self.config
+    }
+
     fn queues(&self) -> &dyn QueueTable {
         self.queues.as_ref()
     }
@@ -142,5 +148,27 @@ impl Store for PostgresStore {
 
     fn backend_name(&self) -> &'static str {
         "postgres"
+    }
+
+    async fn producer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let producer =
+            PostgresProducer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(producer))
+    }
+
+    async fn consumer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let consumer =
+            PostgresConsumer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(consumer))
     }
 }

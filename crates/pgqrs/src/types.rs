@@ -321,9 +321,9 @@ impl ArchivedMessage {
 pub struct WorkerInfo {
     /// Unique worker ID
     pub id: i64,
-    /// Hostname where the worker is running
+    /// Hostname where the worker is running ("__ephemeral__" for ephemeral workers)
     pub hostname: String,
-    /// Port number for the worker
+    /// Port number for the worker (-1 for ephemeral workers)
     pub port: i32,
     /// Queue ID this worker is processing (None for Admin workers)
     #[serde(skip_serializing_if = "Option::is_none")]

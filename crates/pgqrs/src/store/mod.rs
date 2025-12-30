@@ -26,6 +26,8 @@ pub enum ConcurrencyModel {
 pub mod any;
 pub mod postgres;
 
+pub use any::AnyStore;
+
 /// Trait defining the interface for all worker types.
 #[async_trait]
 pub trait Worker: Send + Sync {
@@ -61,6 +63,10 @@ pub trait Admin: Worker {
         heartbeat_timeout: Duration,
         group_by_queue: bool,
     ) -> crate::error::Result<Vec<crate::types::WorkerHealthStats>>;
+
+    // Worker management
+    async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
+    async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
 }
 
 /// Producer interface for enqueueing messages.
@@ -193,6 +199,9 @@ impl<T: ?Sized + StepGuard> StepGuardExt for T {}
 #[async_trait]
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
+    /// Get the configuration for this store
+    fn config(&self) -> &Config;
+
     /// Get access to the queue repository.
     fn queues(&self) -> &dyn QueueTable;
     /// Get access to the message repository.
@@ -247,6 +256,22 @@ pub trait Store: Clone + Send + Sync + 'static {
 
     /// Returns the backend name (e.g., "postgres", "sqlite", "turso")
     fn backend_name(&self) -> &'static str;
+
+    /// Create an ephemeral producer (NULL hostname/port, auto-cleanup).
+    /// Used by high-level API functions like `produce()`.
+    async fn producer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Producer>>;
+
+    /// Create an ephemeral consumer (NULL hostname/port, auto-cleanup).
+    /// Used by high-level API functions like `consume()`.
+    async fn consumer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Consumer>>;
 }
 
 /// Repository for managing queues.

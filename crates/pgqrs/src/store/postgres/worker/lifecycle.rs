@@ -31,6 +31,13 @@ const INSERT_WORKER: &str = r#"
     RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
 "#;
 
+/// SQL to insert a new ephemeral worker (unique hostname with UUID, port -1)
+const INSERT_EPHEMERAL_WORKER: &str = r#"
+    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
+    VALUES ($1, -1, $2, 'ready')
+    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+"#;
+
 /// SQL for atomic state transition from Ready to Suspended
 const TRANSITION_READY_TO_SUSPENDED: &str = r#"
     UPDATE pgqrs_workers
@@ -172,6 +179,36 @@ impl WorkerLifecycle {
                     })?
             }
         };
+        Ok(worker_info)
+    }
+
+    /// Register an ephemeral worker (one-off, short-lived).
+    ///
+    /// Ephemeral workers use a hostname with format "__ephemeral__<UUID>" and port -1
+    /// to distinguish them from regular workers and avoid unique constraint violations.
+    ///
+    /// # Arguments
+    /// * `queue_info` - Queue information including ID and name
+    ///
+    /// # Returns
+    /// WorkerInfo with unique ephemeral hostname and port -1
+    pub async fn register_ephemeral(
+        &self,
+        queue_info: &crate::types::QueueInfo,
+    ) -> Result<WorkerInfo> {
+        // Generate a unique hostname using UUID
+        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+
+        // Create new ephemeral worker (always creates new, never reuses)
+        let worker_info = sqlx::query_as::<_, WorkerInfo>(INSERT_EPHEMERAL_WORKER)
+            .bind(&hostname)
+            .bind(queue_info.id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to create ephemeral worker: {}", e),
+            })?;
+
         Ok(worker_info)
     }
 

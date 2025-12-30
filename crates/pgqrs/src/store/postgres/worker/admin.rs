@@ -1015,4 +1015,25 @@ impl crate::store::Admin for Admin {
             message: format!("Failed to get worker health stats: {}", e),
         })
     }
+
+    async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
+        // First check if worker has any references
+        let reference_count = self.check_worker_references(worker_id).await?;
+
+        if reference_count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!(
+                    "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
+                    worker_id, reference_count
+                ),
+            });
+        }
+
+        self.workers.delete(worker_id).await
+    }
+
+    async fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
+        // Delegate to the workers table
+        self.workers.list().await
+    }
 }

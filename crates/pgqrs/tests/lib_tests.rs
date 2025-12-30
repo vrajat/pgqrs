@@ -20,6 +20,15 @@ async fn create_admin() -> pgqrs::admin::Admin {
     Admin::new(&config).await.expect("Failed to create Admin")
 }
 
+async fn create_store() -> pgqrs::store::AnyStore {
+    let database_url = common::get_postgres_dsn(Some("pgqrs_lib_test")).await;
+    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_test")
+        .expect("Failed to create config with lib_test schema");
+    pgqrs::store::AnyStore::connect(&config)
+        .await
+        .expect("Failed to create store")
+}
+
 #[tokio::test]
 async fn verify() {
     let admin = create_admin().await;
@@ -65,47 +74,78 @@ async fn test_create_and_list_queue() {
 
 #[tokio::test]
 async fn test_send_message() {
-    let admin = create_admin().await;
-    let queue_info = admin
+    let store = create_store().await;
+
+    // Create queue using admin builder
+    let queue_info = pgqrs::admin(&store)
         .create_queue(TEST_QUEUE_SEND_MESSAGE)
         .await
         .expect("Failed to create queue");
-    let producer = pgqrs::Producer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "test_send_message_producer",
-        3000,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create producer");
-    let consumer = pgqrs::Consumer::new(
-        admin.pool.clone(),
-        &queue_info,
-        "test_send_message_consumer",
-        3001,
-        &admin.config,
-    )
-    .await
-    .expect("Failed to create consumer");
+
+    // For message counting, we still need direct table access
+    let admin = create_admin().await;
     let messages = Messages::new(admin.pool.clone());
 
     let payload = json!({
         "k": "v"
     });
-    assert!(producer.enqueue(&payload).await.is_ok());
+
+    // Use new builder API to produce
+    let msg_id = pgqrs::produce(&payload)
+        .to(TEST_QUEUE_SEND_MESSAGE)
+        .execute(&store)
+        .await
+        .expect("Failed to produce message");
+
+    assert!(msg_id > 0, "Message ID should be positive");
     assert!(messages.count_pending(queue_info.id).await.unwrap() == EXPECTED_MESSAGE_COUNT);
-    let read_messages = consumer.dequeue_many(READ_MESSAGE_COUNT).await;
-    assert!(read_messages.is_ok());
-    let read_messages = read_messages.unwrap();
-    assert_eq!(read_messages.len(), READ_MESSAGE_COUNT);
-    assert!(read_messages[0].payload == payload);
-    let deleted_message = consumer.delete(read_messages[0].id).await;
-    assert!(deleted_message.is_ok());
+
+    // Use new builder API to consume
+    let payload_clone = payload.clone();
+    pgqrs::consume()
+        .from(TEST_QUEUE_SEND_MESSAGE)
+        .handler(move |msg: pgqrs::types::QueueMessage| {
+            let payload_ref = payload_clone.clone();
+            async move {
+                // Verify payload matches
+                assert_eq!(msg.payload, payload_ref);
+                Ok(())
+            }
+        })
+        .execute(&store)
+        .await
+        .expect("Failed to consume message");
+
+    // Verify the message was archived (count should be 0)
     assert!(messages.count_pending(queue_info.id).await.unwrap() == 0);
-    assert!(admin.delete_worker(producer.worker_id()).await.is_ok());
-    assert!(admin.delete_worker(consumer.worker_id()).await.is_ok());
-    assert!(admin.delete_queue(&queue_info).await.is_ok());
+
+    // Cleanup in correct order: 1) Purge queue, 2) Delete workers, 3) Delete queue
+    // Step 1: Purge queue (removes all messages)
+    pgqrs::admin(&store)
+        .purge_queue(TEST_QUEUE_SEND_MESSAGE)
+        .await
+        .expect("Failed to purge queue");
+
+    // Step 2: Delete ephemeral workers (auto-shutdown via Drop, but need deletion for cleanup)
+    let all_workers = pgqrs::admin(&store)
+        .list_workers()
+        .await
+        .expect("Failed to list workers");
+
+    for worker in all_workers {
+        if worker.hostname.starts_with("__ephemeral__") {
+            pgqrs::admin(&store)
+                .delete_worker(worker.id)
+                .await
+                .expect("Failed to delete worker");
+        }
+    }
+
+    // Step 3: Delete the queue
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .expect("Failed to delete queue");
 }
 
 #[tokio::test]

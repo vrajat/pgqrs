@@ -25,11 +25,11 @@
 //! // consumer.dequeue(...)
 //! ```
 
+use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
 use crate::store::postgres::tables::Messages;
 use crate::store::MessageTable;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
-use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -144,6 +144,31 @@ impl Consumer {
             lifecycle,
         })
     }
+
+    /// Create an ephemeral consumer (NULL hostname/port, auto-cleanup).
+    ///
+    /// Used by high-level API functions like `consume()`.
+    pub async fn new_ephemeral(
+        pool: PgPool,
+        queue_info: &crate::types::QueueInfo,
+        config: &crate::config::Config,
+    ) -> Result<Self> {
+        let lifecycle = WorkerLifecycle::new(pool.clone());
+        let worker_info = lifecycle.register_ephemeral(queue_info).await?;
+        tracing::debug!(
+            "Registered ephemeral consumer worker {} for queue '{}'",
+            worker_info.id,
+            queue_info.queue_name
+        );
+
+        Ok(Self {
+            pool: pool.clone(),
+            queue_info: queue_info.clone(),
+            worker_info,
+            config: config.clone(),
+            lifecycle,
+        })
+    }
 }
 
 #[async_trait]
@@ -211,17 +236,19 @@ impl crate::store::Consumer for Consumer {
     }
 
     async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
+        // FIXED: Corrected parameter order to match SQL
+        // SQL expects: $1=queue_id, $2=limit, $3=vt, $4=worker_id
         let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
-            .bind(self.queue_info.id)
-            .bind(limit as i64)
-            .bind(self.config.max_read_ct)
-            .bind(vt as i32)
-            .bind(self.worker_info.id) // worker_id
+            .bind(self.queue_info.id) // $1 - queue_id
+            .bind(limit as i64) // $2 - limit
+            .bind(vt as i32) // $3 - vt (visibility timeout)
+            .bind(self.worker_info.id) // $4 - worker_id
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
                 message: e.to_string(),
             })?;
+
         Ok(messages)
     }
 
@@ -309,5 +336,24 @@ impl crate::store::Consumer for Consumer {
             .await?;
         // Count how many were successfully released
         Ok(results.into_iter().filter(|&released| released).count() as u64)
+    }
+}
+
+// Auto-cleanup for ephemeral workers
+impl Drop for Consumer {
+    fn drop(&mut self) {
+        // Check if this is an ephemeral worker by hostname prefix
+        if self.worker_info.hostname.starts_with("__ephemeral__") {
+            // Spawn a task to properly shutdown the worker
+            let lifecycle = self.lifecycle.clone();
+            let worker_id = self.worker_info.id;
+
+            // Best-effort shutdown - ignore errors since we're in Drop
+            tokio::task::spawn(async move {
+                // Suspend then shutdown the worker
+                let _ = lifecycle.suspend(worker_id).await;
+                let _ = lifecycle.shutdown(worker_id).await;
+            });
+        }
     }
 }

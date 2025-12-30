@@ -22,12 +22,12 @@
 //! // let message = producer.enqueue(&payload).await?;
 //! ```
 
+use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
 use crate::store::postgres::tables::Messages;
 use crate::store::MessageTable;
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
-use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -97,6 +97,33 @@ impl Producer {
             worker_info.id,
             hostname,
             port,
+            queue_info.queue_name
+        );
+        let messages = Messages::new(pool.clone());
+        Ok(Self {
+            pool,
+            queue_info: queue_info.clone(),
+            worker_info: worker_info.clone(),
+            validator: PayloadValidator::new(config.validation_config.clone()),
+            config: config.clone(),
+            lifecycle,
+            messages,
+        })
+    }
+
+    /// Create an ephemeral producer (NULL hostname/port, auto-cleanup).
+    ///
+    /// Used by high-level API functions like `produce()`.
+    pub async fn new_ephemeral(
+        pool: PgPool,
+        queue_info: &QueueInfo,
+        config: &crate::config::Config,
+    ) -> Result<Self> {
+        let lifecycle = WorkerLifecycle::new(pool.clone());
+        let worker_info = lifecycle.register_ephemeral(queue_info).await?;
+        tracing::debug!(
+            "Registered ephemeral producer worker {} for queue '{}'",
+            worker_info.id,
             queue_info.queue_name
         );
         let messages = Messages::new(pool.clone());
@@ -311,5 +338,24 @@ impl crate::store::Producer for Producer {
 
     fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
         self.validator.rate_limit_status()
+    }
+}
+
+// Auto-cleanup for ephemeral workers
+impl Drop for Producer {
+    fn drop(&mut self) {
+        // Check if this is an ephemeral worker by hostname prefix
+        if self.worker_info.hostname.starts_with("__ephemeral__") {
+            // Spawn a task to properly shutdown the worker
+            let lifecycle = self.lifecycle.clone();
+            let worker_id = self.worker_info.id;
+
+            // Best-effort shutdown - ignore errors since we're in Drop
+            tokio::task::spawn(async move {
+                // Suspend then shutdown the worker
+                let _ = lifecycle.suspend(worker_id).await;
+                let _ = lifecycle.shutdown(worker_id).await;
+            });
+        }
     }
 }

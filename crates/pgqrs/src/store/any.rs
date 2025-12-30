@@ -20,7 +20,59 @@ pub enum AnyStore {
 }
 
 impl AnyStore {
-    /// Connect to a database using a DSN string.
+    /// Connect to a database using a configuration object.
+    ///
+    /// This is the primary connection method that applies all configuration settings including:
+    /// - Schema search path
+    /// - Connection pool size
+    /// - Max read count
+    /// - Connection timeout
+    ///
+    /// # Arguments
+    /// * `config` - Configuration object
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use pgqrs::{store::any::AnyStore, Config};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = Config::from_dsn("postgresql://localhost/mydb")?;
+    /// let store = AnyStore::connect(&config).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect(config: &Config) -> crate::error::Result<Self> {
+        if config.dsn.starts_with("postgres://") || config.dsn.starts_with("postgresql://") {
+            // Create search_path SQL for schema
+            let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
+
+            let pool = PgPoolOptions::new()
+                .max_connections(config.max_connections)
+                .after_connect(move |conn, _meta| {
+                    let sql = search_path_sql.clone();
+                    Box::pin(async move {
+                        sqlx::query(&sql).execute(&mut *conn).await?;
+                        Ok(())
+                    })
+                })
+                .connect(&config.dsn)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: e.to_string(),
+                })?;
+
+            Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
+        } else {
+            Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: format!("Unsupported DSN format: {}", config.dsn),
+            })
+        }
+    }
+
+    /// Connect to a database using just a DSN string (simple connection).
+    ///
+    /// This method uses default configuration and the "public" schema.
+    /// For custom schemas or advanced configuration, use [`connect`](Self::connect) instead.
     ///
     /// The DSN format determines which backend is used:
     /// - `postgres://` or `postgresql://` → PostgreSQL
@@ -32,13 +84,13 @@ impl AnyStore {
     ///
     /// # Example
     /// ```no_run
-    /// # use pgqrs::store::AnyStore;
+    /// # use pgqrs::store::any::AnyStore;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let store = AnyStore::connect("postgresql://localhost/mydb").await?;
+    /// let store = AnyStore::connect_with_dsn("postgresql://localhost/mydb").await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(dsn: &str) -> crate::error::Result<Self> {
+    pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
         if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
             let pool = PgPool::connect(dsn)
                 .await
@@ -57,49 +109,16 @@ impl AnyStore {
             })
         }
     }
-
-    /// Connect to a database using a configuration object.
-    ///
-    /// This method applies all configuration settings including:
-    /// - Schema search path
-    /// - Connection pool size
-    /// - Max read count
-    /// - Connection timeout
-    ///
-    /// # Arguments
-    /// * `config` - Configuration object
-    pub async fn connect_with_config(config: &Config) -> crate::error::Result<Self> {
-        if config.dsn.starts_with("postgres://") || config.dsn.starts_with("postgresql://") {
-            // Create search_path SQL for schema
-            let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
-
-            let pool = PgPoolOptions::new()
-                .max_connections(config.max_connections)
-                .after_connect(move |conn, _meta| {
-                    let sql = search_path_sql.clone();
-                    Box::pin(async move {
-                        sqlx::query(&sql).execute(conn).await?;
-                        Ok(())
-                    })
-                })
-                .connect(&config.dsn)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: e.to_string(),
-                })?;
-
-            Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
-        } else {
-            Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: format!("Unsupported DSN format: {}", config.dsn),
-            })
-        }
-    }
 }
 
 #[async_trait]
 impl Store for AnyStore {
+    fn config(&self) -> &Config {
+        match self {
+            AnyStore::Postgres(s) => s.config(),
+        }
+    }
+
     fn queues(&self) -> &dyn QueueTable {
         match self {
             AnyStore::Postgres(s) => s.queues(),
@@ -195,6 +214,26 @@ impl Store for AnyStore {
     fn backend_name(&self) -> &'static str {
         match self {
             AnyStore::Postgres(s) => s.backend_name(),
+        }
+    }
+
+    async fn producer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Producer>> {
+        match self {
+            AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
+        }
+    }
+
+    async fn consumer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Consumer>> {
+        match self {
+            AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
         }
     }
 }

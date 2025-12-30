@@ -58,8 +58,14 @@ mod validation;
 pub mod worker;
 pub mod workflow;
 
-// Re-export worker types at crate root for convenience
-pub use crate::worker::admin;
+// Tier 1: High-level API (builders module)
+pub mod builders;
+
+// Re-export Tier 1 high-level functions at crate root
+pub use builders::{admin, consume, consume_batch, produce, produce_batch};
+
+// Re-export worker types and modules at crate root for convenience
+pub use crate::worker::admin; // admin module
 pub use crate::worker::consumer;
 pub use crate::worker::producer;
 pub use crate::worker::{Admin, Consumer, Producer, Worker, WorkerHandle};
