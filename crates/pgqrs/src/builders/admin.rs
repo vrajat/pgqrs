@@ -57,6 +57,12 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         admin.delete_queue(queue_info).await
     }
 
+    /// Delete a queue by name
+    pub async fn delete_queue_by_name(self, name: &str) -> crate::error::Result<()> {
+        let queue_info = self.store.queues().get_by_name(name).await?;
+        self.delete_queue(&queue_info).await
+    }
+
     /// Purge all messages from a queue
     pub async fn purge_queue(self, queue_name: &str) -> Result<()> {
         let admin = self.store.admin(self.store.config()).await?;
