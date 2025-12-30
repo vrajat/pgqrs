@@ -72,6 +72,9 @@ pub use crate::store::{
 };
 pub use crate::worker::WorkerHandle;
 
+// NOTE: These Postgres-specific implementation types are exported for macro support
+// and legacy compatibility. New code should use the Store trait methods instead.
+// TODO(#125): Consider moving these to a `pgqrs::postgres` sub-module.
 pub use crate::store::postgres::workflow::guard::StepGuard as StepGuardImpl;
 pub use crate::store::postgres::workflow::guard::StepResult as StepResultImpl;
 pub use crate::store::postgres::workflow::handle::Workflow as WorkflowImpl;

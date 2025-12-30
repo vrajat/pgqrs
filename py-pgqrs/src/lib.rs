@@ -181,17 +181,14 @@ impl PyStore {
                 gethostname().to_string_lossy(),
                 uuid::Uuid::new_v4()
             );
-            let builder = rust_pgqrs::producer(&hostname, 0, &queue);
-            let p_borrowed = builder
-                .create(&store)
+            // Use Store trait method directly - returns Box<dyn Producer + 'static>
+            let producer = store
+                .producer(&queue, &hostname, 0, store.config())
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-            let p_static: Box<dyn rust_pgqrs::store::Producer + 'static> =
-                unsafe { std::mem::transmute(p_borrowed) };
-
             Ok(Producer {
-                inner: Arc::new(p_static),
+                inner: Arc::new(producer),
             })
         })
     }
@@ -204,17 +201,14 @@ impl PyStore {
                 gethostname().to_string_lossy(),
                 uuid::Uuid::new_v4()
             );
-            let builder = rust_pgqrs::consumer(&hostname, 0, &queue);
-            let c_borrowed = builder
-                .create(&store)
+            // Use Store trait method directly - returns Box<dyn Consumer + 'static>
+            let consumer = store
+                .consumer(&queue, &hostname, 0, store.config())
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-            let c_static: Box<dyn rust_pgqrs::store::Consumer + 'static> =
-                unsafe { std::mem::transmute(c_borrowed) };
-
             Ok(Consumer {
-                inner: Arc::new(c_static),
+                inner: Arc::new(consumer),
             })
         })
     }
@@ -610,16 +604,11 @@ impl Producer {
         let rt = get_runtime();
 
         let producer = rt.block_on(async move {
-            let builder = rust_pgqrs::producer(&hostname, port, &queue);
-            let p_borrowed = builder
-                .create(&store)
+            // Use Store trait method directly - returns Box<dyn Producer + 'static>
+            store
+                .producer(&queue, &hostname, port, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            let p_static: Box<dyn rust_pgqrs::store::Producer + 'static> =
-                unsafe { std::mem::transmute(p_borrowed) };
-
-            Ok::<_, PyErr>(p_static)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
 
         Ok(Producer {
@@ -680,16 +669,11 @@ impl Consumer {
         let rt = get_runtime();
 
         let consumer = rt.block_on(async move {
-            let builder = rust_pgqrs::consumer(&hostname, port, &queue);
-            let c_borrowed = builder
-                .create(&store)
+            // Use Store trait method directly - returns Box<dyn Consumer + 'static>
+            store
+                .consumer(&queue, &hostname, port, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            let c_static: Box<dyn rust_pgqrs::store::Consumer + 'static> =
-                unsafe { std::mem::transmute(c_borrowed) };
-
-            Ok::<_, PyErr>(c_static)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })?;
 
         Ok(Consumer {

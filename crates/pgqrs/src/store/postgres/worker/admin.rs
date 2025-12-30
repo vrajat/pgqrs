@@ -381,43 +381,57 @@ impl Admin {
 
         self.workers.delete(worker_id).await
     }
+
+    /// Get the worker ID, returning an error if not registered.
+    /// Use this in async methods that can propagate errors.
+    fn try_worker_id(&self) -> Result<i64> {
+        self.worker_info
+            .as_ref()
+            .map(|w| w.id)
+            .ok_or_else(|| crate::error::Error::WorkerNotRegistered {
+                message: "Admin must be registered before using Worker methods. Call register() first.".to_string()
+            })
+    }
 }
 
 #[async_trait]
 impl crate::store::Worker for Admin {
     fn worker_id(&self) -> i64 {
+        // Return -1 as sentinel value if not registered.
+        // Async methods should use try_worker_id() which returns Result.
         self.worker_info
             .as_ref()
-            .expect("Admin must be registered before using Worker methods. Call register() first.")
-            .id
+            .map(|w| w.id)
+            .unwrap_or(-1)
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let worker_id = self.worker_id();
+        let worker_id = self.try_worker_id()?;
         self.lifecycle.heartbeat(worker_id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle.is_healthy(self.worker_id(), max_age).await
+        let worker_id = self.try_worker_id()?;
+        self.lifecycle.is_healthy(worker_id, max_age).await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let worker_id = self.worker_id();
+        let worker_id = self.try_worker_id()?;
         self.lifecycle.get_status(worker_id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let worker_id = self.worker_id();
+        let worker_id = self.try_worker_id()?;
         self.lifecycle.suspend(worker_id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let worker_id = self.worker_id();
+        let worker_id = self.try_worker_id()?;
         self.lifecycle.resume(worker_id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let worker_id = self.worker_id();
+        let worker_id = self.try_worker_id()?;
         self.lifecycle.shutdown(worker_id).await
     }
 }
