@@ -1,19 +1,18 @@
-use pgqrs::{tables::Queues, Admin, Table};
-
 mod common;
 
-async fn create_admin() -> pgqrs::admin::Admin {
+async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(None).await;
-    Admin::new(&pgqrs::config::Config::from_dsn(database_url))
+    let config = pgqrs::config::Config::from_dsn(database_url);
+    pgqrs::store::AnyStore::connect(&config)
         .await
-        .expect("Failed to create Admin")
+        .expect("Failed to create Store")
 }
 
 #[tokio::test]
 async fn verify() {
-    let admin = create_admin().await;
+    let store = create_store().await;
     // Verify should succeed (using default schema "public")
-    assert!(admin.verify().await.is_ok());
+    assert!(pgqrs::admin(&store).verify().await.is_ok());
 }
 
 #[tokio::test]
@@ -26,29 +25,35 @@ async fn test_default_schema_backward_compatibility() {
     let config = pgqrs::config::Config::from_dsn(&database_url);
     assert_eq!(config.schema, "public");
 
-    // Test that admin operations work with default schema
-    let admin = Admin::new(&config).await.expect("Failed to create admin");
+    // Test that store operations work with default schema
+    let store = pgqrs::store::AnyStore::connect(&config)
+        .await
+        .expect("Failed to create store");
 
     // Verify installation in default schema
-    assert!(admin.verify().await.is_ok());
+    assert!(pgqrs::admin(&store).verify().await.is_ok());
 
     // Test basic queue operations in default schema
     let queue_name = "test_default_schema_queue".to_string();
-    let queue_result = admin.create_queue(&queue_name).await;
+    let queue_result = pgqrs::admin(&store).create_queue(&queue_name).await;
     assert!(
         queue_result.is_ok(),
         "Should create queue in default schema"
     );
+    let queue_info = queue_result.unwrap();
 
-    // Test queue listing
-    let queue_obj = Queues::new(admin.pool.clone());
-    let queues = queue_obj.list().await.expect("Should list queues");
+    // Test queue listing using tables API
+    let queues = pgqrs::tables(&store)
+        .queues()
+        .list()
+        .await
+        .expect("Should list queues");
     let found_queue = queues.iter().find(|q| q.queue_name == queue_name);
     assert!(found_queue.is_some(), "Should find created queue in list");
 
     // Cleanup
     assert!(
-        admin.delete_queue(found_queue.unwrap()).await.is_ok(),
+        pgqrs::admin(&store).delete_queue(&queue_info).await.is_ok(),
         "Should delete queue"
     );
 }
