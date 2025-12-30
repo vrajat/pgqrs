@@ -67,6 +67,7 @@ pub trait Admin: Worker {
     // Worker management
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
     async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
+    async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
 }
 
 /// Producer interface for enqueueing messages.

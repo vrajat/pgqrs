@@ -66,6 +66,21 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.list_workers().await
     }
+
+    /// Move messages to dead letter queue
+    pub async fn dlq(self) -> Result<Vec<i64>> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.dlq().await
+    }
+
+    /// Get messages held by a specific worker
+    pub async fn get_worker_messages(
+        self,
+        worker_id: i64,
+    ) -> Result<Vec<crate::types::QueueMessage>> {
+        let admin = self.store.admin(self.store.config()).await?;
+        admin.get_worker_messages(worker_id).await
+    }
 }
 
 /// Create an admin builder for administrative operations

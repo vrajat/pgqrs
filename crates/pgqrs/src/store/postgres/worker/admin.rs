@@ -29,6 +29,7 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
+use crate::types::QueueMessage;
 
 use crate::tables::{Archive, Messages, Queues, Table, Workers};
 use crate::types::QueueMetrics;
@@ -1035,5 +1036,31 @@ impl crate::store::Admin for Admin {
     async fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
         // Delegate to the workers table
         self.workers.list().await
+    }
+
+    async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        // First validate the worker exists
+        let worker = self.workers.get(worker_id).await?;
+        if worker.queue_id.is_none() {
+            return Err(crate::error::Error::Connection {
+                message: "Cannot get messages for admin worker".to_string(),
+            });
+        }
+
+        // Get all messages held by this worker (locked by consumer_worker_id)
+        let messages = sqlx::query_as::<_, QueueMessage>(
+            "SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+             FROM pgqrs_messages
+             WHERE consumer_worker_id = $1
+             ORDER BY id"
+        )
+        .bind(worker_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to get messages for worker {}: {}", worker_id, e),
+        })?;
+
+        Ok(messages)
     }
 }

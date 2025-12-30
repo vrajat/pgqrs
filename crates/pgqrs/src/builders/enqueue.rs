@@ -1,5 +1,4 @@
 //! EnqueueBuilder for advanced enqueue options
-//! TODO: Implement builder pattern for priority, delay, metadata
 
 use crate::error::Result;
 use crate::store::Store;
@@ -7,15 +6,13 @@ use serde::Serialize;
 
 /// Builder for enqueue operations with advanced options.
 ///
-/// This will support:
-/// - `.to(queue)` - specify queue
-/// - `.priority(Priority::High)` - set priority
-/// - `.delay(Duration)` - delay message
-/// - `.metadata(Value)` - add metadata
-/// - `.execute(store)` - execute the enqueue
+/// Supports two modes:
+/// 1. Ephemeral worker (auto-managed): `.to(queue).execute(store)`
+/// 2. Managed worker: `.worker(&producer).execute()`
 pub struct EnqueueBuilder<'a, T> {
     message: &'a T,
     queue: Option<String>,
+    worker: Option<&'a dyn crate::store::Producer>,
 }
 
 impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
@@ -23,25 +20,49 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         Self {
             message,
             queue: None,
+            worker: None,
         }
     }
 
+    /// Specify queue (for ephemeral worker mode)
     pub fn to(mut self, queue: &str) -> Self {
         self.queue = Some(queue.to_string());
         self
     }
 
-    pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<i64> {
-        let queue = self
-            .queue
-            .ok_or_else(|| crate::error::Error::ValidationFailed {
-                reason: "Queue name is required".to_string(),
-            })?;
-
-        let producer = store.producer_ephemeral(&queue, store.config()).await?;
-        let json =
-            serde_json::to_value(self.message).map_err(crate::error::Error::Serialization)?;
-        let msg = producer.enqueue(&json).await?;
-        Ok(msg.id)
+    /// Use a managed worker instead of ephemeral
+    pub fn worker(mut self, producer: &'a dyn crate::store::Producer) -> Self {
+        self.worker = Some(producer);
+        self
     }
+
+    /// Execute with ephemeral worker (requires .to())
+    pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<i64> {
+        if let Some(producer) = self.worker {
+            // Managed worker mode
+            let json =
+                serde_json::to_value(self.message).map_err(crate::error::Error::Serialization)?;
+            let msg = producer.enqueue(&json).await?;
+            Ok(msg.id)
+        } else {
+            // Ephemeral worker mode
+            let queue = self
+                .queue
+                .ok_or_else(|| crate::error::Error::ValidationFailed {
+                    reason: "Queue name is required. Use .to(\"queue-name\") or .worker(&producer)"
+                        .to_string(),
+                })?;
+
+            let producer = store.producer_ephemeral(&queue, store.config()).await?;
+            let json =
+                serde_json::to_value(self.message).map_err(crate::error::Error::Serialization)?;
+            let msg = producer.enqueue(&json).await?;
+            Ok(msg.id)
+        }
+    }
+}
+
+/// Create a new enqueue builder for a message
+pub fn enqueue<T: Serialize + Send + Sync>(message: &T) -> EnqueueBuilder<'_, T> {
+    EnqueueBuilder::new(message)
 }
