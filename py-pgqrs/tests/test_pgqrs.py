@@ -397,3 +397,99 @@ async def test_workflow_crash_recovery(postgres_dsn, schema):
     assert result == "b_a_crash_test"
     assert step1_called == 1
     assert step2_called == 1
+
+@pytest.mark.asyncio
+async def test_ephemeral_consume_success(postgres_dsn, schema):
+    """
+    Test that successful consumption archives the message.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue = "ephemeral_success_q"
+    await admin.create_queue(queue)
+
+    payload = {"data": "test_success"}
+    await pgqrs.produce(store, queue, payload)
+
+    consumed_event = asyncio.Event()
+
+    async def handler(msg):
+        assert msg.payload == payload
+        consumed_event.set()
+        return True
+
+    await pgqrs.consume(store, queue, handler)
+    assert consumed_event.is_set()
+
+    # Verify message is archived and not in queue
+    assert await (await admin.get_messages()).count() == 0
+    assert await (await admin.get_archive()).count() == 1
+
+@pytest.mark.asyncio
+async def test_ephemeral_consume_failure(postgres_dsn, schema):
+    """
+    Test that failed consumption (exception) does NOT archive the message.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue = "ephemeral_fail_q"
+    await admin.create_queue(queue)
+
+    payload = {"data": "test_fail"}
+    await pgqrs.produce(store, queue, payload)
+
+    async def handler(msg):
+        raise ValueError("Simulated failure")
+
+    with pytest.raises(ValueError, match="Simulated failure"):
+        await pgqrs.consume(store, queue, handler)
+
+    # Verify message is STILL in queue and NOT archived
+    assert await (await admin.get_messages()).count() == 1
+    assert await (await admin.get_archive()).count() == 0
+
+@pytest.mark.asyncio
+async def test_ephemeral_consume_batch_success(postgres_dsn, schema):
+    """
+    Test that successful batch consumption archives all messages.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue = "ephemeral_batch_success_q"
+    await admin.create_queue(queue)
+
+    for i in range(3):
+        await pgqrs.produce(store, queue, {"i": i})
+
+    consumed_event = asyncio.Event()
+
+    async def batch_handler(msgs):
+        assert len(msgs) == 3
+        consumed_event.set()
+        return True
+
+    await pgqrs.consume_batch(store, queue, 10, batch_handler)
+    assert consumed_event.is_set()
+
+    # Verify all messages are archived
+    assert await (await admin.get_messages()).count() == 0
+    assert await (await admin.get_archive()).count() == 3
+
+@pytest.mark.asyncio
+async def test_ephemeral_consume_batch_failure(postgres_dsn, schema):
+    """
+    Test that failed batch consumption does NOT archive any messages.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue = "ephemeral_batch_fail_q"
+    await admin.create_queue(queue)
+
+    for i in range(3):
+        await pgqrs.produce(store, queue, {"i": i})
+
+    async def batch_handler(msgs):
+        raise ValueError("Simulated batch failure")
+
+    with pytest.raises(ValueError, match="Simulated batch failure"):
+        await pgqrs.consume_batch(store, queue, 10, batch_handler)
+
+    # Verify all messages are STILL in queue
+    assert await (await admin.get_messages()).count() == 3
+    assert await (await admin.get_archive()).count() == 0
