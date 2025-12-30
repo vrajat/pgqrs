@@ -585,27 +585,220 @@ Teams can choose the appropriate style:
 
 ---
 
-## 10. Open Questions
+## 10. Python API Redesign
 
-1. ~~**Naming:** `pgqrs::send` vs `pgqrs::enqueue` vs `pgqrs::publish`?~~ **Resolved:** Use `enqueue`/`dequeue` (queue terminology)
-2. ~~**One API or two?**~~ **Resolved:** Both builder and direct methods (like sqlx)
-3. **Error types:** Should builder errors be distinct from execution errors?
-4. **Ephemeral worker limits:** Should there be a cap on concurrent ephemeral workers?
-5. **Telemetry:** Should builders support injecting tracing spans?
+The Python bindings should follow the same two-level pattern as Rust.
+
+### 10.1 Current Python API (Problems)
+
+```python
+# Current: Requires Admin to create Producer/Consumer
+admin = pgqrs.Admin(dsn, schema=schema)
+await admin.install()
+await admin.create_queue("orders")
+
+# Producer/Consumer take Admin as first argument (unusual)
+producer = pgqrs.Producer(admin, "orders", "hostname", 8100)
+consumer = pgqrs.Consumer(admin, "orders", "hostname", 8200)
+
+await producer.enqueue({"data": "test"})
+msgs = await consumer.dequeue()
+await consumer.archive(msg.id)
+```
+
+**Issues:**
+1. `Admin` is overloaded - both setup AND worker factory
+2. Workers take `Admin` as first arg (should be `Store`)
+3. No high-level API for simple cases
+4. Hostname/port required even for simple scripts
+
+### 10.2 Proposed Python API
+
+**Two levels, matching Rust:**
+
+```python
+import pgqrs
+
+# Connect (returns Store)
+store = await pgqrs.connect("postgres://localhost/mydb")
+# or with config
+store = await pgqrs.connect_with(pgqrs.Config(
+    dsn="postgres://localhost/mydb",
+    schema="myapp",
+    max_connections=10
+))
+
+# === High-level API (ephemeral workers) ===
+
+# Produce
+await pgqrs.produce(store, "orders", {"order_id": "123"})
+await pgqrs.produce_batch(store, "orders", [order1, order2])
+
+# Consume (with callback)
+async def handler(msg):
+    order = msg.payload
+    await process_order(order)
+    # return normally → auto-archive
+    # raise exception → message stays in queue
+
+await pgqrs.consume(store, "orders", handler)
+await pgqrs.consume_batch(store, "orders", 10, batch_handler)
+
+# === Low-level API (you manage workers) ===
+
+# Create workers
+producer = await store.producer("orders")
+consumer = await store.consumer("orders")
+
+# Enqueue/dequeue with worker reference
+msg_id = await pgqrs.enqueue(producer, {"order_id": "123"})
+msg_ids = await pgqrs.enqueue_batch(producer, [order1, order2])
+
+msgs = await pgqrs.dequeue(consumer, 10)
+await pgqrs.archive(consumer, msg)
+await pgqrs.archive_batch(consumer, msgs)
+
+# Worker lifecycle
+await producer.heartbeat()
+await consumer.heartbeat()
+await producer.shutdown()
+await consumer.shutdown()
+
+# === Admin API (tier 3) ===
+
+admin = pgqrs.admin(store)
+await admin.install()
+await admin.verify()
+await admin.create_queue("orders")
+await admin.delete_queue("old-queue")
+```
+
+### 10.3 Changes Required
+
+| Current | Proposed | Notes |
+|---------|----------|-------|
+| `Admin(dsn, schema)` | `pgqrs.connect(dsn)` | Returns `Store` |
+| `Producer(admin, queue, host, port)` | `store.producer(queue)` | No host/port for simple case |
+| `Consumer(admin, queue, host, port)` | `store.consumer(queue)` | No host/port for simple case |
+| `producer.enqueue(payload)` | `pgqrs.enqueue(producer, payload)` | Function takes worker |
+| `consumer.dequeue()` | `pgqrs.dequeue(consumer, batch_size)` | Explicit batch size |
+| `consumer.archive(msg_id)` | `pgqrs.archive(consumer, msg)` | Takes message, not just ID |
+| N/A | `pgqrs.produce(store, queue, payload)` | NEW: high-level |
+| N/A | `pgqrs.consume(store, queue, handler)` | NEW: high-level |
+
+### 10.4 Full Python Example
+
+```python
+import pgqrs
+import asyncio
+
+async def main():
+    # Connect
+    store = await pgqrs.connect("postgres://localhost/mydb")
+    
+    # Setup (one-time)
+    admin = pgqrs.admin(store)
+    await admin.install()
+    await admin.create_queue("orders")
+    
+    # === Simple case: High-level API ===
+    
+    # Produce
+    await pgqrs.produce(store, "orders", {
+        "order_id": "ORD-123",
+        "customer": "Alice",
+        "total": 99.99
+    })
+    
+    # Consume
+    async def process_order(msg):
+        order = msg.payload
+        print(f"Processing order {order['order_id']}")
+        # Do work...
+        # Return normally = archive
+        # Raise exception = retry
+    
+    await pgqrs.consume(store, "orders", process_order)
+    
+    # === Production case: Low-level API ===
+    
+    producer = await store.producer("orders")
+    consumer = await store.consumer("orders")
+    
+    # Producer loop
+    for order in get_orders():
+        await pgqrs.enqueue(producer, order)
+        await producer.heartbeat()
+    
+    # Consumer loop
+    while True:
+        await consumer.heartbeat()
+        msgs = await pgqrs.dequeue(consumer, batch_size=10)
+        
+        for msg in msgs:
+            try:
+                await process_order(msg)
+                await pgqrs.archive(consumer, msg)
+            except Exception as e:
+                print(f"Failed: {e}")  # Will retry
+    
+    # Cleanup
+    await producer.shutdown()
+    await consumer.shutdown()
+
+asyncio.run(main())
+```
+
+### 10.5 Decorator API (Workflows - Existing)
+
+The existing decorator API for workflows remains unchanged:
+
+```python
+from pgqrs.decorators import workflow, step
+
+@step
+async def validate_inventory(ctx, order):
+    # ...
+    return inventory_result
+
+@step  
+async def charge_payment(ctx, order):
+    # ...
+    return payment_result
+
+@workflow
+async def process_order(ctx, order):
+    inv = await validate_inventory(ctx, order)
+    payment = await charge_payment(ctx, order)
+    return {"inventory": inv, "payment": payment}
+```
+
+**Note:** Workflow API redesign is deferred (same as Rust).
 
 ---
 
-## 11. Summary
+## 11. Open Questions
+
+1. ~~**Naming:** `pgqrs::send` vs `pgqrs::enqueue` vs `pgqrs::publish`?~~ **Resolved:** Use `enqueue`/`dequeue` (queue terminology)
+2. ~~**One API or two?**~~ **Resolved:** Both high-level and low-level
+3. **Error types:** Should builder errors be distinct from execution errors?
+4. **Ephemeral worker limits:** Should there be a cap on concurrent ephemeral workers?
+5. **Telemetry:** Should builders support injecting tracing spans?
+6. **Python: Host/port for workers:** Should low-level workers still support custom hostname/port, or auto-generate?
+
+---
+
+## 12. Summary
 
 This proposal introduces sqlx-inspired APIs for pgqrs:
 
-**Two new patterns:**
-1. **Builder pattern:** `pgqrs::enqueue(&msg).to("q").priority(High).execute(&store)`
-2. **Direct pattern:** `store.enqueue("q", &msg)`
+**Two API levels:**
+1. **High-level:** `pgqrs::produce()` / `pgqrs::consume()` - ephemeral workers, auto-managed
+2. **Low-level:** `pgqrs::enqueue()` / `pgqrs::dequeue()` / `pgqrs::archive()` - you manage workers
 
 **Key decisions:**
-- Use queue terminology: `enqueue`/`dequeue` (not send/receive)
-- Support both patterns like sqlx (builder + executor trait)
-- Coexist with existing worker-based API for long-running consumers
+- Use queue terminology: `produce`/`consume` (high), `enqueue`/`dequeue` (low)
+- Tiered namespace: Tier 1 (top-level), Tier 2 (workflow::), Tier 3 (admin/builder)
+- Python follows same pattern as Rust
 
 The implementation leverages existing trait infrastructure and can be rolled out incrementally.
