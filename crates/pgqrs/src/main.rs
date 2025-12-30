@@ -441,7 +441,10 @@ async fn handle_worker_commands(
                         .get_by_name(&queue_name)
                         .await?
                         .id;
-                    pgqrs::tables(store).workers().filter_by_fk(queue_id).await?
+                    pgqrs::tables(store)
+                        .workers()
+                        .filter_by_fk(queue_id)
+                        .await?
                 }
                 None => {
                     tracing::info!("Listing all workers...");

@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, StepGuard as StepGuardTrait, Store, WorkerTable,
-    Workflow as WorkflowTrait, WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Store, WorkerTable, Workflow as WorkflowTrait,
+    WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -126,14 +126,14 @@ impl Store for PostgresStore {
         &self,
         workflow_id: i64,
         step_id: &str,
-    ) -> crate::error::Result<Option<Box<dyn StepGuardTrait>>> {
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
         use crate::store::postgres::workflow::guard::StepResult;
         let result =
             PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
                 .await?;
         match result {
-            StepResult::Execute(guard) => Ok(Some(Box::new(guard))),
-            StepResult::Skipped(_) => Ok(None),
+            StepResult::Execute(guard) => Ok(crate::store::StepResult::Execute(Box::new(guard))),
+            StepResult::Skipped(val) => Ok(crate::store::StepResult::Skipped(val)),
         }
     }
 

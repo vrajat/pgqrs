@@ -47,12 +47,6 @@ const CHECK_QUEUE_EXISTS: &str = r#"
     SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1);
 "#;
 
-/// Input data for creating a new queue
-#[derive(Debug)]
-pub struct NewQueue {
-    pub queue_name: String,
-}
-
 /// Queues table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_queues` table without business logic.
@@ -63,9 +57,6 @@ pub struct Queues {
 
 impl Queues {
     /// Create a new Queues instance.
-    ///
-    /// # Arguments
-    /// * `pool` - Database connection pool
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
@@ -77,7 +68,7 @@ impl Queues {
     /// * `tx` - Database transaction
     ///
     /// # Returns
-    /// Number of rows affected (should be 1 if successful)
+    /// * `Result<u64>` - Number of rows affected
     pub async fn delete_by_name_tx<'a, 'b: 'a>(
         name: &str,
         tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
@@ -97,33 +88,59 @@ impl Queues {
 
 #[async_trait]
 impl crate::store::QueueTable for Queues {
-    async fn insert(&self, data: crate::tables::NewQueue) -> Result<QueueInfo> {
+    /// Insert a new queue record.
+    ///
+    /// # Arguments
+    /// * `data` - New queue information
+    ///
+    /// # Returns
+    /// The created queue with generated ID and timestamp
+    async fn insert(&self, data: crate::types::NewQueue) -> Result<QueueInfo> {
         let queue = sqlx::query_as::<_, QueueInfo>(INSERT_QUEUE)
-            .bind(data.queue_name)
+            .bind(&data.queue_name)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to create queue: {}", e),
+            .map_err(|e| {
+                // Check if this is a unique constraint violation (queue already exists)
+                if let sqlx::Error::Database(db_err) = &e {
+                    if db_err.code().as_deref() == Some("23505") {
+                        // PostgreSQL unique violation code
+                        return crate::error::Error::QueueAlreadyExists {
+                            name: data.queue_name.clone(),
+                        };
+                    }
+                }
+                crate::error::Error::Connection {
+                    message: format!("Failed to insert queue '{}': {}", data.queue_name, e),
+                }
             })?;
+
         Ok(queue)
     }
 
+    /// Get a queue by ID.
+    ///
+    /// # Arguments
+    /// * `id` - Queue ID to retrieve
+    ///
+    /// # Returns
+    /// The queue record
     async fn get(&self, id: i64) -> Result<QueueInfo> {
         let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| match e {
-                sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
-                    name: format!("ID {}", id),
-                },
-                _ => crate::error::Error::Connection {
-                    message: format!("Failed to get queue {}: {}", id, e),
-                },
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get queue {}: {}", id, e),
             })?;
+
         Ok(queue)
     }
 
+    /// List all queues.
+    ///
+    /// # Returns
+    /// List of all queue records
     async fn list(&self) -> Result<Vec<QueueInfo>> {
         let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
@@ -131,11 +148,17 @@ impl crate::store::QueueTable for Queues {
             .map_err(|e| crate::error::Error::Connection {
                 message: format!("Failed to list queues: {}", e),
             })?;
+
         Ok(queues)
     }
 
+    /// Count all queues.
+    ///
+    /// # Returns
+    /// Total number of queues in the table
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_queues")
+        let query = "SELECT COUNT(*) FROM pgqrs_queues";
+        let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
@@ -144,6 +167,13 @@ impl crate::store::QueueTable for Queues {
         Ok(count)
     }
 
+    /// Delete a queue by ID.
+    ///
+    /// # Arguments
+    /// * `id` - Queue ID to delete
+    ///
+    /// # Returns
+    /// Number of rows affected (should be 1 if successful)
     async fn delete(&self, id: i64) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_QUEUE_BY_ID)
             .bind(id)
@@ -153,10 +183,17 @@ impl crate::store::QueueTable for Queues {
                 message: format!("Failed to delete queue {}: {}", id, e),
             })?
             .rows_affected();
+
         Ok(rows_affected)
     }
 
     /// Get a queue by name.
+    ///
+    /// # Arguments
+    /// * `name` - Queue name to retrieve
+    ///
+    /// # Returns
+    /// The queue record
     async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
         let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
             .bind(name)
@@ -175,6 +212,12 @@ impl crate::store::QueueTable for Queues {
     }
 
     /// Check if a queue exists by name.
+    ///
+    /// # Arguments
+    /// * `name` - Queue name to check
+    ///
+    /// # Returns
+    /// True if queue exists, false otherwise
     async fn exists(&self, name: &str) -> Result<bool> {
         let exists: bool = sqlx::query_scalar(CHECK_QUEUE_EXISTS)
             .bind(name)
@@ -188,6 +231,12 @@ impl crate::store::QueueTable for Queues {
     }
 
     /// Delete a queue by name.
+    ///
+    /// # Arguments
+    /// * `name` - Queue name to delete
+    ///
+    /// # Returns
+    /// Number of rows affected (should be 1 if successful)
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
             .bind(name)
@@ -199,30 +248,5 @@ impl crate::store::QueueTable for Queues {
             .rows_affected();
 
         Ok(rows_affected)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_new_queue_creation() {
-        let new_queue = NewQueue {
-            queue_name: "test_queue".to_string(),
-        };
-
-        // Test that the NewQueue struct can be created
-        assert_eq!(new_queue.queue_name, "test_queue");
-    }
-
-    #[test]
-    fn test_table_trait_associated_types() {
-        // Compile-time test to ensure the trait is implemented correctly
-        // This test passes if the code compiles, proving our Table trait implementation
-        // has the correct associated types.
-
-        // Note: This is a compile-time test, we don't actually create connections
-        // In real usage, Queues would be created with a valid pool
     }
 }

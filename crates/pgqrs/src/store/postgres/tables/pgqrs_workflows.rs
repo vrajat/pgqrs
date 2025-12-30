@@ -2,7 +2,8 @@ use crate::error::Result;
 use sqlx::PgPool;
 
 // Import shared types instead of redefining them
-pub use crate::tables::{NewWorkflow, WorkflowRecord};
+// Import shared types instead of redefining them
+pub use crate::types::{NewWorkflow, WorkflowRecord};
 
 #[derive(Debug, Clone)]
 pub struct Workflows {

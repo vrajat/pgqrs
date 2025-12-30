@@ -195,7 +195,7 @@ impl Store for AnyStore {
         &self,
         workflow_id: i64,
         step_id: &str,
-    ) -> crate::error::Result<Option<Box<dyn StepGuard>>> {
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
         match self {
             AnyStore::Postgres(s) => s.acquire_step(workflow_id, step_id).await,
         }

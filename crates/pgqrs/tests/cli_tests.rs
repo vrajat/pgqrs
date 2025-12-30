@@ -255,8 +255,7 @@ fn test_cli_archive_functionality() {
         assert!(dequeued_message.vt > chrono::Utc::now());
 
         // Archive the dequeued message using the same consumer
-        let archive: Option<ArchivedMessage> =
-            consumer.archive(dequeued_message.id).await.unwrap();
+        let archive: Option<ArchivedMessage> = consumer.archive(dequeued_message.id).await.unwrap();
 
         assert!(
             archive.is_some(),

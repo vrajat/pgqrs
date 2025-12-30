@@ -49,7 +49,10 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Delete a queue
-    pub async fn delete_queue(self, queue_info: &crate::types::QueueInfo) -> crate::error::Result<()> {
+    pub async fn delete_queue(
+        self,
+        queue_info: &crate::types::QueueInfo,
+    ) -> crate::error::Result<()> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.delete_queue(queue_info).await
     }
@@ -134,7 +137,9 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         group_by_queue: bool,
     ) -> Result<Vec<crate::types::WorkerHealthStats>> {
         let admin = self.store.admin(self.store.config()).await?;
-        admin.worker_health_stats(heartbeat_timeout, group_by_queue).await
+        admin
+            .worker_health_stats(heartbeat_timeout, group_by_queue)
+            .await
     }
 
     /// Release messages locked by a worker

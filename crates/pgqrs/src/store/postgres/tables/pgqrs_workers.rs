@@ -4,7 +4,6 @@
 //! on the `pgqrs_workers` table.
 
 use crate::error::Result;
-
 use crate::types::{WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -41,6 +40,14 @@ const DELETE_WORKER_BY_ID: &str = r#"
     WHERE id = $1
 "#;
 
+const DELETE_WORKERS_BY_QUEUE: &str = r#"
+    DELETE FROM pgqrs_workers WHERE queue_id = $1
+"#;
+
+const COUNT_WORKERS_BY_QUEUE_TX: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1
+"#;
+
 const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
@@ -57,17 +64,6 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
     ORDER BY heartbeat_at ASC
 "#;
 
-// --- Lifecycle SQL from lifecycle.rs ---
-
-/// Input data for creating a new worker
-#[derive(Debug)]
-pub struct NewWorker {
-    pub hostname: String,
-    pub port: i32,
-    /// Queue ID (None for Admin workers)
-    pub queue_id: Option<i64>,
-}
-
 /// Workers table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table.
@@ -81,11 +77,8 @@ impl Workers {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-}
 
-#[async_trait]
-impl crate::store::WorkerTable for Workers {
-    async fn insert(&self, data: crate::tables::NewWorker) -> Result<WorkerInfo> {
+    pub async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
         let now = Utc::now();
 
         let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
@@ -113,7 +106,7 @@ impl crate::store::WorkerTable for Workers {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+    pub async fn get(&self, id: i64) -> Result<WorkerInfo> {
         let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -125,7 +118,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker)
     }
 
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+    pub async fn list(&self) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
@@ -136,7 +129,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_workers";
         let row = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
@@ -147,7 +140,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(row)
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let result = sqlx::query(DELETE_WORKER_BY_ID)
             .bind(id)
             .execute(&self.pool)
@@ -159,19 +152,77 @@ impl crate::store::WorkerTable for Workers {
         Ok(result.rows_affected())
     }
 
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+    pub async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
-            .bind(queue_id)
+            .bind(foreign_key_value)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to filter workers by queue ID {}: {}", queue_id, e),
+                message: format!(
+                    "Failed to filter workers by queue ID {}: {}",
+                    foreign_key_value, e
+                ),
             })?;
-
         Ok(workers)
     }
 
-    async fn count_for_queue(
+    pub async fn count_for_fk<'a, 'b: 'a>(
+        &self,
+        foreign_key_value: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(COUNT_WORKERS_BY_QUEUE_TX)
+            .bind(foreign_key_value)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to count workers for queue {}: {}",
+                    foreign_key_value, e
+                ),
+            })?;
+        Ok(count)
+    }
+
+    pub async fn delete_by_fk<'a, 'b: 'a>(
+        &self,
+        foreign_key_value: i64,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<u64> {
+        let result = sqlx::query(DELETE_WORKERS_BY_QUEUE)
+            .bind(foreign_key_value)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to delete workers for queue {}: {}",
+                    foreign_key_value, e
+                ),
+            })?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn list_zombies_for_queue_tx<'a, 'b: 'a>(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
+    ) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
+            .bind(queue_id)
+            .bind(older_than)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to list zombie workers for queue {} in tx: {}",
+                    queue_id, e
+                ),
+            })?;
+        Ok(workers)
+    }
+
+    pub async fn count_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -197,7 +248,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(count)
     }
 
-    async fn count_zombies_for_queue(
+    pub async fn count_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -225,7 +276,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(count)
     }
 
-    async fn list_for_queue(
+    pub async fn list_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -245,7 +296,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn list_zombies_for_queue(
+    pub async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -266,51 +317,62 @@ impl crate::store::WorkerTable for Workers {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tables::Table;
-
-    #[test]
-    fn test_new_worker_creation() {
-        let new_worker = NewWorker {
-            hostname: "test-host".to_string(),
-            port: 8080,
-            queue_id: Some(1),
-        };
-
-        // Test that the NewWorker struct can be created
-        assert_eq!(new_worker.hostname, "test-host");
-        assert_eq!(new_worker.port, 8080);
-        assert_eq!(new_worker.queue_id, Some(1));
+// Implement the public WorkerTable trait by delegating to inherent methods
+#[async_trait]
+impl crate::store::WorkerTable for Workers {
+    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+        self.insert(data).await
     }
 
-    #[test]
-    fn test_new_admin_worker_creation() {
-        let new_worker = NewWorker {
-            hostname: "admin-host".to_string(),
-            port: 9090,
-            queue_id: None, // Admin workers have no queue
-        };
-
-        assert_eq!(new_worker.hostname, "admin-host");
-        assert_eq!(new_worker.port, 9090);
-        assert_eq!(new_worker.queue_id, None);
+    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+        self.get(id).await
     }
 
-    #[test]
-    fn test_table_trait_associated_types() {
-        // Compile-time test to verify the trait is properly implemented with correct types
-        fn _check_table_trait_types() {
-            // This function won't be called, but if it compiles, our trait is correctly implemented
-            fn assert_entity_type<T: Table<Entity = WorkerInfo>>(_: &T) {}
-            fn assert_new_entity_type<T: Table<NewEntity = NewWorker>>(_: &T) {}
+    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+        self.list().await
+    }
 
-            // These would need a real database pool to actually create:
-            // let pool = PgPool::connect("...").await.unwrap();
-            // let workers = Workers::new(pool);
-            // assert_entity_type(&workers);
-            // assert_new_entity_type(&workers);
-        }
+    async fn count(&self) -> Result<i64> {
+        self.count().await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.delete(id).await
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+        self.filter_by_fk(queue_id).await
+    }
+
+    async fn count_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<i64> {
+        self.count_for_queue(queue_id, state).await
+    }
+
+    async fn count_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> Result<i64> {
+        self.count_zombies_for_queue(queue_id, older_than).await
+    }
+
+    async fn list_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<Vec<WorkerInfo>> {
+        self.list_for_queue(queue_id, state).await
+    }
+
+    async fn list_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> Result<Vec<WorkerInfo>> {
+        self.list_zombies_for_queue(queue_id, older_than).await
     }
 }

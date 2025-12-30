@@ -15,10 +15,8 @@
 //! cargo run --example basic_usage
 //! ```
 
-use pgqrs::admin::Admin;
-use pgqrs::config::Config;
-use pgqrs::tables::Messages;
-use pgqrs::{Archive, Consumer, Producer, Table};
+use pgqrs::store::AnyStore;
+use pgqrs::Config;
 use serde_json::json;
 
 #[tokio::main]
@@ -35,17 +33,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // For this example, we'll use a hardcoded DSN (replace with your database)
     let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
 
-    // Create client
-    let admin = Admin::new(&config).await?;
+    // Create store
+    let store = AnyStore::connect(&config).await?;
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
-    admin.install().await?;
+    pgqrs::admin(&store).install().await?;
 
     // Create queues
     println!("Creating queues...");
-    admin.create_queue(&String::from("email")).await?;
-    admin.create_queue(&String::from("task")).await?;
+    let email_queue = pgqrs::admin(&store).create_queue("email").await?;
+    let task_queue = pgqrs::admin(&store).create_queue("task").await?;
 
     // Send some messages
     println!("Sending messages...");
@@ -61,73 +59,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "image_url": "https://example.com/image.jpg"
     });
 
-    let email_queue_info = admin.get_queue("email").await?;
-    let task_queue_info = admin.get_queue("task").await?;
-
     // Create producers and consumers for each queue
-    // Producer and Consumer now handle their own worker registration
-    let email_producer = Producer::new(
-        admin.pool.clone(),
-        &email_queue_info,
-        "localhost",
-        3000,
-        &admin.config,
-    )
-    .await?;
+    let email_producer = pgqrs::producer("localhost", 3000, &email_queue.queue_name)
+        .create(&store)
+        .await?;
 
-    let task_producer = Producer::new(
-        admin.pool.clone(),
-        &task_queue_info,
-        "localhost",
-        3001,
-        &admin.config,
-    )
-    .await?;
+    let task_producer = pgqrs::producer("localhost", 3001, &task_queue.queue_name)
+        .create(&store)
+        .await?;
 
-    let email_consumer = Consumer::new(
-        admin.pool.clone(),
-        &email_queue_info,
-        "localhost",
-        3002,
-        &admin.config,
-    )
-    .await?;
+    let email_consumer = pgqrs::consumer("localhost", 3002, &email_queue.queue_name)
+        .create(&store)
+        .await?;
 
-    let task_consumer = Consumer::new(
-        admin.pool.clone(),
-        &task_queue_info,
-        "localhost",
-        3003,
-        &admin.config,
-    )
-    .await?;
+    let task_consumer = pgqrs::consumer("localhost", 3003, &task_queue.queue_name)
+        .create(&store)
+        .await?;
 
-    let email_id = email_producer.enqueue(&email_payload).await?;
-    let task_id = task_producer.enqueue(&task_payload).await?;
+    // Enqueue messages using the new builder API
+    let email_id = pgqrs::enqueue(&email_payload)
+        .worker(&*email_producer)
+        .execute(&store)
+        .await?;
+
+    let task_id = pgqrs::enqueue(&task_payload)
+        .worker(&*task_producer)
+        .execute(&store)
+        .await?;
 
     println!("Sent email message with ID: {}", email_id);
     println!("Sent task message with ID: {}", task_id);
 
     // Send batch of messages
     let batch_messages = vec![
-        (json!({
+        json!({
             "to": "user1@example.com",
             "subject": "Newsletter",
             "body": "Monthly newsletter"
-        })),
-        (json!({
+        }),
+        json!({
             "to": "user2@example.com",
             "subject": "Newsletter",
             "body": "Monthly newsletter"
-        })),
-        (json!({
+        }),
+        json!({
             "to": "admin@example.com",
             "subject": "System Alert",
             "body": "Server maintenance scheduled"
-        })),
+        }),
     ];
 
-    let batch_ids = email_producer.batch_enqueue(&batch_messages).await?;
+    let batch_ids = pgqrs::enqueue_batch(&batch_messages)
+        .worker(&*email_producer)
+        .execute(&store)
+        .await?;
     println!("Sent batch of {} emails", batch_ids.len());
 
     // Send delayed message
@@ -137,19 +122,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "due_date": "2024-02-15"
     });
 
-    let delayed_id = task_producer
-        .enqueue_delayed(
-            &delayed_payload,
-            300, // 5 minutes delay
-        )
+    let delayed_id = pgqrs::enqueue(&delayed_payload)
+        .worker(&*task_producer)
+        .delay(300) // 5 minutes delay
+        .execute(&store)
         .await?;
     println!("Sent delayed message with ID: {}", delayed_id);
 
     // Read messages
     println!("Reading messages...");
 
-    // Create a worker.
-    let email_messages = email_consumer.dequeue_many_with_delay(10, 2).await?;
+    let email_messages = pgqrs::dequeue()
+        .worker(&*email_consumer)
+        .batch(10)
+        .vt_offset(2)
+        .fetch_all(&store)
+        .await?;
     println!("Read {} newsletter messages", email_messages.len());
 
     for msg in &email_messages {
@@ -162,7 +150,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Read count: {}", msg.read_ct);
     }
 
-    let task_messages = task_consumer.dequeue_many_with_delay(5, 5).await?;
+    let task_messages = pgqrs::dequeue()
+        .worker(&*task_consumer)
+        .batch(5)
+        .vt_offset(5)
+        .fetch_all(&store)
+        .await?;
     println!("Read {} task messages", task_messages.len());
 
     for msg in &task_messages {
@@ -176,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             task_msg.id
         );
 
+        // Use the consumer to extend visibility
         let extended = task_consumer.extend_visibility(task_msg.id, 30).await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.id);
@@ -186,64 +180,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // PREFERRED: Archive the message instead of deleting for data retention
         println!("Archiving processed message...");
-        let archived = task_consumer.archive(task_msg.id).await?;
-        if archived.is_some() {
-            println!("Successfully archived task message {}", task_msg.id);
-        } else {
-            println!(
-                "Failed to archive task message {} (may not exist)",
-                task_msg.id
-            );
-        }
+        task_consumer.archive(task_msg.id).await?;
+        println!("Successfully archived task message {}", task_msg.id);
     }
 
     // Demonstrate batch archiving for email messages
     println!("Batch archiving email messages...");
     let email_msg_ids: Vec<i64> = email_messages.iter().map(|m| m.id).collect();
     if !email_msg_ids.is_empty() {
-        let archived_ids = email_consumer.archive_many(email_msg_ids.clone()).await?;
+        for msg_id in &email_msg_ids {
+            email_consumer.archive(*msg_id).await?;
+        }
         println!(
             "Successfully archived {} email messages",
-            archived_ids.len()
+            email_msg_ids.len()
         );
-
-        for (msg_id, archived) in email_msg_ids.iter().zip(archived_ids.iter()) {
-            if *archived {
-                println!("  Archived email message {}", msg_id);
-            } else {
-                println!("  Failed to archive email message {}", msg_id);
-            }
-        }
     }
 
     // Show archive counts
-    {
-        let tx = &mut admin.pool.begin().await?;
-        println!("Archive counts:");
-        let pgqrs_archive = Archive::new(admin.pool.clone());
-        let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
-        let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
-        println!("  email_consumer archived: {}", email_archive_count);
-        println!("  task_consumer archived: {}", task_archive_count);
-    }
+    println!("Archive counts:");
+    let email_archive_count = pgqrs::tables(&store)
+        .archive()
+        .count_for_queue(email_queue.id)
+        .await?;
+    let task_archive_count = pgqrs::tables(&store)
+        .archive()
+        .count_for_queue(task_queue.id)
+        .await?;
+    println!("  email queue archived: {}", email_archive_count);
+    println!("  task queue archived: {}", task_archive_count);
 
     // Example of traditional deletion for comparison
     // Note: Use archiving instead for data retention and audit trails
     if let Some(remaining_task) = task_messages.get(1) {
         println!("Traditional deletion (not recommended for data retention):");
-
-        // Delete the message completely
-        let deleted = task_consumer.delete_many(vec![remaining_task.id]).await?;
-        if deleted.first().copied().unwrap_or(false) {
-            println!("Deleted task message {}", remaining_task.id);
-        } else {
-            println!("Failed to delete task message {}", remaining_task.id);
-        }
+        task_consumer.delete(remaining_task.id).await?;
+        println!("Deleted task message {}", remaining_task.id);
     }
 
     // Show queue metrics
     println!("\nQueue metrics:");
-    let all_metrics = admin.all_queues_metrics().await?;
+    let all_metrics = pgqrs::admin(&store).all_queues_metrics().await?;
     for metrics in all_metrics {
         println!(
             "  {}: {} total, {} pending, {} locked, {} archived",
@@ -263,32 +240,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show pending count
-    let messages = Messages::new(admin.pool.clone());
-    let email_pending = messages.count_pending(email_id.id).await?;
-    let task_pending = messages.count_pending(task_id.id).await?;
+    let email_pending = pgqrs::tables(&store)
+        .messages()
+        .count_pending(email_queue.id)
+        .await?;
+    let task_pending = pgqrs::tables(&store)
+        .messages()
+        .count_pending(task_queue.id)
+        .await?;
     println!("\nPending messages:");
-    println!("  email_consumer: {}", email_pending);
-    println!("  task_consumer: {}", task_pending);
+    println!("  email queue: {}", email_pending);
+    println!("  task queue: {}", task_pending);
 
-    // Demonstrate admin archive management operations
-    println!("\n--- Archive Management Example ---");
-
-    // Check archive counts before operations
-    {
-        let tx = &mut admin.pool.begin().await?;
-        let pgqrs_archive = Archive::new(admin.pool.clone());
-        let email_archive_count = pgqrs_archive.count_for_fk(email_id.id, tx).await?;
-        let task_archive_count = pgqrs_archive.count_for_fk(task_id.id, tx).await?;
-        println!(
-            "Archive counts - email: {}, task: {}",
-            email_archive_count, task_archive_count
-        );
-    }
-
-    // Note about queue deletion behavior
     println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");
     println!("and its archive table are removed to prevent orphaned archive tables.");
-    println!("Use admin.purge_archive() to clear archives while preserving structure.");
 
     println!("\nExample completed successfully!");
 

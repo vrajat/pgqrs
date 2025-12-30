@@ -13,7 +13,7 @@ pub use admin::admin;
 pub use consume::{consume, consume_batch};
 pub use consumer::consumer;
 pub use dequeue::dequeue;
-pub use enqueue::enqueue;
+pub use enqueue::{enqueue, enqueue_batch};
 pub use produce::{produce, produce_batch};
 pub use producer::producer;
 pub use tables::tables;

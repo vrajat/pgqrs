@@ -1,6 +1,4 @@
-use chrono::Duration;
 use pgqrs::store::AnyStore;
-use pgqrs::types::WorkerStatus;
 use serde_json::json;
 
 mod common;
@@ -110,10 +108,7 @@ async fn test_queue_metrics() {
     assert_eq!(my_metric.pending_messages, 1);
 
     // Cleanup
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_worker(producer.worker_id())
         .await
@@ -170,10 +165,7 @@ async fn test_system_stats() {
     assert!(!stats.schema_version.is_empty());
 
     // Cleanup
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_worker(producer.worker_id())
         .await
@@ -316,10 +308,7 @@ async fn test_worker_stats() {
     producer.resume().await.unwrap();
 
     // Purge queue to release/delete messages
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
 
     pgqrs::admin(&store)
         .delete_worker(producer.worker_id())

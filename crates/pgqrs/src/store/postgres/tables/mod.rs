@@ -8,11 +8,13 @@ pub mod pgqrs_messages;
 pub mod pgqrs_queues;
 pub mod pgqrs_workers;
 pub mod pgqrs_workflows;
-pub mod table;
 
 pub use pgqrs_archive::Archive;
-pub use pgqrs_messages::{Messages, NewMessage};
-pub use pgqrs_queues::{NewQueue, Queues};
-pub use pgqrs_workers::{NewWorker, Workers};
-pub use pgqrs_workflows::{NewWorkflow, WorkflowRecord, Workflows};
-pub use table::Table;
+pub use pgqrs_messages::Messages;
+pub use pgqrs_queues::Queues;
+pub use pgqrs_workers::Workers;
+pub use pgqrs_workflows::{WorkflowRecord, Workflows}; // WorkflowRecord might be in types too?
+                                                      // workflow::WorkflowRecord is in types. pgqrs_workflows might re-export it.
+                                                      // Checked pgqrs_workflows.rs: "pub use crate::types::{NewWorkflow, WorkflowRecord};"
+                                                      // So it IS re-exported there.
+                                                      // Keep WorkflowRecord for now if used via tables.

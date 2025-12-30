@@ -45,6 +45,11 @@ impl Workflow {
     pub fn new(pool: PgPool, id: i64) -> Self {
         Self { id, pool }
     }
+
+    /// Get a reference to the database pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 }
 
 #[async_trait]
@@ -63,20 +68,20 @@ impl crate::store::Workflow for Workflow {
     /// - **Error**: If the workflow is in the `ERROR` state, this method returns a `ValidationFailed` error.
     async fn start(&mut self) -> crate::error::Result<()> {
         // Try to transition to RUNNING
-        let result = sqlx::query_as::<
-            _,
-            (crate::workflow::WorkflowStatus, Option<serde_json::Value>),
-        >(SQL_START_WORKFLOW)
-        .bind(self.id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to start workflow {}: {}", self.id, e),
-        })?;
+        let result =
+            sqlx::query_as::<_, (crate::types::WorkflowStatus, Option<serde_json::Value>)>(
+                SQL_START_WORKFLOW,
+            )
+            .bind(self.id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to start workflow {}: {}", self.id, e),
+            })?;
 
         // If no row update, check current status
         if result.is_none() {
-            let status: Option<crate::workflow::WorkflowStatus> =
+            let status: Option<crate::types::WorkflowStatus> =
                 sqlx::query_scalar("SELECT status FROM pgqrs_workflows WHERE workflow_id = $1")
                     .bind(self.id)
                     .fetch_optional(&self.pool)
@@ -85,7 +90,7 @@ impl crate::store::Workflow for Workflow {
                         message: format!("Failed to check status for workflow {}: {}", self.id, e),
                     })?;
 
-            if let Some(crate::workflow::WorkflowStatus::Error) = status {
+            if let Some(crate::types::WorkflowStatus::Error) = status {
                 return Err(crate::error::Error::ValidationFailed {
                     reason: format!("Workflow {} is in terminal ERROR state", self.id),
                 });

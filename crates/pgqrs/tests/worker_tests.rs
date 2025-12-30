@@ -100,7 +100,10 @@ async fn test_worker_message_assignment() {
     let store = create_store().await;
 
     // Create a test queue
-    let queue_info = pgqrs::admin(&store).create_queue("message_queue").await.unwrap();
+    let queue_info = pgqrs::admin(&store)
+        .create_queue("message_queue")
+        .await
+        .unwrap();
 
     // Create a producer and consumer with unique hostname+port combinations
     let producer = pgqrs::producer("message-producer-host", 7070, &queue_info.queue_name)
@@ -117,18 +120,21 @@ async fn test_worker_message_assignment() {
     pgqrs::enqueue(&json!({"task": "test1"}))
         .worker(&*producer)
         .execute(&store)
-        .await.unwrap();
+        .await
+        .unwrap();
     pgqrs::enqueue(&json!({"task": "test2"}))
         .worker(&*producer)
         .execute(&store)
-        .await.unwrap();
+        .await
+        .unwrap();
 
     // Read messages normally
     let messages_list = pgqrs::dequeue()
         .worker(&*consumer)
         .batch(2)
         .fetch_all(&store)
-        .await.unwrap();
+        .await
+        .unwrap();
     assert_eq!(messages_list.len(), 2);
 
     // Verify worker can read messages from queue
@@ -150,8 +156,14 @@ async fn test_worker_message_assignment() {
             .unwrap(),
         0
     );
-    assert!(pgqrs::admin(&store).delete_worker(producer.worker_id()).await.is_ok());
-    assert!(pgqrs::admin(&store).delete_worker(consumer.worker_id()).await.is_ok());
+    assert!(pgqrs::admin(&store)
+        .delete_worker(producer.worker_id())
+        .await
+        .is_ok());
+    assert!(pgqrs::admin(&store)
+        .delete_worker(consumer.worker_id())
+        .await
+        .is_ok());
     assert!(pgqrs::admin(&store).delete_queue(&queue_info).await.is_ok());
 }
 
@@ -161,8 +173,14 @@ async fn test_admin_worker_management() {
     let store = create_store().await;
 
     // Create test queues
-    let queue1 = pgqrs::admin(&store).create_queue("admin_queue1").await.unwrap();
-    let queue2 = pgqrs::admin(&store).create_queue("admin_queue2").await.unwrap();
+    let queue1 = pgqrs::admin(&store)
+        .create_queue("admin_queue1")
+        .await
+        .unwrap();
+    let queue2 = pgqrs::admin(&store)
+        .create_queue("admin_queue2")
+        .await
+        .unwrap();
 
     // Create producers on different queues (which registers workers)
     let producer1 = pgqrs::producer("admin-host1", 8001, &queue1.queue_name)
@@ -180,11 +198,19 @@ async fn test_admin_worker_management() {
     assert_eq!(all_workers.len(), 2);
 
     // Test listing workers by queue
-    let queue1_workers = pgqrs::tables(&store).workers().filter_by_fk(queue1.id).await.unwrap();
+    let queue1_workers = pgqrs::tables(&store)
+        .workers()
+        .filter_by_fk(queue1.id)
+        .await
+        .unwrap();
     assert_eq!(queue1_workers.len(), 1);
     assert_eq!(queue1_workers[0].id, producer1.worker_id());
 
-    let queue2_workers = pgqrs::tables(&store).workers().filter_by_fk(queue2.id).await.unwrap();
+    let queue2_workers = pgqrs::tables(&store)
+        .workers()
+        .filter_by_fk(queue2.id)
+        .await
+        .unwrap();
     assert_eq!(queue2_workers.len(), 1);
     assert_eq!(queue2_workers[0].id, producer2.worker_id());
 
@@ -257,7 +283,10 @@ async fn test_custom_schema_search_path() {
     );
 
     // Create a queue to verify functionality works in custom schema
-    let queue = pgqrs::admin(&store).create_queue("schema_test_queue").await.unwrap();
+    let queue = pgqrs::admin(&store)
+        .create_queue("schema_test_queue")
+        .await
+        .unwrap();
 
     assert_eq!(queue.queue_name, "schema_test_queue");
 
@@ -315,11 +344,18 @@ async fn test_worker_deletion_with_references() {
     let message_id = pgqrs::enqueue(&json!({"test": "data"}))
         .worker(&*producer)
         .execute(&store)
-        .await.unwrap();
+        .await
+        .unwrap();
 
-    assert!(pgqrs::dequeue().worker(&*consumer).fetch_one(&store).await.is_ok());
+    assert!(pgqrs::dequeue()
+        .worker(&*consumer)
+        .fetch_one(&store)
+        .await
+        .is_ok());
     // Attempt to delete consumer worker with references - should fail
-    let result = pgqrs::admin(&store).delete_worker(consumer.worker_id()).await;
+    let result = pgqrs::admin(&store)
+        .delete_worker(consumer.worker_id())
+        .await;
     assert!(
         result.is_err(),
         "Worker deletion should fail when references exist"
@@ -340,8 +376,14 @@ async fn test_worker_deletion_with_references() {
         .unwrap();
     assert_eq!(workers.len(), 2);
     consumer.delete(message_id).await.unwrap();
-    assert!(pgqrs::admin(&store).delete_worker(producer.worker_id()).await.is_ok());
-    assert!(pgqrs::admin(&store).delete_worker(consumer.worker_id()).await.is_ok());
+    assert!(pgqrs::admin(&store)
+        .delete_worker(producer.worker_id())
+        .await
+        .is_ok());
+    assert!(pgqrs::admin(&store)
+        .delete_worker(consumer.worker_id())
+        .await
+        .is_ok());
     assert!(pgqrs::admin(&store).delete_queue(&queue_info).await.is_ok());
 }
 
@@ -356,7 +398,10 @@ async fn test_worker_deletion_without_references() {
     let mut hasher = DefaultHasher::new();
     "test_deletion_clean".hash(&mut hasher);
     let queue_name = format!("test_delete_clean_{}", hasher.finish());
-    let queue = pgqrs::admin(&store).create_queue(&queue_name).await.unwrap();
+    let queue = pgqrs::admin(&store)
+        .create_queue(&queue_name)
+        .await
+        .unwrap();
 
     let producer = pgqrs::producer("clean-delete-host", 8080, &queue.queue_name)
         .create(&store)
@@ -364,7 +409,9 @@ async fn test_worker_deletion_without_references() {
         .expect("Failed to create producer");
 
     // Delete worker without references - should succeed
-    let result = pgqrs::admin(&store).delete_worker(producer.worker_id()).await;
+    let result = pgqrs::admin(&store)
+        .delete_worker(producer.worker_id())
+        .await;
     assert!(
         result.is_ok(),
         "Worker deletion should succeed when no references exist"
@@ -407,14 +454,20 @@ async fn test_worker_deletion_with_archived_references() {
         .unwrap();
 
     // Read the message to assign it to worker
-    let messages = pgqrs::dequeue().worker(&*consumer).fetch_all(&store).await.unwrap();
+    let messages = pgqrs::dequeue()
+        .worker(&*consumer)
+        .fetch_all(&store)
+        .await
+        .unwrap();
     assert_eq!(messages.len(), 1);
 
     // Archive the message to create an archived reference
     consumer.archive(message_id).await.unwrap();
 
     // Attempt to delete consumer worker with archived references - should fail
-    let result = pgqrs::admin(&store).delete_worker(consumer.worker_id()).await;
+    let result = pgqrs::admin(&store)
+        .delete_worker(consumer.worker_id())
+        .await;
     assert!(
         result.is_err(),
         "Worker deletion should fail when archived references exist"
@@ -500,6 +553,12 @@ async fn test_purge_old_workers() {
     );
 
     // Cleanup
-    pgqrs::admin(&store).delete_worker(consumer.worker_id()).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_worker(consumer.worker_id())
+        .await
+        .unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }

@@ -19,7 +19,7 @@ async fn test_zombie_consumer_race_condition() {
     let store = create_store().await;
 
     let queue_name = "race_condition_queue";
-    let queue_info = pgqrs::admin(&store)
+    let _queue_info = pgqrs::admin(&store)
         .create_queue(queue_name)
         .await
         .expect("Failed to create queue");
@@ -115,7 +115,7 @@ async fn test_zombie_consumer_batch_ops() {
     let store = create_store().await;
 
     let queue_name = "batch_race_queue";
-    let queue_info = pgqrs::admin(&store)
+    let _queue_info = pgqrs::admin(&store)
         .create_queue(queue_name)
         .await
         .expect("Failed to create queue");
@@ -200,7 +200,7 @@ async fn test_concurrent_visibility_extension() {
     let store = create_store().await;
 
     let queue_name = "concurrent_vis_queue";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
 
     let consumer_a = pgqrs::consumer("consumer_a", 1001, queue_name)
         .create(&store)

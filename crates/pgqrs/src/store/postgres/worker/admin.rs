@@ -29,9 +29,13 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
+use crate::store::QueueTable;
 use crate::types::QueueMessage;
 
-use crate::tables::{Archive, Messages, Queues, Table, Workers};
+use crate::store::postgres::tables::pgqrs_archive::Archive;
+use crate::store::postgres::tables::pgqrs_messages::Messages;
+use crate::store::postgres::tables::pgqrs_queues::Queues;
+use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
 use crate::worker::WorkerLifecycle;
@@ -594,10 +598,10 @@ impl crate::store::Admin for Admin {
 
         if zombies.is_empty() {
             tx.commit()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit empty transaction: {}", e),
-            })?;
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: format!("Failed to commit empty transaction: {}", e),
+                })?;
             return Ok(0);
         }
 
@@ -617,10 +621,10 @@ impl crate::store::Admin for Admin {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to release messages for zombie worker {}: {}",
-                    zombie.id, e
-                ),
+                    message: format!(
+                        "Failed to release messages for zombie worker {}: {}",
+                        zombie.id, e
+                    ),
                 })?;
 
             let released = result.rows_affected();
@@ -632,7 +636,7 @@ impl crate::store::Admin for Admin {
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
+                    message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
                 })?;
 
             if released > 0 {
@@ -753,7 +757,7 @@ impl crate::store::Admin for Admin {
             return Ok(worker_info.clone());
         }
 
-        use crate::tables::pgqrs_workers::NewWorker;
+        use crate::types::NewWorker;
         let new_worker = NewWorker {
             hostname: hostname.clone(),
             port,
@@ -776,7 +780,7 @@ impl crate::store::Admin for Admin {
     /// Create a new queue in the database.
     async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
         // Create new queue data
-        use crate::tables::NewQueue;
+        use crate::types::NewQueue;
         let new_queue = NewQueue {
             queue_name: name.to_string(),
         };

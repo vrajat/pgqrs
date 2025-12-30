@@ -1,8 +1,4 @@
-use pgqrs::{
-    config::Config,
-    store::Store,
-    types::WorkerStatus,
-};
+use pgqrs::{config::Config, store::Store, types::WorkerStatus};
 use serial_test::serial;
 use std::process::Command;
 
@@ -97,7 +93,10 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     );
     assert_eq!(stored_msg.read_ct, 1, "Read count should be preserved at 1");
     // Verify worker is stopped
-    let updated_worker = pgqrs::tables(&store).workers().get(consumer_worker_id).await?;
+    let updated_worker = pgqrs::tables(&store)
+        .workers()
+        .get(consumer_worker_id)
+        .await?;
     assert!(
         matches!(updated_worker.status, WorkerStatus::Stopped),
         "Worker should be stopped"
@@ -165,8 +164,12 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Cleanup
     pgqrs::admin(&store).purge_queue(queue_name).await?;
-    pgqrs::admin(&store).delete_worker(producer.worker_id()).await?;
-    pgqrs::admin(&store).delete_worker(consumer_worker_id).await?; // consumer 1
+    pgqrs::admin(&store)
+        .delete_worker(producer.worker_id())
+        .await?;
+    pgqrs::admin(&store)
+        .delete_worker(consumer_worker_id)
+        .await?; // consumer 1
     pgqrs::admin(&store).delete_worker(c2_id).await?; // consumer 2
     pgqrs::admin(&store).delete_queue(&queue).await?;
 

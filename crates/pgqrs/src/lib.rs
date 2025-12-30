@@ -52,32 +52,40 @@ pub mod config;
 pub mod error;
 mod rate_limit;
 pub mod store;
-pub mod tables;
 pub mod types;
 mod validation;
 pub mod worker;
-pub mod workflow;
 
 // Tier 1: High-level API (builders module)
 pub mod builders;
 
 // Re-export Tier 1 high-level functions at crate root
 pub use builders::{
-    admin, consume, consume_batch, consumer, dequeue, enqueue, produce, produce_batch, producer,
-    tables, worker_handle,
+    admin, consume, consume_batch, consumer, dequeue, enqueue, enqueue_batch, produce,
+    produce_batch, producer, tables, worker_handle,
 };
 
 // Re-export worker types and modules at crate root for convenience
-pub use crate::worker::admin; // admin module
-pub use crate::worker::consumer;
-pub use crate::worker::producer;
-pub use crate::worker::{Admin, Consumer, Producer, Worker, WorkerHandle};
+pub use crate::store::{
+    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, StepGuard, StepGuardExt,
+    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,
+};
+pub use crate::worker::WorkerHandle;
+
+pub use crate::store::postgres::workflow::guard::StepGuard as StepGuardImpl;
+pub use crate::store::postgres::workflow::guard::StepResult as StepResultImpl;
+pub use crate::store::postgres::workflow::handle::Workflow as WorkflowImpl;
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
 pub use crate::rate_limit::RateLimitStatus;
-pub use crate::tables::{Archive, NewWorker, Table, Workers, WorkflowRecord, Workflows};
-pub use crate::types::{WorkerInfo, WorkerStats, WorkerStatus};
+
+// Re-export types (formerly from tables)
+pub use crate::types::{
+    ArchivedMessage, NewArchivedMessage, NewMessage, NewQueue, NewWorker, NewWorkflow, QueueInfo,
+    QueueMessage, QueueMetrics, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStats,
+    WorkerStatus, WorkflowRecord, WorkflowStatus,
+};
+
 pub use crate::validation::ValidationConfig;
-pub use crate::workflow::{StepGuard, StepResult, Workflow};
 pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};

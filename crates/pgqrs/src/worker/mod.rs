@@ -1,16 +1,7 @@
 //! Worker lifecycle management for pgqrs.
 //!
-//! This module provides the [`Worker`] trait and lifecycle management functions
-//! for managing worker state transitions in a PostgreSQL-backed job queue system.
-//!
-//! ## What
-//!
-//! - [`Worker`] trait defines the interface for all worker types (Producer, Consumer, Admin)
-//! - [`WorkerHandle`] is a generic worker reference that implements [`Worker`] for any worker ID
-//! - [`Admin`] provides administrative functions for managing queues and workers
-//! - [`Producer`] handles message production (enqueueing)
-//! - [`Consumer`] handles message consumption (dequeueing)
-//! - [`lifecycle`] module provides atomic state transition functions
+//! This module provides the `WorkerHandle` for managing generic worker state
+//! transitions (suspend, resume, shutdown) in a PostgreSQL-backed job queue system.
 //!
 //! ## Worker Lifecycle
 //!
@@ -30,15 +21,13 @@
 //! 2. Consumers can only `suspend()` if they have no pending messages
 //! 3. All state transitions are atomic database operations with row-level locking
 //!
-//! ## How
+//! ## Using WorkerHandle
 //!
-//! Implement the [`Worker`] trait for your worker types. Use the [`lifecycle`] module
-//! functions for state transitions.
-//!
-//! ### Example: Using WorkerHandle for generic worker operations
+//! `WorkerHandle` allows you to manage any worker (Producer, Consumer, Admin) using just its ID.
 //!
 //! ```rust,ignore
-//! use pgqrs::worker::{Worker, WorkerHandle};
+//! use pgqrs::worker::WorkerHandle;
+//! use pgqrs::store::Worker;
 //!
 //! // Get a handle to any worker by ID
 //! let handle = WorkerHandle::new(pool.clone(), worker_id);
@@ -48,59 +37,21 @@
 //! handle.suspend().await?;
 //! handle.shutdown().await?;
 //! ```
-//!
-//! ### Example: Graceful shutdown
-//!
-//! ```rust
-//! use pgqrs::worker::Worker;
-//!
-//! async fn graceful_shutdown(worker: &impl Worker) -> pgqrs::Result<()> {
-//!     // First suspend the worker
-//!     worker.suspend().await?;
-//!     // Then shut it down
-//!     worker.shutdown().await?;
-//!     Ok(())
-//! }
-//! ```
 
-pub mod admin;
-pub mod consumer;
 mod lifecycle;
-pub mod producer;
-mod traits;
 
-pub use admin::Admin;
-pub use consumer::Consumer;
 pub use lifecycle::WorkerLifecycle;
-pub use producer::Producer;
-pub use traits::Worker;
 
 use crate::error::Result;
+use crate::store::Worker;
 use crate::types::WorkerStatus;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
 /// A generic handle to any worker that implements the [`Worker`] trait.
 ///
-/// This is the Rust equivalent of a "base class" - it allows you to call
-/// Worker trait methods on any worker given just its ID, without needing
-/// to know the concrete type (Producer, Consumer, or Admin).
-///
-/// ## Example
-///
-/// ```rust,ignore
-/// use pgqrs::worker::{Worker, WorkerHandle};
-///
-/// // Given just a worker ID, create a handle and call trait methods
-/// let handle = WorkerHandle::new(pool.clone(), worker_id);
-///
-/// // Check status
-/// let status = handle.status().await?;
-///
-/// // Suspend and shutdown
-/// handle.suspend().await?;
-/// handle.shutdown().await?;
-/// ```
+/// This provides a way to manage worker lifecycle (status, modify state)
+/// given just a worker ID, without needing the concrete worker instance.
 #[derive(Debug, Clone)]
 pub struct WorkerHandle {
     worker_id: i64,

@@ -1,9 +1,6 @@
 //! Integration tests for error handling scenarios with schema operations
 
-use pgqrs::{
-    config::Config,
-    error::Error,
-};
+use pgqrs::{config::Config, error::Error};
 use serial_test::serial;
 
 mod common;
@@ -128,8 +125,8 @@ async fn test_nonexistent_schema_operations() {
 
     if let Err(Error::Connection { message }) = result {
         assert!(
-            message.contains("relation \"pgqrs_messages\" does not exist") ||
-            message.contains("does not exist"),
+            message.contains("relation \"pgqrs_messages\" does not exist")
+                || message.contains("does not exist"),
             "Error should mention schema/relation not existing, got: {}",
             message
         );

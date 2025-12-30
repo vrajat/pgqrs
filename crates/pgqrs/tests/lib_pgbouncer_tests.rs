@@ -1,7 +1,4 @@
-use pgqrs::{
-    store::{AnyStore, Store},
-    Table,
-};
+use pgqrs::store::{AnyStore, Store};
 use serde_json::json;
 
 // Test-specific constants
@@ -31,7 +28,9 @@ async fn test_pgbouncer_happy_path() {
         .expect("Verify should succeed through PgBouncer");
 
     // Create a queue through PgBouncer
-    let queue_result = pgqrs::admin(&store).create_queue(TEST_QUEUE_PGBOUNCER_HAPPY).await;
+    let queue_result = pgqrs::admin(&store)
+        .create_queue(TEST_QUEUE_PGBOUNCER_HAPPY)
+        .await;
 
     if let Err(ref e) = queue_result {
         panic!("Failed to create queue through PgBouncer: {:?}", e);
@@ -39,23 +38,15 @@ async fn test_pgbouncer_happy_path() {
     let queue_info = queue_result.unwrap();
 
     // Create producer/consumer using the builder API
-    let producer = pgqrs::producer(
-        "pgbouncer_test_producer",
-        3000,
-        &queue_info.queue_name,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create producer through PgBouncer");
+    let producer = pgqrs::producer("pgbouncer_test_producer", 3000, &queue_info.queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create producer through PgBouncer");
 
-    let consumer = pgqrs::consumer(
-        "pgbouncer_test_consumer",
-        3001,
-        &queue_info.queue_name,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create consumer through PgBouncer");
+    let consumer = pgqrs::consumer("pgbouncer_test_consumer", 3001, &queue_info.queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer through PgBouncer");
 
     // Send a message through PgBouncer
     let test_message = json!({

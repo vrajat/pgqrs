@@ -408,3 +408,75 @@ impl fmt::Display for WorkerStats {
         )
     }
 }
+
+// Moved from src/tables/pgqrs_queues.rs
+/// Input data for creating a new queue
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewQueue {
+    pub queue_name: String,
+}
+
+// Moved from src/tables/pgqrs_workers.rs
+/// Input data for creating a new worker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorker {
+    pub hostname: String,
+    pub port: i32,
+    /// Queue ID (None for Admin workers)
+    pub queue_id: Option<i64>,
+}
+
+// Moved from src/tables/pgqrs_messages.rs
+/// Input data for creating a new message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewMessage {
+    pub queue_id: i64,
+    pub payload: serde_json::Value,
+    pub read_ct: i32,
+    pub enqueued_at: DateTime<Utc>,
+    pub vt: DateTime<Utc>,
+    pub producer_worker_id: Option<i64>,
+    pub consumer_worker_id: Option<i64>,
+}
+
+/// Parameters for batch message insertion
+#[derive(Debug, Clone)]
+pub struct BatchInsertParams {
+    pub read_ct: i32,
+    pub enqueued_at: DateTime<Utc>,
+    pub vt: DateTime<Utc>,
+    pub producer_worker_id: Option<i64>,
+    pub consumer_worker_id: Option<i64>,
+}
+
+// Moved from src/workflow/mod.rs
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(
+    type_name = "pgqrs_workflow_status",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum WorkflowStatus {
+    Pending,
+    Running,
+    Success,
+    Error,
+}
+
+// Moved from src/tables/pgqrs_workflows.rs
+#[derive(Debug, sqlx::FromRow, Clone)]
+pub struct WorkflowRecord {
+    pub workflow_id: i64,
+    pub name: String,
+    pub status: WorkflowStatus,
+    pub input: Option<serde_json::Value>,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub executor_id: Option<String>,
+}
+
+pub struct NewWorkflow {
+    pub name: String,
+    pub input: Option<serde_json::Value>,
+}

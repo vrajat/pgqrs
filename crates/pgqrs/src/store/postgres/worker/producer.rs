@@ -25,7 +25,6 @@
 use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
 use crate::store::postgres::tables::Messages;
-use crate::store::MessageTable;
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
@@ -270,7 +269,7 @@ impl crate::store::Producer for Producer {
             .batch_insert(
                 self.queue_info.id,
                 payloads,
-                crate::tables::pgqrs_messages::BatchInsertParams {
+                crate::types::BatchInsertParams {
                     read_ct: 0,
                     enqueued_at: now,
                     vt,
@@ -301,7 +300,7 @@ impl crate::store::Producer for Producer {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        use crate::tables::NewMessage;
+        use crate::types::NewMessage;
 
         let new_message = NewMessage {
             queue_id: self.queue_info.id,

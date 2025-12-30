@@ -4,10 +4,10 @@
 //! enabling pgqrs to support multiple database backends (Postgres, SQLite, Turso).
 
 use crate::rate_limit::RateLimitStatus;
-use crate::tables::{NewQueue, NewWorkflow, WorkflowRecord};
 use crate::types::{
     ArchivedMessage, NewArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus,
 };
+use crate::types::{NewQueue, NewWorkflow, WorkflowRecord};
 use crate::validation::ValidationConfig;
 use crate::Config;
 use async_trait::async_trait;
@@ -68,8 +68,15 @@ pub trait Admin: Worker {
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
     async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
     async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn reclaim_messages(&self, queue_id: i64, older_than: Option<Duration>) -> crate::error::Result<u64>;
-    async fn worker_stats(&self, queue_name: &str) -> crate::error::Result<crate::types::WorkerStats>;
+    async fn reclaim_messages(
+        &self,
+        queue_id: i64,
+        older_than: Option<Duration>,
+    ) -> crate::error::Result<u64>;
+    async fn worker_stats(
+        &self,
+        queue_name: &str,
+    ) -> crate::error::Result<crate::types::WorkerStats>;
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64>;
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
 }
@@ -199,6 +206,15 @@ pub trait StepGuardExt: StepGuard {
     }
 }
 impl<T: ?Sized + StepGuard> StepGuardExt for T {}
+
+/// The result of attempting to start a step.
+pub enum StepResult<T> {
+    /// The step needs to be executed. The returned guard MUST be used to report success or failure.
+    Execute(Box<dyn StepGuard>),
+    /// The step was already completed successfully in a previous run. Contains the cached output.
+    Skipped(T),
+}
+
 /// Main store trait that provides access to entity-specific repositories
 /// and transaction management.
 #[async_trait]
@@ -250,7 +266,7 @@ pub trait Store: Clone + Send + Sync + 'static {
         &self,
         workflow_id: i64,
         step_id: &str,
-    ) -> crate::error::Result<Option<Box<dyn StepGuard>>>;
+    ) -> crate::error::Result<StepResult<serde_json::Value>>;
 
     /// Create a new workflow execution.
     async fn create_workflow<T: serde::Serialize + Send + Sync>(
@@ -302,7 +318,7 @@ pub trait QueueTable: Send + Sync {
 #[async_trait]
 pub trait MessageTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: crate::tables::NewMessage) -> crate::error::Result<QueueMessage>;
+    async fn insert(&self, data: crate::types::NewMessage) -> crate::error::Result<QueueMessage>;
     async fn get(&self, id: i64) -> crate::error::Result<QueueMessage>;
     async fn list(&self) -> crate::error::Result<Vec<QueueMessage>>;
     async fn count(&self) -> crate::error::Result<i64>;
@@ -314,7 +330,7 @@ pub trait MessageTable: Send + Sync {
         &self,
         queue_id: i64,
         payloads: &[serde_json::Value],
-        params: crate::tables::pgqrs_messages::BatchInsertParams,
+        params: crate::types::BatchInsertParams,
     ) -> crate::error::Result<Vec<i64>>;
 
     async fn get_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<QueueMessage>>;
@@ -360,7 +376,7 @@ pub trait MessageTable: Send + Sync {
 #[async_trait]
 pub trait WorkerTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: crate::tables::NewWorker) -> crate::error::Result<WorkerInfo>;
+    async fn insert(&self, data: crate::types::NewWorker) -> crate::error::Result<WorkerInfo>;
     async fn get(&self, id: i64) -> crate::error::Result<WorkerInfo>;
     async fn list(&self) -> crate::error::Result<Vec<WorkerInfo>>;
     async fn count(&self) -> crate::error::Result<i64>;
@@ -426,6 +442,9 @@ pub trait ArchiveTable: Send + Sync {
     async fn delete_by_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
 
     async fn replay_message(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>>;
+
+    /// Count archived messages for a specific queue
+    async fn count_for_queue(&self, queue_id: i64) -> crate::error::Result<i64>;
 }
 
 /// Repository for managing workflows.

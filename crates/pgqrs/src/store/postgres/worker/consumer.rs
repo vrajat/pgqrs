@@ -28,7 +28,6 @@
 use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
 use crate::store::postgres::tables::Messages;
-use crate::store::MessageTable;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
