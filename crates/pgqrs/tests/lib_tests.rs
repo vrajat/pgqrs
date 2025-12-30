@@ -27,6 +27,30 @@ async fn verify() {
 }
 
 #[tokio::test]
+async fn test_connect_function() {
+    // Test the new pgqrs::connect() convenience function
+    let database_url = common::get_postgres_dsn(Some("pgqrs_connect_test")).await;
+
+    let store = pgqrs::connect(&database_url)
+        .await
+        .expect("Failed to connect using pgqrs::connect()");
+
+    // Install schema
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
+
+    // Verify the connection works
+    let result = pgqrs::admin(&store).verify().await;
+    assert!(
+        result.is_ok(),
+        "Verify should succeed after connect: {:?}",
+        result
+    );
+}
+
+#[tokio::test]
 async fn test_create_and_list_queue() {
     let store = create_store().await;
     let queue_name = TEST_QUEUE_LOGGED.to_string();
