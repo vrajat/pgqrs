@@ -51,10 +51,7 @@ async fn test_enqueue_all_options() {
     // Cleanup
     producer.suspend().await.unwrap();
     producer.shutdown().await.unwrap();
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await
@@ -111,10 +108,7 @@ async fn test_enqueue_edge_cases() {
     // Cleanup
     producer.suspend().await.unwrap();
     producer.shutdown().await.unwrap();
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await
@@ -185,7 +179,7 @@ async fn test_dequeue_builder_combinations() {
     assert_eq!(messages.len(), 1);
 
     // Test with large batch size (should get remaining messages)
-    let messages = pgqrs::dequeue()
+    let _messages = pgqrs::dequeue()
         .worker(&*consumer)
         .batch(100)
         .fetch_all(&store)
@@ -193,10 +187,7 @@ async fn test_dequeue_builder_combinations() {
         .expect("Failed to dequeue large batch");
 
     // Cleanup - purge queue handles all messages and workers
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
 
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
@@ -250,10 +241,7 @@ async fn test_enqueue_batch_builder() {
     // Cleanup
     producer.suspend().await.unwrap();
     producer.shutdown().await.unwrap();
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await

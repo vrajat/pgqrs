@@ -58,10 +58,7 @@ async fn test_anystore_delegates_to_postgres() {
     producer.suspend().await.expect("Failed to suspend");
     producer.shutdown().await.expect("Failed to shutdown");
 
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await
@@ -124,7 +121,11 @@ async fn test_anystore_all_table_accessors() {
     let _workflows = store.workflows();
 
     // Verify they all work by calling a method on each
-    let queue_count = store.queues().count().await.expect("Failed to count queues");
+    let queue_count = store
+        .queues()
+        .count()
+        .await
+        .expect("Failed to count queues");
     assert!(queue_count >= 0);
 
     let message_count = store
@@ -236,10 +237,7 @@ async fn test_anystore_worker_creation() {
     ephemeral_consumer.suspend().await.unwrap();
     ephemeral_consumer.shutdown().await.unwrap();
 
-    pgqrs::admin(&store)
-        .purge_queue(queue_name)
-        .await
-        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await
