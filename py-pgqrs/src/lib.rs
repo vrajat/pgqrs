@@ -1,18 +1,16 @@
 #![allow(non_local_definitions)]
 use ::pgqrs as rust_pgqrs;
+use gethostname::gethostname;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use rust_pgqrs::tables::{
-    Archive as RustArchive, Messages as RustMessages, Queues as RustQueues, Table,
-    Workers as RustWorkers,
-};
+use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
-    ArchivedMessage as RustArchivedMessage, QueueInfo as RustQueueInfo,
-    QueueMessage as RustQueueMessage, WorkerStatus,
+    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
 };
-use rust_pgqrs::workflow::{StepResult, Workflow as RustWorkflow};
-use rust_pgqrs::{Admin as RustAdmin, Consumer as RustConsumer, Producer as RustProducer};
-use std::sync::{Arc, OnceLock};
+use rust_pgqrs::{StepGuard, StepGuardImpl, StepResultImpl, Workflow, WorkflowExt, WorkflowImpl};
+
+use std::sync::Arc;
+use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -54,13 +52,6 @@ fn json_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
 }
 
 fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
-    // Simplified conversion, for enqueuing
-    // let s = val.call_method0("__str__")?.extract::<String>()?;
-    // This expects a JSON string or dict.
-    // If it's a dict, we can dump it to string then parse.
-    // Or we can rely on user passing a string.
-    // Let's assume user passes a dict or other json-serializable object,
-    // we use json.dumps
     let json_module = val.py().import("json")?;
     let json_str = json_module
         .call_method1("dumps", (val,))?
@@ -72,11 +63,25 @@ fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
 #[pyclass(name = "Config")]
 #[derive(Clone)]
 struct PyConfig {
+    #[allow(dead_code)]
     inner: rust_pgqrs::Config,
 }
 
 #[pymethods]
 impl PyConfig {
+    #[new]
+    #[pyo3(signature = (dsn, schema=None, max_connections=None))]
+    fn new(dsn: String, schema: Option<String>, max_connections: Option<u32>) -> PyResult<Self> {
+        let mut inner = rust_pgqrs::Config::from_dsn(&dsn);
+        if let Some(s) = schema {
+            inner = inner.with_schema(&s);
+        }
+        if let Some(m) = max_connections {
+            inner = inner.with_max_connections(m);
+        }
+        Ok(PyConfig { inner })
+    }
+
     #[staticmethod]
     fn from_dsn(dsn: String) -> Self {
         PyConfig {
@@ -84,9 +89,9 @@ impl PyConfig {
         }
     }
 
-    #[setter]
-    fn set_schema(&mut self, schema: String) {
-        self.inner.schema = schema;
+    #[getter]
+    fn get_dsn(&self) -> String {
+        self.inner.dsn.clone()
     }
 
     #[getter]
@@ -95,8 +100,8 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_max_connections(&mut self, max: u32) {
-        self.inner.max_connections = max;
+    fn set_schema(&mut self, schema: String) {
+        self.inner.schema = schema;
     }
 
     #[getter]
@@ -105,8 +110,8 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_connection_timeout_seconds(&mut self, timeout: u64) {
-        self.inner.connection_timeout_seconds = timeout;
+    fn set_max_connections(&mut self, max: u32) {
+        self.inner.max_connections = max;
     }
 
     #[getter]
@@ -115,8 +120,8 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_default_lock_time_seconds(&mut self, seconds: u32) {
-        self.inner.default_lock_time_seconds = seconds;
+    fn set_connection_timeout_seconds(&mut self, timeout: u64) {
+        self.inner.connection_timeout_seconds = timeout;
     }
 
     #[getter]
@@ -125,8 +130,8 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_default_max_batch_size(&mut self, size: usize) {
-        self.inner.default_max_batch_size = size;
+    fn set_default_lock_time_seconds(&mut self, lock_time: u32) {
+        self.inner.default_lock_time_seconds = lock_time;
     }
 
     #[getter]
@@ -135,8 +140,8 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_max_read_ct(&mut self, count: i32) {
-        self.inner.max_read_ct = count;
+    fn set_default_max_batch_size(&mut self, batch_size: usize) {
+        self.inner.default_max_batch_size = batch_size;
     }
 
     #[getter]
@@ -145,41 +150,478 @@ impl PyConfig {
     }
 
     #[setter]
-    fn set_heartbeat_interval_seconds(&mut self, seconds: u64) {
-        self.inner.heartbeat_interval = seconds;
+    fn set_max_read_ct(&mut self, max_read_ct: i32) {
+        self.inner.max_read_ct = max_read_ct;
     }
 
     #[getter]
     fn get_heartbeat_interval_seconds(&self) -> u64 {
         self.inner.heartbeat_interval
     }
+
+    #[setter]
+    fn set_heartbeat_interval_seconds(&mut self, interval: u64) {
+        self.inner.heartbeat_interval = interval;
+    }
+}
+
+#[pyclass(name = "Store")]
+#[derive(Clone)]
+struct PyStore {
+    inner: AnyStore,
+}
+
+#[pymethods]
+impl PyStore {
+    fn producer<'a>(&self, py: Python<'a>, queue: String) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let hostname = format!(
+                "{}-{}",
+                gethostname().to_string_lossy(),
+                uuid::Uuid::new_v4()
+            );
+            let builder = rust_pgqrs::producer(&hostname, 0, &queue);
+            let p_borrowed = builder
+                .create(&store)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let p_static: Box<dyn rust_pgqrs::store::Producer + 'static> =
+                unsafe { std::mem::transmute(p_borrowed) };
+
+            Ok(Producer {
+                inner: Arc::new(p_static),
+            })
+        })
+    }
+
+    fn consumer<'a>(&self, py: Python<'a>, queue: String) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let hostname = format!(
+                "{}-{}",
+                gethostname().to_string_lossy(),
+                uuid::Uuid::new_v4()
+            );
+            let builder = rust_pgqrs::consumer(&hostname, 0, &queue);
+            let c_borrowed = builder
+                .create(&store)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let c_static: Box<dyn rust_pgqrs::store::Consumer + 'static> =
+                unsafe { std::mem::transmute(c_borrowed) };
+
+            Ok(Consumer {
+                inner: Arc::new(c_static),
+            })
+        })
+    }
+}
+
+#[pyfunction]
+fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let config = rust_pgqrs::Config::from_dsn(&dsn);
+        let store = AnyStore::connect(&config)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(PyStore { inner: store })
+    })
+}
+
+#[pyfunction]
+fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let store = AnyStore::connect(&config.inner)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(PyStore { inner: store })
+    })
+}
+
+#[pyclass]
+struct Admin {
+    store: AnyStore,
+}
+
+#[pymethods]
+impl Admin {
+    #[new]
+    fn new(store: PyStore) -> Self {
+        Admin { store: store.inner }
+    }
+
+    fn install<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            rust_pgqrs::admin(&store)
+                .install()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn verify<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            rust_pgqrs::admin(&store)
+                .verify()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn create_queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let q = rust_pgqrs::admin(&store)
+                .create_queue(&name)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(QueueInfo::from(q))
+        })
+    }
+
+    fn delete_queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            rust_pgqrs::admin(&store)
+                .delete_queue_by_name(&name)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(true)
+        })
+    }
+
+    fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Workers { store }) })
+    }
+
+    fn get_queues<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Queues { store }) })
+    }
+
+    fn get_messages<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Messages { store }) })
+    }
+
+    fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Archive { store }) })
+    }
+
+    fn create_workflow<'a>(
+        &self,
+        py: Python<'a>,
+        name: String,
+        arg: PyObject,
+    ) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        let json_arg = py_to_json(arg.as_ref(py))?;
+
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let pool = store.pool();
+            let workflow = WorkflowImpl::create(pool.clone(), &name, &json_arg)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            Ok(PyWorkflow {
+                inner: Arc::new(tokio::sync::Mutex::new(workflow)),
+            })
+        })
+    }
+}
+
+#[pyfunction]
+fn admin(store: PyStore) -> Admin {
+    Admin { store: store.inner }
+}
+
+#[pyfunction]
+fn produce<'a>(
+    py: Python<'a>,
+    store: PyStore,
+    queue: String,
+    payload: PyObject,
+) -> PyResult<&'a PyAny> {
+    let rust_store = store.inner.clone();
+    let json_payload = py_to_json(payload.as_ref(py))?;
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let msg_id = rust_pgqrs::produce(&json_payload)
+            .to(&queue)
+            .execute(&rust_store)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(msg_id)
+    })
+}
+
+#[pyfunction]
+fn produce_batch<'a>(
+    py: Python<'a>,
+    store: PyStore,
+    queue: String,
+    payloads: Vec<PyObject>,
+) -> PyResult<&'a PyAny> {
+    let rust_store = store.inner.clone();
+    let mut json_payloads = Vec::new();
+    for p in payloads {
+        json_payloads.push(py_to_json(p.as_ref(py))?);
+    }
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let msg_ids = rust_pgqrs::produce_batch(&json_payloads)
+            .to(&queue)
+            .execute(&rust_store)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(msg_ids)
+    })
+}
+
+#[pyfunction]
+fn consume<'a>(
+    py: Python<'a>,
+    store: PyStore,
+    queue: String,
+    handler: PyObject,
+) -> PyResult<&'a PyAny> {
+    let rust_store = store.inner.clone();
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let consumer = rust_store
+            .consumer_ephemeral(&queue, rust_store.config())
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let msgs = consumer
+            .dequeue_many(1)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        if let Some(msg) = msgs.first() {
+            let py_msg = QueueMessage::from(msg.clone());
+            let res: PyResult<PyObject> = Python::with_gil(|py| {
+                let fut = handler.call1(py, (py_msg,))?;
+                pyo3_asyncio::tokio::into_future(fut.as_ref(py))
+            })?
+            .await;
+
+            match res {
+                Ok(_) => {
+                    consumer
+                        .delete(msg.id)
+                        .await
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+#[pyfunction]
+fn consume_batch<'a>(
+    py: Python<'a>,
+    store: PyStore,
+    queue: String,
+    batch_size: usize,
+    handler: PyObject,
+) -> PyResult<&'a PyAny> {
+    let rust_store = store.inner.clone();
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let consumer = rust_store
+            .consumer_ephemeral(&queue, rust_store.config())
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let msgs = consumer
+            .dequeue_many(batch_size)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        if !msgs.is_empty() {
+            let py_msgs: Vec<_> = msgs.iter().map(|m| QueueMessage::from(m.clone())).collect();
+            let res: PyResult<PyObject> = Python::with_gil(|py| {
+                let fut = handler.call1(py, (py_msgs,))?;
+                pyo3_asyncio::tokio::into_future(fut.as_ref(py))
+            })?
+            .await;
+
+            match res {
+                Ok(_) => {
+                    let msg_ids: Vec<_> = msgs.iter().map(|m| m.id).collect();
+                    consumer
+                        .archive_many(msg_ids)
+                        .await
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+#[pyfunction]
+fn enqueue<'a>(py: Python<'a>, producer: &Producer, payload: PyObject) -> PyResult<&'a PyAny> {
+    let inner = producer.inner.clone();
+    let json_payload = py_to_json(payload.as_ref(py))?;
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let msg = inner
+            .enqueue(&json_payload)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(msg.id)
+    })
+}
+
+#[pyfunction]
+fn enqueue_batch<'a>(
+    py: Python<'a>,
+    producer: &Producer,
+    payloads: Vec<PyObject>,
+) -> PyResult<&'a PyAny> {
+    let inner = producer.inner.clone();
+    let mut json_payloads = Vec::new();
+    for p in payloads {
+        json_payloads.push(py_to_json(p.as_ref(py))?);
+    }
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let msgs = inner
+            .batch_enqueue(&json_payloads)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(msgs.iter().map(|m| m.id).collect::<Vec<_>>())
+    })
+}
+
+#[pyfunction]
+fn dequeue<'a>(py: Python<'a>, consumer: &Consumer, batch_size: usize) -> PyResult<&'a PyAny> {
+    let inner = consumer.inner.clone();
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let messages = inner
+            .dequeue_many(batch_size)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(messages
+            .into_iter()
+            .map(QueueMessage::from)
+            .collect::<Vec<_>>())
+    })
+}
+
+#[pyfunction]
+fn enqueue_delayed<'a>(
+    py: Python<'a>,
+    producer: &Producer,
+    payload: &PyAny,
+    delay_seconds: u32,
+) -> PyResult<&'a PyAny> {
+    producer.enqueue_delayed(py, payload, delay_seconds)
+}
+
+#[pyfunction]
+fn extend_vt<'a>(
+    py: Python<'a>,
+    consumer: &Consumer,
+    message: &QueueMessage,
+    seconds: u32,
+) -> PyResult<&'a PyAny> {
+    consumer.extend_vt(py, message.id, seconds)
+}
+
+#[pyfunction]
+fn archive<'a>(py: Python<'a>, consumer: &Consumer, message: &QueueMessage) -> PyResult<&'a PyAny> {
+    let inner = consumer.inner.clone();
+    let message_id = message.id;
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        inner
+            .archive(message_id)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(true)
+    })
+}
+
+#[pyfunction]
+fn delete<'a>(py: Python<'a>, consumer: &Consumer, message: &QueueMessage) -> PyResult<&'a PyAny> {
+    let inner = consumer.inner.clone();
+    let message_id = message.id;
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        inner
+            .delete(message_id)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    })
+}
+
+#[pyfunction]
+fn archive_batch<'a>(
+    py: Python<'a>,
+    consumer: &Consumer,
+    messages: Vec<PyObject>,
+) -> PyResult<&'a PyAny> {
+    let inner = consumer.inner.clone();
+    pyo3_asyncio::tokio::future_into_py(py, async move {
+        let mut msg_ids = Vec::new();
+        Python::with_gil(|py| {
+            for m in messages {
+                // Extract directly from PyObject which should be a QueueMessage
+                let msg = m.extract::<Py<QueueMessage>>(py)?;
+                msg_ids.push(msg.borrow(py).id);
+            }
+            Ok::<(), PyErr>(())
+        })?;
+        inner
+            .archive_many(msg_ids)
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(true)
+    })
 }
 
 #[pyclass]
 struct Producer {
-    inner: Arc<RustProducer>,
+    inner: Arc<Box<dyn rust_pgqrs::store::Producer>>,
 }
 
 #[pymethods]
 impl Producer {
     #[new]
-    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new() -> PyResult<Self> {
+        Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "Direct Producer creation is disabled. Use store.producer(queue).",
+        ))
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "new_producer")]
+    fn init(admin: &Admin, queue: String, hostname: String, port: i32) -> PyResult<Self> {
+        let store = admin.store.clone();
         let rt = get_runtime();
-        let producer = rt.block_on(async {
-            let (pool, config) = {
-                let locked_admin = admin.inner.lock().await;
-                (locked_admin.pool.clone(), locked_admin.config.clone())
-            };
 
-            let queues = RustQueues::new(pool.clone());
-            let q = queues.get_by_name(queue).await.map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
-            })?;
-
-            RustProducer::new(pool, &q, &hostname, port, &config)
+        let producer = rt.block_on(async move {
+            let builder = rust_pgqrs::producer(&hostname, port, &queue);
+            let p_borrowed = builder
+                .create(&store)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let p_static: Box<dyn rust_pgqrs::store::Producer + 'static> =
+                unsafe { std::mem::transmute(p_borrowed) };
+
+            Ok::<_, PyErr>(p_static)
         })?;
+
         Ok(Producer {
             inner: Arc::new(producer),
         })
@@ -202,70 +644,54 @@ impl Producer {
         &self,
         py: Python<'a>,
         payload: &PyAny,
-        delay_seconds: u64,
+        delay_seconds: u32,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let json_payload = py_to_json(payload)?;
 
-        let delay: u32 = delay_seconds.try_into().map_err(|_| {
-            pyo3::exceptions::PyOverflowError::new_err("Delay seconds must fit in u32")
-        })?;
-
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let msg = inner
-                .enqueue_delayed(&json_payload, delay)
+                .enqueue_delayed(&json_payload, delay_seconds)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(msg.id)
-        })
-    }
-
-    fn enqueue_batch<'a>(&self, py: Python<'a>, payloads: Vec<PyObject>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        let json_payloads: Result<Vec<serde_json::Value>, _> = payloads
-            .into_iter()
-            .map(|p| py_to_json(p.as_ref(py)))
-            .collect();
-        let json_payloads = json_payloads?;
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
-                .batch_enqueue(&json_payloads)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(messages
-                .into_iter()
-                .map(QueueMessage::from)
-                .collect::<Vec<_>>())
         })
     }
 }
 
 #[pyclass]
 struct Consumer {
-    inner: Arc<RustConsumer>,
+    inner: Arc<Box<dyn rust_pgqrs::store::Consumer>>,
 }
 
 #[pymethods]
 impl Consumer {
     #[new]
-    fn new(admin: &Admin, queue: &str, hostname: String, port: i32) -> PyResult<Self> {
+    fn new() -> PyResult<Self> {
+        Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "Direct Consumer creation is disabled. Use store.consumer(queue).",
+        ))
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "new_consumer")]
+    fn init(admin: &Admin, queue: String, hostname: String, port: i32) -> PyResult<Self> {
+        let store = admin.store.clone();
         let rt = get_runtime();
-        let consumer = rt.block_on(async {
-            let (pool, config) = {
-                let locked_admin = admin.inner.lock().await;
-                (locked_admin.pool.clone(), locked_admin.config.clone())
-            };
 
-            let queues = RustQueues::new(pool.clone());
-            let q = queues.get_by_name(queue).await.map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Queue not found: {}", e))
-            })?;
-
-            RustConsumer::new(pool, &q, &hostname, port, &config)
+        let consumer = rt.block_on(async move {
+            let builder = rust_pgqrs::consumer(&hostname, port, &queue);
+            let c_borrowed = builder
+                .create(&store)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let c_static: Box<dyn rust_pgqrs::store::Consumer + 'static> =
+                unsafe { std::mem::transmute(c_borrowed) };
+
+            Ok::<_, PyErr>(c_static)
         })?;
+
         Ok(Consumer {
             inner: Arc::new(consumer),
         })
@@ -285,122 +711,45 @@ impl Consumer {
         })
     }
 
-    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let result = inner
-                .delete(message_id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(result)
-        })
-    }
-
-    fn archive<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+    fn extend_vt<'a>(&self, py: Python<'a>, message_id: i64, seconds: u32) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             inner
-                .archive(message_id)
+                .extend_visibility(message_id, seconds)
                 .await
-                .map(|_| Python::with_gil(|py| py.None()))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(true)
+        })
+    }
+
+    fn ack<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        self.delete(py, message_id)
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner
+                .delete(message_id)
+                .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    /// Extends the visibility timeout for a message in the queue.
-    ///
-    /// Parameters
-    /// ----------
-    /// message_id : int
-    ///     The ID of the message whose visibility timeout is to be extended.
-    /// extension_seconds : float
-    ///     The number of seconds to extend the visibility timeout.
-    ///
-    /// Returns
-    /// -------
-    /// None
-    ///     Returns None on success.
-    ///
-    /// Raises
-    /// ------
-    /// RuntimeError
-    ///     If the operation fails.
-    fn extend_visibility<'a>(
-        &self,
-        py: Python<'a>,
-        message_id: i64,
-        extension_seconds: u32,
-    ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let result = inner
-                .extend_visibility(message_id, extension_seconds)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(result)
-        })
-    }
-
-    fn dequeue_batch<'a>(&self, py: Python<'a>, limit: usize) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
-                .dequeue_many(limit)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(messages
-                .into_iter()
-                .map(QueueMessage::from)
-                .collect::<Vec<_>>())
-        })
-    }
-
-    fn dequeue_batch_with_delay<'a>(
-        &self,
-        py: Python<'a>,
-        limit: usize,
-        vt_seconds: u32,
-    ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
-                .dequeue_many_with_delay(limit, vt_seconds)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(messages
-                .into_iter()
-                .map(QueueMessage::from)
-                .collect::<Vec<_>>())
-        })
-    }
-
-    fn archive_batch<'a>(&self, py: Python<'a>, message_ids: Vec<i64>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let results = inner
-                .archive_many(message_ids)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(results)
         })
     }
 }
 
-// Wrappers for Tables
-
 #[pyclass]
 #[derive(Clone)]
 struct Workers {
-    inner: RustWorkers,
+    store: AnyStore,
 }
 
 #[pymethods]
 impl Workers {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
+            store
+                .workers()
                 .count()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -408,9 +757,10 @@ impl Workers {
     }
 
     fn list<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let workers = inner
+            let workers = store
+                .workers()
                 .list()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -420,31 +770,21 @@ impl Workers {
                 .collect::<Vec<_>>())
         })
     }
-
-    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let worker = inner
-                .get(id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            Ok(WorkerInfo::from(worker))
-        })
-    }
 }
 
 #[pyclass]
 #[derive(Clone)]
 struct Queues {
-    inner: RustQueues,
+    store: AnyStore,
 }
 
 #[pymethods]
 impl Queues {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
+            store
+                .queues()
                 .count()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -455,15 +795,16 @@ impl Queues {
 #[pyclass]
 #[derive(Clone)]
 struct Messages {
-    inner: RustMessages,
+    store: AnyStore,
 }
 
 #[pymethods]
 impl Messages {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
+            store
+                .messages()
                 .count()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -474,68 +815,17 @@ impl Messages {
 #[pyclass]
 #[derive(Clone)]
 struct Archive {
-    inner: RustArchive,
+    store: AnyStore,
 }
 
 #[pymethods]
 impl Archive {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
+            store
+                .archive()
                 .count()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-        })
-    }
-
-    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let msg = inner
-                .get(id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(ArchivedMessage::from(msg))
-        })
-    }
-
-    fn delete<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let count = inner
-                .delete(id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(count)
-        })
-    }
-
-    fn list_dlq_messages<'a>(
-        &self,
-        py: Python<'a>,
-        max_attempts: i32,
-        limit: i64,
-        offset: i64,
-    ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
-                .list_dlq_messages(max_attempts, limit, offset)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(messages
-                .into_iter()
-                .map(ArchivedMessage::from)
-                .collect::<Vec<_>>())
-        })
-    }
-
-    fn dlq_count<'a>(&self, py: Python<'a>, max_attempts: i32) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .dlq_count(max_attempts)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
@@ -548,9 +838,10 @@ impl Archive {
         limit: i64,
         offset: i64,
     ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
+            let messages = store
+                .archive()
                 .list_by_worker(worker_id, limit, offset)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -562,20 +853,45 @@ impl Archive {
     }
 
     fn count_by_worker<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
+            store
+                .archive()
                 .count_by_worker(worker_id)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
-    fn delete_by_worker<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
+    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .delete_by_worker(worker_id)
+            let msg = store
+                .archive()
+                .get(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            Ok(ArchivedMessage::from(msg))
+        })
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            store
+                .archive()
+                .delete(id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn dlq_count<'a>(&self, py: Python<'a>, max_attempts: i32) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            store
+                .archive()
+                .dlq_count(max_attempts)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
@@ -583,174 +899,163 @@ impl Archive {
 }
 
 #[pyclass]
-struct Admin {
-    inner: Arc<tokio::sync::Mutex<RustAdmin>>, // Admin is mutable in register, so need Mutex
+#[derive(Clone)]
+struct ArchivedMessage {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    queue_id: i64,
+    #[pyo3(get)]
+    original_msg_id: i64,
+    #[pyo3(get)]
+    payload: PyObject,
+    #[pyo3(get)]
+    producer_worker_id: Option<i64>,
+    #[pyo3(get)]
+    consumer_worker_id: Option<i64>,
+    #[pyo3(get)]
+    vt: String,
+    #[pyo3(get)]
+    dequeued_at: Option<String>,
+    #[pyo3(get)]
+    archived_at: String,
+    #[pyo3(get)]
+    enqueued_at: String,
+    #[pyo3(get)]
+    read_ct: i32,
+}
+
+impl From<rust_pgqrs::types::ArchivedMessage> for ArchivedMessage {
+    fn from(r: rust_pgqrs::types::ArchivedMessage) -> Self {
+        Python::with_gil(|py| ArchivedMessage {
+            id: r.id,
+            queue_id: r.queue_id,
+            original_msg_id: r.original_msg_id,
+            payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
+            producer_worker_id: r.producer_worker_id,
+            consumer_worker_id: r.consumer_worker_id,
+            vt: r.vt.to_rfc3339(),
+            dequeued_at: r.dequeued_at.map(|dt| dt.to_rfc3339()),
+            archived_at: r.archived_at.to_rfc3339(),
+            enqueued_at: r.enqueued_at.to_rfc3339(),
+            read_ct: r.read_ct,
+        })
+    }
+}
+
+#[pyclass]
+struct PyWorkflow {
+    #[allow(dead_code)]
+    inner: Arc<tokio::sync::Mutex<WorkflowImpl>>,
 }
 
 #[pymethods]
-impl Admin {
-    #[new]
-    fn new(dsn: &PyAny, schema: Option<String>) -> PyResult<Self> {
-        let mut config = if let Ok(dsn_str) = dsn.extract::<String>() {
-            rust_pgqrs::Config::from_dsn(&dsn_str)
-        } else if let Ok(config_wrapper) = dsn.extract::<PyConfig>() {
-            config_wrapper.inner
-        } else {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "Argument 'dsn' must be a string or a Config instance",
-            ));
-        };
-
-        if let Some(s) = schema {
-            config.schema = s;
-        }
-
-        let rt = get_runtime();
-        let admin = rt.block_on(async {
-            RustAdmin::new(&config)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
-        })?;
-        Ok(Admin {
-            inner: Arc::new(tokio::sync::Mutex::new(admin)),
-        })
-    }
-
-    fn install<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+impl PyWorkflow {
+    fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            admin
-                .install()
+            let mut wf = inner.lock().await;
+            wf.start()
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
-    fn verify<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+    fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            admin
-                .verify()
+            let mut wf = inner.lock().await;
+            wf.fail(&error)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
-    fn create_queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
+    fn success<'a>(&self, py: Python<'a>, result: PyObject) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let json_res = py_to_json(result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            let q = admin
-                .create_queue(&name)
+            let mut wf = inner.lock().await;
+            wf.success(&json_res)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(QueueInfo::from(q))
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
         })
     }
 
-    fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+    fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            Ok(Workers {
-                inner: admin.workers.clone(),
-            })
-        })
-    }
+            let (id, pool) = {
+                let wf = inner.lock().await;
+                (wf.id(), wf.pool().clone())
+            };
 
-    fn get_queues<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            Ok(Queues {
-                inner: admin.queues.clone(),
-            })
-        })
-    }
+            let res: StepResultImpl<serde_json::Value> =
+                StepGuardImpl::acquire(&pool, id, &step_id)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-    fn get_messages<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            Ok(Messages {
-                inner: admin.messages.clone(),
-            })
-        })
-    }
-
-    fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            Ok(Archive {
-                inner: admin.archive.clone(),
-            })
-        })
-    }
-
-    fn reclaim_messages<'a>(
-        &self,
-        py: Python<'a>,
-        queue_name: String,
-        older_than_seconds: Option<f64>,
-    ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            let queue = admin
-                .get_queue(&queue_name)
-                .await
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-            let duration =
-                older_than_seconds.map(|s| chrono::Duration::milliseconds((s * 1000.0) as i64));
-
-            let count = admin
-                .reclaim_messages(queue.id, duration)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(count)
-        })
-    }
-
-    /// Creates a new workflow execution.
-    ///
-    /// Parameters
-    /// ----------
-    /// name : str
-    ///     The name of the workflow type.
-    /// arg : object
-    ///     The argument for the workflow execution (must be JSON serializable).
-    ///
-    /// Returns
-    /// -------
-    /// PyWorkflow
-    ///     A handle to the created workflow.
-    fn create_workflow<'a>(
-        &self,
-        py: Python<'a>,
-        name: String,
-        arg: PyObject,
-    ) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        let json_arg = py_to_json(arg.as_ref(py))?;
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let admin = inner.lock().await;
-            let workflow = RustWorkflow::create(admin.pool.clone(), &name, &json_arg)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            Ok(PyWorkflow {
-                inner: Arc::new(workflow),
+            Python::with_gil(|py| match res {
+                StepResultImpl::Execute(guard) => Ok(PyStepResult {
+                    status: "EXECUTE".to_string(),
+                    value: py.None(),
+                    guard: Some(PyStepGuard {
+                        inner: Arc::new(tokio::sync::Mutex::new(guard)),
+                    }),
+                }
+                .into_py(py)),
+                StepResultImpl::Skipped(val) => Ok(PyStepResult {
+                    status: "SKIPPED".to_string(),
+                    value: json_to_py(py, &val)?,
+                    guard: None,
+                }
+                .into_py(py)),
             })
         })
     }
 }
 
-// Data Types Wrappers
+#[pyclass]
+struct PyStepResult {
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    value: PyObject,
+    #[pyo3(get)]
+    guard: Option<PyStepGuard>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct PyStepGuard {
+    inner: Arc<tokio::sync::Mutex<StepGuardImpl>>,
+}
+
+#[pymethods]
+impl PyStepGuard {
+    fn success<'a>(&self, py: Python<'a>, result: PyObject) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_res = py_to_json(result.as_ref(py))?;
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            guard
+                .complete(json_res)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            guard
+                .fail_with_json(serde_json::Value::String(error))
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+}
 
 #[pyclass]
 struct QueueInfo {
@@ -758,8 +1063,6 @@ struct QueueInfo {
     id: i64,
     #[pyo3(get)]
     queue_name: String,
-    #[pyo3(get)]
-    created_at: String,
 }
 
 impl From<RustQueueInfo> for QueueInfo {
@@ -767,12 +1070,12 @@ impl From<RustQueueInfo> for QueueInfo {
         QueueInfo {
             id: r.id,
             queue_name: r.queue_name,
-            created_at: r.created_at.to_rfc3339(),
         }
     }
 }
 
 #[pyclass]
+#[derive(Clone)]
 struct QueueMessage {
     #[pyo3(get)]
     id: i64,
@@ -780,6 +1083,18 @@ struct QueueMessage {
     queue_id: i64,
     #[pyo3(get)]
     payload: PyObject,
+    #[pyo3(get)]
+    vt: String,
+    #[pyo3(get)]
+    enqueued_at: String,
+    #[pyo3(get)]
+    read_ct: i32,
+    #[pyo3(get)]
+    dequeued_at: Option<String>,
+    #[pyo3(get)]
+    producer_worker_id: Option<i64>,
+    #[pyo3(get)]
+    consumer_worker_id: Option<i64>,
 }
 
 impl From<RustQueueMessage> for QueueMessage {
@@ -788,48 +1103,10 @@ impl From<RustQueueMessage> for QueueMessage {
             id: r.id,
             queue_id: r.queue_id,
             payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
-        })
-    }
-}
-
-#[pyclass]
-struct ArchivedMessage {
-    #[pyo3(get)]
-    id: i64,
-    #[pyo3(get)]
-    original_msg_id: i64,
-    #[pyo3(get)]
-    queue_id: i64,
-    #[pyo3(get)]
-    payload: PyObject,
-    #[pyo3(get)]
-    enqueued_at: String,
-    #[pyo3(get)]
-    archived_at: String,
-    #[pyo3(get)]
-    vt: String,
-    #[pyo3(get)]
-    dequeued_at: Option<String>,
-    #[pyo3(get)]
-    read_ct: i32,
-    #[pyo3(get)]
-    producer_worker_id: Option<i64>,
-    #[pyo3(get)]
-    consumer_worker_id: Option<i64>,
-}
-
-impl From<RustArchivedMessage> for ArchivedMessage {
-    fn from(r: RustArchivedMessage) -> Self {
-        Python::with_gil(|py| ArchivedMessage {
-            id: r.id,
-            original_msg_id: r.original_msg_id,
-            queue_id: r.queue_id,
-            payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
-            enqueued_at: r.enqueued_at.to_rfc3339(),
-            archived_at: r.archived_at.to_rfc3339(),
             vt: r.vt.to_rfc3339(),
-            dequeued_at: r.dequeued_at.map(|t| t.to_rfc3339()),
+            enqueued_at: r.enqueued_at.to_rfc3339(),
             read_ct: r.read_ct,
+            dequeued_at: r.dequeued_at.map(|dt| dt.to_rfc3339()),
             producer_worker_id: r.producer_worker_id,
             consumer_worker_id: r.consumer_worker_id,
         })
@@ -842,263 +1119,50 @@ struct WorkerInfo {
     id: i64,
     #[pyo3(get)]
     hostname: String,
-    #[pyo3(get)]
-    port: i32,
-    #[pyo3(get)]
-    queue_id: Option<i64>,
-    #[pyo3(get)]
-    started_at: String,
-    #[pyo3(get)]
-    heartbeat_at: String,
-    #[pyo3(get)]
-    shutdown_at: Option<String>,
-    #[pyo3(get)]
-    status: PyWorkerStatus,
 }
 
-impl From<rust_pgqrs::types::WorkerInfo> for WorkerInfo {
-    fn from(w: rust_pgqrs::types::WorkerInfo) -> Self {
+impl From<RustWorkerInfo> for WorkerInfo {
+    fn from(r: RustWorkerInfo) -> Self {
         WorkerInfo {
-            id: w.id,
-            hostname: w.hostname,
-            port: w.port,
-            queue_id: w.queue_id,
-            started_at: w.started_at.to_rfc3339(),
-            heartbeat_at: w.heartbeat_at.to_rfc3339(),
-            shutdown_at: w.shutdown_at.map(|t| t.to_rfc3339()),
-            status: w.status.into(),
+            id: r.id,
+            hostname: r.hostname,
         }
-    }
-}
-
-#[pyclass(name = "WorkerStatus")]
-#[derive(Clone, PartialEq, Debug)]
-enum PyWorkerStatus {
-    Ready,
-    Suspended,
-    Stopped,
-}
-
-impl From<WorkerStatus> for PyWorkerStatus {
-    fn from(s: WorkerStatus) -> Self {
-        match s {
-            WorkerStatus::Ready => PyWorkerStatus::Ready,
-            WorkerStatus::Suspended => PyWorkerStatus::Suspended,
-            WorkerStatus::Stopped => PyWorkerStatus::Stopped,
-        }
-    }
-}
-
-impl From<PyWorkerStatus> for WorkerStatus {
-    fn from(s: PyWorkerStatus) -> Self {
-        match s {
-            PyWorkerStatus::Ready => WorkerStatus::Ready,
-            PyWorkerStatus::Suspended => WorkerStatus::Suspended,
-            PyWorkerStatus::Stopped => WorkerStatus::Stopped,
-        }
-    }
-}
-
-/// A guard representing an exclusively acquired step execution.
-///
-/// This object is used to mark a step as successfully completed or failed.
-/// It holds a lock or state that ensures only one worker executes this step.
-#[pyclass]
-struct PyStepGuard {
-    inner: Option<rust_pgqrs::workflow::StepGuard>, // Option to allow taking it out
-}
-
-#[pymethods]
-impl PyStepGuard {
-    fn success<'a>(&mut self, py: Python<'a>, val: PyObject) -> PyResult<&'a PyAny> {
-        let guard = self
-            .inner
-            .take()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("StepGuard already used"))?;
-        let json_val = py_to_json(val.as_ref(py))?;
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            guard
-                .success(&json_val)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    fn fail<'a>(&mut self, py: Python<'a>, err: String) -> PyResult<&'a PyAny> {
-        let guard = self
-            .inner
-            .take()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("StepGuard already used"))?;
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            guard
-                .fail(&err)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(())
-        })
-    }
-}
-
-struct InternalStepResult {
-    inner: StepResult<serde_json::Value>,
-}
-
-impl IntoPy<PyObject> for InternalStepResult {
-    fn into_py(self, py: Python<'_>) -> PyObject {
-        match self.inner {
-            StepResult::Skipped(val) => {
-                let py_val = json_to_py(py, &val).unwrap_or_else(|e| {
-                    eprintln!("Failed to convert JSON value to Python object: {}", e);
-                    py.None()
-                });
-                PyStepResult {
-                    status: "SKIPPED".to_string(),
-                    value: Some(py_val),
-                    guard: None,
-                }
-                .into_py(py)
-            }
-            StepResult::Execute(guard) => {
-                let py_guard = PyStepGuard { inner: Some(guard) };
-                let guard_obj = Py::new(py, py_guard)
-                    .expect("failed to create PyStepGuard Python object")
-                    .to_object(py);
-                PyStepResult {
-                    status: "EXECUTE".to_string(),
-                    value: None,
-                    guard: Some(guard_obj),
-                }
-                .into_py(py)
-            }
-        }
-    }
-}
-
-/// The result of an attempt to acquire a workflow step.
-///
-/// Contains the decision on whether to execute the step or skip it (if already completed).
-#[pyclass]
-struct PyStepResult {
-    #[pyo3(get)]
-    status: String, // "SKIPPED" or "EXECUTE"
-    #[pyo3(get)]
-    value: Option<PyObject>,
-    #[pyo3(get)]
-    guard: Option<PyObject>,
-}
-
-/// A handle to a durable workflow execution.
-///
-/// Used to manage the lifecycle of a workflow instance and its steps.
-#[pyclass]
-#[derive(Clone)]
-struct PyWorkflow {
-    inner: Arc<RustWorkflow>,
-}
-
-#[pymethods]
-impl PyWorkflow {
-    fn id(&self) -> i64 {
-        self.inner.id()
-    }
-
-    /// Starts the workflow execution.
-    ///
-    /// Transitions the workflow to the RUNNING state. Idempotent.
-    fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .start()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// Marks the workflow as successfully completed.
-    ///
-    /// Parameters
-    /// ----------
-    /// val : object
-    ///     The return value of the workflow.
-    fn success<'a>(&self, py: Python<'a>, val: PyObject) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        let json_val = py_to_json(val.as_ref(py))?;
-
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .success(&json_val)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// Marks the workflow as failed.
-    ///
-    /// Parameters
-    /// ----------
-    /// err : str
-    ///     The error message describing the failure.
-    fn fail<'a>(&self, py: Python<'a>, err: String) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .fail(&err)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// Acquires a step for execution.
-    ///
-    /// Parameters
-    /// ----------
-    /// step_id : str
-    ///     The unique identifier for the step within this workflow.
-    ///
-    /// Returns
-    /// -------
-    /// PyStepResult
-    ///     The result containing execution status (EXECUTE or SKIPPED).
-    fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
-        let inner = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let result =
-                rust_pgqrs::workflow::StepGuard::acquire(inner.pool(), inner.id(), &step_id)
-                    .await
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-            Ok(InternalStepResult { inner: result })
-        })
     }
 }
 
 #[pymodule]
 fn _pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<Admin>()?;
     m.add_class::<Producer>()?;
     m.add_class::<Consumer>()?;
-    m.add_class::<Admin>()?;
     m.add_class::<Workers>()?;
     m.add_class::<Queues>()?;
     m.add_class::<Messages>()?;
     m.add_class::<Archive>()?;
-    m.add_class::<QueueInfo>()?;
-    m.add_class::<QueueMessage>()?;
-    m.add_class::<ArchivedMessage>()?;
-    m.add_class::<WorkerInfo>()?;
-    m.add_class::<PyWorkerStatus>()?;
     m.add_class::<PyConfig>()?;
-
-    // Workflow classes
+    m.add_class::<PyStore>()?;
+    m.add_class::<QueueMessage>()?;
+    m.add_class::<QueueInfo>()?;
     m.add_class::<PyWorkflow>()?;
-    m.add_class::<PyStepGuard>()?;
     m.add_class::<PyStepResult>()?;
+    m.add_class::<PyStepGuard>()?;
+    m.add_class::<ArchivedMessage>()?;
+
+    m.add_function(wrap_pyfunction!(connect, m)?)?;
+    m.add_function(wrap_pyfunction!(connect_with, m)?)?;
+    m.add_function(wrap_pyfunction!(admin, m)?)?;
+    m.add_function(wrap_pyfunction!(produce, m)?)?;
+    m.add_function(wrap_pyfunction!(produce_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(consume, m)?)?;
+    m.add_function(wrap_pyfunction!(consume_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(enqueue, m)?)?;
+    m.add_function(wrap_pyfunction!(enqueue_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(dequeue, m)?)?;
+    m.add_function(wrap_pyfunction!(archive, m)?)?;
+    m.add_function(wrap_pyfunction!(archive_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(delete, m)?)?;
+    m.add_function(wrap_pyfunction!(enqueue_delayed, m)?)?;
+    m.add_function(wrap_pyfunction!(extend_vt, m)?)?;
 
     Ok(())
 }
