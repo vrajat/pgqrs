@@ -3,7 +3,7 @@ mod common;
 async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(None).await;
     let config = pgqrs::config::Config::from_dsn(database_url);
-    pgqrs::store::AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to create Store")
 }

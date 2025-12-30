@@ -15,7 +15,7 @@ async fn create_store() -> AnyStore {
     let schema = "workflow_test";
     let dsn = common::get_postgres_dsn(Some(schema)).await;
     let config = Config::from_dsn_with_schema(dsn, schema).expect("Failed to create config");
-    AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to connect store")
 }

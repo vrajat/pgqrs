@@ -13,9 +13,9 @@ async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(Some("pgqrs_lib_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_test")
         .expect("Failed to create config with lib_test schema");
-    pgqrs::store::AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store")
+        .expect("Failed to connect using pgqrs::connect_with_config()")
 }
 
 #[tokio::test]

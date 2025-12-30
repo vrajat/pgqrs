@@ -15,8 +15,6 @@
 //! cargo run --example basic_usage
 //! ```
 
-use pgqrs::store::AnyStore;
-use pgqrs::Config;
 use serde_json::json;
 
 #[tokio::main]
@@ -31,10 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let config = Config::from_file("pgqrs.yaml").expect("Failed to load config");
 
     // For this example, we'll use a hardcoded DSN (replace with your database)
-    let config = Config::from_dsn("postgresql://postgres:postgres@localhost:5432/postgres");
+    let dsn = "postgresql://postgres:postgres@localhost:5432/postgres";
 
-    // Create store
-    let store = AnyStore::connect(&config).await?;
+    // Create store using the new connect() function
+    let store = pgqrs::connect(dsn).await?;
 
     // Install schema (if needed)
     println!("Installing pgqrs schema...");
