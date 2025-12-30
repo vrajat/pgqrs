@@ -1,5 +1,6 @@
 // High-level builder functions
 mod admin;
+mod connect;
 mod consume;
 mod produce;
 mod tables;
@@ -10,6 +11,7 @@ mod producer;
 
 // Re-export high-level functions
 pub use admin::admin;
+pub use connect::{connect, connect_with_config};
 pub use consume::{consume, consume_batch};
 pub use consumer::consumer;
 pub use dequeue::dequeue;
