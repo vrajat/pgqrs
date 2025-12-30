@@ -82,10 +82,6 @@ async fn test_send_message() {
         .await
         .expect("Failed to create queue");
 
-    // For message counting, we still need direct table access
-    let admin = create_admin().await;
-    let messages = Messages::new(admin.pool.clone());
-
     let payload = json!({
         "k": "v"
     });
@@ -98,7 +94,13 @@ async fn test_send_message() {
         .expect("Failed to produce message");
 
     assert!(msg_id > 0, "Message ID should be positive");
-    assert!(messages.count_pending(queue_info.id).await.unwrap() == EXPECTED_MESSAGE_COUNT);
+    // Use tables API to count pending messages
+    let pending_count = pgqrs::tables(&store)
+        .messages()
+        .count_pending(queue_info.id)
+        .await
+        .unwrap();
+    assert!(pending_count == EXPECTED_MESSAGE_COUNT);
 
     // Use new builder API to consume
     let payload_clone = payload.clone();
@@ -117,7 +119,12 @@ async fn test_send_message() {
         .expect("Failed to consume message");
 
     // Verify the message was archived (count should be 0)
-    assert!(messages.count_pending(queue_info.id).await.unwrap() == 0);
+    let pending_count = pgqrs::tables(&store)
+        .messages()
+        .count_pending(queue_info.id)
+        .await
+        .unwrap();
+    assert!(pending_count == 0);
 
     // Cleanup in correct order: 1) Purge queue, 2) Delete workers, 3) Delete queue
     // Step 1: Purge queue (removes all messages)
@@ -127,8 +134,9 @@ async fn test_send_message() {
         .expect("Failed to purge queue");
 
     // Step 2: Delete ephemeral workers (auto-shutdown via Drop, but need deletion for cleanup)
-    let all_workers = pgqrs::admin(&store)
-        .list_workers()
+    let all_workers = pgqrs::tables(&store)
+        .workers()
+        .list()
         .await
         .expect("Failed to list workers");
 

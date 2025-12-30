@@ -62,7 +62,7 @@ pub mod workflow;
 pub mod builders;
 
 // Re-export Tier 1 high-level functions at crate root
-pub use builders::{admin, consume, consume_batch, produce, produce_batch};
+pub use builders::{admin, consume, consume_batch, produce, produce_batch, tables};
 
 // Re-export worker types and modules at crate root for convenience
 pub use crate::worker::admin; // admin module
