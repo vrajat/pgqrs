@@ -7,7 +7,7 @@ use crate::Config;
 ///
 /// This is a convenience function that wraps `AnyStore::connect_with_dsn()`.
 /// For advanced configuration (custom schema, connection pool size, etc.),
-/// use `AnyStore::connect(&config)` instead.
+/// use `pgqrs::connect_with_config(&config)` instead.
 ///
 /// # Arguments
 /// * `dsn` - Database connection string (e.g., "postgresql://localhost/mydb")
