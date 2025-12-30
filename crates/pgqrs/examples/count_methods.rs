@@ -1,67 +1,61 @@
-//! Example demonstrating the new count() and count_by_fk() methods in the Table trait.
+//! Example demonstrating counting operations using the new Builder API.
 //!
 //! This example shows how to:
 //! 1. Count all records in each table
 //! 2. Count records by foreign key relationships
-//! 3. Use the unified Table trait interface for counting operations
+//! 3. Use the unified table accessor interface for counting operations
 
 use chrono::Utc;
-use pgqrs::config::Config;
-use pgqrs::tables::pgqrs_messages::{Messages, NewMessage};
-use pgqrs::tables::pgqrs_queues::{NewQueue, Queues};
-use pgqrs::tables::pgqrs_workers::{NewWorker, Workers};
-use pgqrs::tables::{Archive, Table};
-use pgqrs::Admin;
+use pgqrs::store::AnyStore;
+use pgqrs::Config;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load configuration and initialize the admin
+    // Load configuration and initialize the store
     let config = Config::from_dsn("postgres://postgres:password@localhost:5432/postgres");
-    let admin = Admin::new(&config).await?;
-    let pool = admin.pool.clone();
+    let store = AnyStore::connect(&config).await?;
 
-    // Initialize table instances
-    let queues = Queues::new(pool.clone());
-    let workers = Workers::new(pool.clone());
-    let messages = Messages::new(pool.clone());
-    let archives = Archive::new(pool.clone());
-
-    // Install the schema and create test data
-    admin.install().await?;
+    // Install the schema
+    pgqrs::admin(&store).install().await?;
 
     // Create some test queues
-    let queue1 = queues
-        .insert(NewQueue {
+    let queue1 = pgqrs::tables(&store)
+        .queues()
+        .insert(pgqrs::types::NewQueue {
             queue_name: "test_queue_1".to_string(),
         })
         .await?;
 
-    let queue2 = queues
-        .insert(NewQueue {
+    let queue2 = pgqrs::tables(&store)
+        .queues()
+        .insert(pgqrs::types::NewQueue {
             queue_name: "test_queue_2".to_string(),
         })
         .await?;
 
     // Create some test workers
-    let worker1 = workers
-        .insert(NewWorker {
+    let worker1 = pgqrs::tables(&store)
+        .workers()
+        .insert(pgqrs::types::NewWorker {
             hostname: "worker-1".to_string(),
             port: 8080,
             queue_id: Some(queue1.id),
         })
         .await?;
 
-    let _worker2 = workers
-        .insert(NewWorker {
+    let _worker2 = pgqrs::tables(&store)
+        .workers()
+        .insert(pgqrs::types::NewWorker {
             hostname: "worker-2".to_string(),
             port: 8081,
             queue_id: Some(queue1.id),
         })
         .await?;
 
-    let _worker3 = workers
-        .insert(NewWorker {
+    let _worker3 = pgqrs::tables(&store)
+        .workers()
+        .insert(pgqrs::types::NewWorker {
             hostname: "worker-3".to_string(),
             port: 8082,
             queue_id: Some(queue2.id),
@@ -70,8 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create some test messages directly in the messages table
     let now = Utc::now();
-    let _msg1 = messages
-        .insert(NewMessage {
+    let _msg1 = pgqrs::tables(&store)
+        .messages()
+        .insert(pgqrs::types::NewMessage {
             queue_id: queue1.id,
             payload: json!({"task": "process_data_1"}),
             read_ct: 0,
@@ -82,8 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let _msg2 = messages
-        .insert(NewMessage {
+    let _msg2 = pgqrs::tables(&store)
+        .messages()
+        .insert(pgqrs::types::NewMessage {
             queue_id: queue1.id,
             payload: json!({"task": "process_data_2"}),
             read_ct: 0,
@@ -94,8 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let _msg3 = messages
-        .insert(NewMessage {
+    let _msg3 = pgqrs::tables(&store)
+        .messages()
+        .insert(pgqrs::types::NewMessage {
             queue_id: queue2.id,
             payload: json!({"task": "backup_data_1"}),
             read_ct: 0,
@@ -107,7 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Create some test archived messages (simulating processed messages)
-    let _archive1 = archives
+    let _archive1 = pgqrs::tables(&store)
+        .archive()
         .insert(pgqrs::types::NewArchivedMessage {
             original_msg_id: 100, // Simulated original message ID
             queue_id: queue1.id,
@@ -121,7 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let _archive2 = archives
+    let _archive2 = pgqrs::tables(&store)
+        .archive()
         .insert(pgqrs::types::NewArchivedMessage {
             original_msg_id: 101,
             queue_id: queue2.id,
@@ -137,70 +136,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demonstrate count() methods - count all records in each table
     println!("=== Count All Records ===");
-    let total_queues = queues.count().await?;
-    let total_workers = workers.count().await?;
-    let total_messages = messages.count().await?;
-    let total_archives = archives.count().await?;
+    let total_queues = pgqrs::tables(&store).queues().count().await?;
+    let total_workers = pgqrs::tables(&store).workers().count().await?;
+    let total_messages = pgqrs::tables(&store).messages().count().await?;
+    let total_archives = pgqrs::tables(&store).archive().count().await?;
 
     println!("Total queues: {}", total_queues);
     println!("Total workers: {}", total_workers);
     println!("Total messages: {}", total_messages);
     println!("Total archived messages: {}", total_archives);
 
-    // Demonstrate count_by_fk() methods - count by foreign key relationships
-    println!("\n=== Count By Foreign Key ===");
+    // Demonstrate count by foreign key - count by queue
+    println!("\n=== Count By Queue ===");
 
     // Count workers by queue
-    {
-        let mut txn = pool.begin().await?;
-        let queue1_workers = workers.count_for_fk(queue1.id, &mut txn).await?;
-        let queue2_workers = workers.count_for_fk(queue2.id, &mut txn).await?;
-        println!(
-            "Workers in queue '{}': {}",
-            queue1.queue_name, queue1_workers
-        );
-        println!(
-            "Workers in queue '{}': {}",
-            queue2.queue_name, queue2_workers
-        );
+    let queue1_workers = pgqrs::tables(&store)
+        .workers()
+        .filter_by_fk(queue1.id)
+        .await?
+        .len();
+    let queue2_workers = pgqrs::tables(&store)
+        .workers()
+        .filter_by_fk(queue2.id)
+        .await?
+        .len();
+    println!(
+        "Workers in queue '{}': {}",
+        queue1.queue_name, queue1_workers
+    );
+    println!(
+        "Workers in queue '{}': {}",
+        queue2.queue_name, queue2_workers
+    );
 
-        // Count messages by queue
-        let queue1_messages = messages.count_for_fk(queue1.id, &mut txn).await?;
-        let queue2_messages = messages.count_for_fk(queue2.id, &mut txn).await?;
-        println!(
-            "Messages in queue '{}': {}",
-            queue1.queue_name, queue1_messages
-        );
-        println!(
-            "Messages in queue '{}': {}",
-            queue2.queue_name, queue2_messages
-        );
+    // Count messages by queue
+    let queue1_messages = pgqrs::tables(&store)
+        .messages()
+        .filter_by_fk(queue1.id)
+        .await?
+        .len();
+    let queue2_messages = pgqrs::tables(&store)
+        .messages()
+        .filter_by_fk(queue2.id)
+        .await?
+        .len();
+    println!(
+        "Messages in queue '{}': {}",
+        queue1.queue_name, queue1_messages
+    );
+    println!(
+        "Messages in queue '{}': {}",
+        queue2.queue_name, queue2_messages
+    );
 
-        // Count archived messages by queue
-        let queue1_archives = archives.count_for_fk(queue1.id, &mut txn).await?;
-        let queue2_archives = archives.count_for_fk(queue2.id, &mut txn).await?;
-        println!(
-            "Archived messages in queue '{}': {}",
-            queue1.queue_name, queue1_archives
-        );
-        println!(
-            "Archived messages in queue '{}': {}",
-            queue2.queue_name, queue2_archives
-        );
-    }
-
-    {
-        let mut txn = pool.begin().await?;
-        // Queues don't have meaningful foreign keys, so this returns 0
-        let queue_foreign_count = queues.count_for_fk(999, &mut txn).await?;
-        println!("Queues by foreign key (always 0): {}", queue_foreign_count);
-    }
+    // Count archived messages by queue
+    let queue1_archives = pgqrs::tables(&store)
+        .archive()
+        .count_for_queue(queue1.id)
+        .await?;
+    let queue2_archives = pgqrs::tables(&store)
+        .archive()
+        .count_for_queue(queue2.id)
+        .await?;
+    println!(
+        "Archived messages in queue '{}': {}",
+        queue1.queue_name, queue1_archives
+    );
+    println!(
+        "Archived messages in queue '{}': {}",
+        queue2.queue_name, queue2_archives
+    );
 
     println!("\n=== Summary ===");
-    println!("The Table trait now provides a unified interface for:");
+    println!("The table accessors now provide a unified interface for:");
     println!("- count(): Get total record count in any table");
-    println!("- count_for_fk(): Get count of records matching a foreign key");
-    println!("- This enables consistent counting operations across all tables");
+    println!("- filter_by_fk(): Get records matching a foreign key");
+    println!("- This enables consistent operations across all tables");
     println!("- Archive table is now included with full CRUD + count support");
 
     Ok(())

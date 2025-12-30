@@ -119,4 +119,8 @@ pub enum Error {
     /// Worker not found
     #[error("Worker with id '{id}' not found")]
     WorkerNotFound { id: i64 },
+
+    /// Worker not registered - methods requiring registration called before register()
+    #[error("Worker not registered: {message}")]
+    WorkerNotRegistered { message: String },
 }

@@ -1,14 +1,5 @@
-use pgqrs::{
-    admin::Admin,
-    config::Config,
-    consumer::Consumer,
-    producer::Producer,
-    tables::{Messages, Workers},
-    types::WorkerStatus,
-    Table, Worker,
-};
+use pgqrs::{config::Config, store::Store, types::WorkerStatus};
 use serial_test::serial;
-use sqlx::PgPool;
 use std::process::Command;
 
 mod common;
@@ -20,29 +11,43 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let db_name = "test_zombie_reclamation";
     let dsn = common::get_postgres_dsn(Some(db_name)).await;
     let config = Config::from_dsn(dsn.clone());
-    let pool = PgPool::connect(&dsn).await?;
 
-    let admin = Admin::new(&config).await?;
-    admin.install().await?;
+    let store = pgqrs::store::AnyStore::connect(&config).await?;
+
+    // Create admin via builder
+    pgqrs::admin(&store).install().await?;
 
     // 2. Create Queue
     let queue_name = "zombie-queue";
-    let queue = admin.create_queue(queue_name).await?;
+    let queue = pgqrs::admin(&store).create_queue(queue_name).await?;
 
     // 3. Create Producer & Enqueue
-    let producer = Producer::new(pool.clone(), &queue, "producer-host", 1001, &config).await?;
+    let producer = pgqrs::producer("producer-host", 1001, queue_name)
+        .create(&store)
+        .await?;
 
     let payload = serde_json::json!({"task": "brains"});
-    let msg = producer.enqueue(&payload).await?;
-    assert_eq!(msg.payload, payload);
+    let msg_id = pgqrs::enqueue(&payload)
+        .worker(&*producer)
+        .execute(&store)
+        .await?;
+    // We can't easily verify payload without fetching, so trust msg_id returned.
+    // Or fetch it.
+    let stored_msg = pgqrs::tables(&store).messages().get(msg_id).await?;
+    assert_eq!(stored_msg.payload, payload);
 
     // 4. Create Consumer & Dequeue
-    let consumer = Consumer::new(pool.clone(), &queue, "consumer-host", 2001, &config).await?;
+    let consumer = pgqrs::consumer("consumer-host", 2001, queue_name)
+        .create(&store)
+        .await?;
 
-    let dequeued_messages = consumer.dequeue().await?;
+    let dequeued_messages = pgqrs::dequeue()
+        .worker(&*consumer)
+        .fetch_all(&store)
+        .await?;
     assert_eq!(dequeued_messages.len(), 1);
     let locked_msg = &dequeued_messages[0];
-    assert_eq!(locked_msg.id, msg.id);
+    assert_eq!(locked_msg.id, msg_id);
 
     // 5. Simulate Zombie (Update Heartbeat)
     // Manually set the worker's heartbeat to be old (e.g., 1 hour ago)
@@ -50,34 +55,34 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let consumer_worker_id = consumer.worker_id();
     sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
         .bind(consumer_worker_id)
-        .execute(&pool)
+        .execute(store.pool())
         .await?;
 
     // 6. Test pgqrs_workers functions
-    let workers_table = Workers::new(pool.clone());
-
+    // Use pgqrs::tables(&store).workers()
     // Verify it's counted as a zombie
-    let zombie_count = workers_table
+    let zombie_count = pgqrs::tables(&store)
+        .workers()
         .count_zombies_for_queue(queue.id, chrono::Duration::seconds(60))
         .await?;
     // We intentionally violate encapsulation here for the test setup
     assert_eq!(zombie_count, 1, "Should detect 1 zombie worker");
 
-    let zombies = workers_table
+    let zombies = pgqrs::tables(&store)
+        .workers()
         .list_zombies_for_queue(queue.id, chrono::Duration::seconds(60))
         .await?;
     assert_eq!(zombies.len(), 1);
     assert_eq!(zombies[0].id, consumer_worker_id);
 
     // 7. Test admin.reclaim_messages
-    let reclaimed = admin
+    let reclaimed = pgqrs::admin(&store)
         .reclaim_messages(queue.id, Some(chrono::Duration::seconds(60)))
         .await?;
     assert_eq!(reclaimed, 1, "Should reclaim 1 message");
 
     // Verify message is released
-    let messages_table = Messages::new(pool.clone());
-    let stored_msg = messages_table.get(msg.id).await?;
+    let stored_msg = pgqrs::tables(&store).messages().get(msg_id).await?;
     assert_eq!(
         stored_msg.consumer_worker_id, None,
         "Message should have no consumer"
@@ -88,7 +93,10 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     );
     assert_eq!(stored_msg.read_ct, 1, "Read count should be preserved at 1");
     // Verify worker is stopped
-    let updated_worker = workers_table.get(consumer_worker_id).await?;
+    let updated_worker = pgqrs::tables(&store)
+        .workers()
+        .get(consumer_worker_id)
+        .await?;
     assert!(
         matches!(updated_worker.status, WorkerStatus::Stopped),
         "Worker should be stopped"
@@ -99,18 +107,23 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Reset: Make message owned by a new zombie
     // Use a new consumer for the next test phase
-    let consumer_2 = Consumer::new(pool.clone(), &queue, "consumer-2", 2002, &config).await?;
+    let consumer_2 = pgqrs::consumer("consumer-2", 2002, queue_name)
+        .create(&store)
+        .await?;
 
     // Dequeue again (should get the released message)
-    let msgs_2 = consumer_2.dequeue().await?;
+    let msgs_2 = pgqrs::dequeue()
+        .worker(&*consumer_2)
+        .fetch_all(&store)
+        .await?;
     assert_eq!(msgs_2.len(), 1);
-    assert_eq!(msgs_2[0].id, msg.id);
+    assert_eq!(msgs_2[0].id, msg_id);
 
     // Make consumer_2 a zombie
     let c2_id = consumer_2.worker_id();
     sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
         .bind(c2_id)
-        .execute(&pool)
+        .execute(store.pool())
         .await?;
 
     // Run CLI command
@@ -120,7 +133,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             "run",
             "--",
             "-d",
-            &dsn,
+            &store.config().dsn,
             "admin",
             "reclaim",
             "--queue",
@@ -143,18 +156,22 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         stdout
     );
 
-    let c2_worker = workers_table.get(c2_id).await?;
+    let c2_worker = pgqrs::tables(&store).workers().get(c2_id).await?;
     assert!(
         matches!(c2_worker.status, WorkerStatus::Stopped),
         "Consumer 2 should be stopped by CLI"
     );
 
     // Cleanup
-    admin.purge_queue(queue_name).await?;
-    admin.delete_worker(producer.worker_id()).await?;
-    admin.delete_worker(consumer_worker_id).await?; // consumer 1
-    admin.delete_worker(c2_id).await?; // consumer 2
-    admin.delete_queue(&queue).await?;
+    pgqrs::admin(&store).purge_queue(queue_name).await?;
+    pgqrs::admin(&store)
+        .delete_worker(producer.worker_id())
+        .await?;
+    pgqrs::admin(&store)
+        .delete_worker(consumer_worker_id)
+        .await?; // consumer 1
+    pgqrs::admin(&store).delete_worker(c2_id).await?; // consumer 2
+    pgqrs::admin(&store).delete_queue(&queue).await?;
 
     Ok(())
 }

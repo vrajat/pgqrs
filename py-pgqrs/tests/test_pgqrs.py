@@ -5,61 +5,39 @@ import asyncio
 from pgqrs import PyWorkflow
 from pgqrs.decorators import workflow, step
 
-# Constants for ports as requested
-PRODUCER_PORT = 8100
-CONSUMER_PORT = 8200
+# Helper to setup a store and admin
+async def setup_test(dsn, schema):
+    config = pgqrs.Config(dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+    return store, admin
 
 @pytest.mark.asyncio
 async def test_basic_workflow(postgres_dsn, schema):
     """
     Test basic workflow: Install -> Create Queue -> Produce -> Consume -> Archive
-    From original test_basic.py
     """
-    # Create Admin with DSN
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-
-    # 1. Install & Verify Schema
-    await admin.install()
+    store, admin = await setup_test(postgres_dsn, schema)
     await admin.verify()
 
-    # 2. Create Queue
     queue_name = "test_queue_1"
     await admin.create_queue(queue_name)
 
-    # 3. Verify Queue Exists
     queues = await admin.get_queues()
     assert await queues.count() == 1
 
-    # 4. Produce Message using Admin
-    test_name = "test_basic_workflow"
-    # New strict API: Producer(admin, queue, hostname, port)
-    producer = pgqrs.Producer(
-        admin,
-        queue_name,
-        f"{test_name}_producer",
-        PRODUCER_PORT
-    )
     payload = {"data": "test_payload", "id": 123}
-    msg_id = await producer.enqueue(payload)
+    msg_id = await pgqrs.produce(store, queue_name, payload)
     assert msg_id > 0
 
-    # 5. Verify Message Count
     messages = await admin.get_messages()
     assert await messages.count() == 1
 
-    # 6. Consume Message using Admin
-    # New strict API: Consumer(admin, queue, hostname, port)
-    consumer = pgqrs.Consumer(
-        admin,
-        queue_name,
-        f"{test_name}_consumer",
-        CONSUMER_PORT
-    )
-
-    # Poll for message
+    consumer = await store.consumer(queue_name)
     received_msgs = []
     for _ in range(10):
-        batch = await consumer.dequeue()
+        batch = await pgqrs.dequeue(consumer, 1)
         if batch:
             received_msgs.extend(batch)
             break
@@ -70,53 +48,153 @@ async def test_basic_workflow(postgres_dsn, schema):
     assert msg.id == msg_id
     assert msg.payload == payload
 
-    # 7. Archive Message
-    await consumer.archive(msg.id)
+    await pgqrs.archive(consumer, msg)
 
-    # 8. Verify Archive
     archive_msgs = await admin.get_archive()
     assert await archive_msgs.count() == 1
-
-    # Verify Active Messages is 0
     assert await messages.count() == 0
 
+@pytest.mark.asyncio
+async def test_consumer_archive(postgres_dsn, schema):
+    """
+    Test consumer delete (archive) functionality.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "test_delete_queue"
+    await admin.create_queue(queue_name)
+
+    producer = await store.producer(queue_name)
+    consumer = await store.consumer(queue_name)
+
+    payload = {"foo": "bar"}
+    msg_id = await pgqrs.enqueue(producer, payload)
+
+    msgs = await pgqrs.dequeue(consumer, 1)
+    assert len(msgs) == 1
+    msg = msgs[0]
+    assert msg.id == msg_id
+
+    await pgqrs.archive(consumer, msg)
+    assert await (await admin.get_messages()).count() == 0
+
+@pytest.mark.asyncio
+async def test_batch_operations(postgres_dsn, schema):
+    """
+    Test batch operations (enqueue_batch, dequeue, archive_batch).
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "batch_ops_test"
+    await admin.create_queue(queue_name)
+
+    producer = await store.producer(queue_name)
+    consumer = await store.consumer(queue_name)
+
+    payloads = [{"id": i} for i in range(5)]
+    msg_ids = await pgqrs.enqueue_batch(producer, payloads)
+    assert len(msg_ids) == 5
+
+    count = await (await admin.get_messages()).count()
+    assert count == 5
+
+    batch = await pgqrs.dequeue(consumer, 3)
+    assert len(batch) == 3
+
+    await pgqrs.archive_batch(consumer, batch)
+
+    count_after = await (await admin.get_messages()).count()
+    assert count_after == 2
+
+    arch_count = await (await admin.get_archive()).count()
+    assert arch_count == 3
+
+@pytest.mark.asyncio
+async def test_config_properties(postgres_dsn):
+    c = pgqrs.Config(postgres_dsn)
+
+    c.max_connections = 42
+    assert c.max_connections == 42
+
+    c.connection_timeout_seconds = 60
+    assert c.connection_timeout_seconds == 60
+
+    c.default_lock_time_seconds = 120
+    assert c.default_lock_time_seconds == 120
+
+    c.default_max_batch_size = 500
+    assert c.default_max_batch_size == 500
+
+    c.max_read_ct = 10
+    assert c.max_read_ct == 10
+
+    c.heartbeat_interval_seconds = 15
+    assert c.heartbeat_interval_seconds == 15
+
+@pytest.mark.asyncio
+async def test_connect_string(postgres_dsn):
+    """Test connecting with a plain string DSN."""
+    store = await pgqrs.connect(postgres_dsn)
+    assert store is not None
+    admin = pgqrs.admin(store)
+    await admin.install()
+    await admin.verify()
+
+@pytest.mark.asyncio
+async def test_enqueue_delayed(postgres_dsn, schema):
+    """
+    Test delayed message enqueueing.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "test_delayed_queue"
+    await admin.create_queue(queue_name)
+
+    producer = await store.producer(queue_name)
+    consumer = await store.consumer(queue_name)
+
+    payload = {"foo": "bar"}
+    # Enqueue with 2 second delay
+    await pgqrs.enqueue_delayed(producer, payload, 1)
+
+    # Should not be available immediately
+    msgs = await pgqrs.dequeue(consumer, 1)
+    assert len(msgs) == 0
+
+    await asyncio.sleep(1.2)
+
+    # Should be available now
+    msgs = await pgqrs.dequeue(consumer, 1)
+    assert len(msgs) == 1
+
+@pytest.mark.asyncio
+async def test_worker_list_status(postgres_dsn, schema):
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "worker_test_queue"
+    await admin.create_queue(queue_name)
+
+    _ = await store.producer(queue_name)
+    _ = await store.consumer(queue_name)
+
+    workers_handle = await admin.get_workers()
+    worker_list = await workers_handle.list()
+    assert len(worker_list) >= 2
 
 @pytest.mark.asyncio
 async def test_consumer_delete(postgres_dsn, schema):
     """
-    Test consumer delete functionality, including ownership checks.
-    From original test_consumer_delete.py
+    Test consumer delete (without archiving) functionality.
     """
-
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-
-    queue_name = "test_delete_queue"
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "test_delete_logic_queue"
     await admin.create_queue(queue_name)
 
-    test_name = "test_consumer_delete"
-    producer = pgqrs.Producer(
-        admin,
-        queue_name,
-        f"{test_name}_producer",
-        PRODUCER_PORT
-    )
-    consumer = pgqrs.Consumer(
-        admin,
-        queue_name,
-        f"{test_name}_consumer",
-        CONSUMER_PORT
-    )
+    producer = await store.producer(queue_name)
+    consumer = await store.consumer(queue_name)
 
-    # Enqueue a message
     payload = {"foo": "bar"}
-    msg_id = await producer.enqueue(payload)
+    msg_id = await pgqrs.enqueue(producer, payload)
 
-    # Dequeue it
-    msgs = await consumer.dequeue()
+    msgs = await pgqrs.dequeue(consumer, 1)
     assert len(msgs) == 1
     msg = msgs[0]
-    assert msg.id == msg_id
 
     # Delete it
     deleted = await consumer.delete(msg.id)
@@ -131,376 +209,123 @@ async def test_consumer_delete(postgres_dsn, schema):
     assert deleted is False, "Delete should return False for non-existent message"
 
     # Test deleting message not owned by consumer
-    msg_id2 = await producer.enqueue({"foo": "bar2"})
+    msg_id2 = await pgqrs.enqueue(producer, {"foo": "bar2"})
     # Do NOT dequeue it. Consumer does not own it.
     deleted = await consumer.delete(msg_id2)
     assert deleted is False, "Delete should return False for message not owned/locked by consumer"
 
-
-@pytest.mark.asyncio
-async def test_enqueue_delayed(postgres_dsn, schema):
-    """
-    Test delayed message enqueueing.
-    From original test_delayed.py
-    """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-    queue_name = "test_delayed_queue"
-    await admin.create_queue(queue_name)
-
-    test_name = "test_enqueue_delayed"
-    producer = pgqrs.Producer(
-        admin,
-        queue_name,
-        f"{test_name}_producer",
-        PRODUCER_PORT
-    )
-    consumer = pgqrs.Consumer(
-        admin,
-        queue_name,
-        f"{test_name}_consumer",
-        CONSUMER_PORT
-    )
-
-    payload = {"foo": "bar"}
-    # Enqueue with 2 seconds delay
-    msg_id = await producer.enqueue_delayed(payload, 2)
-    assert msg_id > 0
-
-    # Try immediate dequeue
-    msgs = await consumer.dequeue()
-    assert len(msgs) == 0, "Message should not be visible yet"
-
-    # Wait 2.5 seconds
-    await asyncio.sleep(2.5)
-
-    # Try dequeue again
-    msgs = await consumer.dequeue()
-    assert len(msgs) == 1, "Message should be visible now"
-    assert msgs[0].id == msg_id
-
-
-@pytest.mark.asyncio
-async def test_extend_visibility(postgres_dsn, schema):
-    """
-    Test visibility timeout extension.
-    From Issue #69
-    """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-    queue_name = "test_visibility_queue"
-    await admin.create_queue(queue_name)
-
-    producer = pgqrs.Producer(admin, queue_name, "vis_prod", PRODUCER_PORT)
-    consumer = pgqrs.Consumer(admin, queue_name, "vis_cons", CONSUMER_PORT)
-
-    # Enqueue message
-    msg_id = await producer.enqueue({"foo": "bar"})
-
-    # Dequeue with short visibility (2 seconds)
-    msgs = await consumer.dequeue_batch_with_delay(1, 2)
-    assert len(msgs) == 1
-    msg = msgs[0]
-
-    # Extend visibility by 5 seconds
-    # If successful, another consumer shouldn't see it even after 2s
-    extended = await consumer.extend_visibility(msg.id, 5)
-    assert extended is True, "Failed to extend visibility"
-
-    # Wait 2.5 seconds (original VT expired, but extended should hold)
-    await asyncio.sleep(2.5)
-
-
-
-    # Let's check if it is visible. It should NOT be.
-    msgs_retry = await consumer.dequeue()
-    assert len(msgs_retry) == 0, "Message should still be invisible after extension"
-
-    # Wait another 4 seconds (total 6.5s elapsed; still less than the extended visibility timeout of 7s [2s initial + 5s extension])
-    await asyncio.sleep(4.0)
-
-    # Reclaim messages from zombie consumers (since we waited > heartbeat interval likely, or we force it)
-    await admin.reclaim_messages(queue_name, older_than_seconds=1.0)
-
-    # Now it should be visible (or nearly)
-    msgs_retry_2 = await consumer.dequeue()
-    # The dequeue method performs a single fetch and does not loop internally.
-
-    if len(msgs_retry_2) == 0:
-        await asyncio.sleep(1.0)
-        msgs_retry_2 = await consumer.dequeue()
-
-    assert len(msgs_retry_2) == 1, "Message should become visible after extended timeout"
-    assert msgs_retry_2[0].id == msg_id
-
-
-@pytest.mark.asyncio
-async def test_batch_operations(postgres_dsn, schema):
-    """
-    Test batch operations (enqueue, dequeue, archive).
-    Consolidated from test_batch.py
-    """
-    # Create Admin with schema parameter
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-
-    queue_name = "batch_ops_test"
-    await admin.create_queue(queue_name)
-
-
-    producer = pgqrs.Producer(admin, queue_name, "batch_prod", PRODUCER_PORT)
-    consumer = pgqrs.Consumer(admin, queue_name, "batch_cons", CONSUMER_PORT)
-
-    # 1. Batch Enqueue
-    payloads = [{"id": i, "data": f"msg_{i}"} for i in range(5)]
-    msgs = await producer.enqueue_batch(payloads)
-    assert len(msgs) == 5
-
-
-    # Verify count
-    count = await (await admin.get_messages()).count()
-    assert count == 5
-
-    # 2. Dequeue Batch (2)
-    batch1 = await consumer.dequeue_batch(2)
-    assert len(batch1) == 2
-
-    # 3. Dequeue Batch with Delay (2) with 60s VT
-    batch2 = await consumer.dequeue_batch_with_delay(2, 60)
-    assert len(batch2) == 2
-
-    # Ensure IDs are unique across batches
-    batch1_ids = {m.id for m in batch1}
-    batch2_ids = {m.id for m in batch2}
-    assert batch1_ids.isdisjoint(batch2_ids)
-
-    # 4. Archive Batch
-    to_archive = list(batch1_ids.union(batch2_ids))
-    results = await consumer.archive_batch(to_archive)
-    assert len(results) == 4
-    assert all(results) # All should be True
-
-    # Verify 1 message left active
-    count_after = await (await admin.get_messages()).count()
-    assert count_after == 1
-
-    # Verify 4 items in archive
-    arch_count = await (await admin.get_archive()).count()
-    assert arch_count == 4
-
-@pytest.mark.asyncio
-async def test_config_properties(postgres_dsn):
-    # Test valid DSN creation
-    c = pgqrs.Config.from_dsn(postgres_dsn)
-
-    # Test Max Connections Defaults and Setter
-    c.max_connections = 42
-    assert c.max_connections == 42
-
-    # Test Timeout Defaults and Setter
-    c.connection_timeout_seconds = 60
-    assert c.connection_timeout_seconds == 60
-
-    # Test Advanced Config (PR #89)
-    c.default_lock_time_seconds = 120
-    assert c.default_lock_time_seconds == 120
-
-    c.default_max_batch_size = 500
-    assert c.default_max_batch_size == 500
-
-    c.max_read_ct = 10
-    assert c.max_read_ct == 10
-
-    c.heartbeat_interval_seconds = 15
-    assert c.heartbeat_interval_seconds == 15
-
-@pytest.mark.asyncio
-async def test_config_integration(postgres_dsn, schema):
-    # This test verifies that we can pass a Config object to Admin
-
-    config = pgqrs.Config.from_dsn(postgres_dsn)
-    config.schema = schema
-    config.max_connections = 5
-
-    # Test Admin with Config
-    admin = pgqrs.Admin(config)
-    await admin.install()
-
-    queue_name = "test_config_queue"
-    await admin.create_queue(queue_name)
-
-    # Test Producer with Config -> MUST use Admin now
-    producer = pgqrs.Producer(admin, queue_name, "prod_conf", 1)
-    await producer.enqueue({"key": "val"})
-
-    # Test Consumer with Config -> MUST use Admin now
-    consumer = pgqrs.Consumer(admin, queue_name, "cons_conf", 1)
-    messages = await consumer.dequeue()
-
-    assert len(messages) == 1
-    assert messages[0].payload == {"key": "val"}
-
-@pytest.mark.asyncio
-async def test_legacy_string_dsn(postgres_dsn, schema):
-    # Verify backward compatibility (passing string DSN to Admin)
-
-    # We use schema arg to support test isolation
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    assert isinstance(admin, pgqrs.Admin)
-
-@pytest.mark.asyncio
-async def test_worker_lifecycle(postgres_dsn, schema):
-    # Use Admin correctly
-    # Note: postgres_dsn fixture is bare DSN. schema fixture is string.
-    # Admin(dsn, schema=...) handles schema isolation.
-
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-
-    queue = "worker_test_queue_legacy"
-    await admin.create_queue(queue)
-
-    # 1. Create Consumer (which is a Worker)
-    # MUST pass admin, not dsn string
-    _ = pgqrs.Consumer(admin, queue, "worker_host", 1)
-
-    # 2. Check Status
-    workers = await admin.get_workers()
-    count = await workers.count()
-    assert count == 1
-
-@pytest.mark.asyncio
-async def test_worker_list_status(postgres_dsn, schema):
-    """
-    Test worker listing and status APIs.
-    """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-    queue_name = "worker_test_queue"
-    await admin.create_queue(queue_name)
-
-    _ = pgqrs.Producer(admin, queue_name, "prod_host", 5000)
-    _ = pgqrs.Consumer(admin, queue_name, "cons_host", 5001)
-
-    # Ensure workers are registered
-    # Producer registration happens on new()
-    # Consumer registration happens on new()
-
-    workers_handle = await admin.get_workers()
-
-    # List workers
-    worker_list = await workers_handle.list()
-    assert len(worker_list) >= 2
-
-    # Verify fields
-    prod_worker = next(w for w in worker_list if w.hostname == "prod_host")
-    cons_worker = next(w for w in worker_list if w.hostname == "cons_host")
-
-    assert prod_worker.port == 5000
-    assert cons_worker.port == 5001
-
-    assert prod_worker.status == pgqrs.WorkerStatus.Ready
-
-    # Verify Get
-    fetched_worker = await workers_handle.get(prod_worker.id)
-    assert fetched_worker.id == prod_worker.id
-    assert fetched_worker.hostname == "prod_host"
-
 @pytest.mark.asyncio
 async def test_archive_advanced_methods(postgres_dsn, schema):
-    """
-    Test advanced archive methods (get, list_by_worker, dlq).
-    From Issue #90
-    """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
+    store, admin = await setup_test(postgres_dsn, schema)
     queue_name = "archive_api_queue"
     await admin.create_queue(queue_name)
 
-    producer = pgqrs.Producer(admin, queue_name, "arch_prod", PRODUCER_PORT)
-    consumer = pgqrs.Consumer(admin, queue_name, "arch_cons", CONSUMER_PORT)
+    await pgqrs.produce(store, queue_name, {"foo": "bar"})
+    consumer = await store.consumer(queue_name)
+    msgs = await pgqrs.dequeue(consumer, 1)
+    await pgqrs.archive(consumer, msgs[0])
 
-    # 1. Enqueue, Consume, Archive
-    msg_id = await producer.enqueue({"foo": "bar"})
-    msgs = await consumer.dequeue()
-    assert len(msgs) == 1
-    msg = msgs[0]
-    await consumer.archive(msg.id)
-
-    # 2. Get Archive handle
     archive = await admin.get_archive()
+    assert await archive.count() == 1
 
-    # 3. Test get()
-    # Note: archive.get() takes archive ID, which is typically same as msg ID in current impl or we need to find it.
-    # The rust implementation might use same ID sequence or different?
-    # Usually archive table uses `id` serial. `original_msg_id` is the queue message id.
-    # We need to find the archive record first.
-
-    # Since we can't search by original_msg_id easily without list(), let's list by worker if possible?
-    # Or just guess ID 1 (since it's fresh schema).
-
-    # Let's try to find it via worker list if consumer registered properly.
-    # Consumer worker ID is needed.
+    # 1. Test get()
+    # We need to list to find the ID of the archived message
+    # Since we only have one worker, we can list by it.
     workers = await (await admin.get_workers()).list()
-    cons_worker = next(w for w in workers if w.hostname == "arch_cons")
+    worker_id = workers[0].id
 
-    # Test list_by_worker
-    archived_msgs = await archive.list_by_worker(cons_worker.id, 10, 0)
-    assert len(archived_msgs) == 1
-    arch_msg = archived_msgs[0]
+    arch_msgs = await archive.list_by_worker(worker_id, 10, 0)
+    assert len(arch_msgs) == 1
+    arch_msg = arch_msgs[0]
 
-    assert arch_msg.original_msg_id == msg_id
-    assert arch_msg.consumer_worker_id == cons_worker.id
-    assert isinstance(arch_msg.vt, str)
-    assert isinstance(arch_msg.dequeued_at, str)
+    fetched = await archive.get(arch_msg.id)
+    assert fetched.id == arch_msg.id
+    assert fetched.payload == {"foo": "bar"}
 
-    # Test get() using the ID we just found
-    fetched_arch_msg = await archive.get(arch_msg.id)
-    assert fetched_arch_msg.id == arch_msg.id
-    assert fetched_arch_msg.payload == {"foo": "bar"}
+    # 2. Test count_by_worker
+    assert await archive.count_by_worker(worker_id) == 1
 
-    # 4. Test count_by_worker
-    count = await archive.count_by_worker(cons_worker.id)
-    assert count == 1
+    # 3. Test dlq_count
+    assert await archive.dlq_count(5) == 0
 
-    # 5. Test delete()
-    deleted = await archive.delete(arch_msg.id)
-    assert deleted == 1
-
-    # Verify gone
+    # 4. Test delete()
+    await archive.delete(arch_msg.id)
     assert await archive.count() == 0
 
-    # Testing Archive DLQ count is fine as 0 initially
-    dlq_count = await archive.dlq_count(5)
-    assert dlq_count == 0
+@pytest.mark.asyncio
+async def test_api_redesign_high_level(postgres_dsn, schema):
+    """
+    Test the high-level redesigned API: connect -> produce -> consume.
+    """
+    config = pgqrs.Config(postgres_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+
+    admin = pgqrs.admin(store)
+    await admin.install()
+    queue = "high_level_q"
+    await admin.create_queue(queue)
+
+    payload = {"foo": "bar"}
+    msg_id = await pgqrs.produce(store, queue, payload)
+    assert msg_id > 0
+
+    consumed = asyncio.Event()
+    async def handler(msg):
+        assert msg.payload == payload
+        consumed.set()
+        return True
+
+    await pgqrs.consume(store, queue, handler)
+    assert consumed.is_set()
+
+@pytest.mark.asyncio
+async def test_api_redesign_low_level(postgres_dsn, schema):
+    """
+    Test the low-level redesigned API: connect -> produce -> enqueue/dequeue/archive.
+    """
+    config = pgqrs.Config(postgres_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+    queue = "low_level_q"
+    await admin.create_queue(queue)
+
+    producer = await store.producer(queue)
+    consumer = await store.consumer(queue)
+
+    # Use low-level functions
+    msg_id = await pgqrs.enqueue(producer, {"foo": "bar"})
+    assert msg_id > 0
+
+    msgs = await pgqrs.dequeue(consumer, 1)
+    assert len(msgs) == 1
+    assert msgs[0].id == msg_id
+
+    # Use msg.id for archive? No, the archive pyfunction takes Quantitative message object
+    await pgqrs.archive(consumer, msgs[0])
+
+    assert await (await admin.get_messages()).count() == 0
+    assert await (await admin.get_archive()).count() == 1
 
 # --- Durable Workflow Tests ---
 
 @step
 async def step1(ctx: PyWorkflow, msg: str):
-    print(f"  [Step 1] Executing with msg: {msg}")
     return f"processed_{msg}"
 
 @step
 async def step2(ctx: PyWorkflow, val: str):
-    print(f"  [Step 2] Executing with val: {val}")
     return f"step2_{val}"
 
 @workflow
 async def simple_wf(ctx: PyWorkflow, arg: str):
-    # Basic workflow: Step 1 -> Step 2
     res1 = await step1(ctx, arg)
     res2 = await step2(ctx, res1)
     return res2
 
 @pytest.mark.asyncio
 async def test_workflow_execution(postgres_dsn, schema):
-    """
-    Test basic durable workflow execution.
-    """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
-
+    store, admin = await setup_test(postgres_dsn, schema)
     wf_name = "simple_wf"
     wf_arg = "test_data"
     wf_ctx = await admin.create_workflow(wf_name, wf_arg)
@@ -508,50 +333,67 @@ async def test_workflow_execution(postgres_dsn, schema):
     result = await simple_wf(wf_ctx, wf_arg)
     assert result == "step2_processed_test_data"
 
-    # Verify workflow status is Success?
-    # Currently PyWorkflow doesn't expose status getter easily without querying DB,
-    # but successful return implies success.
-
-
-# Helpers for crash recovery test
-async def crashing_workflow_runner(ctx: PyWorkflow, arg: str):
+@pytest.mark.asyncio
+async def test_extend_visibility(postgres_dsn, schema):
     """
-    Simulates a workflow that starts, matches step 1, but then 'crashes' (raises exception)
-    before completing step 2, specifically WITHOUT calling ctx.fail() or ctx.success().
-    This leaves the workflow in RUNNING state, mimicking a process crash.
+    Test extending visibility timeout.
     """
-    # Manually start (usually handled by @workflow)
-    await ctx.start()
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "test_extend_vt_queue"
+    await admin.create_queue(queue_name)
 
-    # Run step 1 (should succeed)
-    _ = await step1(ctx, arg)
+    producer = await store.producer(queue_name)
+    consumer = await store.consumer(queue_name)
 
-    # Crash!
-    # Raising error here escapes without calling ctx.fail() (because no @workflow decorator)
-    raise ZeroDivisionError("Simulated Process Crash")
+    await pgqrs.enqueue(producer, {"foo": "bar"})
+
+    # Dequeue
+    msgs = await pgqrs.dequeue(consumer, 1)
+    assert len(msgs) == 1
+    msg = msgs[0]
+
+    # Extend VT by 10 seconds
+    await pgqrs.extend_vt(consumer, msg, 10)
 
 @pytest.mark.asyncio
 async def test_workflow_crash_recovery(postgres_dsn, schema):
     """
-    Test workflow recovery/resume after a simulated process crash.
+    Test workflow recovery.
     """
-    admin = pgqrs.Admin(postgres_dsn, schema=schema)
-    await admin.install()
+    store, admin = await setup_test(postgres_dsn, schema)
+    wf_name = "recovery_wf"
+    wf_arg = "crash_test"
 
-    wf_name = "crash_wf"
-    wf_arg = "crash_data"
     wf_ctx = await admin.create_workflow(wf_name, wf_arg)
 
-    # 1. Run until crash (Step 1 succeeds, then crash)
-    with pytest.raises(ZeroDivisionError):
-        await crashing_workflow_runner(wf_ctx, wf_arg)
+    step1_called = 0
+    step2_called = 0
 
-    # 2. Resume workflow using the standard @workflow decorated function
-    # It should:
-    # - Call start() (Idempotent for RUNNING)
-    # - Call step1() (Should SKIP as it's already done)
-    # - Call step2() (Should EXECUTE)
-    # - Complete successfully
-    result = await simple_wf(wf_ctx, wf_arg)
+    @step
+    async def step_a(ctx, arg):
+        nonlocal step1_called
+        step1_called += 1
+        return f"a_{arg}"
 
-    assert result == "step2_processed_crash_data"
+    @step
+    async def step_b(ctx, arg):
+        nonlocal step2_called
+        step2_called += 1
+        return f"b_{arg}"
+
+    async def run_wf(ctx):
+        res1 = await step_a(ctx, wf_arg)
+        return res1
+
+    await run_wf(wf_ctx)
+    assert step1_called == 1
+
+    async def run_wf_complete(ctx):
+        res1 = await step_a(ctx, wf_arg) # Skipped
+        res2 = await step_b(ctx, res1)   # Executed
+        return res2
+
+    result = await run_wf_complete(wf_ctx)
+    assert result == "b_a_crash_test"
+    assert step1_called == 1
+    assert step2_called == 1

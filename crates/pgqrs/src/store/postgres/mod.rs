@@ -1,240 +1,178 @@
 //! Postgres implementation of the Store trait.
 
-use crate::store::{Store, QueueStore, MessageStore, WorkerStore, ArchiveStore};
-use crate::error::Error;
+use crate::store::{
+    Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
+    Producer as ProducerTrait, QueueTable, Store, WorkerTable, Workflow as WorkflowTrait,
+    WorkflowTable,
+};
+use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-pub mod queues;
-pub mod messages;
-pub mod workers;
-pub mod workflows;
-pub mod archive;
+pub mod tables;
+pub mod worker;
+pub mod workflow;
 
+use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
+use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
+use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
+use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
+use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
 
-#[derive(Clone, Debug)]
+use self::worker::admin::Admin as PostgresAdmin;
+use self::worker::consumer::Consumer as PostgresConsumer;
+use self::worker::producer::Producer as PostgresProducer;
+use self::workflow::guard::StepGuard as PostgresStepGuard;
+use self::workflow::handle::Workflow as PostgresWorkflow;
+
+use crate::config::Config;
+
+#[derive(Debug, Clone)]
 pub struct PostgresStore {
-    queues: Arc<queues::PostgresQueueStore>,
-    messages: Arc<messages::PostgresMessageStore>,
-    workers: Arc<workers::PostgresWorkerStore>,
-    archive: Arc<archive::PostgresArchiveStore>,
-    workflows: Arc<workflows::PostgresWorkflowStore>,
     pool: PgPool,
+    config: Config,
+    queues: Arc<PostgresQueueTable>,
+    messages: Arc<PostgresMessageTable>,
+    workers: Arc<PostgresWorkerTable>,
+    archive: Arc<PostgresArchiveTable>,
+    workflows: Arc<PostgresWorkflowTable>,
 }
-
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
-// Verification queries
-const CHECK_TABLE_EXISTS: &str = r#"
-    SELECT EXISTS (
-        SELECT 1 FROM information_schema.tables
-        WHERE table_name = $1
-    )
-"#;
-
-const CHECK_ORPHANED_MESSAGES: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_messages m
-    LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
-    WHERE q.id IS NULL
-"#;
-
-const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_messages m
-    LEFT OUTER JOIN pgqrs_workers pw ON m.producer_worker_id = pw.id
-    LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
-    WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
-       OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
-    WHERE q.id IS NULL
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_workers pw ON a.producer_worker_id = pw.id
-    LEFT OUTER JOIN pgqrs_workers cw ON a.consumer_worker_id = cw.id
-    WHERE (a.producer_worker_id IS NOT NULL AND pw.id IS NULL)
-       OR (a.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
-"#;
 
 impl PostgresStore {
-    pub fn new(pool: PgPool, max_read_ct: u32) -> Self {
+    pub fn new(pool: PgPool, config: &Config) -> Self {
         Self {
-            queues: Arc::new(queues::PostgresQueueStore::new(pool.clone())),
-            messages: Arc::new(messages::PostgresMessageStore::new(pool.clone(), max_read_ct)),
-            workers: Arc::new(workers::PostgresWorkerStore::new(pool.clone())),
-            archive: Arc::new(archive::PostgresArchiveStore::new(pool.clone())),
-            workflows: Arc::new(workflows::PostgresWorkflowStore::new(pool.clone())),
-            pool,
+            pool: pool.clone(),
+            config: config.clone(),
+            queues: Arc::new(PostgresQueueTable::new(pool.clone())),
+            messages: Arc::new(PostgresMessageTable::new(pool.clone())),
+            workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
+            archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
+            workflows: Arc::new(PostgresWorkflowTable::new(pool)),
         }
+    }
+
+    /// Get access to the underlying PgPool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl Store for PostgresStore {
-    type Error = Error;
-
-    type QueueStore = queues::PostgresQueueStore;
-    type MessageStore = messages::PostgresMessageStore;
-    type WorkerStore = workers::PostgresWorkerStore;
-    type ArchiveStore = archive::PostgresArchiveStore;
-    type WorkflowStore = workflows::PostgresWorkflowStore;
-
-    async fn install(&self) -> Result<(), Self::Error> {
-        // Run migrations using sqlx
-        MIGRATOR
-            .run(&self.pool)
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!("Migration failed: {}", e),
-            })?;
-        Ok(())
+    fn pool(&self) -> sqlx::PgPool {
+        self.pool.clone()
     }
 
-    async fn verify(&self) -> Result<(), Self::Error> {
-        // Begin a read-only transaction for all verification queries
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+    fn config(&self) -> &Config {
+        &self.config
+    }
 
-        // Category 1: Check existence of all required tables
-        let required_tables = [
-            ("pgqrs_queues", "Queue repository table"),
-            ("pgqrs_workers", "Worker repository table"),
-            ("pgqrs_messages", "Unified messages table"),
-            ("pgqrs_archive", "Unified archive table"),
-        ];
+    fn queues(&self) -> &dyn QueueTable {
+        self.queues.as_ref()
+    }
 
-        for (table_name, description) in &required_tables {
-            let table_exists = sqlx::query_scalar::<_, bool>(CHECK_TABLE_EXISTS)
-                .bind(table_name)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| Error::Connection {
-                    message: format!("Failed to check {} existence: {}", description, e),
-                })?;
+    fn messages(&self) -> &dyn MessageTable {
+        self.messages.as_ref()
+    }
 
-            if !table_exists {
-                return Err(Error::Connection {
-                    message: format!("{} ('{}') does not exist", description, table_name),
-                });
-            }
+    fn workers(&self) -> &dyn WorkerTable {
+        self.workers.as_ref()
+    }
+
+    fn archive(&self) -> &dyn ArchiveTable {
+        self.archive.as_ref()
+    }
+
+    fn workflows(&self) -> &dyn WorkflowTable {
+        self.workflows.as_ref()
+    }
+
+    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
+        let admin = PostgresAdmin::new(config).await?;
+        Ok(Box::new(admin))
+    }
+
+    async fn producer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let producer =
+            PostgresProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+        Ok(Box::new(producer))
+    }
+
+    async fn consumer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let consumer =
+            PostgresConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+        Ok(Box::new(consumer))
+    }
+
+    fn workflow(&self, id: i64) -> Box<dyn WorkflowTrait> {
+        Box::new(PostgresWorkflow::new(self.pool.clone(), id))
+    }
+
+    async fn acquire_step(
+        &self,
+        workflow_id: i64,
+        step_id: &str,
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
+        use crate::store::postgres::workflow::guard::StepResult;
+        let result =
+            PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
+                .await?;
+        match result {
+            StepResult::Execute(guard) => Ok(crate::store::StepResult::Execute(Box::new(guard))),
+            StepResult::Skipped(val) => Ok(crate::store::StepResult::Skipped(val)),
         }
-
-        // Category 2: Validate referential integrity using left outer joins
-
-        // Check that all messages have valid queue_id references
-        let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!("Failed to check message referential integrity: {}", e),
-            })?;
-
-        if orphaned_messages > 0 {
-            return Err(Error::Connection {
-                message: format!(
-                    "Found {} messages with invalid queue_id references",
-                    orphaned_messages
-                ),
-            });
-        }
-
-        // Check that all messages with producer_worker_id or consumer_worker_id have valid worker references
-        let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!(
-                    "Failed to check message worker referential integrity: {}",
-                    e
-                ),
-            })?;
-
-        if orphaned_message_workers > 0 {
-            return Err(Error::Connection {
-                message: format!(
-                    "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
-                    orphaned_message_workers
-                ),
-            });
-        }
-
-        // Check that all archived messages have valid queue_id references
-        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!("Failed to check archive referential integrity: {}", e),
-            })?;
-
-        if orphaned_archive_queues > 0 {
-            return Err(Error::Connection {
-                message: format!(
-                    "Found {} archived messages with invalid queue_id references",
-                    orphaned_archive_queues
-                ),
-            });
-        }
-
-        // Check that all archived messages with producer_worker_id or consumer_worker_id have valid worker references
-        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!(
-                    "Failed to check archive worker referential integrity: {}",
-                    e
-                ),
-            })?;
-
-        if orphaned_archive_workers > 0 {
-            return Err(Error::Connection {
-                message: format!(
-                    "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
-                    orphaned_archive_workers
-                ),
-            });
-        }
-
-        // Commit the transaction (ensures consistency of all checks)
-        tx.commit()
-            .await
-            .map_err(|e| Error::Connection {
-                message: format!("Failed to commit transaction: {}", e),
-            })?;
-
-        Ok(())
     }
 
-    fn queues(&self) -> &Self::QueueStore {
-        &self.queues
+    async fn create_workflow<T: serde::Serialize + Send + Sync>(
+        &self,
+        name: &str,
+        input: &T,
+    ) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+        let workflow = PostgresWorkflow::create(self.pool.clone(), name, input).await?;
+        Ok(Box::new(workflow))
     }
 
-    fn messages(&self) -> &Self::MessageStore {
-        &self.messages
+    fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
+        crate::store::ConcurrencyModel::MultiProcess
     }
 
-    fn workers(&self) -> &Self::WorkerStore {
-        &self.workers
+    fn backend_name(&self) -> &'static str {
+        "postgres"
     }
 
-    fn archive(&self) -> &Self::ArchiveStore {
-        &self.archive
+    async fn producer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let producer =
+            PostgresProducer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(producer))
     }
 
-    fn workflows(&self) -> &Self::WorkflowStore {
-        &self.workflows
+    async fn consumer_ephemeral(
+        &self,
+        queue: &str,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let consumer =
+            PostgresConsumer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(consumer))
     }
 }

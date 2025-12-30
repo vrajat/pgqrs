@@ -254,6 +254,18 @@ impl Config {
         })
     }
 
+    /// Set the schema name.
+    pub fn with_schema<S: Into<String>>(mut self, schema: S) -> Self {
+        self.schema = schema.into();
+        self
+    }
+
+    /// Set the maximum number of database connections.
+    pub fn with_max_connections(mut self, max: u32) -> Self {
+        self.max_connections = max;
+        self
+    }
+
     /// Create config from environment variables
     ///
     /// Environment variables supported:

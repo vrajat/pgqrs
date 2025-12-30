@@ -1,7 +1,6 @@
 //! Shared database setup and cleanup functionality for test containers
 
 use super::constants::*;
-use pgqrs::admin::Admin;
 use sqlx::postgres::PgPoolOptions;
 
 /// Common database setup function that can be used by all container types
@@ -46,8 +45,11 @@ pub async fn setup_database_common(
     } else {
         pgqrs::config::Config::from_dsn_with_schema(dsn, schema)?
     };
-    let admin = Admin::new(&config).await?;
-    admin.install().await?;
+
+    // Updated to use AnyStore and builder
+    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    pgqrs::admin(&store).install().await?;
+
     println!("{} schema installed in '{}'", connection_type, schema);
 
     Ok(())
@@ -64,11 +66,15 @@ pub async fn cleanup_database_common(
     } else {
         pgqrs::config::Config::from_dsn_with_schema(dsn, schema)?
     };
-    let admin = Admin::new(&config).await?;
+
+    // Updated to use AnyStore
+    let store = pgqrs::store::AnyStore::connect(&config).await?;
+
     // Drop custom schema if not using 'public'
     if schema != "public" {
         let drop_schema_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
-        sqlx::query(&drop_schema_sql).execute(&admin.pool).await?;
+        let pool = store.pool();
+        sqlx::query(&drop_schema_sql).execute(pool).await?;
         println!(
             "{} schema '{}' dropped successfully",
             connection_type, schema

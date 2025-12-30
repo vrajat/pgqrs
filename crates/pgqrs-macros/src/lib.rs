@@ -187,15 +187,18 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #(#attrs)*
         #visibility #sig {
+            // Import trait for extension methods
+            use pgqrs::StepGuardExt as _;
+
             let step_id = #step_id;
 
             // Attempt to initialize the step
-            let guard_res = pgqrs::workflow::StepGuard::acquire(#first_arg_name.pool(), #first_arg_name.id(), step_id)
+            let guard_res = pgqrs::StepGuardImpl::acquire(#first_arg_name.pool(), #first_arg_name.id(), step_id)
                 .await?;
 
             match guard_res {
-                pgqrs::workflow::StepResult::Skipped(val) => Ok(val),
-                pgqrs::workflow::StepResult::Execute(guard) => {
+                pgqrs::StepResultImpl::Skipped(val) => Ok(val),
+                pgqrs::StepResultImpl::Execute(mut guard) => {
                     // Execute the original function body and capture the result
                     let result: #output_type = async { #block }.await;
 
@@ -203,7 +206,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
                         Ok(val) => guard.success(val).await?,
                         Err(e) => {
                             // Pass the error string directly. guard.fail handles serialization.
-                            guard.fail(e.to_string()).await?
+                            guard.fail(&e.to_string()).await?
                         },
                     }
 
@@ -331,7 +334,8 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #(#attrs)*
         #visibility #sig {
-
+            // Import trait for extension methods
+            use pgqrs::WorkflowExt as _;
 
             // Start workflow
             #first_arg_name.start().await?;
@@ -342,7 +346,7 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
             // Handle terminal state
             match &result {
                 Ok(val) => #first_arg_name.success(val).await?,
-                Err(e) => #first_arg_name.fail(e.to_string()).await?,
+                Err(e) => #first_arg_name.fail(&e.to_string()).await?,
             }
 
             result

@@ -20,10 +20,9 @@
 //! ```
 use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
-use pgqrs::tables::Messages;
 use pgqrs::types::{QueueInfo, QueueMessage};
-use pgqrs::{admin::Admin, tables::Queues};
-use pgqrs::{Table, Worker, WorkerHandle, Workers};
+use pgqrs::Worker;
+
 use std::fs::File;
 use std::process;
 
@@ -276,7 +275,8 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     let config = Config::load_with_schema_options(cli.dsn, cli.schema, cli.config)
         .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
 
-    let admin = Admin::new(&config).await?;
+    let store = pgqrs::store::AnyStore::connect(&config).await?;
+
     let writer = match cli.format.to_lowercase().as_str() {
         "json" => OutputWriter::Json(JsonOutputWriter),
         _ => OutputWriter::Table(TableOutputWriter),
@@ -290,22 +290,22 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Admin { admin_command } => {
-            handle_admin_commands(&admin, admin_command, writer, out).await?
+            handle_admin_commands(&store, admin_command, writer, out).await?
         }
 
         Commands::Worker { worker_command } => {
-            handle_worker_commands(&admin, worker_command, writer, out).await?
+            handle_worker_commands(&store, worker_command, writer, out).await?
         }
 
         Commands::Queue { queue_command } => {
-            handle_queue_commands(&admin, queue_command, writer, out).await?
+            handle_queue_commands(&store, queue_command, writer, out).await?
         }
     }
     Ok(())
 }
 
 async fn handle_admin_commands(
-    admin: &Admin,
+    store: &impl pgqrs::store::Store,
     command: AdminCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
@@ -313,25 +313,25 @@ async fn handle_admin_commands(
     match command {
         AdminCommands::Install => {
             tracing::info!("Installing pgqrs schema ...");
-            admin.install().await?;
+            pgqrs::admin(store).install().await?;
             tracing::info!("Installation completed successfully");
         }
 
         AdminCommands::Verify => {
             tracing::info!("Verifying pgqrs installation...");
-            admin.verify().await?;
+            pgqrs::admin(store).verify().await?;
             tracing::info!("Verification completed successfully");
         }
 
         AdminCommands::Stats => {
             tracing::info!("Getting system statistics...");
-            let stats = admin.system_stats().await?;
+            let stats = pgqrs::admin(store).system_stats().await?;
             writer.write_item(&stats, out)?;
         }
 
         AdminCommands::Reclaim { queue, older_than } => {
             tracing::info!("Reclaiming messages for queue '{}'...", queue);
-            let queue_info = admin.get_queue(&queue).await?;
+            let queue_info = pgqrs::tables(store).queues().get_by_name(&queue).await?;
 
             let duration = match older_than {
                 Some(s) => Some(
@@ -345,7 +345,9 @@ async fn handle_admin_commands(
                 None => None,
             };
 
-            let count = admin.reclaim_messages(queue_info.id, duration).await?;
+            let count = pgqrs::admin(store)
+                .reclaim_messages(queue_info.id, duration)
+                .await?;
             tracing::info!("Reclaimed {} messages from zombie workers", count);
             writeln!(out, "Reclaimed {} messages from zombie workers", count)?;
         }
@@ -354,7 +356,7 @@ async fn handle_admin_commands(
 }
 
 async fn handle_queue_commands(
-    admin: &Admin,
+    store: &impl pgqrs::store::Store,
     command: QueueCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
@@ -362,59 +364,60 @@ async fn handle_queue_commands(
     match command {
         QueueCommands::Create { name } => {
             tracing::info!("Creating queue '{}' ...", &name);
-            let queue = admin.create_queue(&name).await?;
+            let queue = pgqrs::admin(store).create_queue(&name).await?;
             writer.write_item(&queue, out)?;
         }
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let queue = Queues::new(admin.pool.clone());
-            let queue_list: Vec<QueueInfo> = queue.list().await?;
+            let queue_list: Vec<QueueInfo> = pgqrs::tables(store).queues().list().await?;
             writer.write_list(&queue_list, out)?;
         }
 
         QueueCommands::Get { name } => {
             tracing::info!("Getting queue '{}'...", name);
-            let queue_info = admin.get_queue(&name).await?;
+            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
             writer.write_item(&queue_info, out)?;
         }
 
         QueueCommands::Messages { name } => {
             tracing::info!("Listing messages for queue '{}'...", name);
-            let queue_info = admin.get_queue(&name).await?;
-            let messages = Messages::new(admin.pool.clone());
-            let messages_list: Vec<QueueMessage> = messages.filter_by_fk(queue_info.id).await?;
+            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let messages_list: Vec<QueueMessage> = pgqrs::tables(store)
+                .messages()
+                .filter_by_fk(queue_info.id)
+                .await?;
             writer.write_list(&messages_list, out)?;
         }
 
         QueueCommands::ArchiveDlq => {
             tracing::info!("Moving dead letter queue messages to archive");
-            let moved_ids = admin.dlq().await?;
+            let moved_ids = pgqrs::admin(store).dlq().await?;
             tracing::info!("Moved {} messages from DLQ to archive", moved_ids.len());
             writer.write_list(&moved_ids, out)?;
         }
 
         QueueCommands::Delete { name } => {
             tracing::info!("Deleting queue '{}'...", name);
-            let queue_info = admin.get_queue(&name).await?;
-            admin.delete_queue(&queue_info).await?;
+            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            pgqrs::admin(store).delete_queue(&queue_info).await?;
             tracing::info!("Queue '{}' deleted successfully", name);
         }
 
         QueueCommands::Purge { name } => {
             tracing::info!("Purging queue '{}'...", name);
-            admin.purge_queue(&name).await?;
+            pgqrs::admin(store).purge_queue(&name).await?;
             tracing::info!("Queue '{}' purged successfully", name);
         }
 
         QueueCommands::Metrics { name } => {
             if let Some(queue_name) = name {
                 tracing::info!("Getting metrics for queue '{}'...", queue_name);
-                let metrics = admin.queue_metrics(&queue_name).await?;
+                let metrics = pgqrs::admin(store).queue_metrics(&queue_name).await?;
                 writer.write_item(&metrics, out)?;
             } else {
                 tracing::info!("Getting metrics for all queues...");
-                let metrics = admin.all_queues_metrics().await?;
+                let metrics = pgqrs::admin(store).all_queues_metrics().await?;
                 writer.write_list(&metrics, out)?;
             }
         }
@@ -423,33 +426,37 @@ async fn handle_queue_commands(
 }
 
 async fn handle_worker_commands(
-    admin: &Admin,
+    store: &impl pgqrs::store::Store,
     command: WorkerCommands,
     writer: OutputWriter,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<()> {
     match command {
         WorkerCommands::List { queue } => {
-            let table = Workers::new(admin.pool.clone());
             let workers = match queue {
                 Some(queue_name) => {
                     tracing::info!("Listing workers for queue '{}'...", queue_name);
-                    let queue_id = Queues::new(admin.pool.clone())
+                    let queue_id = pgqrs::tables(store)
+                        .queues()
                         .get_by_name(&queue_name)
                         .await?
                         .id;
-                    table.filter_by_fk(queue_id).await?
+                    pgqrs::tables(store)
+                        .workers()
+                        .filter_by_fk(queue_id)
+                        .await?
                 }
                 None => {
                     tracing::info!("Listing all workers...");
-                    table.list().await?
+                    pgqrs::tables(store).workers().list().await?
                 }
             };
             tracing::info!("Found {} workers", workers.len());
             writer.write_list(&workers, out)?;
         }
         WorkerCommands::Get { id } => {
-            let worker = Workers::new(admin.pool.clone())
+            let worker = pgqrs::tables(store)
+                .workers()
                 .get(id)
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
@@ -458,20 +465,23 @@ async fn handle_worker_commands(
 
         WorkerCommands::Messages { id } => {
             // Find the worker and get its messages
-            let worker_info = Workers::new(admin.pool.clone())
+            let worker_info = pgqrs::tables(store)
+                .workers()
                 .get(id)
                 .await
                 .map_err(|_| anyhow::anyhow!("Worker with ID {} not found", id))?;
 
             tracing::info!("Getting messages for worker {}...", id);
-            let messages = admin.get_worker_messages(worker_info.id).await?;
+            let messages = pgqrs::admin(store)
+                .get_worker_messages(worker_info.id)
+                .await?;
             tracing::info!("Found {} messages", messages.len());
             writer.write_list(&messages, out)?;
         }
 
         WorkerCommands::ReleaseMessages { id } => {
             tracing::info!("Releasing messages from worker {}...", id);
-            let released_count = admin.release_worker_messages(id).await?;
+            let released_count = pgqrs::admin(store).release_worker_messages(id).await?;
             tracing::info!("Released {} messages", released_count);
             writeln!(
                 out,
@@ -482,31 +492,31 @@ async fn handle_worker_commands(
 
         WorkerCommands::Suspend { id } => {
             tracing::info!("Suspending worker {}...", id);
-            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
-            worker_handle.suspend().await?;
+            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            worker_handler.suspend().await?;
             tracing::info!("Worker {} suspended", id);
             writeln!(out, "Worker {} suspended", id)?;
         }
 
         WorkerCommands::Resume { id } => {
             tracing::info!("Resuming worker {}...", id);
-            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
-            worker_handle.resume().await?;
+            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            worker_handler.resume().await?;
             tracing::info!("Worker {} resumed", id);
             writeln!(out, "Worker {} resumed", id)?;
         }
 
         WorkerCommands::Shutdown { id } => {
             tracing::info!("Shutting down worker {}...", id);
-            let worker_handle = WorkerHandle::new(admin.pool.clone(), id);
-            worker_handle.shutdown().await?;
+            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            worker_handler.shutdown().await?;
             tracing::info!("Worker {} shut down successfully", id);
             writeln!(out, "Worker {} shut down successfully", id)?;
         }
 
         WorkerCommands::Heartbeat { id } => {
             tracing::info!("Updating heartbeat for worker {}...", id);
-            let worker = WorkerHandle::new(admin.pool.clone(), id);
+            let worker = pgqrs::worker_handle(store, id).await?;
             worker.heartbeat().await?;
             tracing::info!("Heartbeat updated for worker {}", id);
             writeln!(out, "Heartbeat updated for worker {}", id)?;
@@ -524,14 +534,14 @@ async fn handle_worker_commands(
             )
             .map_err(|e| anyhow::anyhow!("Duration too large: {}", e))?;
             tracing::info!("Purging workers older than {:?}...", duration);
-            let purged_count = admin.purge_old_workers(duration).await?;
+            let purged_count = pgqrs::admin(store).purge_old_workers(duration).await?;
             tracing::info!("Purged {} old workers", purged_count);
             writeln!(out, "Purged {} old workers", purged_count)?;
         }
 
         WorkerCommands::Delete { id } => {
             tracing::info!("Deleting worker {}...", id);
-            match admin.delete_worker(id).await {
+            match pgqrs::admin(store).delete_worker(id).await {
                 Ok(deleted_count) => {
                     if deleted_count > 0 {
                         tracing::info!("Deleted worker {}", id);
@@ -550,7 +560,7 @@ async fn handle_worker_commands(
 
         WorkerCommands::Stats { queue } => {
             tracing::info!("Getting worker statistics for queue '{}'...", queue);
-            let stats = admin.worker_stats(&queue).await?;
+            let stats = pgqrs::admin(store).worker_stats(&queue).await?;
             tracing::info!("Worker statistics retrieved");
 
             // Print stats in a readable format
@@ -581,7 +591,7 @@ async fn handle_worker_commands(
                 timeout,
                 group_by_queue
             );
-            let stats = admin
+            let stats = pgqrs::admin(store)
                 .worker_health_stats(chrono::Duration::seconds(timeout as i64), group_by_queue)
                 .await?;
             writer.write_list(&stats, out)?;

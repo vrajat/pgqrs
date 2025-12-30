@@ -1,27 +1,9 @@
 use crate::error::Result;
-use crate::tables::table::Table;
-use crate::workflow::WorkflowStatus;
-use chrono::{DateTime, Utc};
-use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::PgPool;
 
-#[derive(Debug, FromRow, Clone)]
-pub struct WorkflowRecord {
-    pub workflow_id: i64,
-    pub name: String,
-    pub status: WorkflowStatus,
-    pub input: Option<Value>,
-    pub output: Option<Value>,
-    pub error: Option<Value>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub executor_id: Option<String>,
-}
-
-pub struct NewWorkflow {
-    pub name: String,
-    pub input: Option<Value>,
-}
+// Import shared types instead of redefining them
+// Import shared types instead of redefining them
+pub use crate::types::{NewWorkflow, WorkflowRecord};
 
 #[derive(Debug, Clone)]
 pub struct Workflows {
@@ -32,12 +14,54 @@ impl Workflows {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    pub async fn complete_workflow(
+        executor: &mut sqlx::PgConnection,
+        id: i64,
+        output: serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflows
+            SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, updated_at = NOW()
+            WHERE workflow_id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(output)
+        .execute(executor)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to complete workflow {}: {}", id, e),
+        })?;
+        Ok(())
+    }
+
+    pub async fn fail_workflow(
+        executor: &mut sqlx::PgConnection,
+        id: i64,
+        error: serde_json::Value,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflows
+            SET status = 'ERROR'::pgqrs_workflow_status, error = $2, updated_at = NOW()
+            WHERE workflow_id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(error)
+        .execute(executor)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: format!("Failed to fail workflow {}: {}", id, e),
+        })?;
+        Ok(())
+    }
 }
 
-impl Table for Workflows {
-    type Entity = WorkflowRecord;
-    type NewEntity = NewWorkflow;
-
+#[async_trait::async_trait]
+impl crate::store::WorkflowTable for Workflows {
     async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
         let row = sqlx::query_as::<_, WorkflowRecord>(
             r#"
@@ -83,11 +107,6 @@ impl Table for Workflows {
         Ok(rows)
     }
 
-    async fn filter_by_fk(&self, _foreign_key_value: i64) -> Result<Vec<WorkflowRecord>> {
-        // Workflows don't have FKs to filter by yet
-        Ok(vec![])
-    }
-
     async fn count(&self) -> Result<i64> {
         let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
             .fetch_one(&self.pool)
@@ -96,14 +115,6 @@ impl Table for Workflows {
                 message: format!("Failed to count workflows: {}", e),
             })?;
         Ok(count)
-    }
-
-    async fn count_for_fk<'a, 'b: 'a>(
-        &self,
-        _foreign_key_value: i64,
-        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<i64> {
-        Ok(0)
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
@@ -116,13 +127,5 @@ impl Table for Workflows {
             })?
             .rows_affected();
         Ok(rows_affected)
-    }
-
-    async fn delete_by_fk<'a, 'b: 'a>(
-        &self,
-        _foreign_key_value: i64,
-        _tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<u64> {
-        Ok(0)
     }
 }
