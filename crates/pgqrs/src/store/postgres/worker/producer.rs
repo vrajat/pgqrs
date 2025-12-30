@@ -16,10 +16,17 @@
 //!
 //! ### Example
 //!
-//! ```rust
-//! use pgqrs::producer::Producer;
-//! // let producer = Producer::new(pool, &queue_info, "localhost", 8080, &config).await?;
-//! // let message = producer.enqueue(&payload).await?;
+//! ```rust,no_run
+//! # use pgqrs::{Producer, Config};
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = Config::from_dsn("postgresql://localhost/test");
+//! # let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! let producer = pgqrs::producer("localhost", 8080, "jobs")
+//!     .create(&store)
+//!     .await?;
+//! let message = producer.enqueue(&serde_json::json!({"foo": "bar"})).await?;
+//! # Ok(())
+//! # }
 //! ```
 
 use super::lifecycle::WorkerLifecycle;

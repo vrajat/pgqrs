@@ -13,11 +13,10 @@
 //!
 //! ### Producer
 //! ```rust
-//! use pgqrs::Producer;
-//! use serde_json::Value;
-//!
+//! # use pgqrs::Producer;
+//! # use serde_json::Value;
 //! /// Enqueue a payload to the queue
-//! async fn enqueue_job(producer: &Producer, payload: Value) -> Result<i64, Box<dyn std::error::Error>> {
+//! async fn enqueue_job(producer: &impl Producer, payload: Value) -> Result<i64, Box<dyn std::error::Error>> {
 //!     let message = producer.enqueue(&payload).await?;
 //!     Ok(message.id)
 //! }
@@ -25,11 +24,10 @@
 //!
 //! ### Consumer
 //! ```rust
-//! use pgqrs::Consumer;
-//! use std::time::Duration;
-//!
+//! # use pgqrs::Consumer;
+//! # use std::time::Duration;
 //! /// Poll for jobs from the queue and print them as they arrive
-//! async fn poll_and_print_jobs(consumer: &Consumer) -> Result<(), Box<dyn std::error::Error>> {
+//! async fn poll_and_print_jobs(consumer: &impl Consumer) -> Result<(), Box<dyn std::error::Error>> {
 //!     loop {
 //!         let messages = consumer.dequeue().await?;
 //!         if messages.is_empty() {
@@ -39,7 +37,7 @@
 //!             for message in messages {
 //!                 println!("Dequeued job: {}", message.payload);
 //!                 // Optionally archive or delete the message after processing
-//!                 consumer.archive(message.id).await?;
+//!                 consumer.delete(message.id).await?;
 //!             }
 //!         }
 //!     }

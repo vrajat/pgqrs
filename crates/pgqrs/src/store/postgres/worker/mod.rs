@@ -52,8 +52,7 @@
 //! ### Example: Graceful shutdown
 //!
 //! ```rust
-//! use pgqrs::worker::Worker;
-//!
+//! # use pgqrs::Worker;
 //! async fn graceful_shutdown(worker: &impl Worker) -> pgqrs::Result<()> {
 //!     // First suspend the worker
 //!     worker.suspend().await?;

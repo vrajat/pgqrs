@@ -23,15 +23,13 @@
 //! config.validation_config.max_enqueue_per_second = Some(100); // 100/second
 //! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
 //!
-//! let admin = Admin::new(&config).await?;
-//! let queue_info = admin.create_queue("my_queue").await?;
-//! let producer = Producer::new(
-//!     admin.pool.clone(),
-//!     &queue_info,
-//!     "localhost",
-//!     8080,
-//!     &admin.config,
-//! ).await?;
+//! let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! pgqrs::admin(&store).install().await?;
+//! pgqrs::admin(&store).create_queue("my_queue").await?;
+//!
+//! let producer = pgqrs::producer("localhost", 8080, "my_queue")
+//!     .create(&store)
+//!     .await?;
 //!
 //! // Rate limiting is automatically applied
 //! for i in 0..200 {

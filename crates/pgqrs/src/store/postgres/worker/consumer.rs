@@ -16,13 +16,19 @@
 //!
 //! ### Example
 //!
-//! ```rust
-//! use pgqrs::consumer::Consumer;
-//! use pgqrs::producer::Producer;
-//! // let consumer = Consumer::register(pool, &queue_info, "localhost", 8080, &config).await?;
-//! // let producer = Producer::register(pool, &queue_info, "localhost", 8081, &config).await?;
-//! // producer.enqueue(...)
-//! // consumer.dequeue(...)
+//! ```rust,no_run
+//! # use pgqrs::{Consumer, Producer, Config};
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = Config::from_dsn("postgresql://localhost/test");
+//! # let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! let consumer = pgqrs::consumer("localhost", 8080, "jobs")
+//!     .create(&store)
+//!     .await?;
+//! let producer = pgqrs::producer("localhost", 8081, "jobs")
+//!     .create(&store)
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 
 use super::lifecycle::WorkerLifecycle;

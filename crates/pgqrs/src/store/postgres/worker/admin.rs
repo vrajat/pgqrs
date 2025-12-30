@@ -15,17 +15,14 @@
 //! ### Example
 //!
 //! ```no_run
-//! use pgqrs::admin::Admin;
-//! use pgqrs::config::Config;
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = Config::from_dsn("postgresql://user:pass@localhost/db");
-//!     let admin = Admin::new(&config).await?;
-//!     admin.install().await?;
-//!     admin.create_queue("jobs").await?;
-//!     Ok(())
-//! }
+//! # use pgqrs::{Config, Admin};
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = Config::from_dsn("postgresql://user:pass@localhost/db");
+//! let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! pgqrs::admin(&store).install().await?;
+//! pgqrs::admin(&store).create_queue("jobs").await?;
+//! # Ok(())
+//! # }
 //! ```
 use crate::config::Config;
 use crate::error::Result;
@@ -385,12 +382,13 @@ impl Admin {
     /// Get the worker ID, returning an error if not registered.
     /// Use this in async methods that can propagate errors.
     fn try_worker_id(&self) -> Result<i64> {
-        self.worker_info
-            .as_ref()
-            .map(|w| w.id)
-            .ok_or_else(|| crate::error::Error::WorkerNotRegistered {
-                message: "Admin must be registered before using Worker methods. Call register() first.".to_string()
-            })
+        self.worker_info.as_ref().map(|w| w.id).ok_or_else(|| {
+            crate::error::Error::WorkerNotRegistered {
+                message:
+                    "Admin must be registered before using Worker methods. Call register() first."
+                        .to_string(),
+            }
+        })
     }
 }
 
@@ -399,10 +397,7 @@ impl crate::store::Worker for Admin {
     fn worker_id(&self) -> i64 {
         // Return -1 as sentinel value if not registered.
         // Async methods should use try_worker_id() which returns Result.
-        self.worker_info
-            .as_ref()
-            .map(|w| w.id)
-            .unwrap_or(-1)
+        self.worker_info.as_ref().map(|w| w.id).unwrap_or(-1)
     }
 
     async fn heartbeat(&self) -> Result<()> {
