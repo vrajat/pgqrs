@@ -242,14 +242,13 @@ async fn test_enqueue_batch_builder() {
 
     // Test empty batch
     let empty_batch: Vec<serde_json::Value> = vec![];
-    let msg_ids = pgqrs::enqueue()
+    let result = pgqrs::enqueue()
         .messages(&empty_batch)
         .worker(&*producer)
         .execute(&store)
-        .await
-        .expect("Failed to enqueue empty batch");
+        .await;
 
-    assert_eq!(msg_ids.len(), 0);
+    assert!(result.is_err(), "Empty batch should return validation error");
 
     // Cleanup
     producer.suspend().await.unwrap();

@@ -118,14 +118,6 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         }
 
         if let Some(producer) = self.worker {
-            // Managed worker mode
-            if self.messages.len() == 1 && self.delay_seconds.is_some() {
-                let msg = producer
-                    .enqueue_delayed(&json_payloads[0], self.delay_seconds.unwrap())
-                    .await?;
-                return Ok(vec![msg.id]);
-            }
-
             // Batch or standard enqueue
             if let Some(delay) = self.delay_seconds {
                 let mut ids = Vec::with_capacity(self.messages.len());
