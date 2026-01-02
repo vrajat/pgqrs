@@ -27,10 +27,12 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         .await?;
 
     let payload = serde_json::json!({"task": "brains"});
-    let msg_id = pgqrs::enqueue(&payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&payload)
         .worker(&*producer)
         .execute(&store)
         .await?;
+    let msg_id = msg_ids[0];
     // We can't easily verify payload without fetching, so trust msg_id returned.
     // Or fetch it.
     let stored_msg = pgqrs::tables(&store).messages().get(msg_id).await?;

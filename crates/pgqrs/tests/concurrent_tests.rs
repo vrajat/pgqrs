@@ -42,11 +42,13 @@ async fn test_zombie_consumer_race_condition() {
 
     // 3. Enqueue Message
     let payload = json!({"task": "slow_process"});
-    let msg_id = pgqrs::enqueue(&payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&payload)
         .worker(&*producer)
         .execute(&store)
         .await
         .expect("Enqueue failed");
+    let msg_id = msg_ids[0];
     println!("Enqueued message ID: {}", msg_id);
 
     // 4. Consumer A dequeues with SHORT visibility (e.g., 1 second)
@@ -134,16 +136,21 @@ async fn test_zombie_consumer_batch_ops() {
         .unwrap();
 
     // Enqueue 2 messages
-    let msg1_id = pgqrs::enqueue(&json!(1))
+    let msg1_ids = pgqrs::enqueue()
+        .message(&json!(1))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
-    let msg2_id = pgqrs::enqueue(&json!(2))
+    let msg1_id = msg1_ids[0];
+
+    let msg2_ids = pgqrs::enqueue()
+        .message(&json!(2))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
+    let msg2_id = msg2_ids[0];
 
     // A dequeues both with short timeout
     let msgs_a = consumer_a.dequeue_many_with_delay(2, 1).await.unwrap();
@@ -218,11 +225,13 @@ async fn test_concurrent_visibility_extension() {
         .unwrap();
 
     // 3. Enqueue Message
-    let msg_id = pgqrs::enqueue(&json!({"foo": "bar"}))
+    let msg_ids = pgqrs::enqueue()
+        .message(&json!({"foo": "bar"}))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
+    let msg_id = msg_ids[0];
 
     // 4. Consumer A dequeues
     let msgs_a = consumer_a.dequeue().await.unwrap();

@@ -75,15 +75,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Enqueue messages using the new builder API
-    let email_id = pgqrs::enqueue(&email_payload)
+    let email_ids = pgqrs::enqueue()
+        .message(&email_payload)
         .worker(&*email_producer)
         .execute(&store)
         .await?;
+    let email_id = email_ids[0];
 
-    let task_id = pgqrs::enqueue(&task_payload)
+    let task_ids = pgqrs::enqueue()
+        .message(&task_payload)
         .worker(&*task_producer)
         .execute(&store)
         .await?;
+    let task_id = task_ids[0];
 
     println!("Sent email message with ID: {}", email_id);
     println!("Sent task message with ID: {}", task_id);
@@ -107,7 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
     ];
 
-    let batch_ids = pgqrs::enqueue_batch(&batch_messages)
+    let batch_ids = pgqrs::enqueue()
+        .messages(&batch_messages)
         .worker(&*email_producer)
         .execute(&store)
         .await?;
@@ -120,11 +125,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "due_date": "2024-02-15"
     });
 
-    let delayed_id = pgqrs::enqueue(&delayed_payload)
+    let delayed_ids = pgqrs::enqueue()
+        .message(&delayed_payload)
         .worker(&*task_producer)
         .delay(300) // 5 minutes delay
         .execute(&store)
         .await?;
+    let delayed_id = delayed_ids[0];
     println!("Sent delayed message with ID: {}", delayed_id);
 
     // Read messages

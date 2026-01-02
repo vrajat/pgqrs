@@ -173,6 +173,11 @@ pub trait Producer: Worker {
         delay_seconds: u32,
     ) -> crate::error::Result<QueueMessage>;
     async fn batch_enqueue(&self, payloads: &[Value]) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn batch_enqueue_delayed(
+        &self,
+        payloads: &[serde_json::Value],
+        delay_seconds: u32,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
 
     // Internal but public method in source
     async fn insert_message(

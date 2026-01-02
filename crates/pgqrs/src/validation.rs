@@ -203,8 +203,9 @@ impl PayloadValidator {
     pub fn validate_batch(&self, payloads: &[serde_json::Value]) -> Result<()> {
         // 1. First validate all payload structures (fast validation to prevent CPU abuse)
         for (index, payload) in payloads.iter().enumerate() {
-            self.validate_single_pass(payload, 0, true)
-                .map_err(|e| match e {
+            let res = self.validate_single_pass(payload, 0, true);
+            if payloads.len() > 1 {
+                res.map_err(|e| match e {
                     crate::error::Error::ValidationFailed { reason } => {
                         crate::error::Error::ValidationFailed {
                             reason: format!("Payload at index {}: {}", index, reason),
@@ -212,6 +213,9 @@ impl PayloadValidator {
                     }
                     other => other,
                 })?;
+            } else {
+                res?;
+            }
         }
 
         // 2. Then check rate limit capacity for entire batch (atomic consumption)
@@ -225,18 +229,23 @@ impl PayloadValidator {
 
         // 3. Finally do expensive size validation (only if structure valid and rate limit passed)
         for (index, payload) in payloads.iter().enumerate() {
-            self.validate_size(payload).map_err(|e| match e {
-                crate::error::Error::PayloadTooLarge {
-                    actual_bytes,
-                    max_bytes,
-                } => crate::error::Error::ValidationFailed {
-                    reason: format!(
-                        "Payload at index {} too large: {} bytes exceeds limit {}",
-                        index, actual_bytes, max_bytes
-                    ),
-                },
-                other => other,
-            })?;
+            let res = self.validate_size(payload);
+            if payloads.len() > 1 {
+                res.map_err(|e| match e {
+                    crate::error::Error::PayloadTooLarge {
+                        actual_bytes,
+                        max_bytes,
+                    } => crate::error::Error::ValidationFailed {
+                        reason: format!(
+                            "Payload at index {} too large: {} bytes exceeds limit {}",
+                            index, actual_bytes, max_bytes
+                        ),
+                    },
+                    other => other,
+                })?;
+            } else {
+                res?;
+            }
         }
 
         Ok(())

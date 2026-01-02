@@ -11,37 +11,43 @@
 //!
 //! ## Example
 //!
+//!
 //! ### Producer
 //! ```rust
-//! # use pgqrs::Producer;
-//! # use serde_json::Value;
-//! /// Enqueue a payload to the queue
-//! async fn enqueue_job(producer: &impl Producer, payload: Value) -> Result<i64, Box<dyn std::error::Error>> {
-//!     let message = producer.enqueue(&payload).await?;
-//!     Ok(message.id)
-//! }
+//! # use pgqrs::{enqueue, Config, Store};
+//! # use pgqrs::store::AnyStore;
+//! # use serde_json::json;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = Config::from_dsn("postgres://localhost/mydb");
+//! # let store = AnyStore::connect(&config).await?;
+//! // Enqueue a single message to a queue
+//! let ids = pgqrs::enqueue()
+//!     .message(&json!({"foo": "bar"}))
+//!     .to("my_queue")
+//!     .execute(&store)
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ### Consumer
 //! ```rust
-//! # use pgqrs::Consumer;
-//! # use std::time::Duration;
-//! /// Poll for jobs from the queue and print them as they arrive
-//! async fn poll_and_print_jobs(consumer: &impl Consumer) -> Result<(), Box<dyn std::error::Error>> {
-//!     loop {
-//!         let messages = consumer.dequeue().await?;
-//!         if messages.is_empty() {
-//!             // No job found, wait before polling again
-//!             tokio::time::sleep(Duration::from_secs(2)).await;
-//!         } else {
-//!             for message in messages {
-//!                 println!("Dequeued job: {}", message.payload);
-//!                 // Optionally archive or delete the message after processing
-//!                 consumer.delete(message.id).await?;
-//!             }
-//!         }
-//!     }
-//! }
+//! # use pgqrs::{dequeue, Config, Store};
+//! # use pgqrs::store::AnyStore;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = Config::from_dsn("postgres://localhost/mydb");
+//! # let store = AnyStore::connect(&config).await?;
+//! // Dequeue and handle a message with automatic lifecycle management
+//! pgqrs::dequeue()
+//!     .from("my_queue")
+//!     .handle(|msg| async move {
+//!         println!("Received: {:?}", msg);
+//!         Ok(())
+//!     })
+//!     .execute(&store)
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! For more details and advanced usage, see the [README](https://github.com/vrajat/pgqrs/blob/main/README.md) and [examples](https://github.com/vrajat/pgqrs/tree/main/examples).
@@ -58,8 +64,8 @@ pub mod builders;
 
 // Re-export Tier 1 high-level functions at crate root
 pub use builders::{
-    admin, connect, connect_with_config, consume, consume_batch, consumer, dequeue, enqueue,
-    enqueue_batch, produce, produce_batch, producer, tables, worker_handle,
+    admin, connect, connect_with_config, consumer, dequeue, enqueue, producer, tables,
+    worker_handle,
 };
 
 // Re-export worker types and modules at crate root for convenience

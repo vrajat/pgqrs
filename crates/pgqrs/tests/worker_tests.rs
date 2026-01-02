@@ -117,12 +117,14 @@ async fn test_worker_message_assignment() {
         .expect("Failed to create consumer");
 
     // Add some messages to the queue
-    pgqrs::enqueue(&json!({"task": "test1"}))
+    pgqrs::enqueue()
+        .message(&json!({"task": "test1"}))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
-    pgqrs::enqueue(&json!({"task": "test2"}))
+    pgqrs::enqueue()
+        .message(&json!({"task": "test2"}))
         .worker(&*producer)
         .execute(&store)
         .await
@@ -341,11 +343,13 @@ async fn test_worker_deletion_with_references() {
         .await
         .expect("Failed to create consumer");
 
-    let message_id = pgqrs::enqueue(&json!({"test": "data"}))
+    let message_ids = pgqrs::enqueue()
+        .message(&json!({"test": "data"}))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
+    let message_id = message_ids[0];
 
     assert!(pgqrs::dequeue()
         .worker(&*consumer)
@@ -447,11 +451,13 @@ async fn test_worker_deletion_with_archived_references() {
         .expect("Failed to create consumer");
 
     // Send and process a message (this should create archived reference)
-    let message_id = pgqrs::enqueue(&json!({"test": "archive_data"}))
+    let message_ids = pgqrs::enqueue()
+        .message(&json!({"test": "archive_data"}))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
+    let message_id = message_ids[0];
 
     // Read the message to assign it to worker
     let messages = pgqrs::dequeue()
