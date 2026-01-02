@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Store, WorkerTable, Workflow as WorkflowTrait,
-    WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Store, Worker as WorkerTrait, WorkerTable,
+    Workflow as WorkflowTrait, WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -120,6 +120,10 @@ impl Store for PostgresStore {
 
     fn workflow(&self, id: i64) -> Box<dyn WorkflowTrait> {
         Box::new(PostgresWorkflow::new(self.pool.clone(), id))
+    }
+
+    fn worker(&self, id: i64) -> Box<dyn WorkerTrait> {
+        Box::new(self::worker::WorkerHandle::new(self.pool.clone(), id))
     }
 
     async fn acquire_step(

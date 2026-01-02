@@ -64,6 +64,28 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
     ORDER BY heartbeat_at ASC
 "#;
 
+/// SQL to find existing worker by hostname and port
+const FIND_WORKER_BY_HOST_PORT: &str = r#"
+    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    FROM pgqrs_workers
+    WHERE hostname = $1 AND port = $2
+"#;
+
+/// SQL to reset a stopped worker back to ready state
+const RESET_WORKER_TO_READY: &str = r#"
+    UPDATE pgqrs_workers
+    SET status = 'ready', queue_id = $2, started_at = NOW(), heartbeat_at = NOW(), shutdown_at = NULL
+    WHERE id = $1 AND status = 'stopped'
+    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+"#;
+
+/// SQL to insert a new ephemeral worker (unique hostname with UUID, port -1)
+const INSERT_EPHEMERAL_WORKER: &str = r#"
+    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
+    VALUES ($1, -1, $2, 'ready')
+    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+"#;
+
 /// Workers table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table.
@@ -76,94 +98,6 @@ impl Workers {
     /// Create a new Workers instance.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
-    }
-
-    pub async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
-        let now = Utc::now();
-
-        let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
-            .bind(&data.hostname)
-            .bind(data.port)
-            .bind(data.queue_id)
-            .bind(now)
-            .bind(now)
-            .bind(WorkerStatus::Ready)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to insert worker: {}", e),
-            })?;
-
-        Ok(WorkerInfo {
-            id: worker_id,
-            hostname: data.hostname,
-            port: data.port,
-            queue_id: data.queue_id,
-            started_at: now,
-            heartbeat_at: now,
-            shutdown_at: None,
-            status: WorkerStatus::Ready,
-        })
-    }
-
-    pub async fn get(&self, id: i64) -> Result<WorkerInfo> {
-        let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get worker {}: {}", id, e),
-            })?;
-
-        Ok(worker)
-    }
-
-    pub async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list workers: {}", e),
-            })?;
-
-        Ok(workers)
-    }
-
-    pub async fn count(&self) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM pgqrs_workers";
-        let row = sqlx::query_scalar(query)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count workers: {}", e),
-            })?;
-        Ok(row)
-    }
-
-    pub async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query(DELETE_WORKER_BY_ID)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete worker {}: {}", id, e),
-            })?;
-
-        Ok(result.rows_affected())
-    }
-
-    pub async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
-            .bind(foreign_key_value)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to filter workers by queue ID {}: {}",
-                    foreign_key_value, e
-                ),
-            })?;
-        Ok(workers)
     }
 
     pub async fn count_for_fk<'a, 'b: 'a>(
@@ -221,8 +155,97 @@ impl Workers {
             })?;
         Ok(workers)
     }
+}
 
-    pub async fn count_for_queue(
+// Implement the public WorkerTable trait by delegating to inherent methods
+#[async_trait]
+impl crate::store::WorkerTable for Workers {
+    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+        let now = Utc::now();
+
+        let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
+            .bind(&data.hostname)
+            .bind(data.port)
+            .bind(data.queue_id)
+            .bind(now)
+            .bind(now)
+            .bind(WorkerStatus::Ready)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to insert worker: {}", e),
+            })?;
+
+        Ok(WorkerInfo {
+            id: worker_id,
+            hostname: data.hostname,
+            port: data.port,
+            queue_id: data.queue_id,
+            started_at: now,
+            heartbeat_at: now,
+            shutdown_at: None,
+            status: WorkerStatus::Ready,
+        })
+    }
+
+    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+        let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get worker {}: {}", id, e),
+            })?;
+
+        Ok(worker)
+    }
+
+    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to list workers: {}", e),
+            })?;
+
+        Ok(workers)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_workers";
+        let row = sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to count workers: {}", e),
+            })?;
+        Ok(row)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let result = sqlx::query(DELETE_WORKER_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to delete worker {}: {}", id, e),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
+            .bind(queue_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to filter workers by queue ID {}: {}", queue_id, e),
+            })?;
+        Ok(workers)
+    }
+
+    async fn count_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -248,7 +271,7 @@ impl Workers {
         Ok(count)
     }
 
-    pub async fn count_zombies_for_queue(
+    async fn count_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -276,7 +299,7 @@ impl Workers {
         Ok(count)
     }
 
-    pub async fn list_for_queue(
+    async fn list_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -296,7 +319,7 @@ impl Workers {
         Ok(workers)
     }
 
-    pub async fn list_zombies_for_queue(
+    async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -312,67 +335,103 @@ impl Workers {
                     queue_id, e
                 ),
             })?;
-
         Ok(workers)
     }
-}
 
-// Implement the public WorkerTable trait by delegating to inherent methods
-#[async_trait]
-impl crate::store::WorkerTable for Workers {
-    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
-        self.insert(data).await
-    }
-
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
-        self.get(id).await
-    }
-
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        self.list().await
-    }
-
-    async fn count(&self) -> Result<i64> {
-        self.count().await
-    }
-
-    async fn delete(&self, id: i64) -> Result<u64> {
-        self.delete(id).await
-    }
-
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
-        self.filter_by_fk(queue_id).await
-    }
-
-    async fn count_for_queue(
+    async fn register(
         &self,
-        queue_id: i64,
-        state: crate::types::WorkerStatus,
-    ) -> Result<i64> {
-        self.count_for_queue(queue_id, state).await
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> Result<WorkerInfo> {
+        // Try to find existing worker by hostname+port
+        let existing_worker: Option<WorkerInfo> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
+            .bind(hostname)
+            .bind(port)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to find worker: {}", e),
+            })?;
+
+        let worker_info = match existing_worker {
+            Some(worker) => {
+                match worker.status {
+                    WorkerStatus::Stopped => {
+                        // Reset stopped worker to ready
+                        sqlx::query_as::<_, WorkerInfo>(RESET_WORKER_TO_READY)
+                            .bind(worker.id)
+                            .bind(queue_id)
+                            .fetch_one(&self.pool)
+                            .await
+                            .map_err(|e| crate::error::Error::Connection {
+                                message: format!("Failed to reset worker: {}", e),
+                            })?
+                    }
+                    WorkerStatus::Ready => {
+                        return Err(crate::error::Error::ValidationFailed {
+                            reason: format!(
+                                "Worker {}:{} is already active. Cannot register duplicate.",
+                                hostname, port
+                            ),
+                        });
+                    }
+                    WorkerStatus::Suspended => {
+                        return Err(crate::error::Error::ValidationFailed {
+                            reason: format!(
+                                "Worker {}:{} is suspended. Use resume() to reactivate.",
+                                hostname, port
+                            ),
+                        });
+                    }
+                }
+            }
+            None => {
+                // Create new worker
+                let now = Utc::now();
+                // We use INSERT_WORKER constant defined at top of file, but adapt it to handle Option<queue_id>
+                let inserted_id: i64 = sqlx::query_scalar(INSERT_WORKER)
+                    .bind(hostname)
+                    .bind(port)
+                    .bind(queue_id)
+                    .bind(now)
+                    .bind(now)
+                    .bind(WorkerStatus::Ready)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| crate::error::Error::Connection {
+                        message: format!("Failed to create worker: {}", e),
+                    })?;
+
+                WorkerInfo {
+                    id: inserted_id,
+                    hostname: hostname.to_string(),
+                    port,
+                    queue_id,
+                    started_at: now,
+                    heartbeat_at: now,
+                    shutdown_at: None,
+                    status: WorkerStatus::Ready,
+                }
+            }
+        };
+        Ok(worker_info)
     }
 
-    async fn count_zombies_for_queue(
-        &self,
-        queue_id: i64,
-        older_than: chrono::Duration,
-    ) -> Result<i64> {
-        self.count_zombies_for_queue(queue_id, older_than).await
-    }
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+        // Generate a unique hostname using UUID
+        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
-    async fn list_for_queue(
-        &self,
-        queue_id: i64,
-        state: crate::types::WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
-        self.list_for_queue(queue_id, state).await
-    }
+        // Create new ephemeral worker (always creates new, never reuses)
+        let worker_info = sqlx::query_as::<_, WorkerInfo>(INSERT_EPHEMERAL_WORKER)
+            .bind(&hostname)
+            .bind(queue_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to create ephemeral worker: {}", e),
+            })?;
 
-    async fn list_zombies_for_queue(
-        &self,
-        queue_id: i64,
-        older_than: chrono::Duration,
-    ) -> Result<Vec<WorkerInfo>> {
-        self.list_zombies_for_queue(queue_id, older_than).await
+        Ok(worker_info)
     }
 }

@@ -191,6 +191,12 @@ impl Store for AnyStore {
         }
     }
 
+    fn worker(&self, id: i64) -> Box<dyn Worker> {
+        match self {
+            AnyStore::Postgres(s) => s.worker(id),
+        }
+    }
+
     async fn acquire_step(
         &self,
         workflow_id: i64,

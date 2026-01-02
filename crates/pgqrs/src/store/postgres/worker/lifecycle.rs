@@ -5,38 +5,8 @@
 
 use crate::error::Result;
 use crate::types::WorkerStatus;
-use crate::WorkerInfo;
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
-
-/// SQL to find existing worker by hostname and port
-const FIND_WORKER_BY_HOST_PORT: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-    FROM pgqrs_workers
-    WHERE hostname = $1 AND port = $2
-"#;
-
-/// SQL to reset a stopped worker back to ready state
-const RESET_WORKER_TO_READY: &str = r#"
-    UPDATE pgqrs_workers
-    SET status = 'ready', queue_id = $2, started_at = NOW(), heartbeat_at = NOW(), shutdown_at = NULL
-    WHERE id = $1 AND status = 'stopped'
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-"#;
-
-/// SQL to insert a new worker
-const INSERT_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
-    VALUES ($1, $2, $3, 'ready')
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-"#;
-
-/// SQL to insert a new ephemeral worker (unique hostname with UUID, port -1)
-const INSERT_EPHEMERAL_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
-    VALUES ($1, -1, $2, 'ready')
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
-"#;
 
 /// SQL for atomic state transition from Ready to Suspended
 const TRANSITION_READY_TO_SUSPENDED: &str = r#"
@@ -80,15 +50,6 @@ const UPDATE_HEARTBEAT: &str = r#"
 "#;
 
 /// Worker lifecycle manager providing atomic state transitions.
-///
-/// This struct encapsulates all worker state transition logic, ensuring
-/// that transitions are atomic and follow the correct state machine.
-///
-/// ## State Machine
-///
-/// ```text
-/// Ready <-> Suspended -> Stopped
-/// ```
 #[derive(Debug, Clone)]
 pub struct WorkerLifecycle {
     pool: PgPool,
@@ -101,115 +62,6 @@ impl WorkerLifecycle {
     /// * `pool` - Database connection pool
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
-    }
-
-    /// Register and create a new WorkerInfo instance for the specified queue.
-    ///
-    /// This method handles worker registration automatically:
-    /// - If a worker with the hostname+port exists and is Stopped → resets to Ready
-    /// - If no worker exists → creates a new one
-    /// - If worker exists but is Ready or Suspended → returns error
-    ///
-    /// # Arguments
-    /// * `queue_info` - Queue information including ID and name
-    /// * `hostname` - Hostname identifier for this worker
-    /// * `port` - Port identifier for this worker
-    ///
-    /// # Errors
-    /// - Returns error if worker exists and is in Ready state (already active)
-    /// - Returns error if worker exists and is in Suspended state (needs explicit resume)
-    pub async fn register(
-        &self,
-        queue_info: &crate::types::QueueInfo,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerInfo> {
-        // Try to find existing worker by hostname+port
-        let existing_worker: Option<WorkerInfo> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
-            .bind(hostname)
-            .bind(port)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to find worker: {}", e),
-            })?;
-
-        let worker_info = match existing_worker {
-            Some(worker) => {
-                match worker.status {
-                    WorkerStatus::Stopped => {
-                        // Reset stopped worker to ready
-                        sqlx::query_as::<_, WorkerInfo>(RESET_WORKER_TO_READY)
-                            .bind(worker.id)
-                            .bind(queue_info.id)
-                            .fetch_one(&self.pool)
-                            .await
-                            .map_err(|e| crate::error::Error::Connection {
-                                message: format!("Failed to reset worker: {}", e),
-                            })?
-                    }
-                    WorkerStatus::Ready => {
-                        return Err(crate::error::Error::ValidationFailed {
-                            reason: format!(
-                                "Worker {}:{} is already active. Cannot register duplicate.",
-                                hostname, port
-                            ),
-                        });
-                    }
-                    WorkerStatus::Suspended => {
-                        return Err(crate::error::Error::ValidationFailed {
-                            reason: format!(
-                                "Worker {}:{} is suspended. Use resume() to reactivate.",
-                                hostname, port
-                            ),
-                        });
-                    }
-                }
-            }
-            None => {
-                // Create new worker
-                sqlx::query_as::<_, WorkerInfo>(INSERT_WORKER)
-                    .bind(hostname)
-                    .bind(port)
-                    .bind(queue_info.id)
-                    .fetch_one(&self.pool)
-                    .await
-                    .map_err(|e| crate::error::Error::Connection {
-                        message: format!("Failed to create worker: {}", e),
-                    })?
-            }
-        };
-        Ok(worker_info)
-    }
-
-    /// Register an ephemeral worker (one-off, short-lived).
-    ///
-    /// Ephemeral workers use a hostname with format "__ephemeral__<UUID>" and port -1
-    /// to distinguish them from regular workers and avoid unique constraint violations.
-    ///
-    /// # Arguments
-    /// * `queue_info` - Queue information including ID and name
-    ///
-    /// # Returns
-    /// WorkerInfo with unique ephemeral hostname and port -1
-    pub async fn register_ephemeral(
-        &self,
-        queue_info: &crate::types::QueueInfo,
-    ) -> Result<WorkerInfo> {
-        // Generate a unique hostname using UUID
-        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
-
-        // Create new ephemeral worker (always creates new, never reuses)
-        let worker_info = sqlx::query_as::<_, WorkerInfo>(INSERT_EPHEMERAL_WORKER)
-            .bind(&hostname)
-            .bind(queue_info.id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to create ephemeral worker: {}", e),
-            })?;
-
-        Ok(worker_info)
     }
 
     /// Get the current status of a worker.

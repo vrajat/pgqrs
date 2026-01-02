@@ -1,5 +1,4 @@
 use crate::store::Store;
-use crate::worker::WorkerHandle;
 
 /// Create a handle for an existing worker
 ///
@@ -8,6 +7,6 @@ use crate::worker::WorkerHandle;
 pub async fn worker_handle<S: Store>(
     store: &S,
     worker_id: i64,
-) -> crate::error::Result<WorkerHandle> {
-    Ok(WorkerHandle::new(store.pool(), worker_id))
+) -> crate::error::Result<Box<dyn crate::Worker>> {
+    Ok(store.worker(worker_id))
 }

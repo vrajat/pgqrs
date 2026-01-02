@@ -26,16 +26,16 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::QueueTable;
+use crate::store::{QueueTable, WorkerTable};
 use crate::types::QueueMessage;
 
+use super::lifecycle::WorkerLifecycle;
 use crate::store::postgres::tables::pgqrs_archive::Archive;
 use crate::store::postgres::tables::pgqrs_messages::Messages;
 use crate::store::postgres::tables::pgqrs_queues::Queues;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
-use crate::worker::WorkerLifecycle;
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -766,14 +766,8 @@ impl crate::store::Admin for Admin {
             return Ok(worker_info.clone());
         }
 
-        use crate::types::NewWorker;
-        let new_worker = NewWorker {
-            hostname: hostname.clone(),
-            port,
-            queue_id: None,
-        };
-
-        let worker_info = self.workers.insert(new_worker).await?;
+        // Use WorkerTable::register (via Workers struct methods) to handle state machine
+        let worker_info = self.workers.register(None, &hostname, port).await?;
 
         tracing::debug!(
             "Registered Admin as worker {} (hostname: {}, port: {})",
