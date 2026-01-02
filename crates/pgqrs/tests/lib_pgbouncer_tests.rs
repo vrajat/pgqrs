@@ -55,7 +55,8 @@ async fn test_pgbouncer_happy_path() {
         "timestamp": "2023-01-01T00:00:00Z"
     });
 
-    pgqrs::enqueue(&test_message)
+    pgqrs::enqueue()
+        .message(&test_message)
         .worker(&*producer)
         .execute(&store)
         .await

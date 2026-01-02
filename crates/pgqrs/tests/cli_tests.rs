@@ -121,11 +121,13 @@ fn test_cli_create_send_dequeue_delete_queue() {
         .await
         .expect("Failed to create producer");
 
-        let msg_id = pgqrs::enqueue(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
+        let msg_ids = pgqrs::enqueue()
+            .message(&serde_json::from_str::<serde_json::Value>(payload).unwrap())
             .worker(&*producer)
             .execute(&store)
             .await
             .unwrap();
+        let msg_id = msg_ids[0];
 
         // Fetch the message to return full object (for tests)
         let messages = pgqrs::tables(&store)
@@ -220,11 +222,13 @@ fn test_cli_archive_functionality() {
         .await
         .expect("Failed to create producer");
 
-        pgqrs::enqueue(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
+        let ids = pgqrs::enqueue()
+            .message(&serde_json::from_str::<serde_json::Value>(message_payload).unwrap())
             .worker(&*producer)
             .execute(&store)
             .await
-            .unwrap()
+            .unwrap();
+        ids[0]
     });
 
     // Dequeue and archive using a Consumer

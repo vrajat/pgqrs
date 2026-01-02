@@ -39,12 +39,14 @@ async fn test_queue_metrics() {
     assert_eq!(metrics.archived_messages, 0);
 
     // Enqueue 2 messages
-    pgqrs::enqueue(&json!({"id": 1}))
+    pgqrs::enqueue()
+        .message(&json!({"id": 1}))
         .worker(&*producer)
         .execute(&store)
         .await
         .unwrap();
-    pgqrs::enqueue(&json!({"id": 2}))
+    pgqrs::enqueue()
+        .message(&json!({"id": 2}))
         .worker(&*producer)
         .execute(&store)
         .await
@@ -139,7 +141,8 @@ async fn test_system_stats() {
         .await
         .unwrap();
 
-    pgqrs::enqueue(&json!({"id": 1}))
+    pgqrs::enqueue()
+        .message(&json!({"id": 1}))
         .worker(&*producer)
         .execute(&store)
         .await
@@ -266,7 +269,8 @@ async fn test_worker_stats() {
     assert!(stats.average_messages_per_worker == 0.0);
 
     // Enqueue 1 message and dequeue (lock) it by consumer
-    pgqrs::enqueue(&json!({"id": 1}))
+    pgqrs::enqueue()
+        .message(&json!({"id": 1}))
         .worker(&*producer)
         .execute(&store)
         .await

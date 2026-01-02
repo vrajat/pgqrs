@@ -36,6 +36,12 @@ pub struct EnqueueBuilder<'a, T> {
     delay_seconds: Option<u32>,
 }
 
+impl Default for EnqueueBuilder<'static, ()> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EnqueueBuilder<'static, ()> {
     pub fn new() -> Self {
         Self {
@@ -47,10 +53,7 @@ impl EnqueueBuilder<'static, ()> {
     }
 
     /// Set the message payload to enqueue.
-    pub fn message<'a, T: Serialize + Send + Sync>(
-        self,
-        message: &'a T,
-    ) -> EnqueueBuilder<'a, T> {
+    pub fn message<'a, T: Serialize + Send + Sync>(self, message: &'a T) -> EnqueueBuilder<'a, T> {
         EnqueueBuilder {
             messages: vec![message],
             queue: self.queue,
@@ -104,29 +107,31 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         // Prepare JSON payloads
         let mut json_payloads = Vec::with_capacity(self.messages.len());
         for msg in &self.messages {
-            json_payloads.push(serde_json::to_value(msg).map_err(crate::error::Error::Serialization)?);
+            json_payloads
+                .push(serde_json::to_value(msg).map_err(crate::error::Error::Serialization)?);
         }
 
         if let Some(producer) = self.worker {
             // Managed worker mode
             if self.messages.len() == 1 && self.delay_seconds.is_some() {
-                 let msg = producer.enqueue_delayed(&json_payloads[0], self.delay_seconds.unwrap()).await?;
-                 return Ok(vec![msg.id]);
+                let msg = producer
+                    .enqueue_delayed(&json_payloads[0], self.delay_seconds.unwrap())
+                    .await?;
+                return Ok(vec![msg.id]);
             }
 
             // Batch or standard enqueue
             if let Some(delay) = self.delay_seconds {
                 let mut ids = Vec::with_capacity(self.messages.len());
                 for json in json_payloads {
-                   let msg = producer.enqueue_delayed(&json, delay).await?;
-                   ids.push(msg.id);
+                    let msg = producer.enqueue_delayed(&json, delay).await?;
+                    ids.push(msg.id);
                 }
                 Ok(ids)
             } else {
-                 let msgs = producer.batch_enqueue(&json_payloads).await?;
-                 Ok(msgs.iter().map(|m| m.id).collect())
+                let msgs = producer.batch_enqueue(&json_payloads).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
             }
-
         } else {
             // Ephemeral worker mode
             let queue = self
@@ -138,16 +143,16 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
 
             let producer = store.producer_ephemeral(&queue, store.config()).await?;
 
-             if let Some(delay) = self.delay_seconds {
+            if let Some(delay) = self.delay_seconds {
                 let mut ids = Vec::with_capacity(self.messages.len());
                 for json in json_payloads {
-                   let msg = producer.enqueue_delayed(&json, delay).await?;
-                   ids.push(msg.id);
+                    let msg = producer.enqueue_delayed(&json, delay).await?;
+                    ids.push(msg.id);
                 }
                 Ok(ids)
             } else {
-                 let msgs = producer.batch_enqueue(&json_payloads).await?;
-                 Ok(msgs.iter().map(|m| m.id).collect())
+                let msgs = producer.batch_enqueue(&json_payloads).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
             }
         }
     }

@@ -346,12 +346,15 @@ fn produce<'a>(
     let rust_store = store.inner.clone();
     let json_payload = py_to_json(payload.as_ref(py))?;
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        let msg_id = rust_pgqrs::produce(&json_payload)
+        let msg_ids = rust_pgqrs::enqueue()
+            .message(&json_payload)
             .to(&queue)
             .execute(&rust_store)
             .await
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        Ok(msg_id)
+
+        // Return single ID
+        Ok(msg_ids.first().copied().unwrap_or(0))
     })
 }
 
@@ -368,7 +371,8 @@ fn produce_batch<'a>(
         json_payloads.push(py_to_json(p.as_ref(py))?);
     }
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        let msg_ids = rust_pgqrs::produce_batch(&json_payloads)
+        let msg_ids = rust_pgqrs::enqueue()
+            .messages(&json_payloads)
             .to(&queue)
             .execute(&rust_store)
             .await

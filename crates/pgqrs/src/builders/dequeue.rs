@@ -71,15 +71,17 @@ impl<'a> DequeueBuilder<'a> {
 
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
-        let consumer_worker = if let Some(_) = self.worker {
-             None
+        let consumer_worker = if self.worker.is_some() {
+            None
         } else {
-             let queue = self
+            let queue = self
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                    reason:
+                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
+                            .to_string(),
                 })?;
-             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+            Some(store.consumer_ephemeral(&queue, store.config()).await?)
         };
 
         let consumer = if let Some(c) = self.worker {
@@ -98,15 +100,17 @@ impl<'a> DequeueBuilder<'a> {
 
     /// Fetch all messages (up to batch size)
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<QueueMessage>> {
-        let consumer_worker = if let Some(_) = self.worker {
-             None
+        let consumer_worker = if self.worker.is_some() {
+            None
         } else {
-             let queue = self
+            let queue = self
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                    reason:
+                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
+                            .to_string(),
                 })?;
-             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+            Some(store.consumer_ephemeral(&queue, store.config()).await?)
         };
 
         let consumer = if let Some(c) = self.worker {
@@ -116,7 +120,9 @@ impl<'a> DequeueBuilder<'a> {
         };
 
         if let Some(vt_offset) = self.vt_offset_seconds {
-            consumer.dequeue_many_with_delay(self.batch_size, vt_offset).await
+            consumer
+                .dequeue_many_with_delay(self.batch_size, vt_offset)
+                .await
         } else {
             consumer.dequeue_many(self.batch_size).await
         }
@@ -162,15 +168,18 @@ where
 {
     /// Execute the dequeue and handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
-        let consumer_worker = if let Some(_) = self.base.worker {
-             None
+        let consumer_worker = if self.base.worker.is_some() {
+            None
         } else {
-             let queue = self.base
+            let queue = self
+                .base
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                    reason:
+                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
+                            .to_string(),
                 })?;
-             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+            Some(store.consumer_ephemeral(&queue, store.config()).await?)
         };
 
         let consumer = if let Some(c) = self.base.worker {
@@ -183,7 +192,7 @@ where
         let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
             consumer.dequeue_many_with_delay(1, vt_offset).await?
         } else {
-           consumer.dequeue().await?
+            consumer.dequeue().await?
         };
 
         if let Some(msg) = msgs.into_iter().next() {
@@ -218,15 +227,18 @@ where
 {
     /// Execute the dequeue and batch handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
-        let consumer_worker = if let Some(_) = self.base.worker {
-             None
+        let consumer_worker = if self.base.worker.is_some() {
+            None
         } else {
-             let queue = self.base
+            let queue = self
+                .base
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                    reason:
+                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
+                            .to_string(),
                 })?;
-             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+            Some(store.consumer_ephemeral(&queue, store.config()).await?)
         };
 
         let consumer = if let Some(c) = self.base.worker {
@@ -237,13 +249,15 @@ where
 
         // Dequeue batch
         let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
-             consumer.dequeue_many_with_delay(self.base.batch_size, vt_offset).await?
+            consumer
+                .dequeue_many_with_delay(self.base.batch_size, vt_offset)
+                .await?
         } else {
-             consumer.dequeue_many(self.base.batch_size).await?
+            consumer.dequeue_many(self.base.batch_size).await?
         };
 
         if !msgs.is_empty() {
-             let msg_ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+            let msg_ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
 
             // Run handler
             match (self.handler)(msgs).await {

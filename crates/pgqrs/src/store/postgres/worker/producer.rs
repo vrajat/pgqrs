@@ -160,9 +160,7 @@ impl crate::store::Worker for Producer {
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers
-            .is_healthy(self.worker_info.id, max_age)
-            .await
+        self.workers.is_healthy(self.worker_info.id, max_age).await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {

@@ -196,9 +196,7 @@ impl crate::store::Worker for Consumer {
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers
-            .is_healthy(self.worker_info.id, max_age)
-            .await
+        self.workers.is_healthy(self.worker_info.id, max_age).await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
@@ -218,15 +216,14 @@ impl crate::store::Worker for Consumer {
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
         // Check if consumer has pending messages
-        let pending_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1"
-        )
-        .bind(self.worker_info.id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: e.to_string(),
-        })?;
+        let pending_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1")
+                .bind(self.worker_info.id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: e.to_string(),
+                })?;
 
         if pending_count > 0 {
             return Err(crate::error::Error::WorkerHasPendingMessages {

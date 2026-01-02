@@ -436,5 +436,8 @@ async fn test_dequeue_with_handlers() {
 
     // Cleanup
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }

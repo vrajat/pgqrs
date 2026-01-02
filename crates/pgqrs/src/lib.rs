@@ -64,8 +64,8 @@ pub mod builders;
 
 // Re-export Tier 1 high-level functions at crate root
 pub use builders::{
-    admin, connect, connect_with_config, consumer, dequeue, enqueue,
-    producer, tables, worker_handle,
+    admin, connect, connect_with_config, consumer, dequeue, enqueue, producer, tables,
+    worker_handle,
 };
 
 // Re-export worker types and modules at crate root for convenience

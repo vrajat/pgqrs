@@ -32,12 +32,14 @@ async fn test_enqueue_with_delay_duration() {
     let payload = json!({"test": "with_delay"});
     let before = chrono::Utc::now();
 
-    let msg_id = pgqrs::enqueue(&payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&payload)
         .worker(&*producer)
         .with_delay(Duration::from_secs(300)) // 5 minutes
         .execute(&store)
         .await
         .expect("Failed to enqueue with Duration delay");
+    let msg_id = msg_ids[0];
 
     assert!(msg_id > 0);
 
@@ -50,9 +52,9 @@ async fn test_enqueue_with_delay_duration() {
 
     assert_eq!(message.payload, payload);
 
-    // VT should be approximately 300 seconds in the future
+    // VT should be approximately 300 seconds (5 mins) in the future
     let vt_diff = (message.vt - before).num_seconds();
-    assert!(vt_diff >= 295 && vt_diff <= 305, "VT diff was {}", vt_diff);
+    assert!((295..=305).contains(&vt_diff), "VT diff was {}", vt_diff);
 
     // Cleanup
     producer.suspend().await.unwrap();
@@ -85,7 +87,8 @@ async fn test_dequeue_with_vt_duration() {
         .expect("Failed to create consumer");
 
     // Enqueue a message
-    pgqrs::enqueue(&json!({"test": "vt"}))
+    pgqrs::enqueue()
+        .message(&json!({"test": "vt"}))
         .worker(&*producer)
         .execute(&store)
         .await
@@ -104,7 +107,7 @@ async fn test_dequeue_with_vt_duration() {
 
     // VT should be approximately 600 seconds in the future
     let vt_diff = (messages[0].vt - before).num_seconds();
-    assert!(vt_diff >= 595 && vt_diff <= 605, "VT diff was {}", vt_diff);
+    assert!((595..=605).contains(&vt_diff), "VT diff was {}", vt_diff);
 
     // Cleanup
     producer.suspend().await.unwrap();
@@ -143,7 +146,8 @@ async fn test_dequeue_limit() {
 
     // Enqueue 10 messages
     for i in 0..10 {
-        pgqrs::enqueue(&json!({"index": i}))
+        pgqrs::enqueue()
+            .message(&json!({"index": i}))
             .worker(&*producer)
             .execute(&store)
             .await
@@ -197,12 +201,14 @@ async fn test_builder_method_chaining() {
 
     // Test chaining multiple ergonomic methods
     let payload = json!({"test": "chaining"});
-    let msg_id = pgqrs::enqueue(&payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&payload)
         .worker(&*producer)
         .with_delay(Duration::from_secs(10))
         .execute(&store)
         .await
         .expect("Failed to enqueue");
+    let msg_id = msg_ids[0];
 
     assert!(msg_id > 0);
 
