@@ -291,15 +291,23 @@ async fn test_archive_batch_messages() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_archive_batch_messages", 3002, TEST_QUEUE_BATCH_ARCHIVE)
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_archive_batch_messages",
+        3002,
+        TEST_QUEUE_BATCH_ARCHIVE,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_archive_batch_messages", 3102, TEST_QUEUE_BATCH_ARCHIVE)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer(
+        "test_archive_batch_messages",
+        3102,
+        TEST_QUEUE_BATCH_ARCHIVE,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create consumer");
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -424,10 +432,14 @@ async fn test_archive_nonexistent_message() {
         .await
         .expect("Failed to create queue");
 
-    let consumer = pgqrs::consumer("test_archive_nonexistent_message", 3103, TEST_QUEUE_NONEXISTENT)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer(
+        "test_archive_nonexistent_message",
+        3103,
+        TEST_QUEUE_NONEXISTENT,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create consumer");
 
     // Try to archive a message that doesn't exist
     let fake_msg_id = 999999;
@@ -953,10 +965,14 @@ async fn test_validation_payload_size_limit() {
         .await
         .unwrap();
 
-    let producer = pgqrs::producer("test_validation_payload_size_limit", 3007, "test_validation_size")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_payload_size_limit",
+        3007,
+        "test_validation_size",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Small payload should work
     let small_payload = json!({"key": "value"});
@@ -1011,10 +1027,14 @@ async fn test_validation_forbidden_keys() {
         .create_queue("test_validation_forbidden")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_validation_forbidden_keys", 3008, "test_validation_forbidden")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_forbidden_keys",
+        3008,
+        "test_validation_forbidden",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Valid payload should work
     let valid_payload = json!({"data": "value"});
@@ -1066,10 +1086,14 @@ async fn test_validation_required_keys() {
         .create_queue("test_validation_required")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_validation_required_keys", 3009, "test_validation_required")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_required_keys",
+        3009,
+        "test_validation_required",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Payload with required key should work
     let valid_payload = json!({"user_id": "123", "data": "value"});
@@ -1121,10 +1145,14 @@ async fn test_validation_object_depth() {
         .create_queue("test_validation_depth")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_validation_object_depth", 3010, "test_validation_depth")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_object_depth",
+        3010,
+        "test_validation_depth",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
@@ -1177,10 +1205,14 @@ async fn test_batch_validation_atomic_failure() {
         .create_queue("test_validation_batch")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_batch_validation_atomic_failure", 3011, "test_validation_batch")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_batch_validation_atomic_failure",
+        3011,
+        "test_validation_batch",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Mix of valid and invalid payloads
     let payloads = vec![
@@ -1236,10 +1268,14 @@ async fn test_validation_string_length() {
         .create_queue("test_validation_strings")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_validation_string_length", 3012, "test_validation_strings")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_string_length",
+        3012,
+        "test_validation_strings",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Short string should work
     let valid_payload = json!({"key": "short_value"});
@@ -1294,10 +1330,14 @@ async fn test_validation_accessor_methods() {
         .create_queue("test_validation_accessors")
         .await
         .unwrap();
-    let producer = pgqrs::producer("test_validation_accessor_methods", 3013, "test_validation_accessors")
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_validation_accessor_methods",
+        3013,
+        "test_validation_accessors",
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
     // Test validation config accessor
     let validation_config = producer.validation_config();
@@ -1471,10 +1511,14 @@ async fn test_consumer_shutdown_no_messages() {
         .await
         .expect("Failed to create queue");
 
-    let consumer = pgqrs::consumer("test_consumer_shutdown_no_messages", 3108, TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer(
+        "test_consumer_shutdown_no_messages",
+        3108,
+        TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create consumer");
 
     // First suspend the consumer (new lifecycle requirement)
     // Consumer can suspend when it has no pending messages
@@ -1518,15 +1562,23 @@ async fn test_consumer_shutdown_with_held_messages() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_consumer_shutdown_with_held_messages", 3016, TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_consumer_shutdown_with_held_messages",
+        3016,
+        TEST_QUEUE_CONSUMER_SHUTDOWN_HELD,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_consumer_shutdown_with_held_messages", 3109, TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer(
+        "test_consumer_shutdown_with_held_messages",
+        3109,
+        TEST_QUEUE_CONSUMER_SHUTDOWN_HELD,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create consumer");
 
     // Send multiple messages
     let msg1_ids = pgqrs::enqueue()
@@ -1640,15 +1692,23 @@ async fn test_consumer_shutdown_all_messages_released() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_consumer_shutdown_all_messages_released", 3017, TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
+    let producer = pgqrs::producer(
+        "test_consumer_shutdown_all_messages_released",
+        3017,
+        TEST_QUEUE_CONSUMER_SHUTDOWN_ALL,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_consumer_shutdown_all_messages_released", 3110, TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer(
+        "test_consumer_shutdown_all_messages_released",
+        3110,
+        TEST_QUEUE_CONSUMER_SHUTDOWN_ALL,
+    )
+    .create(&store)
+    .await
+    .expect("Failed to create consumer");
 
     // Send and dequeue messages
     let msg1_ids = pgqrs::enqueue()
