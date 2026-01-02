@@ -5,8 +5,9 @@ mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(Some("pgqrs_builder_ergonomics_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_builder_ergonomics_test")
-        .expect("Failed to create config with builder_ergonomics_test schema");
+    let config =
+        pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_builder_ergonomics_test")
+            .expect("Failed to create config with builder_ergonomics_test schema");
     pgqrs::store::AnyStore::connect(&config)
         .await
         .expect("Failed to create store")
@@ -57,7 +58,10 @@ async fn test_enqueue_with_delay_duration() {
     producer.suspend().await.unwrap();
     producer.shutdown().await.unwrap();
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -104,7 +108,10 @@ async fn test_dequeue_with_vt_duration() {
 
     // Cleanup
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -148,7 +155,10 @@ async fn test_dequeue_limit() {
 
     // Cleanup
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -199,5 +209,8 @@ async fn test_builder_method_chaining() {
 
     // Cleanup
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
 }

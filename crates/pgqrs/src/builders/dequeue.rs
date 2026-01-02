@@ -85,7 +85,6 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
-
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
         if let Some(consumer) = self.worker {

@@ -59,7 +59,6 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         self
     }
 
-
     /// Execute with ephemeral worker (requires .to())
     pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<i64> {
         if let Some(producer) = self.worker {
