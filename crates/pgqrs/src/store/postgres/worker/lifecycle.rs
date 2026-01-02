@@ -5,7 +5,6 @@
 
 use crate::error::Result;
 use crate::types::WorkerStatus;
-// use crate::WorkerInfo; - Removed unused import
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
 

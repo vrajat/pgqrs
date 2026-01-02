@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Store, Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait,
-    WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Store, Worker as WorkerTrait, WorkerTable,
+    Workflow as WorkflowTrait, WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;

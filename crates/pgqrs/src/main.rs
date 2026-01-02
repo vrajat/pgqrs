@@ -22,7 +22,6 @@ use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
 use pgqrs::types::{QueueInfo, QueueMessage};
 
-
 use std::fs::File;
 use std::process;
 
