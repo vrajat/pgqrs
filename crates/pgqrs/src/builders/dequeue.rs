@@ -56,6 +56,36 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
+    /// Set visibility timeout using Duration (more ergonomic than seconds).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::time::Duration;
+    /// pgqrs::dequeue()
+    ///     .from("my_queue")
+    ///     .with_vt(Duration::from_secs(300))
+    ///     .fetch_all(&store).await?;
+    /// ```
+    pub fn with_vt(mut self, duration: std::time::Duration) -> Self {
+        // Use saturating conversion to handle edge cases (durations > u32::MAX seconds)
+        self.vt_offset_seconds = Some(duration.as_secs().min(u32::MAX as u64) as u32);
+        self
+    }
+
+    /// Set batch size (alias for `batch` with clearer naming).
+    ///
+    /// # Example
+    /// ```ignore
+    /// pgqrs::dequeue()
+    ///     .from("my_queue")
+    ///     .limit(10)
+    ///     .fetch_all(&store).await?;
+    /// ```
+    pub fn limit(mut self, count: usize) -> Self {
+        self.batch_size = count;
+        self
+    }
+
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
         if let Some(consumer) = self.worker {

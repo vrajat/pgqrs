@@ -44,6 +44,22 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         self
     }
 
+    /// Set delay using Duration (more ergonomic than seconds).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::time::Duration;
+    /// pgqrs::enqueue(&payload)
+    ///     .to("my_queue")
+    ///     .with_delay(Duration::from_secs(300))
+    ///     .execute(&store).await?;
+    /// ```
+    pub fn with_delay(mut self, duration: std::time::Duration) -> Self {
+        // Use saturating conversion to handle edge cases (durations > u32::MAX seconds)
+        self.delay_seconds = Some(duration.as_secs().min(u32::MAX as u64) as u32);
+        self
+    }
+
     /// Execute with ephemeral worker (requires .to())
     pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<i64> {
         if let Some(producer) = self.worker {
