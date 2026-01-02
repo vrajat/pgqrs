@@ -3,6 +3,7 @@
 use crate::error::Result;
 use crate::store::Store;
 use crate::types::QueueMessage;
+use std::future::Future;
 
 /// Builder for dequeue operations with advanced options.
 ///
@@ -57,30 +58,12 @@ impl<'a> DequeueBuilder<'a> {
     }
 
     /// Set visibility timeout using Duration (more ergonomic than seconds).
-    ///
-    /// # Example
-    /// ```ignore
-    /// use std::time::Duration;
-    /// pgqrs::dequeue()
-    ///     .from("my_queue")
-    ///     .with_vt(Duration::from_secs(300))
-    ///     .fetch_all(&store).await?;
-    /// ```
     pub fn with_vt(mut self, duration: std::time::Duration) -> Self {
-        // Use saturating conversion to handle edge cases (durations > u32::MAX seconds)
         self.vt_offset_seconds = Some(duration.as_secs().min(u32::MAX as u64) as u32);
         self
     }
 
     /// Set batch size (alias for `batch` with clearer naming).
-    ///
-    /// # Example
-    /// ```ignore
-    /// pgqrs::dequeue()
-    ///     .from("my_queue")
-    ///     .limit(10)
-    ///     .fetch_all(&store).await?;
-    /// ```
     pub fn limit(mut self, count: usize) -> Self {
         self.batch_size = count;
         self
@@ -88,64 +71,195 @@ impl<'a> DequeueBuilder<'a> {
 
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
-        if let Some(consumer) = self.worker {
-            // Managed worker mode
-            let msgs = if let Some(vt_offset) = self.vt_offset_seconds {
-                consumer.dequeue_many_with_delay(1, vt_offset).await?
-            } else {
-                consumer.dequeue().await?
-            };
-            Ok(msgs.into_iter().next())
+        let consumer_worker = if let Some(_) = self.worker {
+             None
         } else {
-            // Ephemeral worker mode
-            let queue = self
+             let queue = self
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason:
-                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
-                            .to_string(),
+                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
                 })?;
+             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+        };
 
-            let consumer = store.consumer_ephemeral(&queue, store.config()).await?;
-            let msgs = if let Some(vt_offset) = self.vt_offset_seconds {
-                consumer.dequeue_many_with_delay(1, vt_offset).await?
-            } else {
-                consumer.dequeue().await?
-            };
-            Ok(msgs.into_iter().next())
-        }
+        let consumer = if let Some(c) = self.worker {
+            c
+        } else {
+            consumer_worker.as_ref().unwrap().as_ref()
+        };
+
+        let msgs = if let Some(vt_offset) = self.vt_offset_seconds {
+            consumer.dequeue_many_with_delay(1, vt_offset).await?
+        } else {
+            consumer.dequeue().await?
+        };
+        Ok(msgs.into_iter().next())
     }
 
     /// Fetch all messages (up to batch size)
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<QueueMessage>> {
-        if let Some(consumer) = self.worker {
-            // Managed worker mode
-            if let Some(vt_offset) = self.vt_offset_seconds {
-                consumer
-                    .dequeue_many_with_delay(self.batch_size, vt_offset)
-                    .await
-            } else {
-                consumer.dequeue_many(self.batch_size).await
-            }
+        let consumer_worker = if let Some(_) = self.worker {
+             None
         } else {
-            // Ephemeral worker mode
-            let queue = self
+             let queue = self
                 .queue
                 .ok_or_else(|| crate::error::Error::ValidationFailed {
-                    reason:
-                        "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)"
-                            .to_string(),
+                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
                 })?;
+             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+        };
 
-            let consumer = store.consumer_ephemeral(&queue, store.config()).await?;
-            if let Some(vt_offset) = self.vt_offset_seconds {
-                consumer
-                    .dequeue_many_with_delay(self.batch_size, vt_offset)
-                    .await
-            } else {
-                consumer.dequeue_many(self.batch_size).await
+        let consumer = if let Some(c) = self.worker {
+            c
+        } else {
+            consumer_worker.as_ref().unwrap().as_ref()
+        };
+
+        if let Some(vt_offset) = self.vt_offset_seconds {
+            consumer.dequeue_many_with_delay(self.batch_size, vt_offset).await
+        } else {
+            consumer.dequeue_many(self.batch_size).await
+        }
+    }
+
+    /// Set handler for single-message processing.
+    /// Returns a DequeueHandlerBuilder for execution.
+    pub fn handle<F, Fut>(self, handler: F) -> DequeueHandlerBuilder<'a, F>
+    where
+        F: FnOnce(QueueMessage) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        DequeueHandlerBuilder {
+            base: self,
+            handler,
+        }
+    }
+
+    /// Set handler for batch-message processing.
+    /// Returns a DequeueBatchHandlerBuilder for execution.
+    pub fn handle_batch<F, Fut>(self, handler: F) -> DequeueBatchHandlerBuilder<'a, F>
+    where
+        F: FnOnce(Vec<QueueMessage>) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        DequeueBatchHandlerBuilder {
+            base: self,
+            handler,
+        }
+    }
+}
+
+/// Builder for operations with a single-message handler.
+pub struct DequeueHandlerBuilder<'a, F> {
+    base: DequeueBuilder<'a>,
+    handler: F,
+}
+
+impl<'a, F, Fut> DequeueHandlerBuilder<'a, F>
+where
+    F: FnOnce(QueueMessage) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    /// Execute the dequeue and handle operation.
+    pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
+        let consumer_worker = if let Some(_) = self.base.worker {
+             None
+        } else {
+             let queue = self.base
+                .queue
+                .ok_or_else(|| crate::error::Error::ValidationFailed {
+                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                })?;
+             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+        };
+
+        let consumer = if let Some(c) = self.base.worker {
+            c
+        } else {
+            consumer_worker.as_ref().unwrap().as_ref()
+        };
+
+        // Dequeue one message (force 1 for single handler semantics)
+        let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
+            consumer.dequeue_many_with_delay(1, vt_offset).await?
+        } else {
+           consumer.dequeue().await?
+        };
+
+        if let Some(msg) = msgs.into_iter().next() {
+            // Call the handler
+            match (self.handler)(msg.clone()).await {
+                Ok(_) => {
+                    // Success - archive the message
+                    consumer.archive(msg.id).await?;
+                }
+                Err(e) => {
+                    // Error - release the message back to the queue
+                    consumer.release_messages(&[msg.id]).await?;
+                    return Err(e);
+                }
             }
         }
+
+        Ok(())
+    }
+}
+
+/// Builder for operations with a batch-message handler.
+pub struct DequeueBatchHandlerBuilder<'a, F> {
+    base: DequeueBuilder<'a>,
+    handler: F,
+}
+
+impl<'a, F, Fut> DequeueBatchHandlerBuilder<'a, F>
+where
+    F: FnOnce(Vec<QueueMessage>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    /// Execute the dequeue and batch handle operation.
+    pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
+        let consumer_worker = if let Some(_) = self.base.worker {
+             None
+        } else {
+             let queue = self.base
+                .queue
+                .ok_or_else(|| crate::error::Error::ValidationFailed {
+                    reason: "Queue name is required. Use .from(\"queue-name\") or .worker(&consumer)".to_string(),
+                })?;
+             Some(store.consumer_ephemeral(&queue, store.config()).await?)
+        };
+
+        let consumer = if let Some(c) = self.base.worker {
+            c
+        } else {
+            consumer_worker.as_ref().unwrap().as_ref()
+        };
+
+        // Dequeue batch
+        let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
+             consumer.dequeue_many_with_delay(self.base.batch_size, vt_offset).await?
+        } else {
+             consumer.dequeue_many(self.base.batch_size).await?
+        };
+
+        if !msgs.is_empty() {
+             let msg_ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+
+            // Run handler
+            match (self.handler)(msgs).await {
+                Ok(_) => {
+                    // Success - archive all messages
+                    consumer.archive_many(msg_ids).await?;
+                }
+                Err(e) => {
+                    // Error - release all messages
+                    consumer.release_messages(&msg_ids).await?;
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

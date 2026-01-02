@@ -31,8 +31,8 @@
 //! # }
 //! ```
 
-use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
+use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::postgres::tables::Messages;
 use crate::store::WorkerTable;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
@@ -120,8 +120,8 @@ pub struct Consumer {
     _config: crate::config::Config,
     /// Worker information for this consumer
     worker_info: crate::types::WorkerInfo,
-    /// Worker lifecycle manager
-    lifecycle: WorkerLifecycle,
+    /// Worker lifecycle manager (Workers repository handles this now)
+    workers: Workers,
 }
 
 impl Consumer {
@@ -137,7 +137,10 @@ impl Consumer {
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
-        let lifecycle = WorkerLifecycle::new(pool.clone());
+        // Helper to avoid variable name conflict or just reuse
+        // workers variable is created above, we can just clone it or use it.
+        // But above 'workers' is used for register.
+
         tracing::debug!(
             "Registered consumer worker {} ({}:{}) for queue '{}'",
             worker_info.id,
@@ -151,7 +154,7 @@ impl Consumer {
             queue_info: queue_info.clone(),
             worker_info,
             _config: config.clone(),
-            lifecycle,
+            workers,
         })
     }
 
@@ -166,7 +169,6 @@ impl Consumer {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
         let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
 
-        let lifecycle = WorkerLifecycle::new(pool.clone());
         tracing::debug!(
             "Registered ephemeral consumer worker {} for queue '{}'",
             worker_info.id,
@@ -178,7 +180,7 @@ impl Consumer {
             queue_info: queue_info.clone(),
             worker_info,
             _config: config.clone(),
-            lifecycle,
+            workers,
         })
     }
 }
@@ -190,36 +192,41 @@ impl crate::store::Worker for Consumer {
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.lifecycle.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_info.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle
+        self.workers
             .is_healthy(self.worker_info.id, max_age)
             .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.lifecycle.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_info.id).await
     }
 
     /// Suspend this consumer (transition from Ready to Suspended).
     async fn suspend(&self) -> Result<()> {
-        self.lifecycle.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_info.id).await
     }
 
     /// Resume this consumer (transition from Suspended to Ready).
     async fn resume(&self) -> Result<()> {
-        self.lifecycle.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_info.id).await
     }
 
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
         // Check if consumer has pending messages
-        let pending_count = self
-            .lifecycle
-            .count_pending_messages(self.worker_info.id)
-            .await?;
+        let pending_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1"
+        )
+        .bind(self.worker_info.id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::Connection {
+            message: e.to_string(),
+        })?;
 
         if pending_count > 0 {
             return Err(crate::error::Error::WorkerHasPendingMessages {
@@ -228,7 +235,7 @@ impl crate::store::Worker for Consumer {
             });
         }
 
-        self.lifecycle.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_info.id).await
     }
 }
 
@@ -357,14 +364,14 @@ impl Drop for Consumer {
         // Check if this is an ephemeral worker by hostname prefix
         if self.worker_info.hostname.starts_with("__ephemeral__") {
             // Spawn a task to properly shutdown the worker
-            let lifecycle = self.lifecycle.clone();
+            let workers = self.workers.clone();
             let worker_id = self.worker_info.id;
 
             // Best-effort shutdown - ignore errors since we're in Drop
             tokio::task::spawn(async move {
                 // Suspend then shutdown the worker
-                let _ = lifecycle.suspend(worker_id).await;
-                let _ = lifecycle.shutdown(worker_id).await;
+                let _ = workers.suspend(worker_id).await;
+                let _ = workers.shutdown(worker_id).await;
             });
         }
     }

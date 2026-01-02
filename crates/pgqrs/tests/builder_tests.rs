@@ -29,13 +29,16 @@ async fn test_enqueue_all_options() {
 
     // Test enqueue with all options set
     let payload = json!({"test": "all_options"});
-    let msg_id = pgqrs::enqueue(&payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&payload)
         .worker(&*producer)
         .delay(5) // 5 second delay
         .execute(&store)
         .await
         .expect("Failed to enqueue with all options");
 
+    assert_eq!(msg_ids.len(), 1);
+    let msg_id = msg_ids[0];
     assert!(msg_id > 0);
 
     // Verify the message exists
@@ -75,35 +78,41 @@ async fn test_enqueue_edge_cases() {
 
     // Test with empty object payload
     let empty_payload = json!({});
-    let msg_id = pgqrs::enqueue(&empty_payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&empty_payload)
         .worker(&*producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue empty payload");
 
-    assert!(msg_id > 0);
+    assert_eq!(msg_ids.len(), 1);
+    assert!(msg_ids[0] > 0);
 
     // Test with max delay (large number)
     let max_delay_payload = json!({"delayed": true});
-    let msg_id = pgqrs::enqueue(&max_delay_payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&max_delay_payload)
         .worker(&*producer)
         .delay(3600) // 1 hour delay
         .execute(&store)
         .await
         .expect("Failed to enqueue with max delay");
 
-    assert!(msg_id > 0);
+    assert_eq!(msg_ids.len(), 1);
+    assert!(msg_ids[0] > 0);
 
     // Test with zero delay (should be immediate)
     let zero_delay_payload = json!({"immediate": true});
-    let msg_id = pgqrs::enqueue(&zero_delay_payload)
+    let msg_ids = pgqrs::enqueue()
+        .message(&zero_delay_payload)
         .worker(&*producer)
         .delay(0)
         .execute(&store)
         .await
         .expect("Failed to enqueue with zero delay");
 
-    assert!(msg_id > 0);
+    assert_eq!(msg_ids.len(), 1);
+    assert!(msg_ids[0] > 0);
 
     // Cleanup
     producer.suspend().await.unwrap();
@@ -137,7 +146,8 @@ async fn test_dequeue_builder_combinations() {
 
     // Enqueue multiple messages
     for i in 0..10 {
-        pgqrs::enqueue(&json!({"index": i}))
+        pgqrs::enqueue()
+            .message(&json!({"index": i}))
             .worker(&*producer)
             .execute(&store)
             .await
@@ -217,7 +227,9 @@ async fn test_enqueue_batch_builder() {
         json!({"batch": 2}),
     ];
 
-    let msg_ids = pgqrs::enqueue_batch(&payloads)
+    // UPDATED: Use .messages() instead of removed enqueue_batch function
+    let msg_ids = pgqrs::enqueue()
+        .messages(&payloads)
         .worker(&*producer)
         .execute(&store)
         .await
@@ -230,7 +242,8 @@ async fn test_enqueue_batch_builder() {
 
     // Test empty batch
     let empty_batch: Vec<serde_json::Value> = vec![];
-    let msg_ids = pgqrs::enqueue_batch(&empty_batch)
+    let msg_ids = pgqrs::enqueue()
+        .messages(&empty_batch)
         .worker(&*producer)
         .execute(&store)
         .await
@@ -376,4 +389,52 @@ async fn test_tables_builder() {
         .await
         .expect("Failed to count workflows");
     assert!(workflow_count >= 0);
+}
+
+#[tokio::test]
+async fn test_dequeue_with_handlers() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_handlers";
+
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+
+    // Add 2 messages
+    let payloads = vec![json!({"h": 1}), json!({"h": 2})];
+    pgqrs::enqueue()
+        .messages(&payloads)
+        .to(queue_name)
+        .execute(&store)
+        .await
+        .expect("Failed to enqueue messages");
+
+    // Test single handler (managed via ephemeral worker logic in handle())
+    pgqrs::dequeue()
+        .from(queue_name)
+        .handle(|msg| async move {
+            assert_eq!(msg.payload["h"], 1);
+            Ok(())
+        })
+        .execute(&store)
+        .await
+        .expect("Failed to handle single message");
+
+    // Test batch handler
+    pgqrs::dequeue()
+        .from(queue_name)
+        .batch(10) // should get remaining 1
+        .handle_batch(|msgs| async move {
+            assert_eq!(msgs.len(), 1);
+            assert_eq!(msgs[0].payload["h"], 2);
+            Ok(())
+        })
+        .execute(&store)
+        .await
+        .expect("Failed to handle batch");
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store).delete_queue(&queue_info).await.unwrap();
 }

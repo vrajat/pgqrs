@@ -10,7 +10,6 @@
 //! - [`Admin`] provides administrative functions for managing queues and workers
 //! - [`Producer`] handles message production (enqueueing)
 //! - [`Consumer`] handles message consumption (dequeueing)
-//! - [`lifecycle`] module provides atomic state transition functions
 //!
 //! ## Worker Lifecycle
 //!
@@ -32,8 +31,7 @@
 //!
 //! ## How
 //!
-//! Implement the [`Worker`] trait for your worker types. Use the [`lifecycle`] module
-//! functions for state transitions.
+//! Implement the [`Worker`] trait for your worker types.
 //!
 //! ### Example: Using WorkerHandle for generic worker operations
 //!
@@ -64,14 +62,13 @@
 
 pub mod admin;
 pub mod consumer;
-mod lifecycle;
 pub mod producer;
 
 pub use admin::Admin;
 pub use consumer::Consumer;
-pub use lifecycle::WorkerLifecycle;
 pub use producer::Producer;
 
+use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::Worker;
 
 use crate::error::Result;
@@ -103,7 +100,7 @@ use sqlx::PgPool;
 #[derive(Debug, Clone)]
 pub struct WorkerHandle {
     worker_id: i64,
-    lifecycle: WorkerLifecycle,
+    workers: Workers,
 }
 
 impl WorkerHandle {
@@ -118,7 +115,7 @@ impl WorkerHandle {
     pub fn new(pool: PgPool, worker_id: i64) -> Self {
         Self {
             worker_id,
-            lifecycle: WorkerLifecycle::new(pool),
+            workers: Workers::new(pool),
         }
     }
 }
@@ -130,26 +127,26 @@ impl Worker for WorkerHandle {
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.lifecycle.get_status(self.worker_id).await
+        self.workers.get_status(self.worker_id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.lifecycle.heartbeat(self.worker_id).await
+        self.workers.heartbeat(self.worker_id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle.is_healthy(self.worker_id, max_age).await
+        self.workers.is_healthy(self.worker_id, max_age).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.lifecycle.suspend(self.worker_id).await
+        self.workers.suspend(self.worker_id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.lifecycle.resume(self.worker_id).await
+        self.workers.resume(self.worker_id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.lifecycle.shutdown(self.worker_id).await
+        self.workers.shutdown(self.worker_id).await
     }
 }

@@ -29,8 +29,8 @@
 //! # }
 //! ```
 
-use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
+use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::postgres::tables::Messages;
 use crate::store::WorkerTable;
 use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
@@ -75,8 +75,8 @@ pub struct Producer {
     validator: PayloadValidator,
     /// Messages table operations
     messages: Messages,
-    /// Worker lifecycle manager
-    lifecycle: WorkerLifecycle,
+    /// Worker lifecycle manager (Workers repository handles this now)
+    workers: Workers,
 }
 
 impl Producer {
@@ -102,7 +102,6 @@ impl Producer {
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
-        let lifecycle = WorkerLifecycle::new(pool.clone());
         tracing::debug!(
             "Registered producer worker {} ({}:{}) for queue '{}'",
             worker_info.id,
@@ -117,7 +116,7 @@ impl Producer {
             worker_info: worker_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
-            lifecycle,
+            workers,
             messages,
         })
     }
@@ -133,12 +132,6 @@ impl Producer {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
         let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
 
-        let lifecycle = WorkerLifecycle::new(pool.clone());
-        tracing::debug!(
-            "Registered ephemeral producer worker {} for queue '{}'",
-            worker_info.id,
-            queue_info.queue_name
-        );
         let messages = Messages::new(pool.clone());
         Ok(Self {
             pool,
@@ -146,7 +139,7 @@ impl Producer {
             worker_info: worker_info.clone(),
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
-            lifecycle,
+            workers,
             messages,
         })
     }
@@ -163,29 +156,29 @@ impl crate::store::Worker for Producer {
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.lifecycle.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_info.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.lifecycle
+        self.workers
             .is_healthy(self.worker_info.id, max_age)
             .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.lifecycle.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_info.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.lifecycle.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_info.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.lifecycle.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_info.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.lifecycle.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_info.id).await
     }
 }
 
@@ -360,14 +353,14 @@ impl Drop for Producer {
         // Check if this is an ephemeral worker by hostname prefix
         if self.worker_info.hostname.starts_with("__ephemeral__") {
             // Spawn a task to properly shutdown the worker
-            let lifecycle = self.lifecycle.clone();
+            let workers = self.workers.clone();
             let worker_id = self.worker_info.id;
 
             // Best-effort shutdown - ignore errors since we're in Drop
             tokio::task::spawn(async move {
                 // Suspend then shutdown the worker
-                let _ = lifecycle.suspend(worker_id).await;
-                let _ = lifecycle.shutdown(worker_id).await;
+                let _ = workers.suspend(worker_id).await;
+                let _ = workers.shutdown(worker_id).await;
             });
         }
     }

@@ -29,7 +29,6 @@ use crate::error::Result;
 use crate::store::{QueueTable, WorkerTable};
 use crate::types::QueueMessage;
 
-use super::lifecycle::WorkerLifecycle;
 use crate::store::postgres::tables::pgqrs_archive::Archive;
 use crate::store::postgres::tables::pgqrs_messages::Messages;
 use crate::store::postgres::tables::pgqrs_queues::Queues;
@@ -248,8 +247,6 @@ pub struct Admin {
     pub workers: Workers,
     /// Worker info for this Admin instance (set after calling register())
     worker_info: Option<WorkerInfo>,
-    /// Worker lifecycle manager
-    lifecycle: WorkerLifecycle,
 }
 
 impl Admin {
@@ -285,7 +282,6 @@ impl Admin {
         let queues = Queues::new(pool.clone());
         let messages = Messages::new(pool.clone());
         let archive = Archive::new(pool.clone());
-        let lifecycle = WorkerLifecycle::new(pool.clone());
 
         Ok(Self {
             pool,
@@ -295,7 +291,6 @@ impl Admin {
             archive,
             workers,
             worker_info: None,
-            lifecycle,
         })
     }
 
@@ -402,32 +397,32 @@ impl crate::store::Worker for Admin {
 
     async fn heartbeat(&self) -> Result<()> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.heartbeat(worker_id).await
+        self.workers.heartbeat(worker_id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.is_healthy(worker_id, max_age).await
+        self.workers.is_healthy(worker_id, max_age).await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.get_status(worker_id).await
+        self.workers.get_status(worker_id).await
     }
 
     async fn suspend(&self) -> Result<()> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.suspend(worker_id).await
+        self.workers.suspend(worker_id).await
     }
 
     async fn resume(&self) -> Result<()> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.resume(worker_id).await
+        self.workers.resume(worker_id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
         let worker_id = self.try_worker_id()?;
-        self.lifecycle.shutdown(worker_id).await
+        self.workers.shutdown(worker_id).await
     }
 }
 

@@ -155,6 +155,147 @@ impl Workers {
             })?;
         Ok(workers)
     }
+
+    /// Get the current status of a worker.
+    pub async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus> {
+        const GET_WORKER_STATUS: &str = "SELECT status FROM pgqrs_workers WHERE id = $1";
+        let status: WorkerStatus = sqlx::query_scalar(GET_WORKER_STATUS)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get worker {} status: {}", worker_id, e),
+            })?;
+
+        Ok(status)
+    }
+
+    /// Update worker heartbeat timestamp.
+    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
+        const UPDATE_HEARTBEAT: &str = r#"
+            UPDATE pgqrs_workers
+            SET heartbeat_at = $1
+            WHERE id = $2
+        "#;
+        let now = Utc::now();
+        sqlx::query(UPDATE_HEARTBEAT)
+            .bind(now)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to update heartbeat for worker {}: {}", worker_id, e),
+            })?;
+
+        Ok(())
+    }
+
+    /// Check if this worker is healthy based on heartbeat age
+    pub async fn is_healthy(&self, worker_id: i64, max_age: chrono::Duration) -> Result<bool> {
+        let threshold = Utc::now() - max_age;
+
+        // Query returns true if heartbeat_at >= threshold (i.e., within max_age)
+        let is_healthy: bool =
+            sqlx::query_scalar("SELECT heartbeat_at >= $2 FROM pgqrs_workers WHERE id = $1")
+                .bind(worker_id)
+                .bind(threshold)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::Connection {
+                    message: format!("Failed to check health for worker {}: {}", worker_id, e),
+                })?;
+
+        Ok(is_healthy)
+    }
+
+    /// Transition worker from Ready to Suspended.
+    pub async fn suspend(&self, worker_id: i64) -> Result<()> {
+        const TRANSITION_READY_TO_SUSPENDED: &str = r#"
+            UPDATE pgqrs_workers
+            SET status = 'suspended'
+            WHERE id = $1 AND status = 'ready'
+            RETURNING id
+        "#;
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_TO_SUSPENDED)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to suspend worker {}: {}", worker_id, e),
+            })?;
+
+        match result {
+            Some(_) => Ok(()),
+            None => {
+                let current_status = self.get_status(worker_id).await?;
+                Err(crate::error::Error::InvalidStateTransition {
+                    from: current_status.to_string(),
+                    to: "suspended".to_string(),
+                    reason: "Worker must be in Ready state to suspend".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Transition worker from Suspended to Ready.
+    pub async fn resume(&self, worker_id: i64) -> Result<()> {
+        const TRANSITION_SUSPENDED_TO_READY: &str = r#"
+            UPDATE pgqrs_workers
+            SET status = 'ready'
+            WHERE id = $1 AND status = 'suspended'
+            RETURNING id
+        "#;
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_SUSPENDED_TO_READY)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to resume worker {}: {}", worker_id, e),
+            })?;
+
+        match result {
+            Some(_) => Ok(()),
+            None => {
+                let current_status = self.get_status(worker_id).await?;
+                Err(crate::error::Error::InvalidStateTransition {
+                    from: current_status.to_string(),
+                    to: "ready".to_string(),
+                    reason: "Worker must be in Suspended state to resume".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Shutdown worker: transition from Suspended to Stopped.
+    pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
+        const TRANSITION_SUSPENDED_TO_STOPPED: &str = r#"
+            UPDATE pgqrs_workers
+            SET status = 'stopped', shutdown_at = $2
+            WHERE id = $1 AND status = 'suspended'
+            RETURNING id
+        "#;
+        let now = Utc::now();
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_SUSPENDED_TO_STOPPED)
+            .bind(worker_id)
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to shutdown worker {}: {}", worker_id, e),
+            })?;
+
+        match result {
+            Some(_) => Ok(()),
+            None => {
+                let current_status = self.get_status(worker_id).await?;
+                Err(crate::error::Error::InvalidStateTransition {
+                    from: current_status.to_string(),
+                    to: "stopped".to_string(),
+                    reason: "Worker must be in Suspended state to shutdown".to_string(),
+                })
+            }
+        }
+    }
 }
 
 // Implement the public WorkerTable trait by delegating to inherent methods
