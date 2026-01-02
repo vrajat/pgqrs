@@ -37,7 +37,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = Config::from_dsn("postgres://localhost/mydb");
 //! # let store = AnyStore::connect(&config).await?;
-//! // Dequeue and handle a message with automatic lifestyle management
+//! // Dequeue and handle a message with automatic lifecycle management
 //! pgqrs::dequeue()
 //!     .from("my_queue")
 //!     .handle(|msg| async move {

@@ -441,3 +441,31 @@ async fn test_dequeue_with_handlers() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_enqueue_empty_messages_error() {
+    let store = create_store().await;
+    let queue_name = "test_empty_messages";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let producer = pgqrs::producer("host", 9999, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    // Should fail because no .message() or .messages() called
+    let result = pgqrs::enqueue().worker(&*producer).execute(&store).await;
+
+    assert!(
+        result.is_err(),
+        "Enqueue without messages should return error"
+    );
+
+    // Cleanup
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}

@@ -104,6 +104,12 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
     /// Execute the enqueue operation.
     /// Returns a vector of message IDs (even for single message).
     pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<Vec<i64>> {
+        if self.messages.is_empty() {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: "No messages to enqueue. Use .message() or .messages() before .execute()."
+                    .to_string(),
+            });
+        }
         // Prepare JSON payloads
         let mut json_payloads = Vec::with_capacity(self.messages.len());
         for msg in &self.messages {
