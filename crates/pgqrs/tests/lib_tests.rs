@@ -977,15 +977,16 @@ async fn test_validation_payload_size_limit() {
         .execute(&store)
         .await;
     assert!(result.is_err());
-    match result.unwrap_err() {
-        pgqrs::error::Error::PayloadTooLarge {
-            actual_bytes,
-            max_bytes,
-        } => {
-            assert!(actual_bytes > 50);
-            assert_eq!(max_bytes, 50);
+    let err = result.unwrap_err();
+    match err {
+        pgqrs::error::Error::ValidationFailed { reason } => {
+            assert!(reason.contains("too large"));
+            assert!(reason.contains("exceeds limit 50"));
         }
-        _ => panic!("Expected PayloadTooLarge error"),
+        _ => panic!(
+            "Expected ValidationFailed error for payload size, got: {:?}",
+            err
+        ),
     }
 
     // Cleanup
