@@ -487,6 +487,31 @@ pub trait WorkerTable: Send + Sync {
         queue_id: i64,
         older_than: chrono::Duration,
     ) -> crate::error::Result<Vec<WorkerInfo>>;
+
+    /// Register a worker with state machine handling.
+    ///
+    /// - Reuses stopped workers (resets to Ready)
+    /// - Creates new worker if doesn't exist
+    /// - Errors if worker is already active
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue (None for admin workers)
+    /// * `hostname` - Hostname for the worker
+    /// * `port` - Port for the worker
+    async fn register(
+        &self,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> crate::error::Result<WorkerInfo>;
+
+    /// Register an ephemeral worker (one-off, short-lived).
+    ///
+    /// Ephemeral workers use an auto-generated unique hostname and port -1.
+    ///
+    /// # Arguments
+    /// * `queue_id` - ID of the queue (None for admin workers)
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> crate::error::Result<WorkerInfo>;
 }
 
 /// Repository for managing archived messages.

@@ -54,7 +54,6 @@ const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
     WHERE queue_id = $1 AND status = $2
     ORDER BY started_at DESC
 "#;
-
 const LIST_ZOMBIE_WORKERS: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
@@ -64,7 +63,30 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
     ORDER BY heartbeat_at ASC
 "#;
 
+/// SQL to find existing worker by hostname and port
+const FIND_WORKER_BY_HOST_PORT: &str = r#"
+    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    FROM pgqrs_workers
+    WHERE hostname = $1 AND port = $2
+"#;
+
+/// SQL to reset a stopped worker back to ready state
+const RESET_WORKER_TO_READY: &str = r#"
+    UPDATE pgqrs_workers
+    SET status = 'ready', queue_id = $2, started_at = NOW(), heartbeat_at = NOW(), shutdown_at = NULL
+    WHERE id = $1 AND status = 'stopped'
+    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+"#;
+
+/// SQL to insert a new ephemeral worker (unique hostname with UUID, port -1)
+const INSERT_EPHEMERAL_WORKER: &str = r#"
+    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
+    VALUES ($1, -1, $2, 'ready')
+    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+"#;
+
 /// Workers table CRUD operations for pgqrs.
+
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table.
 #[derive(Debug, Clone)]
@@ -312,8 +334,111 @@ impl Workers {
                     queue_id, e
                 ),
             })?;
-
         Ok(workers)
+    }
+
+    pub async fn register(
+        &self,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> Result<WorkerInfo> {
+        // Try to find existing worker by hostname+port
+        let existing_worker: Option<WorkerInfo> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
+            .bind(hostname)
+            .bind(port)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to find worker: {}", e),
+            })?;
+
+        let worker_info = match existing_worker {
+            Some(worker) => {
+                match worker.status {
+                    WorkerStatus::Stopped => {
+                        // Reset stopped worker to ready
+                        sqlx::query_as::<_, WorkerInfo>(RESET_WORKER_TO_READY)
+                            .bind(worker.id)
+                            .bind(queue_id)
+                            .fetch_one(&self.pool)
+                            .await
+                            .map_err(|e| crate::error::Error::Connection {
+                                message: format!("Failed to reset worker: {}", e),
+                            })?
+                    }
+                    WorkerStatus::Ready => {
+                        return Err(crate::error::Error::ValidationFailed {
+                            reason: format!(
+                                "Worker {}:{} is already active. Cannot register duplicate.",
+                                hostname, port
+                            ),
+                        });
+                    }
+                    WorkerStatus::Suspended => {
+                        return Err(crate::error::Error::ValidationFailed {
+                            reason: format!(
+                                "Worker {}:{} is suspended. Use resume() to reactivate.",
+                                hostname, port
+                            ),
+                        });
+                    }
+                }
+            }
+            None => {
+                // Create new worker
+                let now = Utc::now();
+                // We use INSERT_WORKER constant defined at top of file, but adapt it to handle Option<queue_id>
+                // Note: The original INSERT_WORKER uses explicit values. We'll use a specific insert here to handle the Option properly if needed,
+                // or just reuse the logic from insert() but we need the checks above.
+
+                // Actually, let's just use the query directly since we need to return the full WorkerInfo
+                let inserted_id: i64 = sqlx::query_scalar(INSERT_WORKER)
+                    .bind(hostname)
+                    .bind(port)
+                    .bind(queue_id)
+                    .bind(now)
+                    .bind(now)
+                    .bind(WorkerStatus::Ready)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| crate::error::Error::Connection {
+                        message: format!("Failed to create worker: {}", e),
+                    })?;
+
+                WorkerInfo {
+                    id: inserted_id,
+                    hostname: hostname.to_string(),
+                    port,
+                    queue_id,
+                    started_at: now,
+                    heartbeat_at: now,
+                    shutdown_at: None,
+                    status: WorkerStatus::Ready,
+                }
+            }
+        };
+        Ok(worker_info)
+    }
+
+    pub async fn register_ephemeral(
+        &self,
+        queue_id: Option<i64>,
+    ) -> Result<WorkerInfo> {
+        // Generate a unique hostname using UUID
+        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+
+        // Create new ephemeral worker (always creates new, never reuses)
+        let worker_info = sqlx::query_as::<_, WorkerInfo>(INSERT_EPHEMERAL_WORKER)
+            .bind(&hostname)
+            .bind(queue_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to create ephemeral worker: {}", e),
+            })?;
+
+        Ok(worker_info)
     }
 }
 
@@ -374,5 +499,18 @@ impl crate::store::WorkerTable for Workers {
         older_than: chrono::Duration,
     ) -> Result<Vec<WorkerInfo>> {
         self.list_zombies_for_queue(queue_id, older_than).await
+    }
+
+    async fn register(
+        &self,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> Result<WorkerInfo> {
+        self.register(queue_id, hostname, port).await
+    }
+
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+        self.register_ephemeral(queue_id).await
     }
 }

@@ -96,8 +96,10 @@ impl Producer {
         port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
+        let workers = crate::store::postgres::tables::Workers::new(pool.clone());
+        let worker_info = workers.register(Some(queue_info.id), hostname, port).await?;
+
         let lifecycle = WorkerLifecycle::new(pool.clone());
-        let worker_info = lifecycle.register(queue_info, hostname, port).await?;
         tracing::debug!(
             "Registered producer worker {} ({}:{}) for queue '{}'",
             worker_info.id,
@@ -125,8 +127,10 @@ impl Producer {
         queue_info: &QueueInfo,
         config: &crate::config::Config,
     ) -> Result<Self> {
+        let workers = crate::store::postgres::tables::Workers::new(pool.clone());
+        let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
+
         let lifecycle = WorkerLifecycle::new(pool.clone());
-        let worker_info = lifecycle.register_ephemeral(queue_info).await?;
         tracing::debug!(
             "Registered ephemeral producer worker {} for queue '{}'",
             worker_info.id,
