@@ -120,7 +120,9 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         if let Some(producer) = self.worker {
             // Batch or standard enqueue
             if let Some(delay) = self.delay_seconds {
-                let msgs = producer.batch_enqueue_delayed(&json_payloads, delay).await?;
+                let msgs = producer
+                    .batch_enqueue_delayed(&json_payloads, delay)
+                    .await?;
                 Ok(msgs.iter().map(|m| m.id).collect())
             } else {
                 let msgs = producer.batch_enqueue(&json_payloads).await?;
@@ -138,7 +140,9 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
             let producer = store.producer_ephemeral(&queue, store.config()).await?;
 
             if let Some(delay) = self.delay_seconds {
-                let msgs = producer.batch_enqueue_delayed(&json_payloads, delay).await?;
+                let msgs = producer
+                    .batch_enqueue_delayed(&json_payloads, delay)
+                    .await?;
                 Ok(msgs.iter().map(|m| m.id).collect())
             } else {
                 let msgs = producer.batch_enqueue(&json_payloads).await?;

@@ -216,14 +216,13 @@ impl crate::store::Worker for Consumer {
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
         // Check if consumer has pending messages
-        let pending_count: i64 =
-            sqlx::query_scalar(COUNT_PENDING_MESSAGES_FOR_WORKER)
-                .bind(self.worker_info.id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: e.to_string(),
-                })?;
+        let pending_count: i64 = sqlx::query_scalar(COUNT_PENDING_MESSAGES_FOR_WORKER)
+            .bind(self.worker_info.id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: e.to_string(),
+            })?;
 
         if pending_count > 0 {
             return Err(crate::error::Error::WorkerHasPendingMessages {
