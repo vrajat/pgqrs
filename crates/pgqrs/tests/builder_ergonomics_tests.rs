@@ -107,6 +107,13 @@ async fn test_dequeue_with_vt_duration() {
     assert!(vt_diff >= 595 && vt_diff <= 605, "VT diff was {}", vt_diff);
 
     // Cleanup
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
+    // Release messages before shutting down consumer
+    let msg_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+    consumer.release_messages(&msg_ids).await.unwrap();
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
@@ -154,6 +161,13 @@ async fn test_dequeue_limit() {
     assert_eq!(messages.len(), 5);
 
     // Cleanup
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
+    // Release messages before shutting down consumer
+    let msg_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+    consumer.release_messages(&msg_ids).await.unwrap();
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
@@ -208,6 +222,13 @@ async fn test_builder_method_chaining() {
     assert_eq!(messages[0].payload, payload);
 
     // Cleanup
+    producer.suspend().await.unwrap();
+    producer.shutdown().await.unwrap();
+    // Release messages before shutting down consumer
+    let msg_ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+    consumer.release_messages(&msg_ids).await.unwrap();
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)

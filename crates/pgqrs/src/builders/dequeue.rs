@@ -67,7 +67,8 @@ impl<'a> DequeueBuilder<'a> {
     ///     .fetch_all(&store).await?;
     /// ```
     pub fn with_vt(mut self, duration: std::time::Duration) -> Self {
-        self.vt_offset_seconds = Some(duration.as_secs() as u32);
+        // Use saturating conversion to handle edge cases (durations > u32::MAX seconds)
+        self.vt_offset_seconds = Some(duration.as_secs().min(u32::MAX as u64) as u32);
         self
     }
 
