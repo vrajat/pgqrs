@@ -457,10 +457,18 @@ async fn test_enqueue_empty_messages_error() {
     // Should fail because no .message() or .messages() called
     let result = pgqrs::enqueue().worker(&*producer).execute(&store).await;
 
-    assert!(
-        result.is_err(),
-        "Enqueue without messages should return error"
-    );
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    match err {
+        pgqrs::error::Error::ValidationFailed { reason } => {
+            assert!(
+                reason.contains("No messages to enqueue"),
+                "Expected 'No messages to enqueue' error, got: {}",
+                reason
+            );
+        }
+        _ => panic!("Expected ValidationFailed error, got: {:?}", err),
+    }
 
     // Cleanup
     producer.suspend().await.unwrap();

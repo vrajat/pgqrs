@@ -986,10 +986,7 @@ async fn test_validation_payload_size_limit() {
             assert!(actual_bytes > 50);
             assert_eq!(max_bytes, 50);
         }
-        _ => panic!(
-            "Expected PayloadTooLarge error, got: {:?}",
-            err
-        ),
+        _ => panic!("Expected PayloadTooLarge error, got: {:?}", err),
     }
 
     // Cleanup

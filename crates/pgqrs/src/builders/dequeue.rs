@@ -174,15 +174,16 @@ where
         };
 
         if let Some(msg) = msgs.into_iter().next() {
+            let msg_id = msg.id;
             // Call the handler
-            match (self.handler)(msg.clone()).await {
+            match (self.handler)(msg).await {
                 Ok(_) => {
                     // Success - archive the message
-                    consumer.archive(msg.id).await?;
+                    consumer.archive(msg_id).await?;
                 }
                 Err(e) => {
                     // Error - release the message back to the queue
-                    consumer.release_messages(&[msg.id]).await?;
+                    consumer.release_messages(&[msg_id]).await?;
                     return Err(e);
                 }
             }

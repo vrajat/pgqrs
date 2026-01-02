@@ -103,6 +103,10 @@ const DELETE_MESSAGE_OWNED: &str = r#"
     WHERE id = $1 AND consumer_worker_id = $2
 "#;
 
+const COUNT_PENDING_MESSAGES_FOR_WORKER: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1
+"#;
+
 /// Consumer interface for a specific queue.
 ///
 /// A Consumer instance provides methods for dequeuing messages, reading messages,
@@ -213,7 +217,7 @@ impl crate::store::Worker for Consumer {
     async fn shutdown(&self) -> Result<()> {
         // Check if consumer has pending messages
         let pending_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1")
+            sqlx::query_scalar(COUNT_PENDING_MESSAGES_FOR_WORKER)
                 .bind(self.worker_info.id)
                 .fetch_one(&self.pool)
                 .await

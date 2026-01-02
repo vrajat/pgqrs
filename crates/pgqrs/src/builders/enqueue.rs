@@ -120,12 +120,8 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         if let Some(producer) = self.worker {
             // Batch or standard enqueue
             if let Some(delay) = self.delay_seconds {
-                let mut ids = Vec::with_capacity(self.messages.len());
-                for json in json_payloads {
-                    let msg = producer.enqueue_delayed(&json, delay).await?;
-                    ids.push(msg.id);
-                }
-                Ok(ids)
+                let msgs = producer.batch_enqueue_delayed(&json_payloads, delay).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
             } else {
                 let msgs = producer.batch_enqueue(&json_payloads).await?;
                 Ok(msgs.iter().map(|m| m.id).collect())
@@ -142,12 +138,8 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
             let producer = store.producer_ephemeral(&queue, store.config()).await?;
 
             if let Some(delay) = self.delay_seconds {
-                let mut ids = Vec::with_capacity(self.messages.len());
-                for json in json_payloads {
-                    let msg = producer.enqueue_delayed(&json, delay).await?;
-                    ids.push(msg.id);
-                }
-                Ok(ids)
+                let msgs = producer.batch_enqueue_delayed(&json_payloads, delay).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
             } else {
                 let msgs = producer.batch_enqueue(&json_payloads).await?;
                 Ok(msgs.iter().map(|m| m.id).collect())

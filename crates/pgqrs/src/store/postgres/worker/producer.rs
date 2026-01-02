@@ -262,11 +262,24 @@ impl crate::store::Producer for Producer {
     /// The database transaction is atomic - either all messages are enqueued or none are.
     /// Rate limiting is also atomic - tokens are only consumed if the entire batch succeeds.
     async fn batch_enqueue(&self, payloads: &[serde_json::Value]) -> Result<Vec<QueueMessage>> {
+        // Use batch_enqueue_delayed with 0 delay (immediate)
+        self.batch_enqueue_delayed(payloads, 0).await
+    }
+
+    /// Add multiple messages to the queue with a delay in a single batch operation.
+    ///
+    /// This method validates all payloads according to the queue's validation configuration
+    /// before enqueueing. Rate limiting is applied atomically to the entire batch.
+    async fn batch_enqueue_delayed(
+        &self,
+        payloads: &[serde_json::Value],
+        delay_seconds: u32,
+    ) -> Result<Vec<QueueMessage>> {
         // Validate all payloads atomically (including rate limiting)
         self.validator.validate_batch(payloads)?;
 
         let now = Utc::now();
-        let vt = now + chrono::Duration::seconds(0);
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
 
         // Use the batch insert method from the messages table
         let ids = self
