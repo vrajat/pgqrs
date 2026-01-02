@@ -248,7 +248,10 @@ async fn test_enqueue_batch_builder() {
         .execute(&store)
         .await;
 
-    assert!(result.is_err(), "Empty batch should return validation error");
+    assert!(
+        result.is_err(),
+        "Empty batch should return validation error"
+    );
 
     // Cleanup
     producer.suspend().await.unwrap();

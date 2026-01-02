@@ -137,10 +137,6 @@ impl Consumer {
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
-        // Helper to avoid variable name conflict or just reuse
-        // workers variable is created above, we can just clone it or use it.
-        // But above 'workers' is used for register.
-
         tracing::debug!(
             "Registered consumer worker {} ({}:{}) for queue '{}'",
             worker_info.id,

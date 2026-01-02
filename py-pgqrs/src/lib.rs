@@ -354,7 +354,7 @@ fn produce<'a>(
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         // Return single ID
-        Ok(msg_ids.first().copied().unwrap_or(0))
+        Ok(*msg_ids.first().unwrap())
     })
 }
 
