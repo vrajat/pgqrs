@@ -341,6 +341,9 @@ pub trait Store: Clone + Send + Sync + 'static {
     /// Get a workflow handle.
     fn workflow(&self, id: i64) -> Box<dyn Workflow>;
 
+    /// Get a generic worker handle by ID.
+    fn worker(&self, id: i64) -> Box<dyn Worker>;
+
     /// Acquire a step execution guard.
     async fn acquire_step(
         &self,

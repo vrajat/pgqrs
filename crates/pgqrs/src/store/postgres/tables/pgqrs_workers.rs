@@ -155,8 +155,6 @@ impl Workers {
             })?;
         Ok(workers)
     }
-
-
 }
 
 // Implement the public WorkerTable trait by delegating to inherent methods
@@ -242,10 +240,7 @@ impl crate::store::WorkerTable for Workers {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to filter workers by queue ID {}: {}",
-                    queue_id, e
-                ),
+                message: format!("Failed to filter workers by queue ID {}: {}", queue_id, e),
             })?;
         Ok(workers)
     }

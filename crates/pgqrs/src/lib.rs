@@ -52,7 +52,6 @@ mod rate_limit;
 pub mod store;
 pub mod types;
 mod validation;
-// // // pub mod worker; - Removed, use store::postgres::worker instead - Removed, use store::postgres::worker instead - Removed, use store::postgres::worker instead
 
 // Tier 1: High-level API (builders module)
 pub mod builders;
@@ -64,7 +63,7 @@ pub use builders::{
 };
 
 // Re-export worker types and modules at crate root for convenience
-pub use crate::store::postgres::worker::WorkerHandle;
+
 pub use crate::store::{
     Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, StepGuard, StepGuardExt,
     StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,

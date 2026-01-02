@@ -1,4 +1,3 @@
-use crate::store::postgres::worker::WorkerHandle;
 use crate::store::Store;
 
 /// Create a handle for an existing worker
@@ -8,6 +7,6 @@ use crate::store::Store;
 pub async fn worker_handle<S: Store>(
     store: &S,
     worker_id: i64,
-) -> crate::error::Result<WorkerHandle> {
-    Ok(WorkerHandle::new(store.pool(), worker_id))
+) -> crate::error::Result<Box<dyn crate::Worker>> {
+    Ok(store.worker(worker_id))
 }
