@@ -42,42 +42,123 @@ pub trait Worker: Send + Sync {
 }
 
 /// Admin interface for managing pgqrs infrastructure.
+///
+/// This trait provides a unified interface for all administrative operations.
+/// Methods are organized into logical groups:
+/// - **Schema management**: `install()`, `verify()`
+/// - **Queue operations**: `create_queue()`, `get_queue()`, `delete_queue()`, `purge_queue()`, `dlq()`
+/// - **Worker management**: `delete_worker()`, `list_workers()`, `release_worker_messages()`, `purge_old_workers()`
+/// - **Metrics**: `queue_metrics()`, `all_queues_metrics()`, `system_stats()`, `worker_stats()`, `worker_health_stats()`
 #[async_trait]
 pub trait Admin: Worker {
+    // ===== Schema Management =====
+
+    /// Install the pgqrs schema in the database.
+    ///
+    /// This creates all necessary tables, indexes, and functions required for pgqrs to operate.
     async fn install(&self) -> crate::error::Result<()>;
+
+    /// Verify the pgqrs schema is correctly installed.
+    ///
+    /// Checks that all required tables, indexes, and constraints exist and are valid.
     async fn verify(&self) -> crate::error::Result<()>;
+
+    /// Register this admin worker (internal use).
     async fn register(&mut self, hostname: String, port: i32) -> crate::error::Result<WorkerInfo>;
+
+    // ===== Queue Operations =====
+
+    /// Create a new queue.
+    ///
+    /// # Arguments
+    /// * `name` - Unique name for the queue
     async fn create_queue(&self, name: &str) -> crate::error::Result<QueueInfo>;
+
+    /// Get queue information by name.
     async fn get_queue(&self, name: &str) -> crate::error::Result<QueueInfo>;
-    // Matching the exact signature from src/worker/admin.rs in v4
+
+    /// Delete a queue.
+    ///
+    /// The queue must be empty (no messages or workers) before deletion.
     async fn delete_queue(&self, queue_info: &QueueInfo) -> crate::error::Result<()>;
 
-    // Metrics and management
+    /// Purge all messages and workers from a queue.
+    ///
+    /// This removes all pending messages, releases locked messages, and removes all workers.
+    /// Use with caution as this operation cannot be undone.
     async fn purge_queue(&self, name: &str) -> crate::error::Result<()>;
+
+    /// Get IDs of messages in the dead letter queue.
+    ///
+    /// Returns message IDs that have exceeded the maximum retry attempts.
     async fn dlq(&self) -> crate::error::Result<Vec<i64>>;
+
+    // ===== Metrics =====
+
+    /// Get metrics for a specific queue.
+    ///
+    /// Returns counts of total, pending, locked, and archived messages.
     async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::types::QueueMetrics>;
+
+    /// Get metrics for all queues.
     async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::types::QueueMetrics>>;
+
+    /// Get system-wide statistics.
+    ///
+    /// Returns aggregate statistics across all queues, workers, and messages.
     async fn system_stats(&self) -> crate::error::Result<crate::types::SystemStats>;
+
+    /// Get worker health statistics.
+    ///
+    /// # Arguments
+    /// * `heartbeat_timeout` - Duration after which a worker is considered stale
+    /// * `group_by_queue` - If true, returns per-queue stats; if false, returns global stats
     async fn worker_health_stats(
         &self,
         heartbeat_timeout: Duration,
         group_by_queue: bool,
     ) -> crate::error::Result<Vec<crate::types::WorkerHealthStats>>;
 
-    // Worker management
+    /// Get worker statistics for a queue.
+    ///
+    /// Returns counts of workers by status and average messages per worker.
+    async fn worker_stats(
+        &self,
+        queue_name: &str,
+    ) -> crate::error::Result<crate::types::WorkerStats>;
+
+    // ===== Worker Management =====
+
+    /// Delete a worker by ID.
+    ///
+    /// The worker must not have any associated messages or archives.
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
+
+    /// List all workers across all queues.
     async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
+
+    /// Get messages currently held by a worker.
     async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
+
+    /// Reclaim messages that have exceeded their visibility timeout.
+    ///
+    /// # Arguments
+    /// * `queue_id` - Queue to reclaim messages from
+    /// * `older_than` - Optional duration; messages with VT older than this are reclaimed
     async fn reclaim_messages(
         &self,
         queue_id: i64,
         older_than: Option<Duration>,
     ) -> crate::error::Result<u64>;
-    async fn worker_stats(
-        &self,
-        queue_name: &str,
-    ) -> crate::error::Result<crate::types::WorkerStats>;
+
+    /// Purge workers that haven't sent a heartbeat recently.
+    ///
+    /// Only removes workers in Stopped status with old heartbeats.
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64>;
+
+    /// Release all messages held by a worker.
+    ///
+    /// Makes the messages available for other workers to process.
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
 }
 
@@ -217,7 +298,6 @@ pub enum StepResult<T> {
 
 /// Main store trait that provides access to entity-specific repositories
 /// and transaction management.
-#[async_trait]
 #[async_trait]
 pub trait Store: Clone + Send + Sync + 'static {
     /// Get the underlying connection pool.
