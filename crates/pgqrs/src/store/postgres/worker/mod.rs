@@ -67,7 +67,6 @@ pub mod consumer;
 mod lifecycle;
 pub mod producer;
 
-
 pub use admin::Admin;
 pub use consumer::Consumer;
 pub use lifecycle::WorkerLifecycle;

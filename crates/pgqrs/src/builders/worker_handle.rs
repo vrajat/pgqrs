@@ -1,5 +1,5 @@
-use crate::store::Store;
 use crate::store::postgres::worker::WorkerHandle;
+use crate::store::Store;
 
 /// Create a handle for an existing worker
 ///

@@ -26,16 +26,16 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::QueueTable;
+use crate::store::{QueueTable, WorkerTable};
 use crate::types::QueueMessage;
 
+use super::lifecycle::WorkerLifecycle;
 use crate::store::postgres::tables::pgqrs_archive::Archive;
 use crate::store::postgres::tables::pgqrs_messages::Messages;
 use crate::store::postgres::tables::pgqrs_queues::Queues;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::types::QueueMetrics;
 use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
-use super::lifecycle::WorkerLifecycle;
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;

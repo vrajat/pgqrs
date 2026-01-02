@@ -34,6 +34,7 @@
 use super::lifecycle::WorkerLifecycle;
 use crate::error::Result;
 use crate::store::postgres::tables::Messages;
+use crate::store::WorkerTable;
 use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -132,7 +133,9 @@ impl Consumer {
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
-        let worker_info = workers.register(Some(queue_info.id), hostname, port).await?;
+        let worker_info = workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
 
         let lifecycle = WorkerLifecycle::new(pool.clone());
         tracing::debug!(

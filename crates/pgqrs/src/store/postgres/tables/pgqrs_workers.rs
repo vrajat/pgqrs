@@ -54,6 +54,7 @@ const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
     WHERE queue_id = $1 AND status = $2
     ORDER BY started_at DESC
 "#;
+
 const LIST_ZOMBIE_WORKERS: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
@@ -86,7 +87,6 @@ const INSERT_EPHEMERAL_WORKER: &str = r#"
 "#;
 
 /// Workers table CRUD operations for pgqrs.
-
 ///
 /// Provides pure CRUD operations on the `pgqrs_workers` table.
 #[derive(Debug, Clone)]
@@ -98,94 +98,6 @@ impl Workers {
     /// Create a new Workers instance.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
-    }
-
-    pub async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
-        let now = Utc::now();
-
-        let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
-            .bind(&data.hostname)
-            .bind(data.port)
-            .bind(data.queue_id)
-            .bind(now)
-            .bind(now)
-            .bind(WorkerStatus::Ready)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to insert worker: {}", e),
-            })?;
-
-        Ok(WorkerInfo {
-            id: worker_id,
-            hostname: data.hostname,
-            port: data.port,
-            queue_id: data.queue_id,
-            started_at: now,
-            heartbeat_at: now,
-            shutdown_at: None,
-            status: WorkerStatus::Ready,
-        })
-    }
-
-    pub async fn get(&self, id: i64) -> Result<WorkerInfo> {
-        let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get worker {}: {}", id, e),
-            })?;
-
-        Ok(worker)
-    }
-
-    pub async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list workers: {}", e),
-            })?;
-
-        Ok(workers)
-    }
-
-    pub async fn count(&self) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM pgqrs_workers";
-        let row = sqlx::query_scalar(query)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count workers: {}", e),
-            })?;
-        Ok(row)
-    }
-
-    pub async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query(DELETE_WORKER_BY_ID)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete worker {}: {}", id, e),
-            })?;
-
-        Ok(result.rows_affected())
-    }
-
-    pub async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
-            .bind(foreign_key_value)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to filter workers by queue ID {}: {}",
-                    foreign_key_value, e
-                ),
-            })?;
-        Ok(workers)
     }
 
     pub async fn count_for_fk<'a, 'b: 'a>(
@@ -244,7 +156,101 @@ impl Workers {
         Ok(workers)
     }
 
-    pub async fn count_for_queue(
+
+}
+
+// Implement the public WorkerTable trait by delegating to inherent methods
+#[async_trait]
+impl crate::store::WorkerTable for Workers {
+    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+        let now = Utc::now();
+
+        let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
+            .bind(&data.hostname)
+            .bind(data.port)
+            .bind(data.queue_id)
+            .bind(now)
+            .bind(now)
+            .bind(WorkerStatus::Ready)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to insert worker: {}", e),
+            })?;
+
+        Ok(WorkerInfo {
+            id: worker_id,
+            hostname: data.hostname,
+            port: data.port,
+            queue_id: data.queue_id,
+            started_at: now,
+            heartbeat_at: now,
+            shutdown_at: None,
+            status: WorkerStatus::Ready,
+        })
+    }
+
+    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+        let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to get worker {}: {}", id, e),
+            })?;
+
+        Ok(worker)
+    }
+
+    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to list workers: {}", e),
+            })?;
+
+        Ok(workers)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let query = "SELECT COUNT(*) FROM pgqrs_workers";
+        let row = sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to count workers: {}", e),
+            })?;
+        Ok(row)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let result = sqlx::query(DELETE_WORKER_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!("Failed to delete worker {}: {}", id, e),
+            })?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
+            .bind(queue_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: format!(
+                    "Failed to filter workers by queue ID {}: {}",
+                    queue_id, e
+                ),
+            })?;
+        Ok(workers)
+    }
+
+    async fn count_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -270,7 +276,7 @@ impl Workers {
         Ok(count)
     }
 
-    pub async fn count_zombies_for_queue(
+    async fn count_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -298,7 +304,7 @@ impl Workers {
         Ok(count)
     }
 
-    pub async fn list_for_queue(
+    async fn list_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -318,7 +324,7 @@ impl Workers {
         Ok(workers)
     }
 
-    pub async fn list_zombies_for_queue(
+    async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -337,7 +343,7 @@ impl Workers {
         Ok(workers)
     }
 
-    pub async fn register(
+    async fn register(
         &self,
         queue_id: Option<i64>,
         hostname: &str,
@@ -389,10 +395,6 @@ impl Workers {
                 // Create new worker
                 let now = Utc::now();
                 // We use INSERT_WORKER constant defined at top of file, but adapt it to handle Option<queue_id>
-                // Note: The original INSERT_WORKER uses explicit values. We'll use a specific insert here to handle the Option properly if needed,
-                // or just reuse the logic from insert() but we need the checks above.
-
-                // Actually, let's just use the query directly since we need to return the full WorkerInfo
                 let inserted_id: i64 = sqlx::query_scalar(INSERT_WORKER)
                     .bind(hostname)
                     .bind(port)
@@ -421,10 +423,7 @@ impl Workers {
         Ok(worker_info)
     }
 
-    pub async fn register_ephemeral(
-        &self,
-        queue_id: Option<i64>,
-    ) -> Result<WorkerInfo> {
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
         // Generate a unique hostname using UUID
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
@@ -439,78 +438,5 @@ impl Workers {
             })?;
 
         Ok(worker_info)
-    }
-}
-
-// Implement the public WorkerTable trait by delegating to inherent methods
-#[async_trait]
-impl crate::store::WorkerTable for Workers {
-    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
-        self.insert(data).await
-    }
-
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
-        self.get(id).await
-    }
-
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        self.list().await
-    }
-
-    async fn count(&self) -> Result<i64> {
-        self.count().await
-    }
-
-    async fn delete(&self, id: i64) -> Result<u64> {
-        self.delete(id).await
-    }
-
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
-        self.filter_by_fk(queue_id).await
-    }
-
-    async fn count_for_queue(
-        &self,
-        queue_id: i64,
-        state: crate::types::WorkerStatus,
-    ) -> Result<i64> {
-        self.count_for_queue(queue_id, state).await
-    }
-
-    async fn count_zombies_for_queue(
-        &self,
-        queue_id: i64,
-        older_than: chrono::Duration,
-    ) -> Result<i64> {
-        self.count_zombies_for_queue(queue_id, older_than).await
-    }
-
-    async fn list_for_queue(
-        &self,
-        queue_id: i64,
-        state: crate::types::WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
-        self.list_for_queue(queue_id, state).await
-    }
-
-    async fn list_zombies_for_queue(
-        &self,
-        queue_id: i64,
-        older_than: chrono::Duration,
-    ) -> Result<Vec<WorkerInfo>> {
-        self.list_zombies_for_queue(queue_id, older_than).await
-    }
-
-    async fn register(
-        &self,
-        queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerInfo> {
-        self.register(queue_id, hostname, port).await
-    }
-
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
-        self.register_ephemeral(queue_id).await
     }
 }

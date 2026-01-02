@@ -64,11 +64,11 @@ pub use builders::{
 };
 
 // Re-export worker types and modules at crate root for convenience
+pub use crate::store::postgres::worker::WorkerHandle;
 pub use crate::store::{
     Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, StepGuard, StepGuardExt,
     StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,
 };
-pub use crate::store::postgres::worker::WorkerHandle;
 
 // NOTE: These Postgres-specific implementation types are exported for macro support
 // and legacy compatibility. New code should use the Store trait methods instead.
