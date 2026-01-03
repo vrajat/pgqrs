@@ -768,6 +768,7 @@ max_connections: [invalid yaml structure
     }
 
     #[test]
+    #[serial]
     fn test_load_with_explicit_dsn() {
         clear_test_env_vars();
 

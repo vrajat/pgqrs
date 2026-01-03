@@ -94,15 +94,12 @@ async fn test_anystore_config_access() {
 }
 
 #[tokio::test]
-async fn test_anystore_pool_access() {
+async fn test_anystore_query_access() {
     let store = create_store().await;
 
-    // Verify we can access the pool through AnyStore
-    let pool = store.pool();
-
-    // Execute a simple query to verify pool works
-    let result: i32 = sqlx::query_scalar("SELECT 1")
-        .fetch_one(pool)
+    // Verify we can execute queries through the Store trait
+    let result: i32 = store
+        .query_scalar_raw("SELECT 1")
         .await
         .expect("Failed to execute query");
 

@@ -1,4 +1,4 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Workflow};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Store, Workflow};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,9 +81,8 @@ async fn test_macro_suite() -> anyhow::Result<()> {
     let schema = "macro_test_suite_v3";
     let dsn = common::get_postgres_dsn(Some(schema)).await;
     let config = Config::from_dsn_with_schema(&dsn, schema)?;
-    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    let store = pgqrs::connect_with_config(&config).await?;
     pgqrs::admin(&store).install().await?;
-    let pool = store.pool();
 
     // --- CASE 0: Creation State (Pending) ---
     {
@@ -148,11 +147,12 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         // 3. Manually TAMPER with the step output in the database
         // This proves that the next call reads from DB instead of running function logic
         let tampered_json = serde_json::json!({ "msg": "tampered_value" });
-        sqlx::query("UPDATE pgqrs_workflow_steps SET output = $1 WHERE workflow_id = $2 AND step_id = 'step_side_effect'")
-            .bind(tampered_json)
-            .bind(workflow_id)
-            .execute(pool)
-            .await?;
+        let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
+        let update_sql = format!(
+            "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE workflow_id = {} AND step_id = 'step_side_effect'",
+            tampered_json_sql, workflow_id
+        );
+        store.execute_raw(&update_sql).await?;
 
         // 4. Run step second time -> Should return TAMPERED value
         let res2 = step_side_effect(&mut workflow, "run2").await?;

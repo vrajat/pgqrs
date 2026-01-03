@@ -3,6 +3,7 @@
 use chrono::Duration;
 use pgqrs::store::AnyStore;
 use pgqrs::types::WorkerStatus;
+use pgqrs::Store;
 use serde_json::json;
 use serial_test::serial;
 
@@ -18,8 +19,8 @@ async fn create_store() -> AnyStore {
         .expect("Failed to connect to store");
 
     // Clean up any existing workers to ensure test isolation
-    if let Err(e) = sqlx::query("TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE")
-        .execute(store.pool())
+    if let Err(e) = store
+        .execute_raw("TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE")
         .await
     {
         // Ignore error in case table doesn't exist yet
@@ -270,12 +271,8 @@ async fn test_worker_health_check() {
 async fn test_custom_schema_search_path() {
     let store = create_store().await;
 
-    // Get a connection from the pool to check search_path
-    let mut connection = store.pool().acquire().await.unwrap();
-    let result = sqlx::query_scalar::<_, String>("SHOW search_path")
-        .fetch_one(&mut *connection)
-        .await
-        .unwrap();
+    // Check search_path via store helper
+    let result: String = store.query_scalar_raw("SHOW search_path").await.unwrap();
 
     // Should contain our custom schema
     assert!(
@@ -526,11 +523,21 @@ async fn test_purge_old_workers() {
     consumer.shutdown().await.unwrap();
 
     // Set old heartbeat ONLY for producer1 and producer2
-    let old_time = chrono::Utc::now() - Duration::days(30);
-    sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = $1 WHERE id = ANY($2)")
-        .bind(old_time)
-        .bind(vec![producer1.worker_id(), producer2.worker_id()])
-        .execute(store.pool())
+    let old_seconds = Duration::days(30).num_seconds();
+    store
+        .execute_raw_with_two_i64(
+            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            old_seconds,
+            producer1.worker_id(),
+        )
+        .await
+        .unwrap();
+    store
+        .execute_raw_with_two_i64(
+            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            old_seconds,
+            producer2.worker_id(),
+        )
         .await
         .unwrap();
 

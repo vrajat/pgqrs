@@ -117,9 +117,41 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
-    fn pool(&self) -> sqlx::PgPool {
+    type Db = sqlx::Postgres;
+
+    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
-            AnyStore::Postgres(s) => s.pool().clone(),
+            AnyStore::Postgres(s) => s.execute_raw(sql).await,
+        }
+    }
+
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
+        match self {
+            AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
+        }
+    }
+
+    async fn execute_raw_with_two_i64(
+        &self,
+        sql: &str,
+        param1: i64,
+        param2: i64,
+    ) -> crate::error::Result<()> {
+        match self {
+            AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
+        }
+    }
+
+    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
+    where
+        T: 'static
+            + Send
+            + Unpin
+            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>,
+    {
+        match self {
+            AnyStore::Postgres(s) => s.query_scalar_raw(sql).await,
         }
     }
 
@@ -250,18 +282,6 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Consumer>> {
         match self {
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
-        }
-    }
-}
-
-impl AnyStore {
-    /// Get access to the underlying database pool.
-    ///
-    /// **Note:** This is a temporary accessor for legacy code that uses raw SQL.
-    /// New code should use the Store trait methods instead.
-    pub fn pool(&self) -> &PgPool {
-        match self {
-            AnyStore::Postgres(s) => s.pool(),
         }
     }
 }
