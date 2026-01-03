@@ -123,7 +123,8 @@ async fn test_nonexistent_schema_operations() {
         "Verify should fail for non-existent schema"
     );
 
-    if let Err(Error::Connection { message }) = result {
+    if let Err(Error::QueryFailed { source, .. }) = result {
+        let message = source.to_string();
         assert!(
             message.contains("relation \"pgqrs_messages\" does not exist")
                 || message.contains("does not exist"),
@@ -132,7 +133,7 @@ async fn test_nonexistent_schema_operations() {
         );
     } else {
         panic!(
-            "Expected Connection error for non-existent schema verification {}",
+            "Expected QueryFailed error for non-existent schema verification {}",
             result.err().unwrap()
         );
     }

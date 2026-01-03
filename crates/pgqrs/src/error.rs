@@ -78,8 +78,40 @@ pub enum Error {
     Timeout { operation: String },
 
     /// Database connection failed or was lost
-    #[error("Connection error: {message}")]
-    Connection { message: String },
+    #[error("Database connection failed: {source}. Context: {context}")]
+    ConnectionFailed {
+        #[source]
+        source: sqlx::Error,
+        context: String,
+    },
+
+    /// SQL query failed
+    #[error("Database query failed: {query}. Context: {context}. Source: {source}")]
+    QueryFailed {
+        query: String,
+        source: sqlx::Error,
+        context: String,
+    },
+
+    /// Database transaction operation failed
+    #[error("Database transaction failed: {source}. Context: {context}")]
+    TransactionFailed {
+        #[source]
+        source: sqlx::Error,
+        context: String,
+    },
+
+    /// Database connection pool is exhausted
+    #[error("Database connection pool exhausted: {source}. Context: {context}")]
+    PoolExhausted {
+        #[source]
+        source: sqlx::Error,
+        context: String,
+    },
+
+    /// Database migration failed
+    #[error("Database migration failed: {0}")]
+    MigrationFailed(#[from] sqlx::migrate::MigrateError),
 
     /// Unexpected internal error occurred
     #[error("Internal error: {message}")]
@@ -123,4 +155,8 @@ pub enum Error {
     /// Worker not registered - methods requiring registration called before register()
     #[error("Worker not registered: {message}")]
     WorkerNotRegistered { message: String },
+
+    /// DEPRECATED: Database connection failed or was lost. Use ConnectionFailed, QueryFailed etc. instead.
+    #[error("Connection error: {message}")]
+    Connection { message: String },
 }

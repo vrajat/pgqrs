@@ -103,10 +103,6 @@ const DELETE_MESSAGE_OWNED: &str = r#"
     WHERE id = $1 AND consumer_worker_id = $2
 "#;
 
-const COUNT_PENDING_MESSAGES_FOR_WORKER: &str = r#"
-    SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = $1
-"#;
-
 /// Consumer interface for a specific queue.
 ///
 /// A Consumer instance provides methods for dequeuing messages, reading messages,
@@ -216,13 +212,11 @@ impl crate::store::Worker for Consumer {
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
         // Check if consumer has pending messages
-        let pending_count: i64 = sqlx::query_scalar(COUNT_PENDING_MESSAGES_FOR_WORKER)
-            .bind(self.worker_info.id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?;
+        // Use count_pending_filtered from Messages for cleaner abstraction
+        let messages = Messages::new(self.pool.clone());
+        let pending_count = messages
+            .count_pending_filtered(self.queue_info.id, Some(self.worker_info.id))
+            .await?;
 
         if pending_count > 0 {
             return Err(crate::error::Error::WorkerHasPendingMessages {
@@ -260,8 +254,13 @@ impl crate::store::Consumer for Consumer {
             .bind(self.worker_info.id) // $4 - worker_id
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DEQUEUE_MESSAGES".into(),
+                source: e,
+                context: format!(
+                    "Failed to dequeue messages for worker {}",
+                    self.worker_info.id
+                ),
             })?;
 
         Ok(messages)
@@ -281,8 +280,10 @@ impl crate::store::Consumer for Consumer {
             .bind(self.worker_info.id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_OWNED".into(),
+                source: e,
+                context: format!("Failed to delete message {}", message_id),
             })?
             .rows_affected();
 
@@ -295,8 +296,10 @@ impl crate::store::Consumer for Consumer {
             .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_BATCH".into(),
+                source: e,
+                context: "Failed to delete message batch".into(),
             })?;
 
         // For each input id, true if it was deleted, false otherwise
@@ -314,8 +317,10 @@ impl crate::store::Consumer for Consumer {
             .bind(self.worker_info.id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to archive message {msg_id}: {e}"),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("ARCHIVE_MESSAGE ({})", msg_id),
+                source: e,
+                context: format!("Failed to archive message {}", msg_id),
             })?;
 
         Ok(result)
@@ -331,8 +336,10 @@ impl crate::store::Consumer for Consumer {
             .bind(self.worker_info.id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to archive batch messages: {e}"),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "ARCHIVE_BATCH".into(),
+                source: e,
+                context: "Failed to archive message batch".into(),
             })?;
 
         // For each input id, true if it was archived, false otherwise

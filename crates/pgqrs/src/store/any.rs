@@ -56,8 +56,9 @@ impl AnyStore {
                 })
                 .connect(&config.dsn)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: e.to_string(),
+                .map_err(|e| crate::error::Error::ConnectionFailed {
+                    source: e,
+                    context: format!("Failed to connect to postgres: {}", config.dsn),
                 })?;
 
             Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
@@ -92,11 +93,13 @@ impl AnyStore {
     /// ```
     pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
         if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-            let pool = PgPool::connect(dsn)
-                .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: e.to_string(),
-                })?;
+            let pool =
+                PgPool::connect(dsn)
+                    .await
+                    .map_err(|e| crate::error::Error::ConnectionFailed {
+                        source: e,
+                        context: format!("Failed to connect to postgres: {}", dsn),
+                    })?;
             // Default config will be applied when new() creates the store
             Ok(AnyStore::Postgres(PostgresStore::new(
                 pool,

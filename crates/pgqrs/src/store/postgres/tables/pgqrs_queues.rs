@@ -77,8 +77,10 @@ impl Queues {
             .bind(name)
             .execute(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete queue '{}': {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_QUEUE_BY_NAME ({})", name),
+                source: e,
+                context: format!("Failed to delete queue '{}' in transaction", name),
             })?
             .rows_affected();
 
@@ -110,8 +112,10 @@ impl crate::store::QueueTable for Queues {
                         };
                     }
                 }
-                crate::error::Error::Connection {
-                    message: format!("Failed to insert queue '{}': {}", data.queue_name, e),
+                crate::error::Error::QueryFailed {
+                    query: format!("INSERT_QUEUE ({})", data.queue_name),
+                    source: e,
+                    context: format!("Failed to create queue '{}'", data.queue_name),
                 }
             })?;
 
@@ -130,8 +134,10 @@ impl crate::store::QueueTable for Queues {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get queue {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("GET_QUEUE_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to get queue {}", id),
             })?;
 
         Ok(queue)
@@ -145,8 +151,10 @@ impl crate::store::QueueTable for Queues {
         let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list queues: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ALL_QUEUES".into(),
+                source: e,
+                context: "Failed to list all queues".into(),
             })?;
 
         Ok(queues)
@@ -161,8 +169,10 @@ impl crate::store::QueueTable for Queues {
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count queues: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_QUEUES".into(),
+                source: e,
+                context: "Failed to count queues".into(),
             })?;
         Ok(count)
     }
@@ -179,8 +189,10 @@ impl crate::store::QueueTable for Queues {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete queue {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_QUEUE_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to delete queue {}", id),
             })?
             .rows_affected();
 
@@ -203,8 +215,10 @@ impl crate::store::QueueTable for Queues {
                 sqlx::Error::RowNotFound => crate::error::Error::QueueNotFound {
                     name: name.to_string(),
                 },
-                _ => crate::error::Error::Connection {
-                    message: format!("Failed to get queue '{}': {}", name, e),
+                _ => crate::error::Error::QueryFailed {
+                    query: format!("GET_QUEUE_BY_NAME ({})", name),
+                    source: e,
+                    context: format!("Failed to get queue '{}'", name),
                 },
             })?;
 
@@ -223,8 +237,10 @@ impl crate::store::QueueTable for Queues {
             .bind(name)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to check if queue '{}' exists: {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("CHECK_QUEUE_EXISTS ({})", name),
+                source: e,
+                context: format!("Failed to check if queue '{}' exists", name),
             })?;
 
         Ok(exists)
@@ -242,8 +258,10 @@ impl crate::store::QueueTable for Queues {
             .bind(name)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete queue '{}': {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_QUEUE_BY_NAME ({})", name),
+                source: e,
+                context: format!("Failed to delete queue '{}'", name),
             })?
             .rows_affected();
 

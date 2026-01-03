@@ -109,11 +109,10 @@ impl Workers {
             .bind(foreign_key_value)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count workers for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_WORKERS_BY_QUEUE_TX".into(),
+                source: e,
+                context: format!("Failed to count workers for queue {}", foreign_key_value),
             })?;
         Ok(count)
     }
@@ -127,11 +126,10 @@ impl Workers {
             .bind(foreign_key_value)
             .execute(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to delete workers for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_WORKERS_BY_QUEUE".into(),
+                source: e,
+                context: format!("Failed to delete workers for queue {}", foreign_key_value),
             })?;
         Ok(result.rows_affected())
     }
@@ -147,11 +145,10 @@ impl Workers {
             .bind(older_than)
             .fetch_all(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to list zombie workers for queue {} in tx: {}",
-                    queue_id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ZOMBIE_WORKERS".into(),
+                source: e,
+                context: format!("Failed to list zombie workers for queue {}", queue_id),
             })?;
         Ok(workers)
     }
@@ -163,8 +160,10 @@ impl Workers {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get worker {} status: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_WORKER_STATUS".into(),
+                source: e,
+                context: format!("Failed to get worker {} status", worker_id),
             })?;
 
         Ok(status)
@@ -183,8 +182,10 @@ impl Workers {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to update heartbeat for worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "UPDATE_HEARTBEAT".into(),
+                source: e,
+                context: format!("Failed to update heartbeat for worker {}", worker_id),
             })?;
 
         Ok(())
@@ -201,8 +202,10 @@ impl Workers {
                 .bind(threshold)
                 .fetch_one(&self.pool)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to check health for worker {}: {}", worker_id, e),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "CHECK_WORKER_HEALTH".into(),
+                    source: e,
+                    context: format!("Failed to check health for worker {}", worker_id),
                 })?;
 
         Ok(is_healthy)
@@ -220,8 +223,10 @@ impl Workers {
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to suspend worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "TRANSITION_READY_TO_SUSPENDED".into(),
+                source: e,
+                context: format!("Failed to suspend worker {}", worker_id),
             })?;
 
         match result {
@@ -249,8 +254,10 @@ impl Workers {
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to resume worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("TRANSITION_SUSPENDED_TO_READY ({})", worker_id),
+                source: e,
+                context: format!("Failed to resume worker {}", worker_id),
             })?;
 
         match result {
@@ -280,8 +287,10 @@ impl Workers {
             .bind(now)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to shutdown worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("TRANSITION_SUSPENDED_TO_STOPPED ({})", worker_id),
+                source: e,
+                context: format!("Failed to shutdown worker {}", worker_id),
             })?;
 
         match result {
@@ -313,8 +322,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(WorkerStatus::Ready)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to insert worker: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_WORKER".into(),
+                source: e,
+                context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
             })?;
 
         Ok(WorkerInfo {
@@ -334,8 +345,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get worker {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("GET_WORKER_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to get worker {}", id),
             })?;
 
         Ok(worker)
@@ -345,8 +358,10 @@ impl crate::store::WorkerTable for Workers {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list workers: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ALL_WORKERS".into(),
+                source: e,
+                context: "Failed to list all workers".to_string(),
             })?;
 
         Ok(workers)
@@ -357,8 +372,10 @@ impl crate::store::WorkerTable for Workers {
         let row = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count workers: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SELECT COUNT(*) FROM pgqrs_workers".into(),
+                source: e,
+                context: "Failed to count workers".to_string(),
             })?;
         Ok(row)
     }
@@ -368,8 +385,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete worker {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_WORKER_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to delete worker {}", id),
             })?;
 
         Ok(result.rows_affected())
@@ -380,8 +399,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(queue_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to filter workers by queue ID {}: {}", queue_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("LIST_WORKERS_BY_QUEUE (queue_id={})", queue_id),
+                source: e,
+                context: format!("Failed to filter workers by queue ID {}", queue_id),
             })?;
         Ok(workers)
     }
@@ -399,13 +420,18 @@ impl crate::store::WorkerTable for Workers {
 
         let count: i64 = sqlx::query_scalar(COUNT_WORKERS_BY_STATE)
             .bind(queue_id)
-            .bind(state)
+            .bind(&state)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count workers for queue {} with state: {}",
-                    queue_id, e
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!(
+                    "COUNT_WORKERS_BY_STATE (queue_id={}, state={:?})",
+                    queue_id, state
+                ),
+                source: e,
+                context: format!(
+                    "Failed to count workers for queue {} with state {:?}",
+                    queue_id, state
                 ),
             })?;
 
@@ -430,11 +456,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(older_than)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count zombie workers for queue {}: {}",
-                    queue_id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("COUNT_ZOMBIE_WORKERS (queue_id={})", queue_id),
+                source: e,
+                context: format!("Failed to count zombie workers for queue {}", queue_id),
             })?;
 
         Ok(count)
@@ -447,13 +472,18 @@ impl crate::store::WorkerTable for Workers {
     ) -> Result<Vec<WorkerInfo>> {
         let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE_AND_STATE)
             .bind(queue_id)
-            .bind(state)
+            .bind(&state)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to list workers for queue {} with state: {}",
-                    queue_id, e
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!(
+                    "LIST_WORKERS_BY_QUEUE_AND_STATE (queue_id={}, state={:?})",
+                    queue_id, state
+                ),
+                source: e,
+                context: format!(
+                    "Failed to list workers for queue {} with state {:?}",
+                    queue_id, state
                 ),
             })?;
 
@@ -470,11 +500,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(older_than)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to list zombie workers for queue {}: {}",
-                    queue_id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("LIST_ZOMBIE_WORKERS (queue_id={})", queue_id),
+                source: e,
+                context: format!("Failed to list zombie workers for queue {}", queue_id),
             })?;
         Ok(workers)
     }
@@ -491,8 +520,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(port)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to find worker: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("FIND_WORKER_BY_HOST_PORT ({}:{})", hostname, port),
+                source: e,
+                context: format!("Failed to find worker {}:{}", hostname, port),
             })?;
 
         let worker_info = match existing_worker {
@@ -505,8 +536,10 @@ impl crate::store::WorkerTable for Workers {
                             .bind(queue_id)
                             .fetch_one(&self.pool)
                             .await
-                            .map_err(|e| crate::error::Error::Connection {
-                                message: format!("Failed to reset worker: {}", e),
+                            .map_err(|e| crate::error::Error::QueryFailed {
+                                query: format!("RESET_WORKER_TO_READY ({})", worker.id),
+                                source: e,
+                                context: format!("Failed to reset worker {}:{}", hostname, port),
                             })?
                     }
                     WorkerStatus::Ready => {
@@ -540,8 +573,10 @@ impl crate::store::WorkerTable for Workers {
                     .bind(WorkerStatus::Ready)
                     .fetch_one(&self.pool)
                     .await
-                    .map_err(|e| crate::error::Error::Connection {
-                        message: format!("Failed to create worker: {}", e),
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "INSERT_WORKER".into(),
+                        source: e,
+                        context: format!("Failed to insert new worker {}:{}", hostname, port),
                     })?;
 
                 WorkerInfo {
@@ -569,8 +604,10 @@ impl crate::store::WorkerTable for Workers {
             .bind(queue_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to create ephemeral worker: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_EPHEMERAL_WORKER".into(),
+                source: e,
+                context: "Failed to create ephemeral worker".into(),
             })?;
 
         Ok(worker_info)
