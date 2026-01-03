@@ -58,14 +58,14 @@ impl AnyStore {
                 .await
                 .map_err(|e| crate::error::Error::ConnectionFailed {
                     source: e,
-                    context: format!("Failed to connect to postgres: {}", config.dsn),
+                    context: "Failed to connect to postgres".into(),
                 })?;
 
             Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
         } else {
             Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
-                message: format!("Unsupported DSN format: {}", config.dsn),
+                message: "Unsupported DSN format (must start with postgres:// or postgresql://)".to_string(),
             })
         }
     }
