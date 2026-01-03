@@ -118,8 +118,10 @@ impl Archive {
             .bind(data.dequeued_at)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to insert archived message: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_ARCHIVE".into(),
+                source: e,
+                context: format!("Failed to archive message {}", data.original_msg_id),
             })?;
 
         Ok(ArchivedMessage {
@@ -142,8 +144,10 @@ impl Archive {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get archived message {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("GET_ARCHIVE_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to get archived message {}", id),
             })?;
 
         Ok(archive)
@@ -153,8 +157,10 @@ impl Archive {
         let archives = sqlx::query_as::<_, ArchivedMessage>(LIST_ALL_ARCHIVE)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list archived messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ALL_ARCHIVE".into(),
+                source: e,
+                context: "Failed to list all archived messages".into(),
             })?;
 
         Ok(archives)
@@ -165,8 +171,10 @@ impl Archive {
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count archived messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_ARCHIVE".into(),
+                source: e,
+                context: "Failed to count archived messages".into(),
             })?;
         Ok(count)
     }
@@ -176,8 +184,10 @@ impl Archive {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete archived message {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_ARCHIVE_BY_ID ({})", id),
+                source: e,
+                context: format!("Failed to delete archived message {}", id),
             })?;
 
         Ok(result.rows_affected())
@@ -188,11 +198,10 @@ impl Archive {
             .bind(foreign_key_value)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to filter archived messages by queue ID {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("LIST_ARCHIVE_BY_QUEUE ({})", foreign_key_value),
+                source: e,
+                context: format!("Failed to list archives for queue {}", foreign_key_value),
             })?;
         Ok(archives)
     }
@@ -206,11 +215,10 @@ impl Archive {
             .bind(foreign_key_value)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count archived messages for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("COUNT_ARCHIVE_BY_QUEUE_TX ({})", foreign_key_value),
+                source: e,
+                context: format!("Failed to count archives for queue {}", foreign_key_value),
             })?;
         Ok(count)
     }
@@ -224,11 +232,10 @@ impl Archive {
             .bind(foreign_key_value)
             .execute(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to delete archived messages for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_ARCHIVE_BY_QUEUE ({})", foreign_key_value),
+                source: e,
+                context: format!("Failed to delete archives for queue {}", foreign_key_value),
             })?;
         Ok(result.rows_affected())
     }
@@ -245,8 +252,13 @@ impl Archive {
             .bind(offset)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list DLQ messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_DLQ_MESSAGES".into(),
+                source: e,
+                context: format!(
+                    "Failed to list DLQ messages (max_attempts={})",
+                    max_attempts
+                ),
             })?;
         Ok(messages)
     }
@@ -256,8 +268,13 @@ impl Archive {
             .bind(max_attempts)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count DLQ messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_DLQ_MESSAGES".into(),
+                source: e,
+                context: format!(
+                    "Failed to count DLQ messages (max_attempts={})",
+                    max_attempts
+                ),
             })?;
         Ok(count)
     }
@@ -273,7 +290,12 @@ impl Archive {
             .bind(limit)
             .bind(offset)
             .fetch_all(&self.pool)
-            .await?;
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("ARCHIVE_LIST_WITH_WORKER ({})", worker_id),
+                source: e,
+                context: format!("Failed to list archives for worker {}", worker_id),
+            })?;
 
         Ok(messages)
     }
@@ -283,11 +305,10 @@ impl Archive {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count archived messages for worker {}: {}",
-                    worker_id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("ARCHIVE_COUNT_WITH_WORKER ({})", worker_id),
+                source: e,
+                context: format!("Failed to count archives for worker {}", worker_id),
             })?;
         Ok(count)
     }
@@ -297,8 +318,10 @@ impl Archive {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete archived messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "ARCHIVE_DELETE_WITH_WORKER".into(),
+                source: e,
+                context: format!("Failed to delete archives for worker {}", worker_id),
             })?;
 
         Ok(result.rows_affected())
@@ -321,8 +344,10 @@ impl Archive {
         .bind(msg_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to replay message {}: {}", msg_id, e)
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("REPLAY_MESSAGE ({})", msg_id),
+            source: e,
+            context: format!("Failed to replay message {}", msg_id),
         })?;
 
         Ok(msg)
@@ -395,11 +420,10 @@ impl crate::store::ArchiveTable for Archive {
                 .bind(queue_id)
                 .fetch_one(&self.pool)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!(
-                        "Failed to count archived messages for queue {}: {}",
-                        queue_id, e
-                    ),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
+                    source: e,
+                    context: format!("Failed to count archives for queue {}", queue_id),
                 })?;
         Ok(count)
     }

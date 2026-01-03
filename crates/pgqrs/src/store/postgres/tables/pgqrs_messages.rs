@@ -115,8 +115,10 @@ impl Messages {
             .bind(data.consumer_worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to insert message: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_MESSAGE".into(),
+                source: e,
+                context: "Failed to insert message".into(),
             })?;
 
         Ok(message)
@@ -127,8 +129,10 @@ impl Messages {
             .bind(id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get message {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_MESSAGE_BY_ID".into(),
+                source: e,
+                context: format!("Failed to get message {}", id),
             })?;
 
         Ok(message)
@@ -138,8 +142,10 @@ impl Messages {
         let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to list all messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ALL_MESSAGES".into(),
+                source: e,
+                context: "Failed to list all messages".into(),
             })?;
 
         Ok(messages)
@@ -149,8 +155,10 @@ impl Messages {
         let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_MESSAGES".into(),
+                source: e,
+                context: "Failed to count messages".into(),
             })?;
         Ok(count)
     }
@@ -160,8 +168,10 @@ impl Messages {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete message {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_BY_ID".into(),
+                source: e,
+                context: format!("Failed to delete message {}", id),
             })?
             .rows_affected();
 
@@ -173,11 +183,10 @@ impl Messages {
             .bind(foreign_key_value)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to list messages for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_MESSAGES_BY_QUEUE".into(),
+                source: e,
+                context: format!("Failed to list messages for queue {}", foreign_key_value),
             })?;
 
         Ok(messages)
@@ -192,11 +201,10 @@ impl Messages {
             .bind(foreign_key_value)
             .fetch_one(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to count messages for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_MESSAGES_BY_QUEUE_TX".into(),
+                source: e,
+                context: format!("Failed to count messages for queue {}", foreign_key_value),
             })?;
         Ok(count)
     }
@@ -210,11 +218,10 @@ impl Messages {
             .bind(foreign_key_value)
             .execute(&mut **tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to delete messages for queue {}: {}",
-                    foreign_key_value, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGES_BY_QUEUE".into(),
+                source: e,
+                context: format!("Failed to delete messages for queue {}", foreign_key_value),
             })?;
         Ok(result.rows_affected())
     }
@@ -236,8 +243,10 @@ impl Messages {
             .bind(params.consumer_worker_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to batch insert messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "BATCH_INSERT_MESSAGES".into(),
+                source: e,
+                context: format!("Failed to batch insert {} messages", payloads.len()),
             })?;
 
         Ok(ids)
@@ -248,8 +257,10 @@ impl Messages {
             .bind(ids)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get messages by IDs: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_MESSAGES_BY_IDS".into(),
+                source: e,
+                context: format!("Failed to get {} messages by IDs", ids.len()),
             })?;
 
         Ok(messages)
@@ -261,11 +272,10 @@ impl Messages {
             .bind(vt)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to update visibility timeout for message {}: {}",
-                    id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "UPDATE_MESSAGE_VT".into(),
+                source: e,
+                context: format!("Failed to update visibility timeout for message {}", id),
             })?
             .rows_affected();
 
@@ -290,11 +300,10 @@ impl Messages {
             .bind(additional_seconds as i32)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to extend visibility timeout for message {}: {}",
-                    id, e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "EXTEND_MESSAGE_VT".into(),
+                source: e,
+                context: format!("Failed to extend visibility for message {}", id),
             })?
             .rows_affected();
 
@@ -324,10 +333,12 @@ impl Messages {
             .bind(additional_seconds as i32)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to extend visibility timeout for batch messages: {}",
-                    e
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "EXTEND_BATCH_VT".into(),
+                source: e,
+                context: format!(
+                    "Failed to batch extend visibility for {} messages",
+                    message_ids.len()
                 ),
             })?;
 
@@ -361,8 +372,10 @@ impl Messages {
             .bind(worker_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to release specific messages: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "RELEASE_SPECIFIC_MESSAGES".into(),
+                source: e,
+                context: format!("Failed to release {} messages", message_ids.len()),
             })?;
 
         let released_set: std::collections::HashSet<i64> = released_ids.into_iter().collect();
@@ -410,11 +423,10 @@ impl Messages {
                 .await
             }
         }
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!(
-                "Failed to count pending messages for queue {}: {}",
-                queue_id, e
-            ),
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_PENDING (queue_id={})", queue_id),
+            source: e,
+            context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;
 
         Ok(count)
@@ -428,8 +440,10 @@ impl Messages {
                 .bind(id)
                 .execute(&self.pool)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to delete message {}: {}", id, e),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: format!("DELETE_MESSAGE_BY_ID ({})", id),
+                    source: e,
+                    context: format!("Failed to delete message {}", id),
                 })?
                 .rows_affected();
 

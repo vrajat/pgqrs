@@ -140,9 +140,23 @@ async fn initialize_database(
 #[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
 pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
     let external_dsn = std::env::var("PGQRS_TEST_DSN").ok();
-    initialize_database(schema, external_dsn.as_deref(), false)
+    let dsn = initialize_database(schema, external_dsn.as_deref(), false)
         .await
-        .expect("Failed to initialize database")
+        .expect("Failed to initialize database");
+
+    // Ensure the requested schema is installed (idempotent)
+    if let Some(s) = schema {
+        let connection_type = if external_dsn.is_some() {
+            "External PostgreSQL"
+        } else {
+            "PostgreSQL"
+        };
+        crate::common::database_setup::setup_database_common(dsn.clone(), s, connection_type)
+            .await
+            .expect("Failed to setup test schema");
+    }
+
+    dsn
 }
 
 /// Get the DSN for the initialized database with PgBouncer

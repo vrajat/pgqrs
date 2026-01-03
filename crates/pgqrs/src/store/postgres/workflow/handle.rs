@@ -32,8 +32,10 @@ impl Workflow {
             .bind(input_json)
             .fetch_one(&pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to create workflow {}: {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SQL_CREATE_WORKFLOW".into(),
+                source: e,
+                context: format!("Failed to create workflow '{}'", name),
             })?;
 
         Ok(Self { id, pool })
@@ -75,8 +77,10 @@ impl crate::store::Workflow for Workflow {
             .bind(self.id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to start workflow {}: {}", self.id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SQL_START_WORKFLOW".into(),
+                source: e,
+                context: format!("Failed to start workflow {}", self.id),
             })?;
 
         // If no row update, check current status
@@ -86,8 +90,10 @@ impl crate::store::Workflow for Workflow {
                     .bind(self.id)
                     .fetch_optional(&self.pool)
                     .await
-                    .map_err(|e| crate::error::Error::Connection {
-                        message: format!("Failed to check status for workflow {}: {}", self.id, e),
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "CHECK_WORKFLOW_STATUS".into(),
+                        source: e,
+                        context: format!("Failed to check status for workflow {}", self.id),
                     })?;
 
             if let Some(crate::types::WorkflowStatus::Error) = status {
@@ -102,13 +108,14 @@ impl crate::store::Workflow for Workflow {
 
     /// Mark the workflow as successfully completed.
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?;
+        let mut conn =
+            self.pool
+                .acquire()
+                .await
+                .map_err(|e| crate::error::Error::PoolExhausted {
+                    source: e,
+                    context: "Failed to acquire connection for complete_workflow".into(),
+                })?;
 
         crate::store::postgres::tables::pgqrs_workflows::Workflows::complete_workflow(
             &mut conn, self.id, output,
@@ -117,21 +124,19 @@ impl crate::store::Workflow for Workflow {
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
-            })?;
+        let mut conn =
+            self.pool
+                .acquire()
+                .await
+                .map_err(|e| crate::error::Error::PoolExhausted {
+                    source: e,
+                    context: "Failed to acquire connection for fail_with_json".into(),
+                })?;
 
         crate::store::postgres::tables::pgqrs_workflows::Workflows::fail_workflow(
             &mut conn, self.id, error,
         )
-        .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to fail workflow {}: {}", self.id, e),
-        })?;
+        .await?;
 
         Ok(())
     }

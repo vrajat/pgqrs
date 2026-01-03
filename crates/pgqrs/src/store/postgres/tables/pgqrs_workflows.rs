@@ -31,8 +31,10 @@ impl Workflows {
         .bind(output)
         .execute(executor)
         .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to complete workflow {}: {}", id, e),
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "COMPLETE_WORKFLOW".into(),
+            source: e,
+            context: format!("Failed to complete workflow {}", id),
         })?;
         Ok(())
     }
@@ -53,8 +55,10 @@ impl Workflows {
         .bind(error)
         .execute(executor)
         .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to fail workflow {}: {}", id, e),
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "FAIL_WORKFLOW".into(),
+            source: e,
+            context: format!("Failed to fail workflow {}", id),
         })?;
         Ok(())
     }
@@ -70,10 +74,15 @@ impl crate::store::WorkflowTable for Workflows {
             RETURNING workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
             "#,
         )
-        .bind(data.name)
+        .bind(&data.name)
         .bind(data.input)
         .fetch_one(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "INSERT_WORKFLOW".into(),
+            source: e,
+            context: format!("Failed to insert workflow '{}'", data.name),
+        })?;
 
         Ok(row)
     }
@@ -88,7 +97,12 @@ impl crate::store::WorkflowTable for Workflows {
         )
         .bind(id)
         .fetch_one(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("GET_WORKFLOW ({})", id),
+            source: e,
+            context: format!("Failed to get workflow {}", id),
+        })?;
 
         Ok(row)
     }
@@ -102,7 +116,12 @@ impl crate::store::WorkflowTable for Workflows {
             "#,
         )
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "LIST_WORKFLOWS".into(),
+            source: e,
+            context: "Failed to list workflows".into(),
+        })?;
 
         Ok(rows)
     }
@@ -111,8 +130,10 @@ impl crate::store::WorkflowTable for Workflows {
         let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to count workflows: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_WORKFLOWS".into(),
+                source: e,
+                context: "Failed to count workflows".into(),
             })?;
         Ok(count)
     }
@@ -122,8 +143,10 @@ impl crate::store::WorkflowTable for Workflows {
             .bind(id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to delete workflow {}: {}", id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("DELETE_WORKFLOW ({})", id),
+                source: e,
+                context: format!("Failed to delete workflow {}", id),
             })?
             .rows_affected();
         Ok(rows_affected)

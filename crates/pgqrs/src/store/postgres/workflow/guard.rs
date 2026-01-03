@@ -73,8 +73,13 @@ impl StepGuard {
             .bind(&step_id_string)
             .fetch_one(pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to initialize step {}: {}", step_id_string, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SQL_ACQUIRE_STEP".into(),
+                source: e,
+                context: format!(
+                    "Failed to acquire step {} for workflow {}",
+                    step_id_string, workflow_id
+                ),
             })?;
 
         let (status, output, error) = row;
@@ -144,8 +149,10 @@ impl crate::store::StepGuard for StepGuard {
             .bind(output)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to mark step {} as success: {}", self.step_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("SQL_STEP_SUCCESS ({})", self.step_id),
+                source: e,
+                context: format!("Failed to complete step {}", self.step_id),
             })?;
 
         self.completed = true;
@@ -159,8 +166,10 @@ impl crate::store::StepGuard for StepGuard {
             .bind(error)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to mark step {} as error: {}", self.step_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                source: e,
+                context: format!("Failed to fail step {}", self.step_id),
             })?;
 
         self.completed = true;

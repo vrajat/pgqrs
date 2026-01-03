@@ -274,8 +274,9 @@ impl Admin {
             })
             .connect(&config.dsn)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::ConnectionFailed {
+                source: e,
+                context: "Failed to connect to postgres".into(),
             })?;
 
         let workers = Workers::new(pool.clone());
@@ -325,8 +326,10 @@ impl Admin {
             .bind(worker_id)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get messages for worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_WORKER_MESSAGES".into(),
+                source: e,
+                context: format!("Failed to get messages for worker {}", worker_id),
             })?;
 
         Ok(messages)
@@ -344,8 +347,10 @@ impl Admin {
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_WORKER_REFERENCES".into(),
+                source: e,
+                context: format!("Failed to check worker references for worker {}", worker_id),
             })?;
 
         Ok(row)
@@ -440,12 +445,7 @@ impl crate::store::Admin for Admin {
     /// Ok if installation (or validation) succeeds, error otherwise.
     async fn install(&self) -> Result<()> {
         // Run migrations using sqlx
-        MIGRATOR
-            .run(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Migration failed: {}", e),
-            })?;
+        MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
 
@@ -459,13 +459,14 @@ impl crate::store::Admin for Admin {
     /// Ok if installation is valid, error otherwise.
     async fn verify(&self) -> Result<()> {
         // Begin a read-only transaction for all verification queries
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::TransactionFailed {
+                    source: e,
+                    context: "Failed to begin transaction for verification".into(),
+                })?;
 
         // Category 1: Check existence of all required tables
         let required_tables = [
@@ -480,12 +481,14 @@ impl crate::store::Admin for Admin {
                 .bind(table_name)
                 .fetch_one(&mut *tx)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to check {} existence: {}", description, e),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: format!("CHECK_TABLE_EXISTS ({})", table_name),
+                    source: e,
+                    context: format!("Failed to check if table {} exists", table_name),
                 })?;
 
             if !table_exists {
-                return Err(crate::error::Error::Connection {
+                return Err(crate::error::Error::SchemaValidation {
                     message: format!("{} ('{}') does not exist", description, table_name),
                 });
             }
@@ -497,12 +500,14 @@ impl crate::store::Admin for Admin {
         let orphaned_messages = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGES)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to check message referential integrity: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_ORPHANED_MESSAGES".into(),
+                source: e,
+                context: "Failed to check message referential integrity".into(),
             })?;
 
         if orphaned_messages > 0 {
-            return Err(crate::error::Error::Connection {
+            return Err(crate::error::Error::SchemaValidation {
                 message: format!(
                     "Found {} messages with invalid queue_id references",
                     orphaned_messages
@@ -514,15 +519,14 @@ impl crate::store::Admin for Admin {
         let orphaned_message_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_MESSAGE_WORKERS)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to check message worker referential integrity: {}",
-                    e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_ORPHANED_MESSAGE_WORKERS".into(),
+                source: e,
+                context: "Failed to check message worker referential integrity".into(),
             })?;
 
         if orphaned_message_workers > 0 {
-            return Err(crate::error::Error::Connection {
+            return Err(crate::error::Error::SchemaValidation {
                 message: format!(
                     "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_message_workers
@@ -534,12 +538,14 @@ impl crate::store::Admin for Admin {
         let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to check archive referential integrity: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_ORPHANED_ARCHIVE_QUEUES".into(),
+                source: e,
+                context: "Failed to check archive queue referential integrity".into(),
             })?;
 
         if orphaned_archive_queues > 0 {
-            return Err(crate::error::Error::Connection {
+            return Err(crate::error::Error::SchemaValidation {
                 message: format!(
                     "Found {} archived messages with invalid queue_id references",
                     orphaned_archive_queues
@@ -551,15 +557,14 @@ impl crate::store::Admin for Admin {
         let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!(
-                    "Failed to check archive worker referential integrity: {}",
-                    e
-                ),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_ORPHANED_ARCHIVE_WORKERS".into(),
+                source: e,
+                context: "Failed to check archive worker referential integrity".into(),
             })?;
 
         if orphaned_archive_workers > 0 {
-            return Err(crate::error::Error::Connection {
+            return Err(crate::error::Error::SchemaValidation {
                 message: format!(
                     "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_archive_workers
@@ -570,8 +575,9 @@ impl crate::store::Admin for Admin {
         // Commit the transaction (ensures consistency of all checks)
         tx.commit()
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit transaction: {}", e),
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit verification transaction".into(),
             })?;
 
         Ok(())
@@ -586,13 +592,14 @@ impl crate::store::Admin for Admin {
             .unwrap_or_else(|| chrono::Duration::seconds(self.config.heartbeat_interval as i64));
 
         // Start a transaction for the entire reclamation process
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::TransactionFailed {
+                    source: e,
+                    context: "Failed to begin transaction for message reclamation".into(),
+                })?;
 
         // 1. Find zombie workers using the transaction
         let zombies = self
@@ -603,8 +610,9 @@ impl crate::store::Admin for Admin {
         if zombies.is_empty() {
             tx.commit()
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to commit empty transaction: {}", e),
+                .map_err(|e| crate::error::Error::TransactionFailed {
+                    source: e,
+                    context: "Failed to commit empty transaction during message reclamation".into(),
                 })?;
             return Ok(0);
         }
@@ -624,11 +632,10 @@ impl crate::store::Admin for Admin {
                 .bind(zombie.id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!(
-                        "Failed to release messages for zombie worker {}: {}",
-                        zombie.id, e
-                    ),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "RELEASE_ZOMBIE_MESSAGES".into(),
+                    source: e,
+                    context: format!("Failed to release messages for zombie worker {}", zombie.id),
                 })?;
 
             let released = result.rows_affected();
@@ -639,8 +646,10 @@ impl crate::store::Admin for Admin {
                 .bind(zombie.id)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| crate::error::Error::Connection {
-                    message: format!("Failed to stop zombie worker {}: {}", zombie.id, e),
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "SHUTDOWN_ZOMBIE_WORKER".into(),
+                    source: e,
+                    context: format!("Failed to stop zombie worker {}", zombie.id),
                 })?;
 
             if released > 0 {
@@ -654,8 +663,9 @@ impl crate::store::Admin for Admin {
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit zombie cleanup: {}", e),
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit zombie cleanup".into(),
             })?;
 
         Ok(total_released)
@@ -724,8 +734,10 @@ impl crate::store::Admin for Admin {
             .bind(threshold)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "PURGE_OLD_WORKERS".into(),
+                source: e,
+                context: "Failed to purge old workers".into(),
             })?;
 
         Ok(result.rows_affected())
@@ -749,8 +761,10 @@ impl crate::store::Admin for Admin {
             .bind(worker_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to release messages for worker {}: {}", worker_id, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "RELEASE_WORKER_MESSAGES".into(),
+                source: e,
+                context: format!("Failed to release messages for worker {}", worker_id),
             })?;
         Ok(result.rows_affected())
     }
@@ -796,21 +810,24 @@ impl crate::store::Admin for Admin {
     /// Delete a queue from the database.
     async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
         // Start a transaction for atomic deletion with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::ConnectionFailed {
+                    source: e,
+                    context: "Failed to begin transaction".into(),
+                })?;
 
         // Lock the queue row for exclusive access and get queue_id
         let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_DELETE)
             .bind(&queue_info.queue_name)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to lock queue '{}': {}", queue_info.queue_name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LOCK_QUEUE_FOR_DELETE".into(),
+                source: e,
+                context: format!("Failed to lock queue '{}'", queue_info.queue_name),
             })?;
 
         let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
@@ -829,8 +846,8 @@ impl crate::store::Admin for Admin {
         let active_workers = ready_workers + suspended_workers;
 
         if active_workers > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!(
                     "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
                     queue_info.queue_name, active_workers
                 ),
@@ -843,8 +860,8 @@ impl crate::store::Admin for Admin {
         let total_references = messages_count + archive_count;
 
         if total_references > 0 {
-            return Err(crate::error::Error::Connection {
-                message: format!(
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!(
                     "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
                     queue_info.queue_name, total_references
                 ),
@@ -856,8 +873,9 @@ impl crate::store::Admin for Admin {
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit queue deletion: {}", e),
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit queue deletion transaction".into(),
             })?;
 
         tracing::debug!("Successfully deleted queue '{}'", queue_info.queue_name);
@@ -867,21 +885,24 @@ impl crate::store::Admin for Admin {
     /// Purge all messages from a queue, but keep the queue itself.
     async fn purge_queue(&self, name: &str) -> Result<()> {
         // Start a transaction for atomic purge with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::TransactionFailed {
+                    source: e,
+                    context: "Failed to begin transaction for queue purge".into(),
+                })?;
 
         // Lock the queue row for data modification and get queue_id
         let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_UPDATE)
             .bind(name)
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to lock queue '{}': {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LOCK_QUEUE_FOR_UPDATE".into(),
+                source: e,
+                context: format!("Failed to lock queue '{}'", name),
             })?;
 
         let queue_id = queue_id.ok_or_else(|| crate::error::Error::QueueNotFound {
@@ -894,8 +915,9 @@ impl crate::store::Admin for Admin {
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit queue purge: {}", e),
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit queue purge transaction".into(),
             })?;
 
         tracing::debug!("Successfully purged queue '{}'", name);
@@ -907,8 +929,10 @@ impl crate::store::Admin for Admin {
             .bind(self.config.max_read_ct)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to move messages to DLQ: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DLQ_BATCH".into(),
+                source: e,
+                context: "Failed to move messages to DLQ".into(),
             })?;
 
         Ok(result)
@@ -923,8 +947,10 @@ impl crate::store::Admin for Admin {
             .bind(name) // Pass name to be returned in the struct
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get metrics for queue {}: {}", name, e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_QUEUE_METRICS".into(),
+                source: e,
+                context: format!("Failed to get metrics for queue {}", name),
             })?;
 
         Ok(metrics)
@@ -935,8 +961,10 @@ impl crate::store::Admin for Admin {
         let metrics = sqlx::query_as::<_, QueueMetrics>(GET_ALL_QUEUES_METRICS)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get all queues metrics: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_ALL_QUEUES_METRICS".into(),
+                source: e,
+                context: "Failed to get all queues metrics".into(),
             })?;
 
         Ok(metrics)
@@ -947,8 +975,10 @@ impl crate::store::Admin for Admin {
         let stats = sqlx::query_as::<_, SystemStats>(GET_SYSTEM_STATS)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to get system stats: {}", e),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_SYSTEM_STATS".into(),
+                source: e,
+                context: "Failed to get system stats".into(),
             })?;
 
         Ok(stats)
@@ -974,8 +1004,10 @@ impl crate::store::Admin for Admin {
                 .await
         };
 
-        stats.map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to get worker health stats: {}", e),
+        stats.map_err(|e| crate::error::Error::QueryFailed {
+            query: "GET_WORKER_HEALTH".into(),
+            source: e,
+            context: "Failed to get worker health stats".into(),
         })
     }
 
@@ -1004,8 +1036,8 @@ impl crate::store::Admin for Admin {
         // First validate the worker exists
         let worker = self.workers.get(worker_id).await?;
         if worker.queue_id.is_none() {
-            return Err(crate::error::Error::Connection {
-                message: "Cannot get messages for admin worker".to_string(),
+            return Err(crate::error::Error::ValidationFailed {
+                reason: "Cannot get messages for admin worker".to_string(),
             });
         }
 
@@ -1019,8 +1051,10 @@ impl crate::store::Admin for Admin {
         .bind(worker_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| crate::error::Error::Connection {
-            message: format!("Failed to get messages for worker {}: {}", worker_id, e),
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "GET_WORKER_MESSAGES_RAW".into(),
+            source: e,
+            context: format!("Failed to get messages for worker {}", worker_id),
         })?;
 
         Ok(messages)
