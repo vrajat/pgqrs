@@ -276,7 +276,7 @@ impl Admin {
             .await
             .map_err(|e| crate::error::Error::ConnectionFailed {
                 source: e,
-                context: format!("Failed to connect to postgres: {}", config.dsn),
+                context: "Failed to connect to postgres".into(),
             })?;
 
         let workers = Workers::new(pool.clone());
@@ -447,12 +447,7 @@ impl crate::store::Admin for Admin {
         // Run migrations using sqlx
         MIGRATOR
             .run(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "MIGRATOR.run()".into(),
-                source: e.into(),
-                context: "Failed to run database migrations".into(),
-            })?;
+            .await?;
         Ok(())
     }
 
@@ -880,7 +875,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
                 source: e,
-                context: "Failed to commit message reclamation transaction".into(),
+                context: "Failed to commit queue deletion transaction".into(),
             })?;
 
         tracing::debug!("Successfully deleted queue '{}'", queue_info.queue_name);
