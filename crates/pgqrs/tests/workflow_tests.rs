@@ -1,7 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{
-    Config, StepGuardExt, StepResult, Workflow, WorkflowExt,
-};
+use pgqrs::{Config, StepGuardExt, StepResult, Workflow, WorkflowExt};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -45,7 +43,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let step1_id = "step1";
     // step_id is String in macro, but &str here. acquire takes &str.
     // step_id is String in macro, but &str here. acquire takes &str.
-    let step_res = pgqrs::step(workflow_id, step1_id).acquire::<TestData, _>(&store).await?;
+    let step_res = pgqrs::step(workflow_id, step1_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
 
     match step_res {
         StepResult::Execute(mut guard) => {
@@ -59,7 +59,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     }
 
     // Step 1: Rerun (should skip)
-    let step_res = pgqrs::step(workflow_id, step1_id).acquire::<TestData, _>(&store).await?;
+    let step_res = pgqrs::step(workflow_id, step1_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
     match step_res {
         StepResult::Skipped(val) => {
             assert_eq!(val.msg, "step1_done");
@@ -71,7 +73,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let step2_id = "step2";
     // Step 2: Drop (Panic simulation)
     let step2_id = "step2";
-    let step_res = pgqrs::step(workflow_id, step2_id).acquire::<TestData, _>(&store).await?;
+    let step_res = pgqrs::step(workflow_id, step2_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
     match step_res {
         StepResult::Execute(guard) => {
             // Explicitly drop without calling success/fail
@@ -85,7 +89,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
 
     // Step 2: Rerun (should be ERROR state because of drop)
     // Step 2: Rerun (should be ERROR state because of drop)
-    let step_res = pgqrs::step(workflow_id, step2_id).acquire::<TestData, _>(&store).await;
+    let step_res = pgqrs::step(workflow_id, step2_id)
+        .acquire::<TestData, _>(&store)
+        .await;
     assert!(
         step_res.is_err(),
         "Step 2 should be in terminal ERROR state after drop"

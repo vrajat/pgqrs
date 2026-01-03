@@ -349,8 +349,6 @@ pub trait Store: Send + Sync + 'static {
         input: &T,
     ) -> crate::error::Result<Box<dyn Workflow>>;
 
-
-
     /// Attempt to acquire a step lock.
     ///
     /// This is the low-level API. Use `pgqrs::step()` builder for convenience.

@@ -984,11 +984,10 @@ impl PyWorkflow {
                 wf.id()
             };
 
-            let res: rust_pgqrs::StepResult<serde_json::Value> =
-                rust_pgqrs::step(id, &step_id)
-                    .acquire(&store)
-                    .await
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let res: rust_pgqrs::StepResult<serde_json::Value> = rust_pgqrs::step(id, &step_id)
+                .acquire(&store)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             Python::with_gil(|py| match res {
                 rust_pgqrs::StepResult::Execute(guard) => Ok(PyStepResult {

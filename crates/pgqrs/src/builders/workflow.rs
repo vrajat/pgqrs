@@ -1,8 +1,8 @@
-use crate::store::{Store, StepResult};
-use crate::store::{Workflow, StepGuard};
 use crate::error::Result;
-use serde::Serialize;
+use crate::store::{StepGuard, Workflow};
+use crate::store::{StepResult, Store};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::sync::Arc;
 
 /// Builder for creating database-agnostic workflows.
@@ -34,9 +34,11 @@ impl WorkflowBuilder {
 
     /// Create the workflow using the provided store.
     pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn Workflow>> {
-        let name = self.name.ok_or_else(|| crate::error::Error::ValidationFailed {
-            reason: "Workflow name is required".to_string(),
-        })?;
+        let name = self
+            .name
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "Workflow name is required".to_string(),
+            })?;
         let input = self.input.unwrap_or(serde_json::Value::Null);
         store.create_workflow(&name, &input).await
     }
@@ -69,7 +71,8 @@ impl StepBuilder {
         match res {
             StepResult::Execute(guard) => Ok(StepResult::Execute(guard)),
             StepResult::Skipped(val) => {
-                let t: T = serde_json::from_value(val).map_err(crate::error::Error::Serialization)?;
+                let t: T =
+                    serde_json::from_value(val).map_err(crate::error::Error::Serialization)?;
                 Ok(StepResult::Skipped(t))
             }
         }
