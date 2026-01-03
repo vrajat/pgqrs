@@ -300,8 +300,10 @@ impl crate::store::Consumer for Consumer {
             .bind(now) // $5 - now (reference time)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: e.to_string(),
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DEQUEUE_MESSAGES".into(),
+                source: e,
+                context: "Failed to dequeue messages".into(),
             })?;
 
         Ok(messages)

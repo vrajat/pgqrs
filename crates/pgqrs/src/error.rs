@@ -86,7 +86,7 @@ pub enum Error {
     },
 
     /// SQL query failed
-    #[error("Database query failed: {query}. Context: {context}. Source: {source}")]
+    #[error("Database query failed: {query}. Context: {context}.")]
     QueryFailed {
         #[source]
         source: sqlx::Error,
@@ -158,6 +158,10 @@ pub enum Error {
     WorkerNotRegistered { message: String },
 
     /// DEPRECATED: Database connection failed or was lost. Use ConnectionFailed, QueryFailed etc. instead.
+    #[deprecated(
+        since = "0.6.0",
+        note = "Use ConnectionFailed, QueryFailed, TransactionFailed, or PoolExhausted instead"
+    )]
     #[error("Connection error: {message}")]
     Connection { message: String },
 }

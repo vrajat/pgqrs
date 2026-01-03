@@ -663,8 +663,9 @@ impl crate::store::Admin for Admin {
 
         tx.commit()
             .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to commit zombie cleanup: {}", e),
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit zombie cleanup".into(),
             })?;
 
         Ok(total_released)
@@ -809,13 +810,14 @@ impl crate::store::Admin for Admin {
     /// Delete a queue from the database.
     async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
         // Start a transaction for atomic deletion with row locking
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| crate::error::Error::Connection {
-                message: format!("Failed to begin transaction: {}", e),
-            })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::ConnectionFailed {
+                    source: e,
+                    context: "Failed to begin transaction".into(),
+                })?;
 
         // Lock the queue row for exclusive access and get queue_id
         let queue_id: Option<i64> = sqlx::query_scalar(LOCK_QUEUE_FOR_DELETE)
