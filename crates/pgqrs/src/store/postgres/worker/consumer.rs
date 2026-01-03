@@ -98,6 +98,25 @@ const DEQUEUE_MESSAGES: &str = r#"
     RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
 "#;
 
+const DEQUEUE_MESSAGES_AT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = $5 + make_interval(secs => $3::double precision),
+        read_ct = read_ct + 1,
+        dequeued_at = $5,
+        consumer_worker_id = $4
+    WHERE id IN (
+        SELECT id
+        FROM pgqrs_messages
+        WHERE queue_id = $1
+          AND (vt IS NULL OR vt <= $5)
+          AND consumer_worker_id IS NULL
+        ORDER BY enqueued_at ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+"#;
+
 const DELETE_MESSAGE_OWNED: &str = r#"
     DELETE FROM pgqrs_messages
     WHERE id = $1 AND consumer_worker_id = $2
@@ -261,6 +280,28 @@ impl crate::store::Consumer for Consumer {
                     "Failed to dequeue messages for worker {}",
                     self.worker_info.id
                 ),
+            })?;
+
+        Ok(messages)
+    }
+
+    async fn dequeue_at(
+        &self,
+        limit: usize,
+        vt: u32,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<QueueMessage>> {
+        // SQL expects: $1=queue_id, $2=limit, $3=vt, $4=worker_id, $5=now
+        let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES_AT)
+            .bind(self.queue_info.id) // $1 - queue_id
+            .bind(limit as i64) // $2 - limit
+            .bind(vt as i32) // $3 - vt (visibility timeout)
+            .bind(self.worker_info.id) // $4 - worker_id
+            .bind(now) // $5 - now (reference time)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Connection {
+                message: e.to_string(),
             })?;
 
         Ok(messages)

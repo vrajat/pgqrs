@@ -205,6 +205,13 @@ pub trait Consumer: Worker {
         vt: u32,
     ) -> crate::error::Result<Vec<QueueMessage>>;
 
+    async fn dequeue_at(
+        &self,
+        limit: usize,
+        vt: u32,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+
     async fn extend_visibility(
         &self,
         message_id: i64,

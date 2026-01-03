@@ -122,7 +122,7 @@ const GET_WORKER_MESSAGES: &str = r#"
 /// Release messages assigned to a worker (set worker_id to NULL and reset vt)
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
-    SET vt = NOW(), consumer_worker_id = NULL
+    SET vt = NULL, consumer_worker_id = NULL
     WHERE consumer_worker_id = $1;
 "#;
 
