@@ -46,12 +46,10 @@ def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
                 yield postgres.get_connection_url().replace("+psycopg2", "")
 
     elif test_backend == TestBackend.SQLITE:
-        path = os.environ.get("PGQRS_TEST_SQLITE_PATH")
-        if path:
-            yield f"sqlite://{path}"
-        else:
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-                yield f"sqlite://{f.name}"
+        dsn = os.environ.get("PGQRS_TEST_SQLITE_DSN")
+        if not dsn:
+            pytest.skip("PGQRS_TEST_SQLITE_DSN not set")
+        yield dsn
 
     elif test_backend == TestBackend.TURSO:
         dsn = os.environ.get("PGQRS_TEST_TURSO_DSN")
@@ -79,9 +77,9 @@ def skip_on_backend(backend: TestBackend):
 
 # Legacy alias for postgres_dsn compatibility during migration
 @pytest.fixture(scope="session")
-def postgres_dsn(database_dsn: str) -> str:
+def postgres_dsn(database_dsn: str) -> Generator[str, None, None]:
     """Legacy alias for database_dsn."""
-    return database_dsn
+    yield database_dsn
 
 @pytest.fixture(scope="function")
 def schema(postgres_dsn, request):

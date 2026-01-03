@@ -33,7 +33,7 @@ pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
 /// This function handles environment variable resolution for backend-specific DSNs.
 /// For Postgres, if no env var is set, returns None (caller should use testcontainers).
 #[allow(dead_code)]
-pub fn get_dsn_from_env(backend: TestBackend, schema: Option<&str>) -> Option<String> {
+pub fn get_dsn_from_env(backend: TestBackend, _schema: Option<&str>) -> Option<String> {
     match backend {
         TestBackend::Postgres => {
             // Try backend-specific env var first, then fall back to generic
@@ -41,16 +41,7 @@ pub fn get_dsn_from_env(backend: TestBackend, schema: Option<&str>) -> Option<St
                 .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
                 .ok()
         }
-        TestBackend::Sqlite => {
-            if let Ok(path) = std::env::var("PGQRS_TEST_SQLITE_PATH") {
-                Some(format!("sqlite://{}", path))
-            } else {
-                // Create temp file with schema name for isolation
-                let name = schema.unwrap_or("test");
-                let path = std::env::temp_dir().join(format!("pgqrs_test_{}.db", name));
-                Some(format!("sqlite://{}", path.display()))
-            }
-        }
+        TestBackend::Sqlite => std::env::var("PGQRS_TEST_SQLITE_DSN").ok(),
         TestBackend::Turso => std::env::var("PGQRS_TEST_TURSO_DSN").ok(),
     }
 }
@@ -91,7 +82,7 @@ pub async fn create_store_for_backend(
         match backend {
             TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
             TestBackend::Sqlite => {
-                panic!("PGQRS_TEST_SQLITE_PATH must be set for SQLite backend")
+                panic!("PGQRS_TEST_SQLITE_DSN must be set for SQLite backend")
             }
             TestBackend::Turso => panic!("PGQRS_TEST_TURSO_DSN must be set for Turso backend"),
         }
