@@ -153,7 +153,9 @@ async fn test_zombie_consumer_batch_ops() {
     let msg2_id = msg2_ids[0];
 
     // A dequeues both with short timeout
-    let msgs_a = consumer_a.dequeue_many_with_delay(2, 1).await.unwrap();
+    // Use slightly futuristic time to ensure visibility
+    let future_time = chrono::Utc::now() + chrono::Duration::seconds(1);
+    let msgs_a = consumer_a.dequeue_at(2, 1, future_time).await.unwrap();
     assert_eq!(msgs_a.len(), 2);
 
     // Simulate reclamation of messages from A

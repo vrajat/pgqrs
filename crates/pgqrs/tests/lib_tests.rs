@@ -1781,3 +1781,368 @@ async fn test_consumer_shutdown_all_messages_released() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_archive_count_for_queue() {
+    let store = create_store().await;
+    let q1_name = "test_archive_count_q1";
+    let q2_name = "test_archive_count_q2";
+
+    let q1 = pgqrs::admin(&store).create_queue(q1_name).await.unwrap();
+    let q2 = pgqrs::admin(&store).create_queue(q2_name).await.unwrap();
+
+    let consumer1 = pgqrs::consumer("host", 4000, q1_name)
+        .create(&store)
+        .await
+        .unwrap();
+    let consumer2 = pgqrs::consumer("host", 4001, q2_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    // Enqueue and archive 2 messages for Q1
+    for i in 0..2 {
+        let _id = pgqrs::enqueue()
+            .message(&json!({"q": 1, "i": i}))
+            .to(q1_name)
+            .execute(&store)
+            .await
+            .unwrap()[0];
+        let dq = pgqrs::dequeue()
+            .worker(&*consumer1)
+            .fetch_one(&store)
+            .await
+            .unwrap()
+            .unwrap();
+        consumer1.archive(dq.id).await.unwrap();
+    }
+
+    // Enqueue and archive 1 message for Q2
+    let _id = pgqrs::enqueue()
+        .message(&json!({"q": 2}))
+        .to(q2_name)
+        .execute(&store)
+        .await
+        .unwrap()[0];
+    let dq = pgqrs::dequeue()
+        .worker(&*consumer2)
+        .fetch_one(&store)
+        .await
+        .unwrap();
+    if let Some(msg) = dq {
+        consumer2.archive(msg.id).await.unwrap();
+    }
+
+    // Verify counts using Archive::count_for_queue
+    let archive = pgqrs::tables(&store).archive();
+    let count1 = archive
+        .count_for_queue(q1.id)
+        .await
+        .expect("Failed to count Q1");
+    let count2 = archive
+        .count_for_queue(q2.id)
+        .await
+        .expect("Failed to count Q2");
+
+    assert_eq!(count1, 2);
+    assert_eq!(count2, 1);
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(q1_name).await.unwrap();
+    pgqrs::admin(&store).delete_queue(&q1).await.unwrap();
+    pgqrs::admin(&store).purge_queue(q2_name).await.unwrap();
+    pgqrs::admin(&store).delete_queue(&q2).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_consumer_extend_visibility_behavior() {
+    let store = create_store().await;
+    let queue_name = "test_extend_visibility_behavior";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let payload = json!({"extend": true});
+    pgqrs::enqueue()
+        .message(&payload)
+        .to(queue_name)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    let consumer = pgqrs::consumer("host", 4002, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    // Dequeue with 1 second visibility
+    let msg = pgqrs::dequeue()
+        .worker(&*consumer)
+        .vt_offset(1)
+        .fetch_one(&store)
+        .await
+        .unwrap()
+        .expect("Should have message");
+
+    // Extend by 3 more seconds
+    let extended = consumer.extend_visibility(msg.id, 3).await.unwrap();
+    assert!(extended);
+
+    // Verify VT duration - should be ~4s from start, or ~2.5s from now
+    let updated_msg = pgqrs::tables(&store).messages().get(msg.id).await.unwrap();
+    let now = chrono::Utc::now();
+    let diff = (updated_msg.vt - now).num_seconds();
+    assert!(
+        (2..=4).contains(&diff),
+        "VT should be ~2-4s in future, got {}s",
+        diff
+    );
+
+    // After 1.5 seconds, message should STILL be locked (because we extended)
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let updated_msg2 = pgqrs::tables(&store).messages().get(msg.id).await.unwrap();
+    assert!(
+        updated_msg2.vt > chrono::Utc::now(),
+        "VT should still be in future"
+    );
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_worker_health_and_heartbeat() {
+    let store = create_store().await;
+    let queue_name = "test_worker_health";
+    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let consumer = pgqrs::consumer("host", 5000, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    // Check initial health (max age 10s)
+    let is_healthy = consumer
+        .is_healthy(chrono::Duration::seconds(10))
+        .await
+        .unwrap();
+    assert!(is_healthy, "Newly created worker should be healthy");
+
+    // Check status
+    let status = consumer.status().await.unwrap();
+    assert_eq!(status, pgqrs::types::WorkerStatus::Ready);
+
+    // Heartbeat
+    consumer.heartbeat().await.expect("Heartbeat failed");
+
+    // Test health with a very short window (should still be healthy)
+    let is_healthy_now = consumer
+        .is_healthy(chrono::Duration::seconds(1))
+        .await
+        .unwrap();
+    assert!(is_healthy_now);
+
+    // Test suspend/resume
+    consumer.suspend().await.unwrap();
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Suspended
+    );
+
+    consumer.resume().await.unwrap();
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Ready
+    );
+
+    // Cleanup
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_admin_worker_management() {
+    let store = create_store().await;
+    let queue_name = "test_admin_mgmt";
+    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    // Initial workers
+    let initial_workers = pgqrs::admin(&store).list_workers().await.unwrap();
+
+    // Create 2 temporary workers
+    let c1 = pgqrs::consumer("host1", 6000, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+    let c2 = pgqrs::consumer("host2", 6001, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    let workers = pgqrs::admin(&store).list_workers().await.unwrap();
+    assert!(workers.len() >= initial_workers.len() + 2);
+    assert!(workers.iter().any(|w| w.id == c1.worker_id()));
+    assert!(workers.iter().any(|w| w.id == c2.worker_id()));
+
+    // Shutdown and delete one
+    let w1_id = c1.worker_id();
+    c1.suspend().await.unwrap();
+    c1.shutdown().await.unwrap();
+
+    let deleted = pgqrs::admin(&store).delete_worker(w1_id).await.unwrap();
+    assert_eq!(deleted, 1);
+
+    let workers_final = pgqrs::admin(&store).list_workers().await.unwrap();
+    assert!(!workers_final.iter().any(|w| w.id == w1_id));
+
+    // Cleanup
+    c2.suspend().await.unwrap();
+    c2.shutdown().await.unwrap();
+    pgqrs::admin(&store)
+        .delete_worker(c2.worker_id())
+        .await
+        .unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_archive_replay_and_recovery() {
+    let store = create_store().await;
+    let queue_name = "test_replay";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let producer = pgqrs::producer("host", 7000, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+    let consumer = pgqrs::consumer("host", 7001, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    let payload = json!({"replay": true});
+    pgqrs::enqueue()
+        .message(&payload)
+        .worker(&*producer)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    let msg = pgqrs::dequeue()
+        .worker(&*consumer)
+        .fetch_one(&store)
+        .await
+        .unwrap()
+        .unwrap();
+    let archived = consumer.archive(msg.id).await.unwrap().unwrap();
+
+    // Replay from Archive via table directly
+    let archive_table = pgqrs::tables(&store).archive();
+    let replayed = archive_table
+        .replay_message(archived.id)
+        .await
+        .unwrap()
+        .expect("Replay failed");
+
+    assert_eq!(replayed.payload, payload);
+    assert_eq!(replayed.queue_id, queue_info.id);
+
+    // Verify it exists in messages table now
+    let msg_back = pgqrs::tables(&store)
+        .messages()
+        .get(replayed.id)
+        .await
+        .unwrap();
+    assert_eq!(msg_back.payload, payload);
+
+    // Replay from "DLQ" using Producer API
+    // First archive it again
+    let dq = pgqrs::dequeue()
+        .worker(&*consumer)
+        .fetch_one(&store)
+        .await
+        .unwrap()
+        .unwrap();
+    let archived2 = consumer.archive(dq.id).await.unwrap().unwrap();
+
+    let replayed2 = producer
+        .replay_dlq(archived2.id)
+        .await
+        .unwrap()
+        .expect("DLQ Replay failed");
+    assert_eq!(replayed2.payload, payload);
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_batch_management_ops() {
+    let store = create_store().await;
+    let queue_name = "test_batch_ops";
+    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let payloads: Vec<_> = (0..5).map(|i| json!({"batch": i})).collect();
+    let ids = pgqrs::enqueue()
+        .messages(&payloads)
+        .to(queue_name)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    let consumer = pgqrs::consumer("host", 8000, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+    let msgs = consumer.dequeue_many(3).await.unwrap();
+    let msg_ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+
+    // Test Batch Extension (using table directly since Consumer lacks it)
+    let results = pgqrs::tables(&store)
+        .messages()
+        .extend_visibility_batch(&msg_ids, consumer.worker_id(), 10)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    assert!(results.iter().all(|&r| r));
+
+    // Verify VT for one
+    let m1 = pgqrs::tables(&store)
+        .messages()
+        .get(msg_ids[0])
+        .await
+        .unwrap();
+    assert!(m1.vt > chrono::Utc::now() + chrono::Duration::seconds(8));
+
+    // Test Batch Deletion (via Consumer)
+    let del_results = consumer.delete_many(msg_ids.clone()).await.unwrap();
+    assert_eq!(del_results.len(), 3);
+    assert!(del_results.iter().all(|&r| r));
+
+    // Verify they are gone
+    for id in msg_ids {
+        assert!(pgqrs::tables(&store).messages().get(id).await.is_err());
+    }
+
+    // Test delete_by_ids (direct table access)
+    let remaining_ids = &ids[3..];
+    let del_results2 = pgqrs::tables(&store)
+        .messages()
+        .delete_by_ids(remaining_ids)
+        .await
+        .unwrap();
+    assert_eq!(del_results2.len(), 2);
+    assert!(del_results2.iter().all(|&r| r));
+
+    // Cleanup
+    consumer.suspend().await.unwrap();
+    consumer.shutdown().await.unwrap();
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+}
