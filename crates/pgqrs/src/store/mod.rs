@@ -320,6 +320,9 @@ pub enum StepResult<T> {
 /// and transaction management.
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
+    /// Database backend type for implementations.
+    type Db: sqlx::Database;
+
     /// Execute raw SQL without parameters.
     ///
     /// This method is intended for test setup/cleanup and administrative operations.
@@ -351,11 +354,7 @@ pub trait Store: Send + Sync + 'static {
     /// For production queries, prefer using the repository interfaces.
     async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
     where
-        T: 'static
-            + Send
-            + Unpin
-            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
-            + sqlx::Type<sqlx::Postgres>;
+        T: 'static + Send + Unpin + for<'r> sqlx::Decode<'r, Self::Db> + sqlx::Type<Self::Db>;
 
     /// Get the configuration for this store
     fn config(&self) -> &Config;

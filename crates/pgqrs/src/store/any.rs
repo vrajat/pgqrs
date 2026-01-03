@@ -117,6 +117,8 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
+    type Db = sqlx::Postgres;
+
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
             AnyStore::Postgres(s) => s.execute_raw(sql).await,
@@ -283,5 +285,3 @@ impl Store for AnyStore {
         }
     }
 }
-
-impl AnyStore {}
