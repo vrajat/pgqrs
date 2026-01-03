@@ -53,11 +53,13 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // 5. Simulate Zombie (Update Heartbeat)
     // Manually set the worker's heartbeat to be old (e.g., 1 hour ago)
-    // We intentionally violate encapsulation here for the test setup
     let consumer_worker_id = consumer.worker_id();
-    sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
-        .bind(consumer_worker_id)
-        .execute(store.pool())
+    store
+        .execute_raw_with_two_i64(
+            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            3600,
+            consumer_worker_id,
+        )
         .await?;
 
     // 6. Test pgqrs_workers functions
@@ -123,9 +125,12 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Make consumer_2 a zombie
     let c2_id = consumer_2.worker_id();
-    sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
-        .bind(c2_id)
-        .execute(store.pool())
+    store
+        .execute_raw_with_two_i64(
+            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            3600,
+            c2_id,
+        )
         .await?;
 
     // Run CLI command

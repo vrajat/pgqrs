@@ -1,4 +1,4 @@
-use pgqrs::store::AnyStore;
+use pgqrs::store::{AnyStore, Store};
 use serde_json::json;
 
 mod common;
@@ -193,12 +193,11 @@ async fn test_worker_health_stats() {
 
     // Insert a stale worker manually
     // Using pgqrs_lib_stat_test schema
-    sqlx::query(
+    store.execute_raw_with_i64(
         "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at)
-         VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')"
+         VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
+        queue_info.id
     )
-    .bind(queue_info.id)
-    .execute(store.pool())
     .await
     .unwrap();
 

@@ -59,6 +59,46 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
+    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
+        sqlx::raw_sql(sql).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
+        // Use proper parameter binding to prevent SQL injection
+        sqlx::query(sql).bind(param).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    async fn execute_raw_with_two_i64(
+        &self,
+        sql: &str,
+        param1: i64,
+        param2: i64,
+    ) -> crate::error::Result<()> {
+        // Use proper parameter binding to prevent SQL injection
+        sqlx::query(sql)
+            .bind(param1)
+            .bind(param2)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
+    where
+        T: 'static
+            + Send
+            + Unpin
+            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>,
+    {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        let result: T = row.try_get(0)?;
+        Ok(result)
+    }
+
     fn pool(&self) -> sqlx::PgPool {
         self.pool.clone()
     }

@@ -72,9 +72,9 @@ pub async fn cleanup_database_common(
 
     // Drop custom schema if not using 'public'
     if schema != "public" {
-        let drop_schema_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
-        let pool = store.pool();
-        sqlx::query(&drop_schema_sql).execute(pool).await?;
+        use pgqrs::store::Store;
+        let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
+        store.execute_raw(&drop_sql).await?;
         println!(
             "{} schema '{}' dropped successfully",
             connection_type, schema

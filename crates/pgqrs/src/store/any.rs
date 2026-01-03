@@ -117,6 +117,42 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
+    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
+        match self {
+            AnyStore::Postgres(s) => s.execute_raw(sql).await,
+        }
+    }
+
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
+        match self {
+            AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
+        }
+    }
+
+    async fn execute_raw_with_two_i64(
+        &self,
+        sql: &str,
+        param1: i64,
+        param2: i64,
+    ) -> crate::error::Result<()> {
+        match self {
+            AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
+        }
+    }
+
+    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
+    where
+        T: 'static
+            + Send
+            + Unpin
+            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>,
+    {
+        match self {
+            AnyStore::Postgres(s) => s.query_scalar_raw(sql).await,
+        }
+    }
+
     fn pool(&self) -> sqlx::PgPool {
         match self {
             AnyStore::Postgres(s) => s.pool().clone(),

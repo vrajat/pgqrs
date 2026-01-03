@@ -320,6 +320,43 @@ pub enum StepResult<T> {
 /// and transaction management.
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
+    /// Execute raw SQL without parameters.
+    ///
+    /// This method is intended for test setup/cleanup and administrative operations.
+    /// For production queries, prefer using the repository interfaces.
+    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()>;
+
+    /// Execute raw SQL with a single i64 parameter.
+    ///
+    /// This method is intended for test setup/cleanup and administrative operations.
+    /// The parameter is bound as $1 in the SQL string.
+    /// For production queries, prefer using the repository interfaces.
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()>;
+
+    /// Execute raw SQL with two i64 parameters.
+    ///
+    /// This method is intended for test setup/cleanup and administrative operations.
+    /// The parameters are bound as $1 and $2 in the SQL string.
+    /// For production queries, prefer using the repository interfaces.
+    async fn execute_raw_with_two_i64(
+        &self,
+        sql: &str,
+        param1: i64,
+        param2: i64,
+    ) -> crate::error::Result<()>;
+
+    /// Query a single scalar value using raw SQL.
+    ///
+    /// This method is intended for test verification and administrative operations.
+    /// For production queries, prefer using the repository interfaces.
+    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
+    where
+        T: 'static
+            + Send
+            + Unpin
+            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+            + sqlx::Type<sqlx::Postgres>;
+
     /// Get the underlying connection pool.
     fn pool(&self) -> sqlx::PgPool;
 

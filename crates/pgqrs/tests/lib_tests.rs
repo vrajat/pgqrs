@@ -578,12 +578,9 @@ async fn test_custom_schema_search_path() {
         .await
         .expect("Should create queue in custom schema");
 
-    // Verify we can find the table in the custom schema by checking the search_path
-    let pool = store.pool();
-
     // Check that we're using the correct schema by querying the search_path
-    let search_path: String = sqlx::query_scalar("SHOW search_path")
-        .fetch_one(pool)
+    let search_path: String = store
+        .query_scalar_raw("SHOW search_path")
         .await
         .expect("Should get search_path");
 
@@ -602,6 +599,7 @@ async fn test_custom_schema_search_path() {
         "pgqrs_workers",
     ];
 
+    let pool = store.pool();
     for table_name in &tables_to_check {
         let table_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
@@ -769,13 +767,10 @@ async fn test_referential_integrity_checks() {
 
     // Create an orphaned message by inserting directly with invalid queue_id
     // This simulates what would happen if referential integrity was broken
-    let pool = store.pool();
-    let orphan_result =
-        sqlx::query("INSERT INTO pgqrs_messages (queue_id, payload) VALUES ($1, $2)")
-            .bind(99999i64) // Non-existent queue_id
-            .bind(json!({"test": "orphaned"}))
-            .execute(pool)
-            .await;
+    let orphan_result = store
+        .execute_raw(
+            "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)")
+        .await;
 
     match orphan_result {
         Ok(_) => {
@@ -791,9 +786,8 @@ async fn test_referential_integrity_checks() {
                 .contains("messages with invalid queue_id references"));
 
             // Clean up orphaned message
-            sqlx::query("DELETE FROM pgqrs_messages WHERE queue_id = $1")
-                .bind(99999i64)
-                .execute(pool)
+            store
+                .execute_raw("DELETE FROM pgqrs_messages WHERE queue_id = 99999")
                 .await
                 .expect("Failed to clean up orphaned message");
         }
@@ -1383,10 +1377,11 @@ async fn test_dlq() {
     let msg_id = msg_ids[0];
 
     // Update read_ct out of band to simulate processing failure
-    let pool = store.pool();
-    sqlx::query("UPDATE pgqrs_messages SET read_ct = read_ct + 5 WHERE id = $1")
-        .bind(msg_id)
-        .execute(pool)
+    store
+        .execute_raw_with_i64(
+            "UPDATE pgqrs_messages SET read_ct = read_ct + 5 WHERE id = $1",
+            msg_id,
+        )
         .await
         .expect("Failed to update read_ct");
 
