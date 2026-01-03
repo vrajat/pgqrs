@@ -65,7 +65,8 @@ impl AnyStore {
         } else {
             Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
-                message: "Unsupported DSN format (must start with postgres:// or postgresql://)".to_string(),
+                message: "Unsupported DSN format (must start with postgres:// or postgresql://)"
+                    .to_string(),
             })
         }
     }
