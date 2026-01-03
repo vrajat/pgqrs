@@ -322,6 +322,7 @@ impl Admin {
             let workflow = rust_pgqrs::workflow()
                 .name(&name)
                 .arg(&json_arg)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
                 .create(&store)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;

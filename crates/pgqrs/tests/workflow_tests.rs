@@ -30,7 +30,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     // Use create to get valid ID
     let mut workflow = pgqrs::workflow()
         .name("test_wf")
-        .arg(&input)
+        .arg(&input)?
         .create(&store)
         .await?;
     let workflow_id = workflow.id();
@@ -39,7 +39,6 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
 
     // Step 1: Run
     let step1_id = "step1";
-    // step_id is String in macro, but &str here. acquire takes &str.
     // step_id is String in macro, but &str here. acquire takes &str.
     let step_res = pgqrs::step(workflow_id, step1_id)
         .acquire::<TestData, _>(&store)
@@ -84,7 +83,6 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Step 2: Rerun (should be ERROR state because of drop)
-    // Step 2: Rerun (should be ERROR state because of drop)
     let step_res = pgqrs::step(workflow_id, step2_id)
         .acquire::<TestData, _>(&store)
         .await;
@@ -111,7 +109,7 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     };
     let mut wf_fail = pgqrs::workflow()
         .name("fail_wf")
-        .arg(&input_fail)
+        .arg(&input_fail)?
         .create(&store)
         .await?;
     wf_fail.start().await?;

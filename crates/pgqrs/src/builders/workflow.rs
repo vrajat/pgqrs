@@ -25,9 +25,9 @@ impl WorkflowBuilder {
     }
 
     /// Set the workflow input argument.
-    pub fn arg<T: Serialize>(mut self, input: &T) -> Self {
-        self.input = Some(serde_json::to_value(input).expect("Failed to serialize input"));
-        self
+    pub fn arg<T: Serialize>(mut self, input: &T) -> Result<Self> {
+        self.input = Some(serde_json::to_value(input).map_err(crate::error::Error::Serialization)?);
+        Ok(self)
     }
 
     /// Create the workflow using the provided store.

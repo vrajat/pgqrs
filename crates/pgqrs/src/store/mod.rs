@@ -340,9 +340,6 @@ pub trait Store: Send + Sync + 'static {
     /// Create a new workflow.
     ///
     /// This is the low-level API. Use `pgqrs::workflow()` builder for convenience.
-    /// Create a new workflow.
-    ///
-    /// This is the low-level API. Use `pgqrs::workflow()` builder for convenience.
     async fn create_workflow<T: serde::Serialize + Send + Sync>(
         &self,
         name: &str,

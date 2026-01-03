@@ -92,7 +92,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         let workflow = pgqrs::workflow()
             .name("pending_wf")
-            .arg(&input)
+            .arg(&input)?
             .create(&store)
             .await?;
         let workflow_id = workflow.id();
@@ -113,7 +113,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         let mut workflow = pgqrs::workflow()
             .name("my_workflow")
-            .arg(&input)
+            .arg(&input)?
             .create(&store)
             .await?;
         let workflow_id = workflow.id();
@@ -136,7 +136,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         let mut workflow = pgqrs::workflow()
             .name("idempotency_wf")
-            .arg(&input)
+            .arg(&input)?
             .create(&store)
             .await?;
         let workflow_id = workflow.id();
@@ -169,7 +169,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         let mut workflow = pgqrs::workflow()
             .name("workflow_with_failing_step")
-            .arg(&input)
+            .arg(&input)?
             .create(&store)
             .await?;
         let workflow_id = workflow.id();
@@ -193,7 +193,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         let mut workflow = pgqrs::workflow()
             .name("workflow_fail_at_end")
-            .arg(&input)
+            .arg(&input)?
             .create(&store)
             .await?;
         let workflow_id = workflow.id();
