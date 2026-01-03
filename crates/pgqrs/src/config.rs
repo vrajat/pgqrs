@@ -781,6 +781,7 @@ max_connections: [invalid yaml structure
     }
 
     #[test]
+    #[serial]
     fn test_load_with_explicit_config_file() {
         clear_test_env_vars();
 
@@ -803,6 +804,7 @@ max_connections: 128
     }
 
     #[test]
+    #[serial]
     fn test_load_with_dsn_priority_over_file() {
         clear_test_env_vars();
 
@@ -864,6 +866,7 @@ max_connections: 256
     }
 
     #[test]
+    #[serial]
     fn test_load_no_config_source() {
         clear_test_env_vars();
 
