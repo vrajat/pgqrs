@@ -131,14 +131,12 @@ impl Store for PostgresStore {
         workflow_id: i64,
         step_id: &str,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
-        use crate::store::postgres::workflow::guard::StepResult;
         let result =
             PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
                 .await?;
-        match result {
-            StepResult::Execute(guard) => Ok(crate::store::StepResult::Execute(Box::new(guard))),
-            StepResult::Skipped(val) => Ok(crate::store::StepResult::Skipped(val)),
-        }
+        // PostgresStepGuard::acquire returns local StepResult? No, I updated it to crate::store::StepResult.
+        // So no conversion needed if I updated it correctly.
+        Ok(result)
     }
 
     async fn create_workflow<T: serde::Serialize + Send + Sync>(

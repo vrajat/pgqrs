@@ -75,12 +75,8 @@ pub use crate::store::{
     StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,
 };
 
-// NOTE: These Postgres-specific implementation types are exported for macro support
-// and legacy compatibility. New code should use the Store trait methods instead.
-// TODO(#125): Consider moving these to a `pgqrs::postgres` sub-module.
-pub use crate::store::postgres::workflow::guard::StepGuard as StepGuardImpl;
-pub use crate::store::postgres::workflow::guard::StepResult as StepResultImpl;
-pub use crate::store::postgres::workflow::handle::Workflow as WorkflowImpl;
+// Re-export common types
+
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
@@ -95,3 +91,8 @@ pub use crate::types::{
 
 pub use crate::validation::ValidationConfig;
 pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};
+
+// Builder APIs
+// Builder APIs
+// builders module is declared at line 63
+pub use builders::workflow::{step, workflow};

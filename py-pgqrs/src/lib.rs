@@ -7,7 +7,7 @@ use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
     QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
 };
-use rust_pgqrs::{StepGuard, StepGuardImpl, StepResultImpl, Workflow, WorkflowExt, WorkflowImpl};
+use rust_pgqrs::{StepGuard, StepResult, Workflow, WorkflowExt};
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -319,13 +319,16 @@ impl Admin {
         let json_arg = py_to_json(arg.as_ref(py))?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let pool = store.pool();
-            let workflow = WorkflowImpl::create(pool.clone(), &name, &json_arg)
+            let workflow = rust_pgqrs::workflow()
+                .name(&name)
+                .arg(&json_arg)
+                .create(&store)
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             Ok(PyWorkflow {
                 inner: Arc::new(tokio::sync::Mutex::new(workflow)),
+                store,
             })
         })
     }
@@ -934,7 +937,8 @@ impl From<rust_pgqrs::types::ArchivedMessage> for ArchivedMessage {
 #[pyclass]
 struct PyWorkflow {
     #[allow(dead_code)]
-    inner: Arc<tokio::sync::Mutex<WorkflowImpl>>,
+    inner: Arc<tokio::sync::Mutex<Box<dyn Workflow>>>,
+    store: AnyStore,
 }
 
 #[pymethods]
@@ -972,19 +976,22 @@ impl PyWorkflow {
 
     fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let store = self.store.clone();
+
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let (id, pool) = {
+            let id = {
                 let wf = inner.lock().await;
-                (wf.id(), wf.pool().clone())
+                wf.id()
             };
 
-            let res: StepResultImpl<serde_json::Value> =
-                StepGuardImpl::acquire(&pool, id, &step_id)
+            let res: rust_pgqrs::StepResult<serde_json::Value> =
+                rust_pgqrs::step(id, &step_id)
+                    .acquire(&store)
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             Python::with_gil(|py| match res {
-                StepResultImpl::Execute(guard) => Ok(PyStepResult {
+                rust_pgqrs::StepResult::Execute(guard) => Ok(PyStepResult {
                     status: "EXECUTE".to_string(),
                     value: py.None(),
                     guard: Some(PyStepGuard {
@@ -992,7 +999,7 @@ impl PyWorkflow {
                     }),
                 }
                 .into_py(py)),
-                StepResultImpl::Skipped(val) => Ok(PyStepResult {
+                rust_pgqrs::StepResult::Skipped(val) => Ok(PyStepResult {
                     status: "SKIPPED".to_string(),
                     value: json_to_py(py, &val)?,
                     guard: None,
@@ -1016,7 +1023,7 @@ struct PyStepResult {
 #[pyclass]
 #[derive(Clone)]
 struct PyStepGuard {
-    inner: Arc<tokio::sync::Mutex<StepGuardImpl>>,
+    inner: Arc<tokio::sync::Mutex<Box<dyn StepGuard>>>,
 }
 
 #[pymethods]

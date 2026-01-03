@@ -42,14 +42,6 @@ pub struct StepGuard {
     completed: bool,
 }
 
-/// The result of attempting to start a step.
-pub enum StepResult<T> {
-    /// The step needs to be executed. The returned guard MUST be used to report success or failure.
-    Execute(StepGuard),
-    /// The step was already completed successfully in a previous run. Contains the cached output.
-    Skipped(T),
-}
-
 impl StepGuard {
     /// Attempt to start a step.
     ///
@@ -57,11 +49,11 @@ impl StepGuard {
     /// - If the step is already `SUCCESS`, returns `StepResult::Skipped` with the deserialized output.
     /// - If the step is `ERROR`, fails with the previous error (terminal state).
     /// - If the step is `PENDING`, `RUNNING` (retry), marks it as `RUNNING` and returns `StepResult::Execute`.
-    pub async fn acquire<T: DeserializeOwned>(
+    pub async fn acquire<T: DeserializeOwned + 'static>(
         pool: &PgPool,
         workflow_id: i64,
         step_id: &str,
-    ) -> Result<StepResult<T>> {
+    ) -> Result<crate::store::StepResult<T>> {
         let step_id_string = step_id.to_string();
 
         let row: (
@@ -89,7 +81,7 @@ impl StepGuard {
             let output_val = output.unwrap_or(serde_json::Value::Null);
             let result: T =
                 serde_json::from_value(output_val).map_err(crate::error::Error::Serialization)?;
-            return Ok(StepResult::Skipped(result));
+            return Ok(crate::store::StepResult::Skipped(result));
         }
 
         if status == WorkflowStatus::Error {
@@ -103,12 +95,15 @@ impl StepGuard {
             });
         }
 
-        Ok(StepResult::Execute(StepGuard {
+        // Initialize guard and return Execute
+        let guard = StepGuard {
             pool: pool.clone(),
             workflow_id,
             step_id: step_id_string,
-            completed: false,
-        }))
+            completed: false, // Mark as incomplete initially
+        };
+
+        Ok(crate::store::StepResult::Execute(Box::new(guard)))
     }
 }
 

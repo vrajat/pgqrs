@@ -241,6 +241,14 @@ pub trait Workflow: Send + Sync {
 
     /// Fail the workflow with an error value.
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
+
+    /// Acquire a step lock for this workflow.
+    ///
+    /// This is used internally by macros to acquire steps within a workflow execution context.
+    async fn acquire_step(
+        &self,
+        step_id: &str,
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>>;
 }
 
 /// Extension trait for Workflow to provide generic convenience methods.
@@ -311,7 +319,7 @@ pub enum StepResult<T> {
 /// Main store trait that provides access to entity-specific repositories
 /// and transaction management.
 #[async_trait]
-pub trait Store: Clone + Send + Sync + 'static {
+pub trait Store: Send + Sync + 'static {
     /// Get the underlying connection pool.
     fn pool(&self) -> sqlx::PgPool;
 
@@ -328,6 +336,29 @@ pub trait Store: Clone + Send + Sync + 'static {
     fn archive(&self) -> &dyn ArchiveTable;
     /// Get access to the workflow repository.
     fn workflows(&self) -> &dyn WorkflowTable;
+
+    /// Create a new workflow.
+    ///
+    /// This is the low-level API. Use `pgqrs::workflow()` builder for convenience.
+    /// Create a new workflow.
+    ///
+    /// This is the low-level API. Use `pgqrs::workflow()` builder for convenience.
+    async fn create_workflow<T: serde::Serialize + Send + Sync>(
+        &self,
+        name: &str,
+        input: &T,
+    ) -> crate::error::Result<Box<dyn Workflow>>;
+
+
+
+    /// Attempt to acquire a step lock.
+    ///
+    /// This is the low-level API. Use `pgqrs::step()` builder for convenience.
+    async fn acquire_step(
+        &self,
+        workflow_id: i64,
+        step_id: &str,
+    ) -> crate::error::Result<StepResult<serde_json::Value>>;
 
     /// Get an admin worker interface.
     async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>>;
@@ -355,20 +386,6 @@ pub trait Store: Clone + Send + Sync + 'static {
 
     /// Get a generic worker handle by ID.
     fn worker(&self, id: i64) -> Box<dyn Worker>;
-
-    /// Acquire a step execution guard.
-    async fn acquire_step(
-        &self,
-        workflow_id: i64,
-        step_id: &str,
-    ) -> crate::error::Result<StepResult<serde_json::Value>>;
-
-    /// Create a new workflow execution.
-    async fn create_workflow<T: serde::Serialize + Send + Sync>(
-        &self,
-        name: &str,
-        input: &T,
-    ) -> crate::error::Result<Box<dyn Workflow>>;
 
     /// Returns the concurrency model supported by this backend.
     fn concurrency_model(&self) -> ConcurrencyModel;
