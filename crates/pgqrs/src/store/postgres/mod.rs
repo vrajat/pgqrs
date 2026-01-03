@@ -134,8 +134,6 @@ impl Store for PostgresStore {
         let result =
             PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
                 .await?;
-        // PostgresStepGuard::acquire returns local StepResult? No, I updated it to crate::store::StepResult.
-        // So no conversion needed if I updated it correctly.
         Ok(result)
     }
 

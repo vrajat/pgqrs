@@ -7,7 +7,7 @@ use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
     QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
 };
-use rust_pgqrs::{StepGuard, StepResult, Workflow, WorkflowExt};
+use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
 use std::sync::Arc;
 use std::sync::OnceLock;

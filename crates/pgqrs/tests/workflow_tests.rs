@@ -1,5 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{Config, StepGuardExt, StepResult, Workflow, WorkflowExt};
+use pgqrs::{Config, StepGuardExt, StepResult, WorkflowExt};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -22,8 +22,6 @@ async fn create_store() -> AnyStore {
 async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
     pgqrs::admin(&store).install().await?;
-
-    let pool = store.pool();
 
     // Start workflow
     let input = TestData {
@@ -69,8 +67,6 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         StepResult::Execute(_) => panic!("Step 1 should skip on rerun"),
     }
 
-    // Step 2: Drop (Panic simulation)
-    let step2_id = "step2";
     // Step 2: Drop (Panic simulation)
     let step2_id = "step2";
     let step_res = pgqrs::step(workflow_id, step2_id)

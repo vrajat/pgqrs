@@ -95,12 +95,11 @@ impl StepGuard {
             });
         }
 
-        // Initialize guard and return Execute
         let guard = StepGuard {
             pool: pool.clone(),
             workflow_id,
             step_id: step_id_string,
-            completed: false, // Mark as incomplete initially
+            completed: false,
         };
 
         Ok(crate::store::StepResult::Execute(Box::new(guard)))

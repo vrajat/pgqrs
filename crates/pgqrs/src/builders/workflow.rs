@@ -1,9 +1,7 @@
 use crate::error::Result;
-use crate::store::{StepGuard, Workflow};
-use crate::store::{StepResult, Store};
+use crate::store::{StepResult, Store, Workflow};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::sync::Arc;
 
 /// Builder for creating database-agnostic workflows.
 pub struct WorkflowBuilder {
