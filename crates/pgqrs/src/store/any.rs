@@ -99,7 +99,7 @@ impl AnyStore {
                     .await
                     .map_err(|e| crate::error::Error::ConnectionFailed {
                         source: e,
-                        context: format!("Failed to connect to postgres: {}", dsn),
+                        context: "Failed to connect to postgres".into(),
                     })?;
             // Default config will be applied when new() creates the store
             Ok(AnyStore::Postgres(PostgresStore::new(

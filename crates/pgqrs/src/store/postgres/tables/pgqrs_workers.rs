@@ -361,7 +361,7 @@ impl crate::store::WorkerTable for Workers {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ALL_WORKERS".into(),
                 source: e,
-                context: "Failed to list all workers".to_string(),
+                context: "Failed to list all workers".into(),
             })?;
 
         Ok(workers)
@@ -375,7 +375,7 @@ impl crate::store::WorkerTable for Workers {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SELECT COUNT(*) FROM pgqrs_workers".into(),
                 source: e,
-                context: "Failed to count workers".to_string(),
+                context: "Failed to count workers".into(),
             })?;
         Ok(row)
     }
