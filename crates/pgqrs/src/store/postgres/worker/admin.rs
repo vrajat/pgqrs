@@ -445,9 +445,7 @@ impl crate::store::Admin for Admin {
     /// Ok if installation (or validation) succeeds, error otherwise.
     async fn install(&self) -> Result<()> {
         // Run migrations using sqlx
-        MIGRATOR
-            .run(&self.pool)
-            .await?;
+        MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
 
