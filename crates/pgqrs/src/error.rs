@@ -88,8 +88,9 @@ pub enum Error {
     /// SQL query failed
     #[error("Database query failed: {query}. Context: {context}. Source: {source}")]
     QueryFailed {
-        query: String,
+        #[source]
         source: sqlx::Error,
+        query: String,
         context: String,
     },
 
