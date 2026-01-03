@@ -16,7 +16,7 @@ use tokio::runtime::Runtime;
 
 // Exceptions
 pyo3::create_exception!(pgqrs, PgqrsError, pyo3::exceptions::PyException);
-pyo3::create_exception!(pgqrs, ConnectionError, PgqrsError);
+pyo3::create_exception!(pgqrs, PgqrsConnectionError, PgqrsError);
 pyo3::create_exception!(pgqrs, QueueNotFoundError, PgqrsError);
 pyo3::create_exception!(pgqrs, WorkerNotFoundError, PgqrsError);
 pyo3::create_exception!(pgqrs, QueueAlreadyExistsError, PgqrsError);
@@ -25,11 +25,17 @@ pyo3::create_exception!(pgqrs, SerializationError, PgqrsError);
 pyo3::create_exception!(pgqrs, ConfigError, PgqrsError);
 pyo3::create_exception!(pgqrs, RateLimitedError, PgqrsError);
 pyo3::create_exception!(pgqrs, ValidationError, PgqrsError);
+pyo3::create_exception!(pgqrs, TimeoutError, PgqrsError);
+pyo3::create_exception!(pgqrs, InternalError, PgqrsError);
+pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
 
 fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     match err {
         rust_pgqrs::Error::QueueNotFound { .. } => QueueNotFoundError::new_err(err.to_string()),
-        rust_pgqrs::Error::WorkerNotFound { .. } => WorkerNotFoundError::new_err(err.to_string()),
+        rust_pgqrs::Error::WorkerNotFound { .. }
+        | rust_pgqrs::Error::WorkerNotRegistered { .. } => {
+            WorkerNotFoundError::new_err(err.to_string())
+        }
         rust_pgqrs::Error::QueueAlreadyExists { .. } => {
             QueueAlreadyExistsError::new_err(err.to_string())
         }
@@ -42,9 +48,21 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         rust_pgqrs::Error::ValidationFailed { .. }
         | rust_pgqrs::Error::PayloadTooLarge { .. }
         | rust_pgqrs::Error::SchemaValidation { .. } => ValidationError::new_err(err.to_string()),
+        rust_pgqrs::Error::Timeout { .. } => TimeoutError::new_err(err.to_string()),
         rust_pgqrs::Error::ConnectionFailed { .. }
         | rust_pgqrs::Error::PoolExhausted { .. }
-        | rust_pgqrs::Error::Database(_) => ConnectionError::new_err(err.to_string()),
+        | rust_pgqrs::Error::Database(_)
+        | rust_pgqrs::Error::QueryFailed { .. }
+        | rust_pgqrs::Error::TransactionFailed { .. } => {
+            PgqrsConnectionError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::InvalidStateTransition { .. }
+        | rust_pgqrs::Error::WorkerHasPendingMessages { .. } => {
+            StateTransitionError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::Internal { .. } | rust_pgqrs::Error::MigrationFailed(_) => {
+            InternalError::new_err(err.to_string())
+        }
         _ => PgqrsError::new_err(err.to_string()),
     }
 }
@@ -204,12 +222,26 @@ impl PyConfig {
 struct IteratorState {
     store: AnyStore,
     queue: String,
-    consumer: Option<Arc<Box<dyn rust_pgqrs::store::Consumer>>>,
+    consumer: Option<Arc<Box<dyn rust_pgqrs::Consumer>>>,
+    poll_interval: tokio::time::Duration,
 }
 
 #[pyclass]
 struct ConsumerIterator {
     inner: Arc<tokio::sync::Mutex<IteratorState>>,
+}
+
+impl ConsumerIterator {
+    fn new(store: AnyStore, queue: String, poll_interval_ms: u64) -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(IteratorState {
+                store,
+                queue,
+                consumer: None,
+                poll_interval: tokio::time::Duration::from_millis(poll_interval_ms),
+            })),
+        }
+    }
 }
 
 #[pymethods]
@@ -222,18 +254,24 @@ impl ConsumerIterator {
     fn anext<'a>(&self, py: Python<'a>) -> PyResult<IterANextOutput<&'a PyAny, &'a PyAny>> {
         let inner = self.inner.clone();
         let fut = pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut state = inner.lock().await;
+            // Acquire lock to get or initialize consumer
+            let (consumer, poll_interval) = {
+                let mut state = inner.lock().await;
 
-            if state.consumer.is_none() {
-                let c = state
-                    .store
-                    .consumer_ephemeral(&state.queue, state.store.config())
-                    .await
-                    .map_err(to_py_err)?;
-                state.consumer = Some(Arc::new(c));
-            }
+                if state.consumer.is_none() {
+                    let c = state
+                        .store
+                        .consumer_ephemeral(&state.queue, state.store.config())
+                        .await
+                        .map_err(to_py_err)?;
+                    state.consumer = Some(Arc::new(c));
+                }
 
-            let consumer = state.consumer.as_ref().unwrap().clone();
+                (
+                    state.consumer.as_ref().unwrap().clone(),
+                    state.poll_interval,
+                )
+            }; // Lock dropped here
 
             loop {
                 // Fetch 1 message
@@ -244,7 +282,7 @@ impl ConsumerIterator {
                 }
 
                 // Wait a bit before polling again
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(poll_interval).await;
             }
         })?;
         Ok(IterANextOutput::Yield(fut))
@@ -327,14 +365,8 @@ impl PyStore {
         })
     }
 
-    fn consume_stream<'a>(&self, queue: String) -> ConsumerIterator {
-        ConsumerIterator {
-            inner: Arc::new(tokio::sync::Mutex::new(IteratorState {
-                store: self.inner.clone(),
-                queue,
-                consumer: None,
-            })),
-        }
+    fn consume_iter(&self, queue: String, poll_interval_ms: Option<u64>) -> ConsumerIterator {
+        ConsumerIterator::new(self.inner.clone(), queue, poll_interval_ms.unwrap_or(50))
     }
 }
 
@@ -777,10 +809,11 @@ impl Consumer {
         })
     }
 
-    fn dequeue<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+    fn dequeue<'a>(&self, py: Python<'a>, batch_size: Option<usize>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let batch_size = batch_size.unwrap_or(1);
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner.dequeue().await.map_err(to_py_err)?;
+            let messages = inner.dequeue_many(batch_size).await.map_err(to_py_err)?;
             Ok(messages
                 .into_iter()
                 .map(QueueMessage::from)
@@ -799,8 +832,12 @@ impl Consumer {
         })
     }
 
-    fn ack<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
-        self.delete(py, message_id)
+    fn archive<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner.archive(message_id).await.map_err(to_py_err)?;
+            Ok(true)
+        })
     }
 
     fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
@@ -1191,7 +1228,10 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;
-    m.add("ConnectionError", py.get_type::<ConnectionError>())?;
+    m.add(
+        "PgqrsConnectionError",
+        py.get_type::<PgqrsConnectionError>(),
+    )?;
     m.add("QueueNotFoundError", py.get_type::<QueueNotFoundError>())?;
     m.add("WorkerNotFoundError", py.get_type::<WorkerNotFoundError>())?;
     m.add(
@@ -1206,6 +1246,12 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add("ConfigError", py.get_type::<ConfigError>())?;
     m.add("RateLimitedError", py.get_type::<RateLimitedError>())?;
     m.add("ValidationError", py.get_type::<ValidationError>())?;
+    m.add("TimeoutError", py.get_type::<TimeoutError>())?;
+    m.add("InternalError", py.get_type::<InternalError>())?;
+    m.add(
+        "StateTransitionError",
+        py.get_type::<StateTransitionError>(),
+    )?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;

@@ -9,7 +9,7 @@ async def main():
     print(f"Connecting to {DSN}...")
     try:
         store = await pgqrs.connect(DSN)
-    except pgqrs.ConnectionError as e:
+    except pgqrs.PgqrsConnectionError as e:
         print(f"Failed to connect: {e}")
         return
 
@@ -35,7 +35,7 @@ async def main():
     print("Consuming messages using iterator...")
     count = 0
     # Use explicit iterator to access methods like archive()
-    iterator = store.consume_stream(queue)
+    iterator = store.consume_iter(queue)
     try:
         async with asyncio.timeout(5.0):
             async for msg in iterator:

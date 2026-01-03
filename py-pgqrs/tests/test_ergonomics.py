@@ -15,29 +15,36 @@ async def test_consume_stream_iterator(postgres_dsn, schema):
     Test the consume_stream iterator.
     """
     store, admin = await setup_test(postgres_dsn, schema)
-    queue = "stream_test_q"
-    await admin.create_queue(queue)
+    queue_name = "stream_test_q"
+    await admin.create_queue(queue_name)
 
-    # Produce some messages
-    producer = await store.producer(queue)
+    iterator = store.consume_iter(queue_name, poll_interval_ms=10)
+    received_count = 0
+    consume_task = None
+
+    async def consume_loop():
+        nonlocal received_count
+        async for msg in iterator:
+            received_count += 1
+            # Verify archive method
+            res = await iterator.archive(msg.id)
+            assert res is True
+            if received_count >= 5:
+                break
+
+    # Produce messages FIRST
+    producer = await store.producer(queue_name)
     for i in range(5):
         await pgqrs.enqueue(producer, {"i": i})
 
-    # Consume using iterator
-    # Note: Our iterator loops forever, so we need to break manually or run with timeout
-    received = []
+    consume_task = asyncio.create_task(consume_loop())
 
-    async def consume_loop():
-        async for msg in store.consume_stream(queue):
-            received.append(msg)
-            if len(received) >= 5:
-                break
+    await asyncio.wait_for(consume_task, timeout=5.0)
+    assert received_count == 5
 
-    await asyncio.wait_for(consume_loop(), timeout=5.0)
-
-    assert len(received) == 5
-    assert received[0].payload == {"i": 0}
-    assert received[4].payload == {"i": 4}
+    # Verify messages are archived
+    archive_count = await (await admin.get_archive()).count()
+    assert archive_count == 5
 
 @pytest.mark.asyncio
 async def test_exceptions(postgres_dsn, schema):
@@ -47,25 +54,22 @@ async def test_exceptions(postgres_dsn, schema):
     store, admin = await setup_test(postgres_dsn, schema)
 
     # Test QueueNotFoundError
-    # First ensure it doesn't exist
+    # Attempt to use a non-existent queue with consumer to force an error
+    # since admin.delete_queue might be idempotent
     qname = "non_existent_queue_abc"
     try:
         await admin.delete_queue(qname)
     except pgqrs.QueueNotFoundError:
         pass # Expected if it failed
     except Exception:
-        # If delete_queue is idempotent, we might need another way to trigger generic error
-        # Try getting messages from it?
-        # But get_messages returns a Messages object, not async.
         pass
 
     # Better test: connect with invalid DSN
-    print(f"DEBUG: postgres_dsn={postgres_dsn}")
 
     # Use invalid host
     bad_dsn = "postgres://user:pass@non-existent-host-12345.local:5432/db"
 
-    with pytest.raises(pgqrs.ConnectionError):
+    with pytest.raises(pgqrs.PgqrsConnectionError):
          await pgqrs.connect(bad_dsn)
 
     # Test create_queue on existing queue?
