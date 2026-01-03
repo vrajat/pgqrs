@@ -15,6 +15,7 @@ pub struct DequeueBuilder<'a> {
     batch_size: usize,
     worker: Option<&'a dyn crate::store::Consumer>,
     vt_offset_seconds: Option<u32>,
+    at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl<'a> Default for DequeueBuilder<'a> {
@@ -30,6 +31,7 @@ impl<'a> DequeueBuilder<'a> {
             batch_size: 1,
             worker: None,
             vt_offset_seconds: None,
+            at: None,
         }
     }
 
@@ -69,10 +71,19 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
+    /// Set a custom reference time for the dequeue operation (useful for testing delays)
+    pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
+        self.at = Some(time);
+        self
+    }
+
     /// Fetch one message
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
         let consumer = self.resolve_consumer(store).await?;
-        let msgs = if let Some(vt_offset) = self.vt_offset_seconds {
+        let msgs = if let Some(at) = self.at {
+            let vt = self.vt_offset_seconds.unwrap_or(5);
+            consumer.dequeue_at(1, vt, at).await?
+        } else if let Some(vt_offset) = self.vt_offset_seconds {
             consumer.dequeue_many_with_delay(1, vt_offset).await?
         } else {
             consumer.dequeue().await?
@@ -83,7 +94,10 @@ impl<'a> DequeueBuilder<'a> {
     /// Fetch all messages (up to batch size)
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<QueueMessage>> {
         let consumer = self.resolve_consumer(store).await?;
-        if let Some(vt_offset) = self.vt_offset_seconds {
+        if let Some(at) = self.at {
+            let vt = self.vt_offset_seconds.unwrap_or(5);
+            consumer.dequeue_at(self.batch_size, vt, at).await
+        } else if let Some(vt_offset) = self.vt_offset_seconds {
             consumer
                 .dequeue_many_with_delay(self.batch_size, vt_offset)
                 .await

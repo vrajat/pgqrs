@@ -44,15 +44,13 @@ const REPLAY_FROM_DLQ: &str = r#"
     WITH archived_msg AS (
         DELETE FROM pgqrs_archive
         WHERE id = $1
-          AND worker_id IS NULL
-          AND dequeued_at IS NULL
-        RETURNING original_msg_id, queue_id, payload, enqueued_at, vt, read_ct
+        RETURNING queue_id, payload, enqueued_at, read_ct
     )
     INSERT INTO pgqrs_messages
-        (id, queue_id, payload, enqueued_at, vt, read_ct)
-    SELECT original_msg_id, queue_id, payload, enqueued_at, NOW(), read_ct
+        (queue_id, payload, enqueued_at, vt, read_ct)
+    SELECT queue_id, payload, enqueued_at, NOW(), read_ct
     FROM archived_msg
-    RETURNING id, queue_id, payload, enqueued_at, vt, read_ct;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
 "#;
 
 /// Producer interface for enqueueing messages to a specific queue.

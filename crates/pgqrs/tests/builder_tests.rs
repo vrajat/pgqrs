@@ -479,3 +479,138 @@ async fn test_enqueue_empty_messages_error() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn test_builder_delay_behavior() {
+    let store = create_store().await;
+    let queue_name = "test_builder_delay_behavior";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let payload = json!({"delayed": true});
+
+    // Enqueue with 2 second delay
+    pgqrs::enqueue()
+        .message(&payload)
+        .to(queue_name)
+        .delay(2)
+        .execute(&store)
+        .await
+        .expect("Failed to enqueue delayed message");
+
+    // Dequeue immediately - should be None
+    let msg = pgqrs::dequeue()
+        .from(queue_name)
+        .fetch_one(&store)
+        .await
+        .expect("Failed to fetch");
+    assert!(msg.is_none(), "Message should not be visible yet");
+
+    // Use time travel instead of sleep
+    // Dequeue at (now + 3s) - should be Some because 3s > 2s delay
+    let future_time = chrono::Utc::now() + chrono::Duration::seconds(3);
+
+    // Dequeue now - should be Some
+    let msg = pgqrs::dequeue()
+        .from(queue_name)
+        .at(future_time)
+        .fetch_one(&store)
+        .await
+        .expect("Failed to fetch");
+    assert!(msg.is_some(), "Message should be visible now");
+    assert_eq!(msg.unwrap().payload, payload);
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_builder_vt_offset_behavior() {
+    let store = create_store().await;
+    let queue_name = "test_builder_vt_offset_behavior";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let payload = json!({"reappearing": true});
+    pgqrs::enqueue()
+        .message(&payload)
+        .to(queue_name)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    // Dequeue with 5 second vt_offset
+    let msg = pgqrs::dequeue()
+        .from(queue_name)
+        .vt_offset(5)
+        .fetch_one(&store)
+        .await
+        .expect("Failed to fetch")
+        .expect("Should have message");
+
+    assert_eq!(msg.payload, payload);
+
+    // Verify VT duration
+    let now = chrono::Utc::now();
+    let diff = (msg.vt - now).num_seconds();
+    assert!(
+        (4..=6).contains(&diff),
+        "VT should be ~5s in future, got {}s",
+        diff
+    );
+
+    // Try to dequeue immediately - should be None
+    let msg2 = pgqrs::dequeue()
+        .from(queue_name)
+        .fetch_one(&store)
+        .await
+        .expect("Failed to fetch");
+    assert!(msg2.is_none(), "Message should be locked");
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_builder_batch_enqueue_advanced() {
+    let store = create_store().await;
+    let queue_name = "test_batch_advanced";
+    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+
+    let payloads: Vec<_> = (0..10).map(|i| json!({"batch_idx": i})).collect();
+
+    // Batch enqueue with 1 hour delay (using with_delay)
+    let msg_ids = pgqrs::enqueue()
+        .messages(&payloads)
+        .to(queue_name)
+        .with_delay(std::time::Duration::from_secs(3600))
+        .execute(&store)
+        .await
+        .expect("Failed to enqueue batch");
+
+    assert_eq!(msg_ids.len(), 10);
+
+    // Verify all messages have future VT
+    for id in msg_ids {
+        let msg = pgqrs::tables(&store)
+            .messages()
+            .get(id)
+            .await
+            .expect("Message missing");
+
+        assert!(msg.vt > chrono::Utc::now() + chrono::Duration::minutes(59));
+    }
+
+    // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
