@@ -109,7 +109,7 @@ async fn test_nonexistent_schema_operations() {
         .expect("Valid schema name");
 
     // Creating store should succeed (connection pool is created)
-    let store = pgqrs::store::AnyStore::connect(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
         .expect("Creating store should succeed");
 
@@ -148,7 +148,7 @@ async fn test_verify_requires_existing_schema() {
     let config =
         Config::from_dsn_with_schema(database_url, "pgqrs_error_test").expect("Valid schema name");
 
-    let store = pgqrs::store::AnyStore::connect(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
         .expect("Should be able to create store with existing schema");
 

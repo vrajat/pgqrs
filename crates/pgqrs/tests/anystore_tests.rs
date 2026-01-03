@@ -7,7 +7,7 @@ async fn create_store() -> pgqrs::store::AnyStore {
     let database_url = common::get_postgres_dsn(Some("pgqrs_anystore_test")).await;
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_anystore_test")
         .expect("Failed to create config with anystore_test schema");
-    pgqrs::store::AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to create store")
 }

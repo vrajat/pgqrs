@@ -18,7 +18,7 @@
 //! # use pgqrs::{Config, Admin};
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = Config::from_dsn("postgresql://user:pass@localhost/db");
-//! let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! let store = pgqrs::connect_with_config(&config).await?;
 //! pgqrs::admin(&store).install().await?;
 //! pgqrs::admin(&store).create_queue("jobs").await?;
 //! # Ok(())

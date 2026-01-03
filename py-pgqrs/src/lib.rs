@@ -218,7 +218,7 @@ impl PyStore {
 fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let config = rust_pgqrs::Config::from_dsn(&dsn);
-        let store = AnyStore::connect(&config)
+        let store = rust_pgqrs::connect_with_config(&config)
             .await
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(PyStore { inner: store })
@@ -228,7 +228,7 @@ fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
 #[pyfunction]
 fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        let store = AnyStore::connect(&config.inner)
+        let store = rust_pgqrs::connect_with_config(&config.inner)
             .await
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(PyStore { inner: store })

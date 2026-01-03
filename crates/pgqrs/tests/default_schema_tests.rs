@@ -26,7 +26,7 @@ async fn test_default_schema_backward_compatibility() {
     assert_eq!(config.schema, "public");
 
     // Test that store operations work with default schema
-    let store = pgqrs::store::AnyStore::connect(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to create store");
 

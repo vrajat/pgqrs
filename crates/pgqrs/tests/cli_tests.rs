@@ -53,10 +53,7 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 
 mod common;
 
-use pgqrs::{
-    store::AnyStore,
-    types::{ArchivedMessage, QueueInfo, QueueMessage},
-};
+use pgqrs::types::{ArchivedMessage, QueueInfo, QueueMessage};
 use serde::de::DeserializeOwned;
 use std::process::Command;
 use tokio::runtime::Runtime;
@@ -111,7 +108,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
     // Send message using a Producer
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (sent_message, producer_worker_id): (QueueMessage, i64) = rt.block_on(async {
-        let store = AnyStore::connect(&config).await.unwrap();
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         let producer = pgqrs::producer(
             "test_cli_create_send_dequeue_delete_producer_host",
             8080,
@@ -157,7 +154,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
 
     // Dequeue message using a Consumer
     let (dequeued_messages, consumer_worker_id): (Vec<QueueMessage>, i64) = rt.block_on(async {
-        let store = AnyStore::connect(&config).await.unwrap();
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         let consumer = pgqrs::consumer(
             "test_cli_create_send_dequeue_delete_consumer_host",
             8081,
@@ -212,7 +209,7 @@ fn test_cli_archive_functionality() {
     let message_payload = r#"{"test": "archive_message", "timestamp": "2023-01-01"}"#;
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _sent_message: i64 = rt.block_on(async {
-        let store = AnyStore::connect(&config).await.unwrap();
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         let producer = pgqrs::producer(
             "test_cli_archive_functionality_producer_host",
             8080,
@@ -235,7 +232,7 @@ fn test_cli_archive_functionality() {
     // We cannot return Box<dyn Consumer> out of block_on easily if it's not Send + Sync + 'static (it is, but type erasure)
     // Actually we can just do everything inside block_on for simplicity
     rt.block_on(async {
-        let store = AnyStore::connect(&config).await.unwrap();
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         let consumer = pgqrs::consumer(
             "test_cli_archive_functionality_consumer_host",
             8081,

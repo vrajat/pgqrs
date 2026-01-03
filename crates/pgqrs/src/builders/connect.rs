@@ -26,7 +26,7 @@ pub async fn connect(dsn: &str) -> crate::error::Result<AnyStore> {
 
 /// Connect to a database using a configuration object.
 ///
-/// This is a convenience function that wraps `AnyStore::connect()`.
+/// This is the primary way to connect to a database with custom configuration.
 /// Use this when you need custom configuration like schema, pool size, etc.
 ///
 /// # Arguments

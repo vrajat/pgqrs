@@ -19,7 +19,7 @@
 //! # use serde_json::json;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = Config::from_dsn("postgres://localhost/mydb");
-//! # let store = AnyStore::connect(&config).await?;
+//! # let store = pgqrs::connect_with_config(&config).await?;
 //! // Enqueue a single message to a queue
 //! let ids = pgqrs::enqueue()
 //!     .message(&json!({"foo": "bar"}))
@@ -36,7 +36,7 @@
 //! # use pgqrs::store::AnyStore;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = Config::from_dsn("postgres://localhost/mydb");
-//! # let store = AnyStore::connect(&config).await?;
+//! # let store = pgqrs::connect_with_config(&config).await?;
 //! // Dequeue and handle a message with automatic lifecycle management
 //! pgqrs::dequeue()
 //!     .from("my_queue")

@@ -47,7 +47,7 @@ pub async fn setup_database_common(
     };
 
     // Updated to use AnyStore and builder
-    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    let store = pgqrs::connect_with_config(&config).await?;
     pgqrs::admin(&store).install().await?;
 
     println!("{} schema installed in '{}'", connection_type, schema);
@@ -68,7 +68,7 @@ pub async fn cleanup_database_common(
     };
 
     // Updated to use AnyStore
-    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    let store = pgqrs::connect_with_config(&config).await?;
 
     // Drop custom schema if not using 'public'
     if schema != "public" {

@@ -23,7 +23,7 @@
 //! config.validation_config.max_enqueue_per_second = Some(100); // 100/second
 //! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
 //!
-//! let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! let store = pgqrs::connect_with_config(&config).await?;
 //! pgqrs::admin(&store).install().await?;
 //! pgqrs::admin(&store).create_queue("my_queue").await?;
 //!

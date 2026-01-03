@@ -6,7 +6,6 @@
 //! 3. Use the unified table accessor interface for counting operations
 
 use chrono::Utc;
-use pgqrs::store::AnyStore;
 use pgqrs::Config;
 use serde_json::json;
 
@@ -14,7 +13,7 @@ use serde_json::json;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration and initialize the store
     let config = Config::from_dsn("postgres://postgres:password@localhost:5432/postgres");
-    let store = AnyStore::connect(&config).await?;
+    let store = pgqrs::connect_with_config(&config).await?;
 
     // Install the schema
     pgqrs::admin(&store).install().await?;
