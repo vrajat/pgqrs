@@ -1892,7 +1892,7 @@ async fn test_consumer_extend_visibility_behavior() {
     let diff = (updated_msg.vt - now).num_seconds();
     assert!(
         (2..=4).contains(&diff),
-        "VT should be ~3s in future, got {}s",
+        "VT should be ~2-4s in future, got {}s",
         diff
     );
 
@@ -1922,7 +1922,6 @@ async fn test_worker_health_and_heartbeat() {
         .create(&store)
         .await
         .unwrap();
-    let worker_id = consumer.worker_id();
 
     // Check initial health (max age 10s)
     let is_healthy = consumer

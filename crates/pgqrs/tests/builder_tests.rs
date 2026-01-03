@@ -509,7 +509,7 @@ async fn test_builder_delay_behavior() {
     // Dequeue at (now + 3s) - should be Some because 3s > 2s delay
     let future_time = chrono::Utc::now() + chrono::Duration::seconds(3);
 
-    // Dequeue now - should be Some
+    // Dequeue at future time (now + 3s) - should be Some
     let msg = pgqrs::dequeue()
         .from(queue_name)
         .at(future_time)
