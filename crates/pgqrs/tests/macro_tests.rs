@@ -1,4 +1,4 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Workflow, WorkflowImpl};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Workflow};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ struct TestData {
 }
 
 #[pgqrs_step]
-async fn step_one(ctx: &mut WorkflowImpl, _input: &str) -> anyhow::Result<TestData> {
+async fn step_one(ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
     Ok(TestData {
         msg: "step1_done".to_string(),
     })
@@ -19,7 +19,7 @@ async fn step_one(ctx: &mut WorkflowImpl, _input: &str) -> anyhow::Result<TestDa
 #[pgqrs_step]
 #[allow(unused_variables)] // Test attribute forwarding (should not warn about arg2)
 async fn step_multi_args(
-    ctx: &mut WorkflowImpl,
+    ctx: &mut Box<dyn Workflow>,
     arg1: &str,
     arg2: i32,
 ) -> anyhow::Result<TestData> {
@@ -29,7 +29,7 @@ async fn step_multi_args(
 }
 
 #[pgqrs_step]
-async fn step_side_effect(_ctx: &mut WorkflowImpl, _input: &str) -> anyhow::Result<TestData> {
+async fn step_side_effect(_ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
     // This step returns a value that we will manually tamper with in the DB
     // to prove that the second execution returns the DB value, not this value.
     Ok(TestData {
@@ -38,12 +38,12 @@ async fn step_side_effect(_ctx: &mut WorkflowImpl, _input: &str) -> anyhow::Resu
 }
 
 #[pgqrs_step]
-async fn step_fail(ctx: &mut WorkflowImpl, _input: &str) -> anyhow::Result<TestData> {
+async fn step_fail(ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
     anyhow::bail!("step failed intentionally")
 }
 
 #[pgqrs_workflow]
-async fn my_workflow(ctx: &mut WorkflowImpl, input: &TestData) -> anyhow::Result<TestData> {
+async fn my_workflow(ctx: &mut Box<dyn Workflow>, input: &TestData) -> anyhow::Result<TestData> {
     // Step 1
     let s1 = step_one(ctx, "input").await?;
 
@@ -58,7 +58,7 @@ async fn my_workflow(ctx: &mut WorkflowImpl, input: &TestData) -> anyhow::Result
 
 #[pgqrs_workflow]
 async fn workflow_with_failing_step(
-    ctx: &mut WorkflowImpl,
+    ctx: &mut Box<dyn Workflow>,
     _input: &TestData,
 ) -> anyhow::Result<TestData> {
     let _ = step_fail(ctx, "fail").await?;
@@ -69,7 +69,7 @@ async fn workflow_with_failing_step(
 
 #[pgqrs_workflow]
 async fn workflow_fail_at_end(
-    ctx: &mut WorkflowImpl,
+    ctx: &mut Box<dyn Workflow>,
     _input: &TestData,
 ) -> anyhow::Result<TestData> {
     anyhow::bail!("workflow failed intentionally")
@@ -90,7 +90,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "pending_check".to_string(),
         };
-        let workflow = WorkflowImpl::create(pool.clone(), "pending_wf", &input).await?;
+        let workflow = pgqrs::workflow()
+            .name("pending_wf")
+            .arg(&input)?
+            .create(&store)
+            .await?;
         let workflow_id = workflow.id();
 
         // Verify status is PENDING immediately after creation
@@ -107,7 +111,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "start".to_string(),
         };
-        let mut workflow = WorkflowImpl::create(pool.clone(), "my_workflow", &input).await?;
+        let mut workflow = pgqrs::workflow()
+            .name("my_workflow")
+            .arg(&input)?
+            .create(&store)
+            .await?;
         let workflow_id = workflow.id();
 
         let res = my_workflow(&mut workflow, &input).await?;
@@ -126,7 +134,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "idempotency".to_string(),
         };
-        let mut workflow = WorkflowImpl::create(pool.clone(), "idempotency_wf", &input).await?;
+        let mut workflow = pgqrs::workflow()
+            .name("idempotency_wf")
+            .arg(&input)?
+            .create(&store)
+            .await?;
         let workflow_id = workflow.id();
 
         // 2. Run step first time -> Success
@@ -155,8 +167,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "fail_step".to_string(),
         };
-        let mut workflow =
-            WorkflowImpl::create(pool.clone(), "workflow_with_failing_step", &input).await?;
+        let mut workflow = pgqrs::workflow()
+            .name("workflow_with_failing_step")
+            .arg(&input)?
+            .create(&store)
+            .await?;
         let workflow_id = workflow.id();
 
         let res = workflow_with_failing_step(&mut workflow, &input).await;
@@ -176,8 +191,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "fail_wf".to_string(),
         };
-        let mut workflow =
-            WorkflowImpl::create(pool.clone(), "workflow_fail_at_end", &input).await?;
+        let mut workflow = pgqrs::workflow()
+            .name("workflow_fail_at_end")
+            .arg(&input)?
+            .create(&store)
+            .await?;
         let workflow_id = workflow.id();
 
         let res = workflow_fail_at_end(&mut workflow, &input).await;

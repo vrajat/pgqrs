@@ -3,6 +3,7 @@ mod admin;
 mod connect;
 
 mod tables;
+pub mod workflow;
 
 // Worker creation builders
 mod consumer;

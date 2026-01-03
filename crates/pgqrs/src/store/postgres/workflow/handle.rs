@@ -140,4 +140,12 @@ impl crate::store::Workflow for Workflow {
 
         Ok(())
     }
+
+    async fn acquire_step(
+        &self,
+        step_id: &str,
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
+        crate::store::postgres::workflow::guard::StepGuard::acquire(&self.pool, self.id, step_id)
+            .await
+    }
 }

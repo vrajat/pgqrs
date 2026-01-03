@@ -1,7 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{
-    Config, StepGuardExt, StepGuardImpl, StepResultImpl, Workflow, WorkflowExt, WorkflowImpl,
-};
+use pgqrs::{Config, StepGuardExt, StepResult, WorkflowExt};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -25,14 +23,16 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
     pgqrs::admin(&store).install().await?;
 
-    let pool = store.pool();
-
     // Start workflow
     let input = TestData {
         msg: "start".to_string(),
     };
     // Use create to get valid ID
-    let mut workflow = WorkflowImpl::create(pool.clone(), "test_wf", &input).await?;
+    let mut workflow = pgqrs::workflow()
+        .name("test_wf")
+        .arg(&input)?
+        .create(&store)
+        .await?;
     let workflow_id = workflow.id();
 
     workflow.start().await?;
@@ -40,43 +40,52 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     // Step 1: Run
     let step1_id = "step1";
     // step_id is String in macro, but &str here. acquire takes &str.
-    let step_res = StepGuardImpl::acquire::<TestData>(pool, workflow_id, step1_id).await?;
+    let step_res = pgqrs::step(workflow_id, step1_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
 
     match step_res {
-        StepResultImpl::Execute(mut guard) => {
+        StepResult::Execute(mut guard) => {
             let output = TestData {
                 msg: "step1_done".to_string(),
             };
-            guard.success(&output).await?;
+            let val = serde_json::to_value(&output)?;
+            guard.success(&val).await?;
         }
-        StepResultImpl::Skipped(_) => panic!("Step 1 should execute first time"),
+        StepResult::Skipped(_) => panic!("Step 1 should execute first time"),
     }
 
     // Step 1: Rerun (should skip)
-    let step_res = StepGuardImpl::acquire::<TestData>(pool, workflow_id, step1_id).await?;
+    let step_res = pgqrs::step(workflow_id, step1_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
     match step_res {
-        StepResultImpl::Skipped(val) => {
+        StepResult::Skipped(val) => {
             assert_eq!(val.msg, "step1_done");
         }
-        StepResultImpl::Execute(_) => panic!("Step 1 should skip on rerun"),
+        StepResult::Execute(_) => panic!("Step 1 should skip on rerun"),
     }
 
     // Step 2: Drop (Panic simulation)
     let step2_id = "step2";
-    let step_res = StepGuardImpl::acquire::<TestData>(pool, workflow_id, step2_id).await?;
+    let step_res = pgqrs::step(workflow_id, step2_id)
+        .acquire::<TestData, _>(&store)
+        .await?;
     match step_res {
-        StepResultImpl::Execute(guard) => {
+        StepResult::Execute(guard) => {
             // Explicitly drop without calling success/fail
             drop(guard);
         }
-        StepResultImpl::Skipped(_) => panic!("Step 2 should execute"),
+        StepResult::Skipped(_) => panic!("Step 2 should execute"),
     }
 
     // Allow async drop to complete
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Step 2: Rerun (should be ERROR state because of drop)
-    let step_res = StepGuardImpl::acquire::<TestData>(pool, workflow_id, step2_id).await;
+    let step_res = pgqrs::step(workflow_id, step2_id)
+        .acquire::<TestData, _>(&store)
+        .await;
     assert!(
         step_res.is_err(),
         "Step 2 should be in terminal ERROR state after drop"
@@ -84,9 +93,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
 
     // Finish Workflow
     workflow
-        .success(&TestData {
+        .complete(serde_json::to_value(&TestData {
             msg: "done".to_string(),
-        })
+        })?)
         .await?;
 
     // Restart Workflow (should adhere to SUCCESS terminal state)
@@ -98,7 +107,11 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let input_fail = TestData {
         msg: "fail".to_string(),
     };
-    let mut wf_fail = WorkflowImpl::create(pool.clone(), "fail_wf", &input_fail).await?;
+    let mut wf_fail = pgqrs::workflow()
+        .name("fail_wf")
+        .arg(&input_fail)?
+        .create(&store)
+        .await?;
     wf_fail.start().await?;
     wf_fail
         .fail(&TestData {
