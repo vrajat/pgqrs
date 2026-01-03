@@ -99,11 +99,9 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         .await?;
 
     // Restart Workflow (should adhere to SUCCESS terminal state)
-    // Currently start() on SUCCESS behaves like update (idempotent success or keeps success).
-    // Our refactor returns Ok(()) but updates nothing if already SUCCESS.
     workflow.start().await?;
 
-    // Verify Workflow Failure Logic
+    // Verify Workflow Failure Logic using new workflow
     let input_fail = TestData {
         msg: "fail".to_string(),
     };

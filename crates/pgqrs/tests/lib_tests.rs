@@ -599,15 +599,15 @@ async fn test_custom_schema_search_path() {
         "pgqrs_workers",
     ];
 
-    let pool = store.pool();
     for table_name in &tables_to_check {
-        let table_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-        )
-        .bind(table_name)
-        .fetch_one(pool)
-        .await
-        .expect("Should check table existence");
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{}')",
+            table_name
+        );
+        let table_exists: bool = store
+            .query_scalar_raw(&sql)
+            .await
+            .expect("Should check table existence");
 
         assert!(
             table_exists,

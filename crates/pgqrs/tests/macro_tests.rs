@@ -1,6 +1,7 @@
 use pgqrs::{pgqrs_step, pgqrs_workflow, Config, Workflow};
 
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
 
 mod common;
 
@@ -83,7 +84,18 @@ async fn test_macro_suite() -> anyhow::Result<()> {
     let config = Config::from_dsn_with_schema(&dsn, schema)?;
     let store = pgqrs::store::AnyStore::connect(&config).await?;
     pgqrs::admin(&store).install().await?;
-    let pool = store.pool();
+    let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
+    let pool = PgPoolOptions::new()
+        .max_connections(config.max_connections)
+        .after_connect(move |conn, _meta| {
+            let sql = search_path_sql.clone();
+            Box::pin(async move {
+                sqlx::query(&sql).execute(&mut *conn).await?;
+                Ok(())
+            })
+        })
+        .connect(&config.dsn)
+        .await?;
 
     // --- CASE 0: Creation State (Pending) ---
     {
@@ -151,7 +163,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         sqlx::query("UPDATE pgqrs_workflow_steps SET output = $1 WHERE workflow_id = $2 AND step_id = 'step_side_effect'")
             .bind(tampered_json)
             .bind(workflow_id)
-            .execute(pool)
+            .execute(&pool)
             .await?;
 
         // 4. Run step second time -> Should return TAMPERED value

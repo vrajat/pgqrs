@@ -227,8 +227,10 @@ async fn test_worker_health_stats() {
     assert_eq!(q_stat.total_workers, 1);
 
     // Cleanup
-    sqlx::query("DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'")
-        .execute(store.pool())
+    store
+        .execute_raw(
+            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'",
+        )
         .await
         .unwrap();
     pgqrs::admin(&store)

@@ -357,9 +357,6 @@ pub trait Store: Send + Sync + 'static {
             + for<'r> sqlx::Decode<'r, sqlx::Postgres>
             + sqlx::Type<sqlx::Postgres>;
 
-    /// Get the underlying connection pool.
-    fn pool(&self) -> sqlx::PgPool;
-
     /// Get the configuration for this store
     fn config(&self) -> &Config;
 

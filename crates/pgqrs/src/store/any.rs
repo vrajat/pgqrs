@@ -153,12 +153,6 @@ impl Store for AnyStore {
         }
     }
 
-    fn pool(&self) -> sqlx::PgPool {
-        match self {
-            AnyStore::Postgres(s) => s.pool().clone(),
-        }
-    }
-
     fn config(&self) -> &Config {
         match self {
             AnyStore::Postgres(s) => s.config(),
@@ -290,14 +284,4 @@ impl Store for AnyStore {
     }
 }
 
-impl AnyStore {
-    /// Get access to the underlying database pool.
-    ///
-    /// **Note:** This is a temporary accessor for legacy code that uses raw SQL.
-    /// New code should use the Store trait methods instead.
-    pub fn pool(&self) -> &PgPool {
-        match self {
-            AnyStore::Postgres(s) => s.pool(),
-        }
-    }
-}
+impl AnyStore {}

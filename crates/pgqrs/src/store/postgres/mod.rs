@@ -99,10 +99,6 @@ impl Store for PostgresStore {
         Ok(result)
     }
 
-    fn pool(&self) -> sqlx::PgPool {
-        self.pool.clone()
-    }
-
     fn config(&self) -> &Config {
         &self.config
     }
