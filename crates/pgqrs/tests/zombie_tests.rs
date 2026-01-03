@@ -12,7 +12,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let dsn = common::get_postgres_dsn(Some(db_name)).await;
     let config = Config::from_dsn(dsn.clone());
 
-    let store = pgqrs::store::AnyStore::connect(&config).await?;
+    let store = pgqrs::connect_with_config(&config).await?;
 
     // Create admin via builder
     pgqrs::admin(&store).install().await?;

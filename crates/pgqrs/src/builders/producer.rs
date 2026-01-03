@@ -36,7 +36,7 @@ impl<'a> ProducerBuilder<'a> {
 /// use pgqrs::Config;
 /// use pgqrs::store::AnyStore;
 /// let config = Config::from_dsn("postgres://localhost/mydb");
-/// let store = AnyStore::connect(&config).await?;
+/// let store = pgqrs::connect_with_config(&config).await?;
 /// let producer = pgqrs::producer("localhost", 3000, "orders").create(&store).await?;
 /// # Ok(())
 /// # }

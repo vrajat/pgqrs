@@ -31,16 +31,10 @@ impl AnyStore {
     /// # Arguments
     /// * `config` - Configuration object
     ///
-    /// # Example
-    /// ```no_run
-    /// # use pgqrs::{store::any::AnyStore, Config};
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let config = Config::from_dsn("postgresql://localhost/mydb");
-    /// let store = AnyStore::connect(&config).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn connect(config: &Config) -> crate::error::Result<Self> {
+    /// # Note
+    /// This method is primarily used internally by `pgqrs::connect()`.
+    /// Users should prefer the high-level `pgqrs::connect()` function.
+    pub(crate) async fn connect(config: &Config) -> crate::error::Result<Self> {
         if config.dsn.starts_with("postgres://") || config.dsn.starts_with("postgresql://") {
             // Create search_path SQL for schema
             let search_path_sql = format!("SET search_path = \"{}\"", config.schema);

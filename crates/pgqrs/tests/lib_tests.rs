@@ -953,7 +953,7 @@ async fn test_validation_payload_size_limit() {
     // Set a very small payload size limit for testing
     config.validation_config.max_payload_size_bytes = 50; // Very small limit
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_size")
         .await
@@ -1016,7 +1016,7 @@ async fn test_validation_forbidden_keys() {
     // Add custom forbidden key
     config.validation_config.forbidden_keys = vec!["secret".to_string(), "__proto__".to_string()];
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_forbidden")
         .await
@@ -1075,7 +1075,7 @@ async fn test_validation_required_keys() {
     // Add required key
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_required")
         .await
@@ -1134,7 +1134,7 @@ async fn test_validation_object_depth() {
     // Set a shallow depth limit
     config.validation_config.max_object_depth = 2;
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_depth")
         .await
@@ -1194,7 +1194,7 @@ async fn test_batch_validation_atomic_failure() {
     // Set required key for testing
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_batch")
         .await
@@ -1257,7 +1257,7 @@ async fn test_validation_string_length() {
     // Set a small string length limit
     config.validation_config.max_string_length = 20;
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_strings")
         .await
@@ -1319,7 +1319,7 @@ async fn test_validation_accessor_methods() {
     config.validation_config.max_enqueue_per_second = Some(100);
     config.validation_config.max_enqueue_burst = Some(20);
 
-    let store = pgqrs::store::AnyStore::connect(&config).await.unwrap();
+    let store = pgqrs::connect_with_config(&config).await.unwrap();
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_accessors")
         .await

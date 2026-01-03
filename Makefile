@@ -1,5 +1,8 @@
 UV ?= uv
 
+# Database backend for testing (postgres, sqlite, turso)
+PGQRS_TEST_BACKEND ?= postgres
+
 .venv:  ## Set up Python virtual environment
 	$(UV) venv
 
@@ -13,17 +16,56 @@ build: requirements  ## Build Rust and Python bindings
 
 test-rust:  ## Run Rust tests only
 ifdef TEST
-	cargo test --workspace --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace --test $(TEST)
 else
-	cargo test --workspace
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace
 endif
 
 test: build  ## Run all tests
-	cargo test --workspace
-	$(UV) run pytest py-pgqrs
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 test-py: build  ## Run Python tests only
-	$(UV) run pytest py-pgqrs
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
+
+# Convenience targets for each backend
+test-postgres:  ## Run tests on Postgres backend
+	$(MAKE) test PGQRS_TEST_BACKEND=postgres
+
+test-sqlite:  ## Run tests on SQLite backend
+	$(MAKE) test PGQRS_TEST_BACKEND=sqlite
+
+test-turso:  ## Run tests on Turso backend
+	@if [ -z "$$PGQRS_TEST_TURSO_DSN" ]; then \
+		echo "Error: PGQRS_TEST_TURSO_DSN must be set"; \
+		exit 1; \
+	fi
+	$(MAKE) test PGQRS_TEST_BACKEND=turso
+
+# Run on all available backends
+test-all-backends:  ## Run tests on all available backends
+	@echo "=== Testing on Postgres ==="
+	$(MAKE) test-postgres
+	@echo ""
+	@echo "=== Testing on SQLite ==="
+	$(MAKE) test-sqlite
+	@if [ -n "$$PGQRS_TEST_TURSO_DSN" ]; then \
+		echo ""; \
+		echo "=== Testing on Turso ==="; \
+		$(MAKE) test-turso; \
+	else \
+		echo ""; \
+		echo "=== Skipping Turso (PGQRS_TEST_TURSO_DSN not set) ==="; \
+	fi
+
+# Run on a subset (comma-separated)
+# Usage: make test-backends BACKENDS=postgres,sqlite
+test-backends:  ## Run tests on specified backends (BACKENDS=postgres,sqlite)
+	@for backend in $$(echo "$(BACKENDS)" | tr ',' ' '); do \
+		echo "=== Testing on $$backend ==="; \
+		$(MAKE) test PGQRS_TEST_BACKEND=$$backend; \
+		echo ""; \
+	done
 
 fmt:  ## Format code
 	cargo fmt --all

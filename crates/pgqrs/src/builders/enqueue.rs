@@ -7,7 +7,7 @@
 //! # use serde::Serialize;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = Config::from_dsn("postgres://localhost/mydb");
-//! let store = AnyStore::connect(&config).await?;
+//! let store = pgqrs::connect_with_config(&config).await?;
 //!
 //! // Single message
 //! let ids = pgqrs::enqueue()

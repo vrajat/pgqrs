@@ -12,7 +12,7 @@ async fn create_test_setup() -> AnyStore {
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_pgbouncer_test")
         .expect("Failed to create config with pgbouncer test schema");
 
-    AnyStore::connect(&config)
+    pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to connect to pgbouncer")
 }

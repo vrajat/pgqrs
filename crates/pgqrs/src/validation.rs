@@ -28,7 +28,7 @@
 //!     ..Default::default()
 //! };
 //!
-//! let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! let store = pgqrs::connect_with_config(&config).await?;
 //! pgqrs::admin(&store).install().await?;
 //! pgqrs::admin(&store).create_queue("my_queue").await?;
 //!

@@ -20,7 +20,7 @@
 //! # use pgqrs::{Producer, Config};
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let config = Config::from_dsn("postgresql://localhost/test");
-//! # let store = pgqrs::store::AnyStore::connect(&config).await?;
+//! # let store = pgqrs::connect_with_config(&config).await?;
 //! let producer = pgqrs::producer("localhost", 8080, "jobs")
 //!     .create(&store)
 //!     .await?;
