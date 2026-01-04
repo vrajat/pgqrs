@@ -6,6 +6,7 @@ use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
     QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
+    WorkerStatus,
 };
 use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
@@ -314,6 +315,51 @@ impl ConsumerIterator {
                 Err(PgqrsError::new_err("Consumer not initialized"))
             }
         })
+    }
+
+    fn close<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut state = inner.lock().await;
+            if let Some(consumer) = &state.consumer {
+                // Check status and transition gracefully
+                if let Ok(status) = consumer.status().await {
+                    match status {
+                        WorkerStatus::Ready => {
+                            let _ = consumer.suspend().await;
+                            let _ = consumer.shutdown().await;
+                        }
+                        WorkerStatus::Suspended => {
+                            let _ = consumer.shutdown().await;
+                        }
+                        WorkerStatus::Stopped => {
+                            // Already stopped, do nothing
+                        }
+                    }
+                } else {
+                    // If we can't get status, try forceful shutdown path just in case
+                    let _ = consumer.suspend().await;
+                    let _ = consumer.shutdown().await;
+                }
+            }
+            state.consumer = None;
+            Ok(())
+        })
+    }
+
+    fn __aenter__<'a>(slf: PyRef<'a, Self>, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let this = slf.into_py(py);
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(this) })
+    }
+
+    fn __aexit__<'a>(
+        &self,
+        py: Python<'a>,
+        _exc_type: Option<&PyAny>,
+        _exc_value: Option<&PyAny>,
+        _traceback: Option<&PyAny>,
+    ) -> PyResult<&'a PyAny> {
+        self.close(py)
     }
 }
 
@@ -1196,6 +1242,8 @@ struct WorkerInfo {
     id: i64,
     #[pyo3(get)]
     hostname: String,
+    #[pyo3(get)]
+    status: String,
 }
 
 impl From<RustWorkerInfo> for WorkerInfo {
@@ -1203,6 +1251,7 @@ impl From<RustWorkerInfo> for WorkerInfo {
         WorkerInfo {
             id: r.id,
             hostname: r.hostname,
+            status: r.status.to_string(),
         }
     }
 }
