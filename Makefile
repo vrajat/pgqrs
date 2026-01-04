@@ -94,9 +94,20 @@ help:  ## Display this help screen
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 release-dry-run: requirements  ## Dry run of the release process
-	cargo release minor --no-push --no-publish
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$BRANCH" != "main" ]; then \
+		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
+		exit 1; \
+	fi
+	cargo release $${LEVEL:-minor} --no-push --no-publish
 	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
 
-release: requirements  ## Execute the release process
-	cargo release minor --execute
-	$(UV) run maturin publish -m py-pgqrs/Cargo.toml
+release: requirements  ## Execute the release process (LEVEL=patch|minor|major, default=minor)
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$BRANCH" != "main" ]; then \
+		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
+		exit 1; \
+	fi
+	@echo "Creating release with version bump: $${LEVEL:-minor}"
+	@echo "Note: CI will build multi-platform wheels and publish to PyPI on tag push"
+	cargo release $${LEVEL:-minor} --execute --no-publish

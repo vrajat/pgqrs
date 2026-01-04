@@ -1,0 +1,18 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# Consolidated commit for all workspace members
+consolidate-commits = true
+
+# Don't publish via cargo-release; GitHub Actions handles publishing
+publish = false
+
+# Tag format for releases
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+
+# Don't push automatically; Makefile does this after confirmation
+push = false
+
+# Update pyproject.toml version
+pre-release-hook = ["sh", "-c", "if [ -f py-pgqrs/pyproject.toml ]; then sed -i.bak 's/version = \"[^\"]*\"/version = \"{{version}}\"/' py-pgqrs/pyproject.toml && rm py-pgqrs/pyproject.toml.bak; fi"]
