@@ -6,12 +6,67 @@ use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
     QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
+    WorkerStatus,
 };
 use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
+use pyo3::pyasync::IterANextOutput;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
+
+// Exceptions
+pyo3::create_exception!(pgqrs, PgqrsError, pyo3::exceptions::PyException);
+pyo3::create_exception!(pgqrs, PgqrsConnectionError, PgqrsError);
+pyo3::create_exception!(pgqrs, QueueNotFoundError, PgqrsError);
+pyo3::create_exception!(pgqrs, WorkerNotFoundError, PgqrsError);
+pyo3::create_exception!(pgqrs, QueueAlreadyExistsError, PgqrsError);
+pyo3::create_exception!(pgqrs, MessageNotFoundError, PgqrsError);
+pyo3::create_exception!(pgqrs, SerializationError, PgqrsError);
+pyo3::create_exception!(pgqrs, ConfigError, PgqrsError);
+pyo3::create_exception!(pgqrs, RateLimitedError, PgqrsError);
+pyo3::create_exception!(pgqrs, ValidationError, PgqrsError);
+pyo3::create_exception!(pgqrs, TimeoutError, PgqrsError);
+pyo3::create_exception!(pgqrs, InternalError, PgqrsError);
+pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
+
+fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
+    match err {
+        rust_pgqrs::Error::QueueNotFound { .. } => QueueNotFoundError::new_err(err.to_string()),
+        rust_pgqrs::Error::WorkerNotFound { .. }
+        | rust_pgqrs::Error::WorkerNotRegistered { .. } => {
+            WorkerNotFoundError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::QueueAlreadyExists { .. } => {
+            QueueAlreadyExistsError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::MessageNotFound { .. } => MessageNotFoundError::new_err(err.to_string()),
+        rust_pgqrs::Error::Serialization(_) => SerializationError::new_err(err.to_string()),
+        rust_pgqrs::Error::Config(_)
+        | rust_pgqrs::Error::MissingConfig { .. }
+        | rust_pgqrs::Error::InvalidConfig { .. } => ConfigError::new_err(err.to_string()),
+        rust_pgqrs::Error::RateLimited { .. } => RateLimitedError::new_err(err.to_string()),
+        rust_pgqrs::Error::ValidationFailed { .. }
+        | rust_pgqrs::Error::PayloadTooLarge { .. }
+        | rust_pgqrs::Error::SchemaValidation { .. } => ValidationError::new_err(err.to_string()),
+        rust_pgqrs::Error::Timeout { .. } => TimeoutError::new_err(err.to_string()),
+        rust_pgqrs::Error::ConnectionFailed { .. }
+        | rust_pgqrs::Error::PoolExhausted { .. }
+        | rust_pgqrs::Error::Database(_)
+        | rust_pgqrs::Error::QueryFailed { .. }
+        | rust_pgqrs::Error::TransactionFailed { .. } => {
+            PgqrsConnectionError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::InvalidStateTransition { .. }
+        | rust_pgqrs::Error::WorkerHasPendingMessages { .. } => {
+            StateTransitionError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::Internal { .. } | rust_pgqrs::Error::MigrationFailed(_) => {
+            InternalError::new_err(err.to_string())
+        }
+        _ => PgqrsError::new_err(err.to_string()),
+    }
+}
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -165,6 +220,149 @@ impl PyConfig {
     }
 }
 
+struct IteratorState {
+    store: AnyStore,
+    queue: String,
+    consumer: Option<Arc<Box<dyn rust_pgqrs::Consumer>>>,
+    poll_interval: tokio::time::Duration,
+}
+
+#[pyclass]
+struct ConsumerIterator {
+    inner: Arc<tokio::sync::Mutex<IteratorState>>,
+}
+
+impl ConsumerIterator {
+    fn new(store: AnyStore, queue: String, poll_interval_ms: u64) -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(IteratorState {
+                store,
+                queue,
+                consumer: None,
+                poll_interval: tokio::time::Duration::from_millis(poll_interval_ms),
+            })),
+        }
+    }
+}
+
+#[pymethods]
+impl ConsumerIterator {
+    fn __aiter__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+
+    #[pyo3(name = "__anext__")]
+    fn anext<'a>(&self, py: Python<'a>) -> PyResult<IterANextOutput<&'a PyAny, &'a PyAny>> {
+        let inner = self.inner.clone();
+        let fut = pyo3_asyncio::tokio::future_into_py(py, async move {
+            // Acquire lock to get or initialize consumer
+            let (consumer, poll_interval) = {
+                let mut state = inner.lock().await;
+
+                if state.consumer.is_none() {
+                    let c = state
+                        .store
+                        .consumer_ephemeral(&state.queue, state.store.config())
+                        .await
+                        .map_err(to_py_err)?;
+                    state.consumer = Some(Arc::new(c));
+                }
+
+                (
+                    state.consumer.as_ref().unwrap().clone(),
+                    state.poll_interval,
+                )
+            }; // Lock dropped here
+
+            loop {
+                // Fetch 1 message
+                let msgs = consumer.dequeue_many(1).await.map_err(to_py_err)?;
+
+                if let Some(msg) = msgs.into_iter().next() {
+                    return Ok(QueueMessage::from(msg));
+                }
+
+                // Wait a bit before polling again
+                tokio::time::sleep(poll_interval).await;
+            }
+        })?;
+        Ok(IterANextOutput::Yield(fut))
+    }
+
+    fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let state = inner.lock().await;
+            if let Some(consumer) = &state.consumer {
+                consumer.delete(message_id).await.map_err(to_py_err)
+            } else {
+                Err(PgqrsError::new_err("Consumer not initialized"))
+            }
+        })
+    }
+
+    fn archive<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let state = inner.lock().await;
+            if let Some(consumer) = &state.consumer {
+                consumer
+                    .archive(message_id)
+                    .await
+                    .map_err(to_py_err)
+                    .map(|_| true)
+            } else {
+                Err(PgqrsError::new_err("Consumer not initialized"))
+            }
+        })
+    }
+
+    fn close<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut state = inner.lock().await;
+            if let Some(consumer) = &state.consumer {
+                // Check status and transition gracefully
+                if let Ok(status) = consumer.status().await {
+                    match status {
+                        WorkerStatus::Ready => {
+                            let _ = consumer.suspend().await;
+                            let _ = consumer.shutdown().await;
+                        }
+                        WorkerStatus::Suspended => {
+                            let _ = consumer.shutdown().await;
+                        }
+                        WorkerStatus::Stopped => {
+                            // Already stopped, do nothing
+                        }
+                    }
+                } else {
+                    // If we can't get status, try forceful shutdown path just in case
+                    let _ = consumer.suspend().await;
+                    let _ = consumer.shutdown().await;
+                }
+            }
+            state.consumer = None;
+            Ok(())
+        })
+    }
+
+    fn __aenter__<'a>(slf: PyRef<'a, Self>, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let this = slf.into_py(py);
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(this) })
+    }
+
+    fn __aexit__<'a>(
+        &self,
+        py: Python<'a>,
+        _exc_type: Option<&PyAny>,
+        _exc_value: Option<&PyAny>,
+        _traceback: Option<&PyAny>,
+    ) -> PyResult<&'a PyAny> {
+        self.close(py)
+    }
+}
+
 #[pyclass(name = "Store")]
 #[derive(Clone)]
 struct PyStore {
@@ -185,7 +383,7 @@ impl PyStore {
             let producer = store
                 .producer(&queue, &hostname, 0, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
 
             Ok(Producer {
                 inner: Arc::new(producer),
@@ -205,12 +403,16 @@ impl PyStore {
             let consumer = store
                 .consumer(&queue, &hostname, 0, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
 
             Ok(Consumer {
                 inner: Arc::new(consumer),
             })
         })
+    }
+
+    fn consume_iter(&self, queue: String, poll_interval_ms: Option<u64>) -> ConsumerIterator {
+        ConsumerIterator::new(self.inner.clone(), queue, poll_interval_ms.unwrap_or(50))
     }
 }
 
@@ -220,7 +422,7 @@ fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
         let config = rust_pgqrs::Config::from_dsn(&dsn);
         let store = rust_pgqrs::connect_with_config(&config)
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
         Ok(PyStore { inner: store })
     })
 }
@@ -230,7 +432,7 @@ fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let store = rust_pgqrs::connect_with_config(&config.inner)
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
         Ok(PyStore { inner: store })
     })
 }
@@ -250,20 +452,14 @@ impl Admin {
     fn install<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            rust_pgqrs::admin(&store)
-                .install()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            rust_pgqrs::admin(&store).install().await.map_err(to_py_err)
         })
     }
 
     fn verify<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            rust_pgqrs::admin(&store)
-                .verify()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            rust_pgqrs::admin(&store).verify().await.map_err(to_py_err)
         })
     }
 
@@ -273,7 +469,7 @@ impl Admin {
             let q = rust_pgqrs::admin(&store)
                 .create_queue(&name)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
             Ok(QueueInfo::from(q))
         })
     }
@@ -284,7 +480,7 @@ impl Admin {
             rust_pgqrs::admin(&store)
                 .delete_queue_by_name(&name)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
             Ok(true)
         })
     }
@@ -322,10 +518,10 @@ impl Admin {
             let workflow = rust_pgqrs::workflow()
                 .name(&name)
                 .arg(&json_arg)
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+                .map_err(to_py_err)?
                 .create(&store)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
 
             Ok(PyWorkflow {
                 inner: Arc::new(tokio::sync::Mutex::new(workflow)),
@@ -355,7 +551,7 @@ fn produce<'a>(
             .to(&queue)
             .execute(&rust_store)
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
 
         // Return single ID
         Ok(*msg_ids.first().unwrap())
@@ -380,7 +576,7 @@ fn produce_batch<'a>(
             .to(&queue)
             .execute(&rust_store)
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
         Ok(msg_ids)
     })
 }
@@ -397,12 +593,9 @@ fn consume<'a>(
         let consumer = rust_store
             .consumer_ephemeral(&queue, rust_store.config())
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
 
-        let msgs = consumer
-            .dequeue_many(1)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let msgs = consumer.dequeue_many(1).await.map_err(to_py_err)?;
 
         if let Some(msg) = msgs.first() {
             let py_msg = QueueMessage::from(msg.clone());
@@ -414,10 +607,7 @@ fn consume<'a>(
 
             match res {
                 Ok(_) => {
-                    consumer
-                        .archive(msg.id)
-                        .await
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    consumer.archive(msg.id).await.map_err(to_py_err)?;
                 }
                 Err(e) => {
                     return Err(e);
@@ -441,12 +631,9 @@ fn consume_batch<'a>(
         let consumer = rust_store
             .consumer_ephemeral(&queue, rust_store.config())
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
 
-        let msgs = consumer
-            .dequeue_many(batch_size)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let msgs = consumer.dequeue_many(batch_size).await.map_err(to_py_err)?;
 
         if !msgs.is_empty() {
             let py_msgs: Vec<_> = msgs.iter().map(|m| QueueMessage::from(m.clone())).collect();
@@ -459,10 +646,7 @@ fn consume_batch<'a>(
             match res {
                 Ok(_) => {
                     let msg_ids: Vec<_> = msgs.iter().map(|m| m.id).collect();
-                    consumer
-                        .archive_many(msg_ids)
-                        .await
-                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    consumer.archive_many(msg_ids).await.map_err(to_py_err)?;
                 }
                 Err(e) => {
                     return Err(e);
@@ -478,10 +662,7 @@ fn enqueue<'a>(py: Python<'a>, producer: &Producer, payload: PyObject) -> PyResu
     let inner = producer.inner.clone();
     let json_payload = py_to_json(payload.as_ref(py))?;
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        let msg = inner
-            .enqueue(&json_payload)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let msg = inner.enqueue(&json_payload).await.map_err(to_py_err)?;
         Ok(msg.id)
     })
 }
@@ -501,7 +682,7 @@ fn enqueue_batch<'a>(
         let msgs = inner
             .batch_enqueue(&json_payloads)
             .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(to_py_err)?;
         Ok(msgs.iter().map(|m| m.id).collect::<Vec<_>>())
     })
 }
@@ -510,10 +691,7 @@ fn enqueue_batch<'a>(
 fn dequeue<'a>(py: Python<'a>, consumer: &Consumer, batch_size: usize) -> PyResult<&'a PyAny> {
     let inner = consumer.inner.clone();
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        let messages = inner
-            .dequeue_many(batch_size)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let messages = inner.dequeue_many(batch_size).await.map_err(to_py_err)?;
         Ok(messages
             .into_iter()
             .map(QueueMessage::from)
@@ -546,10 +724,7 @@ fn archive<'a>(py: Python<'a>, consumer: &Consumer, message: &QueueMessage) -> P
     let inner = consumer.inner.clone();
     let message_id = message.id;
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        inner
-            .archive(message_id)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        inner.archive(message_id).await.map_err(to_py_err)?;
         Ok(true)
     })
 }
@@ -559,10 +734,7 @@ fn delete<'a>(py: Python<'a>, consumer: &Consumer, message: &QueueMessage) -> Py
     let inner = consumer.inner.clone();
     let message_id = message.id;
     pyo3_asyncio::tokio::future_into_py(py, async move {
-        inner
-            .delete(message_id)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        inner.delete(message_id).await.map_err(to_py_err)
     })
 }
 
@@ -583,10 +755,7 @@ fn archive_batch<'a>(
             }
             Ok::<(), PyErr>(())
         })?;
-        inner
-            .archive_many(msg_ids)
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        inner.archive_many(msg_ids).await.map_err(to_py_err)?;
         Ok(true)
     })
 }
@@ -616,7 +785,7 @@ impl Producer {
             store
                 .producer(&queue, &hostname, port, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(to_py_err)
         })?;
 
         Ok(Producer {
@@ -629,10 +798,7 @@ impl Producer {
         let json_payload = py_to_json(payload)?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let msg = inner
-                .enqueue(&json_payload)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let msg = inner.enqueue(&json_payload).await.map_err(to_py_err)?;
             Ok(msg.id)
         })
     }
@@ -650,7 +816,7 @@ impl Producer {
             let msg = inner
                 .enqueue_delayed(&json_payload, delay_seconds)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
             Ok(msg.id)
         })
     }
@@ -681,7 +847,7 @@ impl Consumer {
             store
                 .consumer(&queue, &hostname, port, store.config())
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(to_py_err)
         })?;
 
         Ok(Consumer {
@@ -689,13 +855,11 @@ impl Consumer {
         })
     }
 
-    fn dequeue<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+    fn dequeue<'a>(&self, py: Python<'a>, batch_size: Option<usize>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let batch_size = batch_size.unwrap_or(1);
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = inner
-                .dequeue()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let messages = inner.dequeue_many(batch_size).await.map_err(to_py_err)?;
             Ok(messages
                 .into_iter()
                 .map(QueueMessage::from)
@@ -709,22 +873,23 @@ impl Consumer {
             inner
                 .extend_visibility(message_id, seconds)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
             Ok(true)
         })
     }
 
-    fn ack<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
-        self.delete(py, message_id)
+    fn archive<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner.archive(message_id).await.map_err(to_py_err)?;
+            Ok(true)
+        })
     }
 
     fn delete<'a>(&self, py: Python<'a>, message_id: i64) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner
-                .delete(message_id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            inner.delete(message_id).await.map_err(to_py_err)
         })
     }
 }
@@ -740,22 +905,14 @@ impl Workers {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .workers()
-                .count()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            store.workers().count().await.map_err(to_py_err)
         })
     }
 
     fn list<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let workers = store
-                .workers()
-                .list()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let workers = store.workers().list().await.map_err(to_py_err)?;
             Ok(workers
                 .into_iter()
                 .map(WorkerInfo::from)
@@ -775,11 +932,7 @@ impl Queues {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .queues()
-                .count()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            store.queues().count().await.map_err(to_py_err)
         })
     }
 }
@@ -795,11 +948,7 @@ impl Messages {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .messages()
-                .count()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            store.messages().count().await.map_err(to_py_err)
         })
     }
 }
@@ -815,11 +964,7 @@ impl Archive {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .archive()
-                .count()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            store.archive().count().await.map_err(to_py_err)
         })
     }
 
@@ -836,7 +981,7 @@ impl Archive {
                 .archive()
                 .list_by_worker(worker_id, limit, offset)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
             Ok(messages
                 .into_iter()
                 .map(ArchivedMessage::from)
@@ -851,18 +996,14 @@ impl Archive {
                 .archive()
                 .count_by_worker(worker_id)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(to_py_err)
         })
     }
 
     fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let msg = store
-                .archive()
-                .get(id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let msg = store.archive().get(id).await.map_err(to_py_err)?;
             Ok(ArchivedMessage::from(msg))
         })
     }
@@ -870,11 +1011,7 @@ impl Archive {
     fn delete<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .archive()
-                .delete(id)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            store.archive().delete(id).await.map_err(to_py_err)
         })
     }
 
@@ -885,7 +1022,7 @@ impl Archive {
                 .archive()
                 .dlq_count(max_attempts)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(to_py_err)
         })
     }
 }
@@ -948,9 +1085,7 @@ impl PyWorkflow {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut wf = inner.lock().await;
-            wf.start()
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            wf.start().await.map_err(to_py_err)
         })
     }
 
@@ -958,9 +1093,7 @@ impl PyWorkflow {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut wf = inner.lock().await;
-            wf.fail(&error)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            wf.fail(&error).await.map_err(to_py_err)
         })
     }
 
@@ -969,9 +1102,7 @@ impl PyWorkflow {
         let json_res = py_to_json(result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut wf = inner.lock().await;
-            wf.success(&json_res)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            wf.success(&json_res).await.map_err(to_py_err)
         })
     }
 
@@ -988,7 +1119,7 @@ impl PyWorkflow {
             let res: rust_pgqrs::StepResult<serde_json::Value> = rust_pgqrs::step(id, &step_id)
                 .acquire(&store)
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                .map_err(to_py_err)?;
 
             Python::with_gil(|py| match res {
                 rust_pgqrs::StepResult::Execute(guard) => Ok(PyStepResult {
@@ -1033,10 +1164,7 @@ impl PyStepGuard {
         let json_res = py_to_json(result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut guard = inner.lock().await;
-            guard
-                .complete(json_res)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            guard.complete(json_res).await.map_err(to_py_err)
         })
     }
 
@@ -1047,7 +1175,7 @@ impl PyStepGuard {
             guard
                 .fail_with_json(serde_json::Value::String(error))
                 .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+                .map_err(to_py_err)
         })
     }
 }
@@ -1114,6 +1242,8 @@ struct WorkerInfo {
     id: i64,
     #[pyo3(get)]
     hostname: String,
+    #[pyo3(get)]
+    status: String,
 }
 
 impl From<RustWorkerInfo> for WorkerInfo {
@@ -1121,12 +1251,13 @@ impl From<RustWorkerInfo> for WorkerInfo {
         WorkerInfo {
             id: r.id,
             hostname: r.hostname,
+            status: r.status.to_string(),
         }
     }
 }
 
 #[pymodule]
-fn _pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Admin>()?;
     m.add_class::<Producer>()?;
     m.add_class::<Consumer>()?;
@@ -1142,6 +1273,34 @@ fn _pgqrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepResult>()?;
     m.add_class::<PyStepGuard>()?;
     m.add_class::<ArchivedMessage>()?;
+    m.add_class::<ConsumerIterator>()?;
+
+    // Exceptions
+    m.add("PgqrsError", py.get_type::<PgqrsError>())?;
+    m.add(
+        "PgqrsConnectionError",
+        py.get_type::<PgqrsConnectionError>(),
+    )?;
+    m.add("QueueNotFoundError", py.get_type::<QueueNotFoundError>())?;
+    m.add("WorkerNotFoundError", py.get_type::<WorkerNotFoundError>())?;
+    m.add(
+        "QueueAlreadyExistsError",
+        py.get_type::<QueueAlreadyExistsError>(),
+    )?;
+    m.add(
+        "MessageNotFoundError",
+        py.get_type::<MessageNotFoundError>(),
+    )?;
+    m.add("SerializationError", py.get_type::<SerializationError>())?;
+    m.add("ConfigError", py.get_type::<ConfigError>())?;
+    m.add("RateLimitedError", py.get_type::<RateLimitedError>())?;
+    m.add("ValidationError", py.get_type::<ValidationError>())?;
+    m.add("TimeoutError", py.get_type::<TimeoutError>())?;
+    m.add("InternalError", py.get_type::<InternalError>())?;
+    m.add(
+        "StateTransitionError",
+        py.get_type::<StateTransitionError>(),
+    )?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;

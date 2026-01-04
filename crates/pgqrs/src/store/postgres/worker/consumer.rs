@@ -413,12 +413,19 @@ impl Drop for Consumer {
             let workers = self.workers.clone();
             let worker_id = self.worker_info.id;
 
-            // Best-effort shutdown - ignore errors since we're in Drop
-            tokio::task::spawn(async move {
-                // Suspend then shutdown the worker
-                let _ = workers.suspend(worker_id).await;
-                let _ = workers.shutdown(worker_id).await;
-            });
+            // Best-effort shutdown - check if we are in a runtime context
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    // Suspend then shutdown the worker
+                    let _ = workers.suspend(worker_id).await;
+                    let _ = workers.shutdown(worker_id).await;
+                });
+            } else {
+                tracing::warn!(
+                    "Skipping ephemeral worker cleanup for {} - no tokio runtime available",
+                    worker_id
+                );
+            }
         }
     }
 }

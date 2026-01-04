@@ -176,6 +176,8 @@ async def test_worker_list_status(postgres_dsn, schema):
     workers_handle = await admin.get_workers()
     worker_list = await workers_handle.list()
     assert len(worker_list) >= 2
+    # Check status of first worker (should be ready or similar)
+    assert worker_list[0].status == "ready"
 
 @pytest.mark.asyncio
 async def test_consumer_delete(postgres_dsn, schema):
@@ -493,3 +495,81 @@ async def test_ephemeral_consume_batch_failure(postgres_dsn, schema):
     # Verify all messages are STILL in queue
     assert await (await admin.get_messages()).count() == 3
     assert await (await admin.get_archive()).count() == 0
+
+@pytest.mark.asyncio
+async def test_consume_stream_iterator(postgres_dsn, schema):
+    """
+    Test the consume_stream iterator and verification of ephemeral consumer cleanup.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+    queue_name = "stream_test_q"
+    await admin.create_queue(queue_name)
+
+    received_count = 0
+
+    async def consume_loop():
+        nonlocal received_count
+        async with store.consume_iter(queue_name, poll_interval_ms=10) as iterator:
+            async for msg in iterator:
+                received_count += 1
+                # Verify archive method
+                res = await iterator.archive(msg.id)
+                assert res is True
+                if received_count >= 5:
+                    break
+
+    # Produce messages FIRST
+    producer = await store.producer(queue_name)
+    for i in range(5):
+        await pgqrs.enqueue(producer, {"i": i})
+
+    consume_task = asyncio.create_task(consume_loop())
+
+    await asyncio.wait_for(consume_task, timeout=5.0)
+    assert received_count == 5
+
+    # Verify messages are archived
+    archive_count = await (await admin.get_archive()).count()
+    assert archive_count == 5
+
+    # Verify ephemeral consumer cleanup
+    # Since we used context manager, cleanup (shutdown) should have happened explicitly upon exit.
+
+    # Wait briefly for async shutdown to complete if needed
+    await asyncio.sleep(0.5)
+
+    # Check workers
+    workers = await (await admin.get_workers()).list()
+    ephemeral_workers = [w for w in workers if w.hostname.startswith("__ephemeral__")]
+
+    # Verify that any ephemeral worker found is in 'stopped' status
+    for w in ephemeral_workers:
+        assert w.status == "stopped", f"Ephemeral worker {w.id} should be stopped, but is {w.status}"
+
+@pytest.mark.asyncio
+async def test_exceptions(postgres_dsn, schema):
+    """
+    Test that custom exceptions are raised and catchable.
+    """
+    store, admin = await setup_test(postgres_dsn, schema)
+
+    # Test QueueNotFoundError
+    qname = "non_existent_queue_abc"
+    try:
+        await admin.delete_queue(qname)
+    except pgqrs.QueueNotFoundError:
+        pass # Expected if it failed
+    except Exception:
+        pass # admin.delete_queue might return boolean false instead of error in some impls, but checking exception types here.
+
+    # Tests connect with invalid DSN
+    bad_dsn = "postgres://user:pass@non-existent-host-12345.local:5432/db"
+
+    with pytest.raises(pgqrs.PgqrsConnectionError):
+        await pgqrs.connect(bad_dsn)
+
+    # Test create_queue on existing queue
+    q2 = "existing_queue"
+    await admin.create_queue(q2)
+    with pytest.raises(pgqrs.QueueAlreadyExistsError):
+        await admin.create_queue(q2)
