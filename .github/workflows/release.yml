@@ -50,6 +50,9 @@ jobs:
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
+          CFLAGS_aarch64_unknown_linux_musl: "-D__ARM_ARCH=8"
         with:
           target: ${{ matrix.target }}
           args: --release --out dist -m py-pgqrs/Cargo.toml
@@ -125,10 +128,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish pgqrs to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cd crates/pgqrs
+          cd crates/pgqrs-macros
+          cargo publish --allow-dirty
+
+          # Wait for crates.io to propagate the new version of pgqrs-macros
+          sleep 60
+
+          cd ../pgqrs
           cargo publish --allow-dirty
 
   # Create GitHub release
