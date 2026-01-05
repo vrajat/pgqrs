@@ -204,7 +204,7 @@ Test with PostgreSQL:
 #[tokio::test]
 async fn test_create_queue() {
     let config = Config::from_env().unwrap();
-    let admin = Admin::new(&config).await.unwrap();
+    let admin = pgqrs::connect(dsn).await.unwrap();
 
     admin.install().await.unwrap();
     let queue = admin.create_queue("test_queue").await.unwrap();

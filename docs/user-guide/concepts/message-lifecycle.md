@@ -166,8 +166,8 @@ Delayed messages have a `vt` set in the future at creation time:
     import pgqrs
     import asyncio
 
-    admin = pgqrs.Admin("postgresql://localhost/mydb")
-    producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
+    admin = pgqrs.admin("postgresql://localhost/mydb")
+    producer = pgqrs.producer(admin, "tasks", "scheduler", 8080)
 
     # Send delayed message (available in 300 seconds = 5 minutes)
     message_id = await producer.enqueue_delayed(
@@ -222,7 +222,7 @@ Extend the lock on a message if processing takes longer:
         msg = messages[0]
 
         # Extend visibility by 5 minutes (300 seconds)
-        await consumer.extend_visibility(msg.id, extension_seconds=300)
+        await consumer.extend_vt(msg.id, 300)
 
         # Continue processing with extended timeout
         result = await long_running_task(msg.payload)
@@ -247,7 +247,8 @@ sequenceDiagram
     C->>Q: archive(id)
 ```
 
-## Read Count
+
+## Read Count & Dead Letter Queue (DLQ)
 
 The `read_ct` field tracks how many times a message has been dequeued:
 
@@ -255,44 +256,41 @@ The `read_ct` field tracks how many times a message has been dequeued:
 |---------|---------|
 | 1 | First attempt |
 | 2 | Second attempt (first retry) |
-| 3+ | Multiple retries |
+| > 3 | **Poison Message** (Hidden from dequeue) |
 
-Use this for dead-letter queue logic:
+By default, messages with `read_ct > 3` are widely considered "poison messages" and will **NOT** be returned by `dequeue()`. This prevents a single bad message from crashing consumers repeatedly forever.
+
+To handle these messages, you must use administrative tools to move them to the archive (Dead Letter Queue processing).
+
+### Handling Poison Messages
 
 === "Rust"
 
     ```rust
-    let messages = consumer.dequeue().await?;
-    for message in messages {
-        if message.read_ct > 3 {
-            // Move to dead-letter queue
-            move_to_dlq(&message).await?;
-            consumer.delete(message.id).await?;
-        } else {
-            // Normal processing
-            process(&message).await?;
-            consumer.archive(message.id).await?;
+    // 1. Identify high read_ct messages (they are stuck in the queue)
+    let messages = admin.messages().list(queue_id).await?;
+    for msg in messages {
+        if msg.read_ct > 3 {
+             println!("Poison message found: {}", msg.id);
         }
     }
+
+    // 2. Move all poison messages (read_ct > 3) to archive
+    // This cleans up the queue and preserves the messages for inspection
+    let moved_ids = admin.dlq().await?;
+    println!("Moved {} messages to DLQ archive", moved_ids.len());
     ```
 
 === "Python"
 
-    ```python
-    messages = await consumer.dequeue()
-    for message in messages:
-        # Note: read_ct field access depends on QueueMessage implementation
-        # Currently archive is available, delete is not yet exposed
-        try:
-            await process(message)
-            await consumer.archive(message.id)
-        except Exception as e:
-            print(f"Failed to process message {message.id}: {e}")
-            # Message will become available again after lock expires
-    ```
+    !!! warning "Not Supported"
+        Python bindings currently do not support the administrative APIs required to inspect `read_ct` of pending messages or trigger the `dlq()` cleanup command.
 
-    !!! note
-        The `delete` method and `read_ct` field access may not be fully exposed in Python bindings yet.
+        **Workaround:** Use the CLI to manage poison messages:
+        ```bash
+        # Move all poison messages to archive
+        pgqrs queue archive-dlq
+        ```
 
 ## Archive vs Delete
 
@@ -331,69 +329,7 @@ Choose based on your requirements:
 === "Python"
 
     ```python
-    import pgqrs
-    import json
-
-    admin = pgqrs.Admin("postgresql://localhost/mydb")
-    consumer = pgqrs.Consumer(admin, "tasks", "worker1", 8080)
-
-    # Dequeue and handle poison message
-    messages = await consumer.dequeue()
-    if messages:
-        msg = messages[0]
-
-        try:
-            # Attempt to process
-            data = json.loads(msg.payload) if isinstance(msg.payload, str) else msg.payload
-            result = await process_task(data)
-            await consumer.archive(msg.id)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"Invalid message format: {e}")
-            # Delete without archiving
-            await consumer.delete(msg.id)
-    ```
-
-## Archive Management
-
-### Query Archived Messages
-
-```bash
-pgqrs archive list tasks
-pgqrs archive count tasks
-```
-
-### Purge Old Archives
-
-```bash
-# Delete archived messages older than 30 days
-pgqrs archive delete tasks --older-than 30d
-```
-
-### Programmatic Archive Access
-
-=== "Rust"
-
-    ```rust
-    use pgqrs::Archive;
-
-    let archive = Archive::new(pool.clone());
-
-    // Count archived messages for a queue
-    let count = archive.count_for_fk(queue_id, &mut tx).await?;
-
-    // List archived messages
-    let messages = archive.filter_by_fk(queue_id, &mut tx).await?;
-    ```
-
-=== "Python"
-
-    ```python
-    admin = Admin("postgresql://localhost/mydb")
-    archive = await admin.get_archive()
-
-    # Count archived messages
-    count = await archive.count()
-    print(f"Total archived: {count}")
+    await consumer.archive(message.id)
     ```
 
 ## Best Practices
@@ -418,51 +354,23 @@ pgqrs archive delete tasks --older-than 30d
 
 === "Python"
 
+    !!! info
+        Python bindings currently use the system default visibility timeout.
+        Custom dequeue lock times are not supported during dequeue.
+
     ```python
-    # Currently Python uses default lock times
     messages = await consumer.dequeue()
 
-    # Process quickly to avoid lock expiration
     for message in messages:
+        # Workaround: Extend visibility immediately if task is known to be long
+        # Note: Method is named 'extend_vt' in Python
+        await consumer.extend_vt(message.id, 300)
+
         await process(message)
         await consumer.archive(message.id)
     ```
 
-### 2. Handle Retries Gracefully
-
-=== "Rust"
-
-    ```rust
-    for message in messages {
-        match process(&message).await {
-            Ok(_) => consumer.archive(message.id).await?,
-            Err(e) if message.read_ct < 3 => {
-                // Let it retry (don't archive/delete)
-                tracing::warn!("Will retry message {}: {}", message.id, e);
-            }
-            Err(e) => {
-                // Too many retries, move to DLQ
-                move_to_dlq(&message, e).await?;
-                consumer.delete(message.id).await?;
-            }
-        }
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    for message in messages:
-        try:
-            await process(message)
-            await consumer.archive(message.id)
-        except Exception as e:
-            print(f"Error processing {message.id}: {e}")
-            # Message will retry after lock expires
-            # Consider logging for manual intervention
-    ```
-
-### 3. Archive for Observability
+### 2. Archive for Observability
 
 Even if you don't need long-term retention, archives help debugging:
 
@@ -471,13 +379,6 @@ Even if you don't need long-term retention, archives help debugging:
     ```rust
     // Always archive in development
     consumer.archive(message.id).await?;
-
-    // In production, archive or delete based on message type
-    if message.payload.get("debug").is_some() {
-        consumer.archive(message.id).await?;
-    } else {
-        consumer.delete(message.id).await?;
-    }
     ```
 
 === "Python"

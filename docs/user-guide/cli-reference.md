@@ -491,5 +491,5 @@ pgqrs queue purge tasks
 ## See Also
 
 - [Installation](getting-started/installation.md)
-- [Configuration](rust/configuration.md)
+- [Configuration](api/configuration.md)
 - [Concepts](concepts/architecture.md)

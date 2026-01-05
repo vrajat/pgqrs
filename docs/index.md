@@ -2,7 +2,6 @@
 
 `pgqrs` is a PostgreSQL-backed durable workflow engine and job queue for Rust and Python.
 
-
 ## Key Features
 
 ### Core
@@ -19,6 +18,79 @@
 - **Exactly-once Steps**: Completed steps are never re-executed.
 - **Persistent State**: All workflow progress stored in PostgreSQL.
 
+## Job Queue
+
+Simple, reliable message queue for background processing:
+
+=== "Rust"
+
+    ```rust
+    use pgqrs;
+    use serde_json::json;
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        // Connect to PostgreSQL
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+
+        // Setup (run once)
+        pgqrs::admin(&store).install().await?;
+        pgqrs::admin(&store).create_queue("tasks").await?;
+
+        // Producer: enqueue a job
+        let ids = pgqrs::enqueue()
+            .message(&json!({"task": "send_email", "to": "user@example.com"}))
+            .to("tasks")
+            .execute(&store)
+            .await?;
+
+        // Consumer: process jobs
+        pgqrs::dequeue()
+            .from("tasks")
+            .handle(|msg| async move {
+                println!("Processing: {:?}", msg.payload);
+                Ok(())
+            })
+            .execute(&store)
+            .await?;
+
+        Ok(())
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    import pgqrs
+    import asyncio
+
+    async def main():
+        # Connect to PostgreSQL
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+
+        # Setup (run once)
+        admin = pgqrs.admin(store)
+        await admin.install()
+        await admin.create_queue("tasks")
+
+        # Producer: enqueue a job
+        msg_id = await pgqrs.produce(store, "tasks", {
+            "task": "send_email",
+            "to": "user@example.com"
+        })
+
+        # Consumer: process jobs
+        async def handler(msg):
+            print(f"Processing: {msg.payload}")
+            return True
+
+        await pgqrs.consume(store, "tasks", handler)
+
+    asyncio.run(main())
+    ```
+
+[:octicons-arrow-right-24: Learn more about Producer & Consumer](user-guide/concepts/producer-consumer.md)
+
 ## Durable Workflows
 
 Orchestrate multi-step processes that survive crashes and resume from where they left off:
@@ -26,57 +98,77 @@ Orchestrate multi-step processes that survive crashes and resume from where they
 === "Rust"
 
     ```rust
-    use pgqrs::workflow::Workflow;
+    use pgqrs;
     use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
 
     #[pgqrs_step]
-    async fn fetch_data(ctx: &Workflow, url: &str) -> Result<String, anyhow::Error> {
+    async fn fetch_data(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
         Ok(reqwest::get(url).await?.text().await?)
     }
 
     #[pgqrs_step]
-    async fn process_data(ctx: &Workflow, data: String) -> Result<i32, anyhow::Error> {
+    async fn process_data(ctx: &pgqrs::Workflow, data: String) -> Result<i32, anyhow::Error> {
         Ok(data.lines().count() as i32)
     }
 
     #[pgqrs_workflow]
-    async fn data_pipeline(ctx: &Workflow, url: &str) -> Result<String, anyhow::Error> {
+    async fn data_pipeline(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
         let data = fetch_data(ctx, url).await?;
         let count = process_data(ctx, data).await?;
         Ok(format!("Processed {} lines", count))
     }
 
     // Usage
-    let workflow = Workflow::create(pool, "data_pipeline", &url).await?;
-    let result = data_pipeline(&workflow, url).await?;
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+        pgqrs::admin(&store).install().await?;
+
+        let url = "https://example.com/data.txt";
+        let workflow = pgqrs::admin(&store)
+            .create_workflow("data_pipeline", &url)
+            .await?;
+
+        let result = data_pipeline(&workflow, url).await?;
+        println!("Result: {}", result);
+        Ok(())
+    }
     ```
 
 === "Python"
 
     ```python
-    from pgqrs import Admin, PyWorkflow
+    import pgqrs
     from pgqrs.decorators import workflow, step
 
     @step
-    async def fetch_data(ctx: PyWorkflow, url: str) -> dict:
-        return await http_client.get(url)
+    async def fetch_data(ctx, url: str) -> dict:
+        # Fetch data from API
+        return {"lines": 100, "data": "..."}
 
     @step
-    async def process_data(ctx: PyWorkflow, data: dict) -> dict:
-        return {"processed": True, "count": len(data)}
+    async def process_data(ctx, data: dict) -> dict:
+        return {"processed": True, "count": data["lines"]}
 
     @workflow
-    async def data_pipeline(ctx: PyWorkflow, url: str):
+    async def data_pipeline(ctx, url: str):
         data = await fetch_data(ctx, url)
         result = await process_data(ctx, data)
         return result
 
     # Usage
-    admin = Admin("postgresql://localhost/mydb", None)
-    await admin.install()
+    async def main():
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+        admin = pgqrs.admin(store)
+        await admin.install()
 
-    ctx = await admin.create_workflow("data_pipeline", "https://api.example.com")
-    result = await data_pipeline(ctx, "https://api.example.com")
+        url = "https://example.com/data"
+        ctx = await admin.create_workflow("data_pipeline", url)
+        result = await data_pipeline(ctx, url)
+        print(f"Result: {result}")
+
+    import asyncio
+    asyncio.run(main())
     ```
 
 **Key benefits:**
@@ -87,79 +179,9 @@ Orchestrate multi-step processes that survive crashes and resume from where they
 
 [:octicons-arrow-right-24: Learn more about Durable Workflows](user-guide/concepts/durable-workflows.md)
 
-## Job Queue
-
-Simple, reliable message queue for background processing:
-
-=== "Rust"
-
-    ```rust
-    use pgqrs::{Admin, Config, Producer, Consumer};
-    use serde_json::json;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to PostgreSQL
-        let config = Config::from_dsn("postgresql://user:pass@localhost/mydb")?;
-
-        // Set up pgqrs (run once)
-        let admin = Admin::new(&config).await?;
-        admin.install().await?;
-        admin.create_queue("tasks").await?;
-
-        // Producer: enqueue a job
-        let producer = Producer::new(&config, "tasks").await?;
-        let message = producer.enqueue(&json!({"task": "send_email", "to": "user@example.com"})).await?;
-        println!("Enqueued message: {}", message.id);
-
-        // Consumer: process jobs
-        let consumer = Consumer::new(&config, "tasks").await?;
-        if let Some(msg) = consumer.dequeue().await? {
-            println!("Processing: {}", msg.payload);
-
-            // Mark as complete
-            consumer.archive(msg.id, "completed").await?;
-        }
-
-        Ok(())
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    import pgqrs
-    import json
-
-    # Connect to PostgreSQL
-    config = pgqrs.Config.from_dsn("postgresql://user:pass@localhost/mydb")
-
-    # Set up pgqrs (run once)
-    admin = pgqrs.Admin(config)
-    admin.install()
-    admin.create_queue("tasks")
-
-    # Producer: enqueue a job
-    producer = pgqrs.Producer(config, "tasks")
-    message = producer.enqueue(json.dumps({"task": "send_email", "to": "user@example.com"}))
-    print(f"Enqueued message: {message.id}")
-
-    # Consumer: process jobs
-    consumer = pgqrs.Consumer(config, "tasks")
-    msg = consumer.dequeue()
-    if msg:
-        print(f"Processing: {msg.payload}")
-
-        # Mark as complete
-        consumer.archive(msg.id, "completed")
-    ```
-
-[:octicons-arrow-right-24: Learn more about Producer & Consumer](user-guide/concepts/producer-consumer.md)
-
 ## Next Steps
 
 - [Installation](user-guide/getting-started/installation.md) - Get pgqrs set up
 - [Quickstart](user-guide/getting-started/quickstart.md) - Complete walkthrough
 - [Architecture](user-guide/concepts/architecture.md) - Understand how pgqrs works
 - [Durable Workflows Guide](user-guide/guides/durable-workflows.md) - Build crash-resistant pipelines
-```

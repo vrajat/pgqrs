@@ -36,10 +36,10 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
 
     Complete reference for the Rust library.
 
-    - [Overview](rust/index.md)
-    - [Producer](rust/producer.md)
-    - [Consumer](rust/consumer.md)
-    - [Admin](rust/admin.md)
+    - [Overview](api/index.md)
+    - [Producer](api/producer.md)
+    - [Consumer](api/consumer.md)
+    - [Admin](api/admin.md)
 
 -   :material-language-python:{ .lg .middle } **Python API**
 
@@ -47,10 +47,10 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
 
     Complete reference for Python bindings.
 
-    - [Overview](python/index.md)
-    - [Producer](python/producer.md)
-    - [Consumer](python/consumer.md)
-    - [Admin](python/admin.md)
+    - [Overview](api/index.md)
+    - [Producer](api/producer.md)
+    - [Consumer](api/consumer.md)
+    - [Admin](api/admin.md)
 
 -   :material-book-open-variant:{ .lg .middle } **Guides**
 
@@ -86,6 +86,6 @@ Before using pgqrs, ensure you have:
 |-------|-------------|
 | [Installation](getting-started/installation.md) | How to install pgqrs for Rust or Python |
 | [Architecture](concepts/architecture.md) | System design and components |
-| [Rust Producer](rust/producer.md) | Creating and sending messages in Rust |
-| [Python Consumer](python/consumer.md) | Processing messages in Python |
+| [Producer](api/producer.md) | Creating and sending messages |
+| [Consumer](api/consumer.md) | Processing messages |
 | [CLI Reference](cli-reference.md) | Command-line operations |

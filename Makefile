@@ -6,8 +6,10 @@ PGQRS_TEST_BACKEND ?= postgres
 .venv:  ## Set up Python virtual environment
 	$(UV) venv
 
-requirements: .venv  ## Install Python requirements
+docs-requirements: .venv  ## Install documentation dependencies only
 	$(UV) pip install maturin "mkdocs-material[imaging]" mkdocs-catppuccin
+
+requirements: docs-requirements  ## Install all Python requirements
 	$(UV) pip install -e "py-pgqrs[test]"
 
 build: requirements  ## Build Rust and Python bindings
@@ -83,10 +85,10 @@ clean:  ## Clean artifacts
 	rm -rf target
 	rm -rf site
 
-docs: requirements  ## Serve documentation
+docs: docs-requirements  ## Serve documentation
 	$(UV) run mkdocs serve -f mkdocs.yml
 
-docs-build: requirements  ## Build documentation
+docs-build: docs-requirements  ## Build documentation
 	$(UV) run mkdocs build --strict -f mkdocs.yml
 
 help:  ## Display this help screen

@@ -20,13 +20,13 @@ Delayed messages are messages that won't be visible to consumers until a specifi
     use serde_json::json;
 
     async fn schedule_message() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("reminders").await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        let producer = Producer::new(
-            admin.pool.clone(), &queue, "scheduler", 3000, &config
-        ).await?;
+        let producer = pgqrs::producer()
+            .queue("reminders")
+            .hostname("scheduler")
+            .create(&store)
+            .await?;
 
         // Schedule a reminder for 1 hour from now
         let payload = json!({
@@ -54,12 +54,10 @@ Delayed messages are messages that won't be visible to consumers until a specifi
     from datetime import datetime, timedelta
 
     async def schedule_message():
-        admin = pgqrs.Admin("postgresql://localhost/mydb")
-        await admin.install()
-        queue_name = "reminders"
-        await admin.create_queue(queue_name)
+        store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        producer = pgqrs.Producer(admin, queue_name, "scheduler", 3000)
+        # Create managed producer
+        producer = await store.producer("reminders")
 
         # Schedule a reminder for 1 hour from now
         payload = {
@@ -582,7 +580,7 @@ To cancel a scheduled message, delete it before it becomes visible:
     import pgqrs
 
     async def schedule_and_cancel_example():
-        admin = pgqrs.Admin("postgresql://localhost/mydb")
+        admin = pgqrs.admin("postgresql://localhost/mydb")
         producer = pgqrs.Producer(admin, "tasks", "scheduler", 8080)
         consumer = pgqrs.Consumer(admin, "tasks", "canceller", 8081)
 
@@ -626,17 +624,6 @@ To cancel a scheduled message, delete it before it becomes visible:
         print(f"Cancelled {cancelled_count} scheduled reminders for user {user_id}")
     ```
 
-## Monitoring Scheduled Messages
-
-Use CLI to check scheduled messages:
-
-```bash
-# List messages (shows visibility timeout)
-pgqrs message list --queue reminders
-
-# Check queue metrics
-pgqrs queue metrics reminders
-```
 
 ## Best Practices
 
@@ -657,15 +644,16 @@ pgqrs queue metrics reminders
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        admin.install().await?;
-        let queue = admin.create_queue("scheduled").await?;
+        pgqrs::admin(&store).install().await?;
+        pgqrs::admin(&store).create_queue("scheduled").await?;
 
-        let producer = Producer::new(
-            admin.pool.clone(), &queue, "scheduler", 3000, &config
-        ).await?;
+        let producer = pgqrs::producer()
+            .queue("scheduled")
+            .hostname("scheduler")
+            .create(&store)
+            .await?;
 
         // Schedule messages with different delays
         println!("Scheduling messages...");
@@ -677,9 +665,11 @@ pgqrs queue metrics reminders
         println!("Scheduled 3 messages. Waiting...\n");
 
         // Consume as they become available
-        let consumer = Consumer::new(
-            admin.pool.clone(), &queue, "consumer", 3001, &config
-        ).await?;
+        let consumer = pgqrs::consumer()
+            .queue("scheduled")
+            .hostname("consumer")
+            .create(&store)
+            .await?;
 
         let mut processed = 0;
         let start = Utc::now();
@@ -711,17 +701,19 @@ pgqrs queue metrics reminders
     from datetime import datetime
 
     async def delayed_messages_demo():
-        \"\"\"Complete example of scheduling and processing delayed messages.\"\"\"
+        """Complete example of scheduling and processing delayed messages."""
 
         # Setup
-        admin = pgqrs.Admin("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+        admin = pgqrs.admin(store)
         await admin.install()
 
         queue_name = "scheduled"
         await admin.create_queue(queue_name)
 
-        producer = pgqrs.Producer(admin, queue_name, "scheduler", 3000)
-        consumer = pgqrs.Consumer(admin, queue_name, "consumer", 3001)
+        # Create managed workers
+        producer = await store.producer("scheduled")
+        consumer = await store.consumer("scheduled")
 
         print("Scheduling messages...")
 
@@ -750,16 +742,16 @@ pgqrs queue metrics reminders
             if not messages:
                 await asyncio.sleep(0.5)  # Brief pause when no messages
 
-        print("\\nAll scheduled messages processed!")
+        print("\nAll scheduled messages processed!")
 
     async def advanced_scheduling_demo():
-        \"\"\"Demonstrate advanced scheduling patterns.\"\"\"
+        """Demonstrate advanced scheduling patterns."""
 
-        admin = pgqrs.Admin("postgresql://localhost/mydb")
-        queue_name = "advanced_scheduling"
-        await admin.create_queue(queue_name)
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+        admin = pgqrs.admin(store)
+        await admin.create_queue("advanced_scheduling")
 
-        producer = pgqrs.Producer(admin, queue_name, "advanced-scheduler", 3100)
+        producer = await store.producer("advanced_scheduling")
 
         print("Advanced scheduling demo...")
 

@@ -1,47 +1,53 @@
 //! # pgqrs
 //!
-//! `pgqrs` is a library-only PostgreSQL-backed job queue for Rust applications.
+//! **pgqrs** is a PostgreSQL-backed durable workflow engine and job queue. Written in Rust with Python bindings.
 //!
 //! ## Features
-//! - **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust applications.
-//! - **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
+//!
+//! ### Core
+//! - **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
+//! - **Connection Pooler Compatible**: Works with [pgBouncer](https://www.pgbouncer.org) and [pgcat](https://github.com/postgresml/pgcat) for connection scaling.
+//!
+//! ### Job Queue
 //! - **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
-//! - **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit.
-//! - **Message Archiving**: Built-in archiving system for audit trails and historical data retention.
+//! - **Exactly-once Delivery**: Guarantees within visibility timeout window.
+//! - **Message Archiving**: Built-in audit trails and historical data retention.
 //!
-//! ## Example
+//! ### Durable Workflows
+//! - **Crash Recovery**: Resume from the last completed step after failures.
+//! - **Exactly-once Steps**: Completed steps are never re-executed.
+//! - **Persistent State**: All workflow progress stored in PostgreSQL.
 //!
+//! ## Quick Start
 //!
-//! ### Producer
+//! ### Job Queue
+//!
+//! Simple, reliable message queue for background processing:
+//!
 //! ```rust
-//! # use pgqrs::{enqueue, Config, Store};
-//! # use pgqrs::store::AnyStore;
-//! # use serde_json::json;
+//! use pgqrs;
+//! use serde_json::json;
+//!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let config = Config::from_dsn("postgres://localhost/mydb");
-//! # let store = pgqrs::connect_with_config(&config).await?;
-//! // Enqueue a single message to a queue
+//! // Connect to PostgreSQL
+//! let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+//!
+//! // Setup (run once)
+//! pgqrs::admin(&store).install().await?;
+//! pgqrs::admin(&store).create_queue("tasks").await?;
+//!
+//! // Producer: enqueue a job
 //! let ids = pgqrs::enqueue()
-//!     .message(&json!({"foo": "bar"}))
-//!     .to("my_queue")
+//!     .message(&json!({"task": "send_email", "to": "user@example.com"}))
+//!     .to("tasks")
 //!     .execute(&store)
 //!     .await?;
-//! # Ok(())
-//! # }
-//! ```
 //!
-//! ### Consumer
-//! ```rust
-//! # use pgqrs::{dequeue, Config, Store};
-//! # use pgqrs::store::AnyStore;
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let config = Config::from_dsn("postgres://localhost/mydb");
-//! # let store = pgqrs::connect_with_config(&config).await?;
-//! // Dequeue and handle a message with automatic lifecycle management
+//! // Consumer: process jobs
 //! pgqrs::dequeue()
-//!     .from("my_queue")
+//!     .from("tasks")
 //!     .handle(|msg| async move {
-//!         println!("Received: {:?}", msg);
+//!         println!("Processing: {:?}", msg.payload);
 //!         Ok(())
 //!     })
 //!     .execute(&store)
@@ -50,7 +56,48 @@
 //! # }
 //! ```
 //!
-//! For more details and advanced usage, see the [README](https://github.com/vrajat/pgqrs/blob/main/README.md) and [examples](https://github.com/vrajat/pgqrs/tree/main/examples).
+//! ### Durable Workflows
+//!
+//! Orchestrate multi-step processes that survive crashes:
+//!
+//! ```rust
+//! use pgqrs;
+//! use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
+//!
+//! #[pgqrs_step]
+//! async fn fetch_data(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
+//!     // Fetch data - only executes once per workflow run
+//!     Ok("data".to_string())
+//! }
+//!
+//! #[pgqrs_step]
+//! async fn process_data(ctx: &pgqrs::Workflow, data: String) -> Result<i32, anyhow::Error> {
+//!     Ok(data.len() as i32)
+//! }
+//!
+//! #[pgqrs_workflow]
+//! async fn data_pipeline(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
+//!     let data = fetch_data(ctx, url).await?;
+//!     let count = process_data(ctx, data).await?;
+//!     Ok(format!("Processed {} bytes", count))
+//! }
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+//! pgqrs::admin(&store).install().await?;
+//!
+//! let url = "https://example.com/data";
+//! let workflow = pgqrs::admin(&store)
+//!     .create_workflow("data_pipeline", &url)
+//!     .await?;
+//!
+//! let result = data_pipeline(&workflow, url).await?;
+//! println!("Result: {}", result);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! For more details, see the [documentation](https://vrajat.github.io/pgqrs/) and [examples](https://github.com/vrajat/pgqrs/tree/main/crates/pgqrs/examples).
 
 pub mod config;
 pub mod error;

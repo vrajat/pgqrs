@@ -11,32 +11,35 @@ This guide covers efficient batch processing patterns for high-throughput scenar
 
 ## Batch Enqueueing
 
-Send multiple messages in a single transaction.
+Send multiple messages efficiently.
 
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Producer, Config};
+    use pgqrs;
     use serde_json::json;
 
     async fn batch_enqueue_example() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("tasks").await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        let producer = Producer::new(
-            admin.pool.clone(), &queue, "producer", 3000, &config
-        ).await?;
+        // Create managed producer
+        let producer = pgqrs::producer()
+            .queue("tasks")
+            .hostname("batch-producer")
+            .create(&store)
+            .await?;
 
         // Prepare batch of messages
         let payloads: Vec<_> = (0..1000)
             .map(|i| json!({"task_id": i, "data": "process me"}))
             .collect();
 
-        // Send all at once
-        let messages = producer.batch_enqueue(&payloads).await?;
+        // Send batch
+        for payload in &payloads {
+            producer.enqueue(payload).await?;
+        }
 
-        println!("Enqueued {} messages in one transaction", messages.len());
+        println!("Enqueued {} messages", payloads.len());
 
         Ok(())
     }
@@ -46,67 +49,84 @@ Send multiple messages in a single transaction.
 
     ```python
     import asyncio
-    from pgqrs import Producer
+    import pgqrs
 
     async def batch_enqueue_example():
-        producer = Producer(
-            "postgresql://localhost/mydb",
-            "tasks",
-            "producer",
-            3000,
-        )
+        store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Note: Python API currently sends one at a time
-        # For batching, use a loop with concurrent sends
-        tasks = []
-        for i in range(1000):
-            task = producer.enqueue({"task_id": i, "data": "process me"})
-            tasks.append(task)
+        # Create managed producer
+        producer = await store.producer("tasks")
 
-        # Send concurrently (with semaphore for connection limits)
-        results = await asyncio.gather(*tasks[:100])  # Batch of 100
-        print(f"Enqueued {len(results)} messages")
+        # Prepare batch
+        payloads = [{"task_id": i, "data": "process me"} for i in range(1000)]
+
+        # Send using producer
+        msg_ids = await producer.enqueue_batch(payloads)
+        print(f"Enqueued {len(msg_ids)} messages")
 
     asyncio.run(batch_enqueue_example())
     ```
 
 ## Batch Dequeueing
 
-Fetch multiple messages in one operation.
+Fetch and process multiple messages in one operation.
 
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Consumer, Config};
+    use pgqrs;
 
     async fn batch_dequeue_example() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("tasks").await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        let consumer = Consumer::new(
-            admin.pool.clone(), &queue, "consumer", 3001, &config
-        ).await?;
+        // Create managed consumer
+        let consumer = pgqrs::consumer()
+            .queue("tasks")
+            .hostname("batch-consumer")
+            .create(&store)
+            .await?;
 
-        // Fetch up to 100 messages with 30-second lock
-        let messages = consumer.dequeue_many_with_delay(100, 30).await?;
+        // Fetch and process batch with handler
+        consumer.dequeue()
+            .batch(100)
+            .handle_batch(|messages| async move {
+                println!("Processing {} messages", messages.len());
 
-        println!("Fetched {} messages", messages.len());
+                for message in &messages {
+                    // Process each message
+                    println!("Processing: {}", message.id);
+                }
 
-        for message in &messages {
-            // Process each message
-            println!("Processing: {}", message.id);
-        }
-
-        // Batch archive
-        let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
-        let results = consumer.archive_many(ids).await?;
-
-        let archived = results.iter().filter(|&&r| r).count();
-        println!("Archived {} messages", archived);
+                Ok(())
+            })
+            .await?;
 
         Ok(())
     }
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+    import pgqrs
+
+    async def batch_dequeue_example():
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+
+        # Create managed consumer
+        consumer = await store.consumer("tasks")
+
+        # Process batch with handler
+        async def process_batch(messages):
+            print(f"Processing {len(messages)} messages")
+            for msg in messages:
+                print(f"Processing: {msg.id}")
+            return True
+
+        await consumer.consume_batch(batch_size=100, handler=process_batch)
+
+    asyncio.run(batch_dequeue_example())
     ```
 
 ## Processing Patterns
@@ -116,34 +136,40 @@ Fetch multiple messages in one operation.
 Process batches one after another with controlled throughput.
 
 ```rust
-async fn sequential_batch_processing(consumer: &Consumer) -> Result<(), Error> {
+use pgqrs;
+use std::time::Duration;
+
+async fn sequential_batch_processing(consumer: &dyn pgqrs::store::Consumer) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        // Fetch batch
-        let messages = consumer.dequeue_many_with_delay(100, 60).await?;
-
-        if messages.is_empty() {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            continue;
-        }
-
-        // Process sequentially
-        let mut successful_ids = Vec::new();
-
-        for message in &messages {
-            match process_message(message).await {
-                Ok(_) => successful_ids.push(message.id),
-                Err(e) => {
-                    tracing::warn!("Failed to process {}: {}", message.id, e);
-                    // Message will become available again after timeout
+        let result = consumer.dequeue()
+            .batch(100)
+            .handle_batch(|messages| async move {
+                if messages.is_empty() {
+                    return Err("No messages".into());
                 }
-            }
-        }
 
-        // Batch archive successful ones
-        if !successful_ids.is_empty() {
-            consumer.archive_many(successful_ids).await?;
+                // Process sequentially
+                for message in &messages {
+                    match process_message(message).await {
+                        Ok(_) => println!("Processed {}", message.id),
+                        Err(e) => {
+                            tracing::warn!("Failed to process {}: {}", message.id, e);
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await;
+
+        if result.is_err() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
+}
+
+async fn process_message(msg: &pgqrs::QueueMessage) -> Result<(), Box<dyn std::error::Error>> {
+    // Your processing logic
+    Ok(())
 }
 ```
 
@@ -152,39 +178,31 @@ async fn sequential_batch_processing(consumer: &Consumer) -> Result<(), Error> {
 Process all messages in a batch concurrently.
 
 ```rust
+use pgqrs;
 use futures::future::join_all;
 
-async fn parallel_batch_processing(consumer: &Consumer) -> Result<(), Error> {
-    let messages = consumer.dequeue_many_with_delay(100, 60).await?;
+async fn parallel_batch_processing(consumer: &dyn pgqrs::store::Consumer) -> Result<(), Box<dyn std::error::Error>> {
+    consumer.dequeue()
+        .batch(100)
+        .handle_batch(|messages| async move {
+            // Process all in parallel
+            let futures: Vec<_> = messages.iter()
+                .map(|m| async move {
+                    process_message(m).await
+                })
+                .collect();
 
-    // Process all in parallel
-    let futures: Vec<_> = messages.iter().map(|m| async {
-        let result = process_message(m).await;
-        (m.id, result)
-    }).collect();
+            let results = join_all(futures).await;
 
-    let results = join_all(futures).await;
+            // Log results
+            let successful = results.iter().filter(|r| r.is_ok()).count();
+            let failed = results.iter().filter(|r| r.is_err()).count();
 
-    // Separate successes and failures
-    let successful: Vec<i64> = results
-        .iter()
-        .filter(|(_, r)| r.is_ok())
-        .map(|(id, _)| *id)
-        .collect();
+            println!("Processed: {} successful, {} failed", successful, failed);
 
-    let failed: Vec<i64> = results
-        .iter()
-        .filter(|(_, r)| r.is_err())
-        .map(|(id, _)| *id)
-        .collect();
-
-    // Batch archive successful
-    consumer.archive_many(successful).await?;
-
-    // Log failures (will retry after timeout)
-    for id in failed {
-        tracing::warn!("Message {} failed, will retry", id);
-    }
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -195,27 +213,22 @@ async fn parallel_batch_processing(consumer: &Consumer) -> Result<(), Error> {
 Process large batches in smaller chunks.
 
 ```rust
-async fn chunked_processing(consumer: &Consumer, chunk_size: usize) -> Result<(), Error> {
-    // Fetch large batch
-    let messages = consumer.dequeue_many_with_delay(1000, 300).await?;
+use pgqrs;
 
-    // Process in chunks
-    for chunk in messages.chunks(chunk_size) {
-        let futures: Vec<_> = chunk.iter().map(process_message).collect();
-        let results = join_all(futures).await;
-
-        // Archive this chunk
-        let ids: Vec<i64> = chunk.iter()
-            .zip(results.iter())
-            .filter(|(_, r)| r.is_ok())
-            .map(|(m, _)| m.id)
-            .collect();
-
-        consumer.archive_many(ids).await?;
-
-        // Progress logging
-        tracing::info!("Processed chunk of {} messages", chunk.len());
-    }
+async fn chunked_processing(consumer: &dyn pgqrs::store::Consumer, chunk_size: usize) -> Result<(), Box<dyn std::error::Error>> {
+    consumer.dequeue()
+        .batch(1000)
+        .handle_batch(|messages| async move {
+            // Process in chunks
+            for chunk in messages.chunks(chunk_size) {
+                for message in chunk {
+                    process_message(message).await?;
+                }
+                tracing::info!("Processed chunk of {} messages", chunk.len());
+            }
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -232,83 +245,49 @@ async fn chunked_processing(consumer: &Consumer, chunk_size: usize) -> Result<()
 | Slow tasks (> 100ms) | 10-50 |
 | I/O bound tasks | 100-200 (with parallel) |
 
-```rust
-// Adaptive batch sizing
-async fn adaptive_batch_consumer(consumer: &Consumer) -> Result<(), Error> {
-    let mut batch_size = 50;
-    let target_batch_time = Duration::from_secs(5);
-
-    loop {
-        let start = Instant::now();
-
-        let messages = consumer.dequeue_many_with_delay(batch_size, 60).await?;
-        if messages.is_empty() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-
-        // Process batch
-        for message in &messages {
-            process_message(message).await?;
-        }
-        consumer.archive_many(messages.iter().map(|m| m.id).collect()).await?;
-
-        let elapsed = start.elapsed();
-
-        // Adjust batch size
-        if elapsed < target_batch_time / 2 && batch_size < 500 {
-            batch_size = (batch_size * 3 / 2).min(500);
-        } else if elapsed > target_batch_time * 2 && batch_size > 10 {
-            batch_size = (batch_size * 2 / 3).max(10);
-        }
-
-        tracing::debug!("Batch size: {}, time: {:?}", batch_size, elapsed);
-    }
-}
-```
-
 ### Connection Pool Sizing
 
 For batch processing, ensure adequate connection pool size:
 
 ```rust
-// In your config
+use pgqrs::Config;
+
 let config = Config {
     dsn: "postgresql://localhost/mydb".into(),
     max_connections: 20,  // Increase for parallel batch processing
     ..Default::default()
 };
+
+let store = pgqrs::connect_with_config(&config).await?;
 ```
 
 ## Batch Processing with Multiple Workers
 
-Scale horizontally with multiple consumers.
+Scale horizontally with multiple consumers using managed workers.
 
 ```rust
+use pgqrs;
 use tokio::task::JoinSet;
 
-async fn run_batch_workers(num_workers: usize) -> Result<(), Error> {
-    let config = Config::from_dsn("postgresql://localhost/mydb");
-    let admin = Admin::new(&config).await?;
-    let queue = admin.get_queue("tasks").await?;
+async fn run_batch_workers(num_workers: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
     let mut workers = JoinSet::new();
 
     for i in 0..num_workers {
-        let pool = admin.pool.clone();
-        let queue = queue.clone();
-        let config = config.clone();
+        let store_clone = store.clone();
 
         workers.spawn(async move {
-            let consumer = Consumer::new(
-                pool,
-                &queue,
-                &format!("worker-{}", i),
-                3000 + i as i32,
-                &config,
-            ).await?;
+            // Create managed consumer for this worker
+            // Note: In a real app, hostname/port should be unique/discoverable
+            let consumer = pgqrs::consumer()
+                .queue("tasks")
+                .hostname(&format!("worker-{}", i))
+                .port(3000 + i as i32)
+                .create(&store_clone)
+                .await?;
 
-            batch_consumer_loop(&consumer).await
+            batch_consumer_loop(&store_clone, &*consumer).await
         });
     }
 
@@ -322,22 +301,31 @@ async fn run_batch_workers(num_workers: usize) -> Result<(), Error> {
     Ok(())
 }
 
-async fn batch_consumer_loop(consumer: &Consumer) -> Result<(), Error> {
+async fn batch_consumer_loop(
+    store: &pgqrs::store::AnyStore,
+    consumer: &dyn pgqrs::store::Consumer
+) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        let messages = consumer.dequeue_many_with_delay(100, 60).await?;
+        let result = pgqrs::dequeue()
+            .from("tasks")
+            .batch(100)
+            .worker(consumer)
+            .handle_batch(|messages| async move {
+                if messages.is_empty() {
+                    return Err("No messages".into());
+                }
 
-        if messages.is_empty() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
+                for message in &messages {
+                    process_message(message).await?;
+                }
+                Ok(())
+            })
+            .execute(store)
+            .await;
+
+        if result.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-
-        // Process and archive
-        for message in &messages {
-            process_message(message).await?;
-        }
-
-        let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
-        consumer.archive_many(ids).await?;
     }
 }
 ```
@@ -348,42 +336,49 @@ Track throughput and processing times:
 
 ```rust
 use std::time::Instant;
+use pgqrs;
 
-async fn monitored_batch_processing(consumer: &Consumer) -> Result<(), Error> {
+async fn monitored_batch_processing(store: &pgqrs::store::AnyStore) -> Result<(), Box<dyn std::error::Error>> {
     let mut total_processed: u64 = 0;
     let start = Instant::now();
 
     loop {
         let batch_start = Instant::now();
 
-        let messages = consumer.dequeue_many_with_delay(100, 60).await?;
-        if messages.is_empty() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
+        let result = pgqrs::dequeue()
+            .from("tasks")
+            .batch(100)
+            .handle_batch(|messages| async move {
+                let batch_size = messages.len();
+
+                for message in &messages {
+                    process_message(message).await?;
+                }
+
+                Ok(batch_size)
+            })
+            .execute(store)
+            .await;
+
+        match result {
+            Ok(batch_size) => {
+                total_processed += batch_size as u64;
+                let batch_time = batch_start.elapsed();
+                let total_time = start.elapsed();
+                let throughput = total_processed as f64 / total_time.as_secs_f64();
+
+                tracing::info!(
+                    batch_size = batch_size,
+                    batch_time_ms = batch_time.as_millis(),
+                    total_processed = total_processed,
+                    throughput_per_sec = throughput,
+                    "Batch completed"
+                );
+            }
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
         }
-
-        let batch_size = messages.len();
-
-        // Process batch
-        for message in &messages {
-            process_message(message).await?;
-        }
-        consumer.archive_many(messages.iter().map(|m| m.id).collect()).await?;
-
-        // Update metrics
-        total_processed += batch_size as u64;
-        let batch_time = batch_start.elapsed();
-        let total_time = start.elapsed();
-
-        let throughput = total_processed as f64 / total_time.as_secs_f64();
-
-        tracing::info!(
-            batch_size = batch_size,
-            batch_time_ms = batch_time.as_millis(),
-            total_processed = total_processed,
-            throughput_per_sec = throughput,
-            "Batch completed"
-        );
     }
 }
 ```
@@ -391,10 +386,11 @@ async fn monitored_batch_processing(consumer: &Consumer) -> Result<(), Error> {
 ## Best Practices
 
 1. **Match batch size to processing time** - Larger batches for quick tasks
-2. **Use appropriate lock times** - Lock time should cover entire batch
+2. **Use appropriate visibility timeouts** - Timeout should cover entire batch processing
 3. **Handle partial failures** - Archive successful, let failed retry
 4. **Monitor throughput** - Track messages per second
 5. **Scale with workers** - Add consumers for more throughput
+6. **Use managed workers** - Let pgqrs handle worker lifecycle
 
 ## What's Next?
 

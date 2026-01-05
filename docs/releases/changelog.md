@@ -38,8 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 let queue = Queue::new(&pool, "my_queue").await?;
 
 // After (0.3.0)
-let producer = Producer::new(pool.clone(), &queue, host, port, &config).await?;
-let consumer = Consumer::new(pool.clone(), &queue, host, port, &config).await?;
+let producer = pgqrs::producer(pool.clone(), &queue, host, port, &config).await?;
+let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?;
 ```
 
 ### Improved

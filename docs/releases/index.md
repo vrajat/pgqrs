@@ -51,8 +51,8 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 | Version | Date | Highlights |
 |---------|------|------------|
 | [0.3.0](changelog.md#030---2024-11-13) | 2024-11-13 | Producer/Consumer architecture |
-| [0.2.0](changelog.md#020-previous-release) | - | Initial queue implementation |
-| [0.1.0](changelog.md#010-initial-release) | - | Project inception |
+| [0.2.0](changelog.md#020---previous-release) | - | Initial queue implementation |
+| [0.1.0](changelog.md#010---initial-release) | - | Project inception |
 
 ## Upgrade Guides
 
@@ -73,10 +73,10 @@ let msg = queue.dequeue().await?;
 
 ```rust
 // New: Separated Producer and Consumer
-let producer = Producer::new(pool.clone(), &queue, host, port, &config).await?;
+let producer = pgqrs::producer(pool.clone(), &queue, host, port, &config).await?;
 producer.enqueue(&payload).await?;
 
-let consumer = Consumer::new(pool.clone(), &queue, host, port, &config).await?;
+let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?;
 let messages = consumer.dequeue().await?;
 ```
 

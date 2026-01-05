@@ -64,20 +64,13 @@ nav:
       - Workers: user-guide/concepts/workers.md
       - Message Lifecycle: user-guide/concepts/message-lifecycle.md
       - Durable Workflows: user-guide/concepts/durable-workflows.md
-    - Rust API:
-      - user-guide/rust/index.md
-      - Producer: user-guide/rust/producer.md
-      - Consumer: user-guide/rust/consumer.md
-      - Admin: user-guide/rust/admin.md
-      - Configuration: user-guide/rust/configuration.md
-      - Workflows: user-guide/rust/workflows.md
-    - Python API:
-      - user-guide/python/index.md
-      - Producer: user-guide/python/producer.md
-      - Consumer: user-guide/python/consumer.md
-      - Admin: user-guide/python/admin.md
-      - Configuration: user-guide/python/configuration.md
-      - Workflows: user-guide/python/workflows.md
+    - API:
+      - user-guide/api/index.md
+      - Producer: user-guide/api/producer.md
+      - Consumer: user-guide/api/consumer.md
+      - Admin: user-guide/api/admin.md
+      - Configuration: user-guide/api/configuration.md
+      - Workflows: user-guide/api/workflows.md
     - Guides:
       - user-guide/guides/index.md
       - Basic Workflow: user-guide/guides/basic-workflow.md

@@ -26,26 +26,21 @@ Run several consumers to increase throughput:
 
     async fn run_workers(num_workers: usize) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("tasks").await?;
+        let store = pgqrs::connect(dsn).await?;
+        let queue = pgqrs::admin(&store).get_queue("tasks").await?;
 
         let mut workers = JoinSet::new();
 
         for i in 0..num_workers {
-            let pool = admin.pool.clone();
-            let queue = queue.clone();
-            let config = config.clone();
-
             workers.spawn(async move {
-                let consumer = Consumer::new(
-                    pool,
-                    &queue,
-                    &format!("worker-{}", i),
-                    3000 + i as i32,
-                    &config,
-                ).await?;
+                let consumer = pgqrs::consumer()
+                    .queue("tasks")
+                    .hostname(&format!("worker-{}", i))
+                    .port(3000 + i as i32)
+                    .create(&store)
+                    .await?;
 
-                consumer_loop(&consumer, i).await
+                consumer_loop(&*consumer, i).await
             });
         }
 
@@ -61,7 +56,7 @@ Run several consumers to increase throughput:
         Ok(())
     }
 
-    async fn consumer_loop(consumer: &Consumer, id: usize) -> Result<(), pgqrs::Error> {
+    async fn consumer_loop(consumer: &dyn pgqrs::store::Consumer, id: usize) -> Result<(), pgqrs::Error> {
         loop {
             let messages = consumer.dequeue().await?;
 
@@ -87,13 +82,11 @@ Run several consumers to increase throughput:
     async def run_workers(num_workers: int):
         tasks = []
 
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+
         for i in range(num_workers):
-            consumer = Consumer(
-                "postgresql://localhost/mydb",
-                "tasks",
-                f"worker-{i}",
-                3000 + i,
-            )
+            # Create managed consumer
+            consumer = await store.consumer("tasks")
             task = asyncio.create_task(consumer_loop(consumer, i))
             tasks.append(task)
 
@@ -120,12 +113,6 @@ Run several consumers to increase throughput:
 
 For production, run workers as separate processes:
 
-```bash
-# Start multiple worker processes
-for i in {1..4}; do
-    WORKER_ID=$i cargo run --release --bin worker &
-done
-```
 
 ```rust
 // worker binary
@@ -139,21 +126,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let hostname = hostname::get()?.to_string_lossy().to_string();
 
-    let config = Config::from_env()?;
-    let admin = Admin::new(&config).await?;
-    let queue = admin.get_queue("tasks").await?;
-
-    let consumer = Consumer::new(
-        admin.pool.clone(),
-        &queue,
-        &hostname,
-        3000 + worker_id,
-        &config,
-    ).await?;
+    let consumer = pgqrs::consumer()
+        .queue("tasks")
+        .hostname(&hostname)
+        .port(3000 + worker_id)
+        .create(&store)
+        .await?;
 
     println!("Worker {} started on {}:{}", worker_id, hostname, 3000 + worker_id);
 
-    run_consumer_loop(&consumer).await
+    run_consumer_loop(&*consumer).await
 }
 ```
 
@@ -169,7 +151,7 @@ Send periodic heartbeats to indicate worker health:
     use pgqrs::Worker;
     use tokio::time::{interval, Duration};
 
-    async fn worker_with_heartbeat(consumer: Consumer) -> Result<(), Error> {
+    async fn worker_with_heartbeat(consumer: &mut dyn pgqrs::store::Consumer) -> Result<(), Error> {
         let mut heartbeat_interval = interval(Duration::from_secs(30));
 
         loop {
@@ -197,10 +179,11 @@ Send periodic heartbeats to indicate worker health:
     import pgqrs
     import asyncio
 
-    admin = pgqrs.Admin("postgresql://localhost/mydb")
+    # Connect
+    store = await pgqrs.connect("postgresql://localhost/mydb")
 
     # Batch producer
-    producer = pgqrs.Producer(admin, "tasks", "batch-producer", 8080)
+    producer = await store.producer("tasks")
 
     # Enqueue multiple messages at once
     payloads = [
@@ -212,7 +195,7 @@ Send periodic heartbeats to indicate worker health:
     print(f"Enqueued {len(messages)} messages")
 
     # Batch consumer
-    consumer = pgqrs.Consumer(admin, "tasks", "batch-consumer", 8081)
+    consumer = await store.consumer("tasks")
 
     # Process messages in batches
     batch = await consumer.dequeue_batch(limit=50)
@@ -238,7 +221,7 @@ Handle shutdown signals properly:
     use tokio::signal;
     use tokio::sync::watch;
 
-    async fn run_with_graceful_shutdown(consumer: Consumer) -> Result<(), Error> {
+    async fn run_with_graceful_shutdown(consumer: &mut dyn pgqrs::store::Consumer) -> Result<(), Error> {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
 
         // Spawn shutdown handler
@@ -317,36 +300,20 @@ Handle shutdown signals properly:
 
 ## Monitoring Workers
 
-### Via CLI
-
-```bash
-# List all workers
-pgqrs worker list
-
-# List workers for a queue
-pgqrs worker list --queue tasks
-
-# Check worker health
-pgqrs worker health --queue tasks --max-age 300
-
-# Get worker stats
-pgqrs worker stats --queue tasks
-```
-
 ### Via Code
 
 === "Rust"
 
     ```rust
     // List workers
-    let workers = admin.workers.list().await?;
+    let workers = pgqrs::admin(&store).workers().list().await?;
     for worker in workers {
         println!("Worker {}: {:?} on queue {}",
             worker.id, worker.status, worker.queue_id);
     }
 
-    // Check health
-    use pgqrs::Worker;
+    // Check health (if you have a consumer instance)
+    // Note: is_healthy() is a method on the Consumer trait
     let healthy = consumer.is_healthy(chrono::Duration::minutes(5)).await?;
     ```
 
@@ -354,7 +321,7 @@ pgqrs worker stats --queue tasks
 
     ```python
     # Access workers table
-    admin = Admin("postgresql://localhost/mydb")
+    admin = pgqrs.admin(store)
     workers = await admin.get_workers()
 
     # Count workers
@@ -381,7 +348,7 @@ Build a health monitoring system:
 
     impl WorkerMonitor {
         async fn check_health(&self) -> Result<Vec<UnhealthyWorker>> {
-            let workers = self.admin.workers.list().await?;
+            let workers = self.admin.workers().list().await?;
             let now = chrono::Utc::now();
 
             let unhealthy: Vec<_> = workers
@@ -421,30 +388,15 @@ Build a health monitoring system:
 
 === "Python"
 
-    For Python, use the CLI for health monitoring until full API support is available:
-
     ```python
-    import subprocess
-    import json
-
-    def check_worker_health(queue: str, max_age: int = 300) -> dict:
-        """Check worker health using CLI."""
-        result = subprocess.run(
-            ["pgqrs", "worker", "health", "--queue", queue,
-             "--max-age", str(max_age), "--format", "json"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-        return {"error": result.stderr}
-
-    # Or implement simple monitoring with available Python APIs
-    async def monitor_workers(admin):
+    async def monitor_workers(store):
+        admin = pgqrs.admin(store)
         workers = await admin.get_workers()
+
         count = await workers.count()
         print(f"Active workers: {count}")
-        # Additional monitoring via CLI or database queries
+
+        # Additional monitoring via database queries
     ```
 
 ## Scaling Strategies
@@ -481,26 +433,27 @@ Build a health monitoring system:
 === "Python"
 
     ```python
-    import subprocess
-    import json
+    import pgqrs
 
-    def get_queue_metrics(queue_name: str) -> dict:
-        """Get queue metrics via CLI."""
-        result = subprocess.run(
-            ["pgqrs", "queue", "metrics", queue_name, "--format", "json"],
-            capture_output=True,
-            text=True,
-        )
-        return json.loads(result.stdout) if result.returncode == 0 else {}
+    async def get_queue_metrics(admin: pgqrs.Admin, queue_name: str) -> dict:
+        """Get queue metrics via Admin API."""
+        queues = await admin.get_queues()
+        metrics_list = await queues.list_metrics()
 
-    def calculate_desired_workers(
+        for m in metrics_list:
+            if m["name"] == queue_name:
+                return m
+        return {}
+
+    async def calculate_desired_workers(
+        admin: pgqrs.Admin,
         queue_name: str,
         min_workers: int = 1,
         max_workers: int = 10,
-        messages_per_worker: int = 100,
+        messages_per_worker: int = 100
     ) -> int:
         """Calculate desired number of workers based on queue depth."""
-        metrics = get_queue_metrics(queue_name)
+        metrics = await get_queue_metrics(admin, queue_name)
         pending = metrics.get("pending_messages", 0)
 
         desired = max(min_workers, min(max_workers, pending // messages_per_worker))
@@ -555,14 +508,13 @@ Build a health monitoring system:
             let mut shutdown_rx = self.shutdown_tx.subscribe();
 
             tokio::spawn(async move {
-                let admin = Admin::new(&config).await?;
-                let consumer = Consumer::new(
-                    admin.pool,
-                    &queue,
-                    &format!("pool-worker-{}", id),
-                    3000 + id as i32,
-                    &config,
-                ).await?;
+                let store = pgqrs::connect(dsn).await?;
+                let consumer = pgqrs::consumer()
+                    .queue(&queue_name)  // Assumes queue struct has name or similar
+                    .hostname(&format!("pool-worker-{}", id))
+                    .port(3000 + id as i32)
+                    .create(&store)
+                    .await?;
 
                 loop {
                     if *shutdown_rx.borrow() {
@@ -621,12 +573,11 @@ Build a health monitoring system:
             self.workers.append(task)
 
         async def _worker_loop(self, worker_id: int):
-            consumer = Consumer(
-                self.dsn,
-                self.queue_name,
-                f"pool-worker-{worker_id}",
-                3000 + worker_id,
-            )
+            # Connect per worker or share connection logic
+            store = await pgqrs.connect(self.dsn)
+
+            # Create managed consumer
+            consumer = await store.consumer(self.queue_name)
 
             while not self.shutdown_event.is_set():
                 try:
@@ -676,22 +627,6 @@ Build a health monitoring system:
 
 ## Cleanup
 
-### Purge Stopped Workers
-
-```bash
-# Remove workers stopped more than 7 days ago
-pgqrs worker purge --older-than 7d
-
-# Remove workers stopped more than 30 days ago
-pgqrs worker purge --older-than 30d
-```
-
-### Delete Specific Worker
-
-```bash
-# Only works if worker has no assigned messages
-pgqrs worker delete --id 42
-```
 
 ## Best Practices
 
@@ -714,11 +649,11 @@ Monitor workers proactively to detect issues early:
     use chrono::Duration;
 
     async fn check_worker_health(admin: &Admin) -> Result<(), Box<dyn std::error::Error>> {
-        let workers = admin.get_workers().await?;
+        let workers = pgqrs::admin(&store).get_workers().await?;
         let worker_list = workers.list().await?;
 
         for worker in worker_list {
-            let handle = WorkerHandle::new(admin.pool.clone(), worker.id);
+            let handle = WorkerHandle::new(store.clone(), worker.id);
 
             // Check if worker responded to heartbeat in last 5 minutes
             if !handle.is_healthy(Duration::minutes(5)).await? {
@@ -734,7 +669,7 @@ Monitor workers proactively to detect issues early:
 
     ```python
     async def monitor_workers(admin: pgqrs.Admin):
-        workers = await admin.get_workers()
+        workers = await pgqrs::admin(&store).get_workers()
         worker_list = await workers.list()
 
         stale_threshold = datetime.utcnow() - timedelta(minutes=5)
@@ -753,14 +688,14 @@ Set up automated cleanup of old workers:
 
     ```rust
     // Run daily cleanup
-    async fn daily_worker_cleanup(admin: Admin) {
+    async fn daily_worker_cleanup(admin: &Admin) {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
 
         loop {
             interval.tick().await;
 
             // Clean up workers stopped more than 7 days ago
-            if let Err(e) = cleanup_old_workers(&admin, 7).await {
+            if let Err(e) = cleanup_old_workers(admin, 7).await {
                 log::error!("Worker cleanup failed: {}", e);
             }
         }

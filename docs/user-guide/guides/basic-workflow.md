@@ -23,19 +23,18 @@ First, install the schema and create a queue.
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Config};
+    use pgqrs;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Install schema (idempotent)
-        admin.install().await?;
+        pgqrs::admin(&store).install().await?;
         println!("✓ Schema installed");
 
         // Create queue
-        let queue = admin.create_queue("tasks").await?;
+        let queue = pgqrs::admin(&store).create_queue("tasks").await?;
         println!("✓ Created queue: {} (id: {})", queue.queue_name, queue.id);
 
         Ok(())
@@ -46,10 +45,11 @@ First, install the schema and create a queue.
 
     ```python
     import asyncio
-    from pgqrs import Admin
+    import pgqrs
 
     async def setup():
-        admin = Admin("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+        admin = pgqrs.admin(store)
 
         # Install schema (idempotent)
         await admin.install()
@@ -62,19 +62,6 @@ First, install the schema and create a queue.
     asyncio.run(setup())
     ```
 
-=== "CLI"
-
-    ```bash
-    # Set connection string
-    export PGQRS_DSN="postgresql://localhost/mydb"
-
-    # Install schema
-    pgqrs install
-    pgqrs verify
-
-    # Create queue
-    pgqrs queue create tasks
-    ```
 
 ## Step 2: Create the Producer
 
@@ -84,23 +71,19 @@ The producer sends messages to the queue.
 
     ```rust
     // producer.rs
-    use pgqrs::{Admin, Producer, Config};
+    use pgqrs;
     use serde_json::json;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("tasks").await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Create producer
-        let producer = Producer::new(
-            admin.pool.clone(),
-            &queue,
-            "producer-host",
-            3000,
-            &config,
-        ).await?;
+        let producer = pgqrs::producer()
+            .queue("tasks")
+            .hostname("producer-app")
+            .create(&store)
+            .await?;
 
         // Send tasks
         for i in 1..=10 {
@@ -110,8 +93,9 @@ The producer sends messages to the queue.
                 "data": {"value": i * 10}
             });
 
-            let msg = producer.enqueue(&payload).await?;
-            println!("Sent task {}: message id {}", i, msg.id);
+            // Use producer to enqueue (ensures worker attribution)
+            let ids = producer.enqueue(&payload).await?;
+            println!("Sent task {}: message id {:?}", i, ids);
         }
 
         println!("\n✓ Sent 10 tasks to queue");
@@ -124,18 +108,13 @@ The producer sends messages to the queue.
     ```python
     # producer.py
     import asyncio
-    from pgqrs import Admin, Producer
+    import pgqrs
 
     async def main():
-        admin = Admin("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Create producer
-        producer = Producer(
-            "postgresql://localhost/mydb",
-            "tasks",
-            "producer-host",
-            3000,
-        )
+        # Create managed producer
+        producer = await store.producer("tasks")
 
         # Send tasks
         for i in range(1, 11):
@@ -161,57 +140,53 @@ The consumer processes messages and archives them.
 
     ```rust
     // consumer.rs
-    use pgqrs::{Admin, Consumer, Config};
+    use pgqrs;
     use std::time::Duration;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
-        let queue = admin.get_queue("tasks").await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Create consumer
-        let consumer = Consumer::new(
-            admin.pool.clone(),
-            &queue,
-            "consumer-host",
-            3001,
-            &config,
-        ).await?;
+        let consumer = pgqrs::consumer()
+            .queue("tasks")
+            .hostname("consumer-app")
+            .create(&store)
+            .await?;
 
         println!("Consumer started. Waiting for messages...\n");
 
         let mut processed = 0;
 
         loop {
-            // Fetch messages
-            let messages = consumer.dequeue().await?;
+            // Fetch and process messages
+            let result = consumer.dequeue()
+                .batch(10)
+                .handle_batch(|messages| async move {
+                    for message in &messages {
+                        let task_id = message.payload.get("task_id");
+                        let data = message.payload.get("data");
 
-            if messages.is_empty() {
-                if processed > 0 {
-                    println!("\nNo more messages. Processed {} tasks.", processed);
-                    break;
+                        println!("Processing task {:?}", task_id);
+                        println!("  Data: {:?}", data);
+
+                        // Simulate work
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        println!("  ✓ Processed");
+                    }
+                    Ok(())
+                })
+                .await;
+
+            match result {
+                Ok(_) => processed += 1,
+                Err(_) => {
+                    if processed > 0 {
+                        println!("\nNo more messages. Processed {} batches.", processed);
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-
-            // Process each message
-            for message in messages {
-                let task_id = message.payload.get("task_id");
-                let data = message.payload.get("data");
-
-                println!("Processing task {:?}", task_id);
-                println!("  Data: {:?}", data);
-
-                // Simulate work
-                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                // Archive the message
-                consumer.archive(message.id).await?;
-                println!("  ✓ Archived");
-
-                processed += 1;
             }
         }
 
@@ -224,50 +199,42 @@ The consumer processes messages and archives them.
     ```python
     # consumer.py
     import asyncio
-    from pgqrs import Admin, Consumer
+    import pgqrs
 
     async def main():
-        admin = Admin("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Create consumer
-        consumer = Consumer(
-            "postgresql://localhost/mydb",
-            "tasks",
-            "consumer-host",
-            3001,
-        )
+        # Create managed consumer
+        consumer = await store.consumer("tasks")
 
         print("Consumer started. Waiting for messages...\n")
 
         processed = 0
 
         while True:
-            # Fetch messages
-            messages = await consumer.dequeue()
-
-            if not messages:
+            # Process messages with handler
+            try:
+                # Use consumer object directly
+                await consumer.consume_batch(batch_size=10, handler=process_batch)
+                processed += 1
+            except:
                 if processed > 0:
-                    print(f"\nNo more messages. Processed {processed} tasks.")
+                    print(f"\nNo more messages. Processed {processed} batches.")
                     break
                 await asyncio.sleep(1)
-                continue
 
-            # Process each message
-            for message in messages:
-                task_id = message.payload.get("task_id")
-                data = message.payload.get("data")
+    async def process_batch(messages):
+        for message in messages:
+            task_id = message.payload.get("task_id")
+            data = message.payload.get("data")
 
-                print(f"Processing task {task_id}")
-                print(f"  Data: {data}")
+            print(f"Processing task {task_id}")
+            print(f"  Data: {data}")
 
-                # Simulate work
-                await asyncio.sleep(0.1)
-
-                # Archive the message
-                await consumer.archive(message.id)
-                print("  ✓ Archived")
-
-                processed += 1
+            # Simulate work
+            await asyncio.sleep(0.1)
+            print("  ✓ Processed")
+        return True
 
     asyncio.run(main())
     ```
@@ -280,30 +247,28 @@ Check the queue status during and after processing.
 
     ```rust
     // monitor.rs
-    use pgqrs::{Admin, Config};
+    use pgqrs;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        let metrics = admin.queue_metrics("tasks").await?;
+        let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
 
-        println!("Queue: {}", metrics.name);
-        println!("  Total messages:  {}", metrics.total_messages);
-        println!("  Pending:         {}", metrics.pending_messages);
-        println!("  Locked:          {}", metrics.locked_messages);
-        println!("  Archived:        {}", metrics.archived_messages);
+        for m in metrics {
+            if m.name == "tasks" {
+                println!("Queue: {}", m.name);
+                println!("  Total messages:  {}", m.total_messages);
+                println!("  Pending:         {}", m.pending_messages);
+                println!("  Locked:          {}", m.locked_messages);
+                println!("  Archived:        {}", m.archived_messages);
+            }
+        }
 
         Ok(())
     }
     ```
 
-=== "CLI"
-
-    ```bash
-    pgqrs queue metrics tasks
-    ```
 
 ## Running the Complete Example
 
@@ -338,51 +303,62 @@ Here's everything in one file for easy testing:
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Producer, Consumer, Config};
+    use pgqrs;
     use serde_json::json;
-    use std::time::Duration;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
-        let admin = Admin::new(&config).await?;
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Setup
-        admin.install().await?;
-        let queue = admin.create_queue("demo").await?;
+        pgqrs::admin(&store).install().await?;
+        pgqrs::admin(&store).create_queue("demo").await?;
         println!("✓ Setup complete\n");
 
-        // Producer
-        let producer = Producer::new(
-            admin.pool.clone(), &queue, "localhost", 3000, &config
-        ).await?;
+        // Create producer
+        let producer = pgqrs::producer()
+            .queue("demo")
+            .hostname("demo-producer")
+            .create(&store)
+            .await?;
 
+        // Producer - send 5 tasks
         for i in 1..=5 {
             producer.enqueue(&json!({"task": i})).await?;
             println!("Produced task {}", i);
         }
         println!();
 
-        // Consumer
-        let consumer = Consumer::new(
-            admin.pool.clone(), &queue, "localhost", 3001, &config
-        ).await?;
+        // Create consumer
+        let consumer = pgqrs::consumer()
+            .queue("demo")
+            .hostname("demo-consumer")
+            .create(&store)
+            .await?;
 
+        // Consumer - process all tasks
         loop {
-            let messages = consumer.dequeue().await?;
-            if messages.is_empty() { break; }
+            let result = consumer.dequeue()
+                .handle(|msg| async move {
+                    println!("Consumed: {:?}", msg.payload);
+                    Ok(())
+                })
+                .await;
 
-            for msg in messages {
-                println!("Consumed: {:?}", msg.payload);
-                consumer.archive(msg.id).await?;
+            if result.is_err() {
+                break;
             }
         }
 
         // Metrics
         println!();
-        let m = admin.queue_metrics("demo").await?;
-        println!("Final: {} pending, {} archived",
-            m.pending_messages, m.archived_messages);
+        let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
+        for m in metrics {
+            if m.name == "demo" {
+                println!("Final: {} pending, {} archived",
+                    m.pending_messages, m.archived_messages);
+            }
+        }
 
         Ok(())
     }
@@ -392,45 +368,44 @@ Here's everything in one file for easy testing:
 
     ```python
     import asyncio
-    from pgqrs import Admin, Producer, Consumer
+    import pgqrs
 
     async def main():
-        admin = Admin("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+        admin = pgqrs.admin(store)
 
         # Setup
         await admin.install()
         await admin.create_queue("demo")
         print("✓ Setup complete\n")
 
-        # Producer
-        producer = Producer(
-            "postgresql://localhost/mydb", "demo", "localhost", 3000
-        )
+        # Create managed workers
+        producer = await store.producer("demo")
+        consumer = await store.consumer("demo")
 
+        # Producer - send 5 tasks
         for i in range(1, 6):
             await producer.enqueue({"task": i})
             print(f"Produced task {i}")
         print()
 
-        # Consumer
-        consumer = Consumer(
-            "postgresql://localhost/mydb", "demo", "localhost", 3001
-        )
-
+        # Consumer - process all tasks
+        processed = 0
         while True:
-            messages = await consumer.dequeue()
-            if not messages:
+            try:
+                # Use lambda or regular function handler
+                await consumer.consume(handler=lambda msg: print(f"Consumed: {msg.payload}") or True)
+                processed += 1
+            except:
                 break
-
-            for msg in messages:
-                print(f"Consumed: {msg.payload}")
-                await consumer.archive(msg.id)
 
         # Stats
         print()
-        messages = await admin.get_messages()
-        archive = await admin.get_archive()
-        print(f"Final: {await messages.count()} pending, {await archive.count()} archived")
+        queues = await admin.get_queues()
+        metrics = await queues.list_metrics()
+        for m in metrics:
+            if m["name"] == "demo":
+                print(f"Final: {m['pending_messages']} pending, {m['archived_messages']} archived")
 
     asyncio.run(main())
     ```

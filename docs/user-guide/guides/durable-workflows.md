@@ -208,24 +208,24 @@ Create and execute the workflow:
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Config};
-    use pgqrs::workflow::Workflow;
+    use pgqrs;
+    use pgqrs::Workflow;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dsn = "postgresql://user:password@localhost:5432/mydb";
 
-        // Create admin and install schema
-        let config = Config::from_dsn(dsn.to_string());
-        let admin = Admin::new(&config).await?;
-        admin.install().await?;
+        // Connect and install schema
+        let store = pgqrs::connect(dsn).await?;
+        pgqrs::admin(&store).install().await?;
 
         // Create workflow
-        let workflow = Workflow::create(
-            admin.pool().clone(),
-            "data_pipeline",
-            &"https://api.example.com/data",
-        ).await?;
+        let workflow = pgqrs::admin(&store)
+            .create_workflow(
+                "data_pipeline",
+                &"https://api.example.com/data"
+            )
+            .await?;
 
         println!("Created workflow ID: {}", workflow.id());
 
@@ -243,7 +243,8 @@ Create and execute the workflow:
     async def main():
         # Connect to PostgreSQL
         dsn = "postgresql://user:password@localhost:5432/mydb"
-        admin = Admin(dsn, None)
+        store = await pgqrs.connect(dsn)
+        admin = pgqrs.admin(store)
 
         # Install schema (creates workflow tables)
         await admin.install()
@@ -323,12 +324,13 @@ Let's simulate a crash and demonstrate recovery:
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dsn = "postgresql://localhost:5432/mydb";
-        let config = Config::from_dsn(dsn.to_string());
-        let admin = Admin::new(&config).await?;
-        admin.install().await?;
+        let store = pgqrs::connect(dsn).await?;
+        pgqrs::admin(&store).install().await?;
 
         // Create workflow
-        let workflow = Workflow::create(admin.pool().clone(), "crash_demo", &"test").await?;
+        let workflow = pgqrs::admin(&store)
+            .create_workflow("crash_demo", &"test")
+            .await?;
         let wf_id = workflow.id();
         println!("Created workflow: {}", wf_id);
 
@@ -341,12 +343,6 @@ Let's simulate a crash and demonstrate recovery:
 
         // RUN 2: Resume with same workflow
         println!("\n=== RUN 2 (resuming) ===");
-
-        // The workflow object contains the workflow ID.
-        // Since we're in the same process, we can reuse it directly.
-        // In production across process restarts, you'd reload using:
-        //   let workflow = Workflow::new(pool.clone(), wf_id);
-
         let result = crash_demo(&workflow, "test").await?;
         println!("Final result: {}", result);
         Ok(())
@@ -393,7 +389,8 @@ Let's simulate a crash and demonstrate recovery:
 
     async def demo():
         dsn = "postgresql://localhost:5432/mydb"
-        admin = Admin(dsn, None)
+        store = await pgqrs.connect(dsn)
+        admin = pgqrs.admin(store)
         await admin.install()
 
         # Create workflow
@@ -410,12 +407,6 @@ Let's simulate a crash and demonstrate recovery:
 
         # RUN 2: Resume with same workflow ID
         print("\n=== RUN 2 (resuming) ===")
-
-        # The workflow context (wf_ctx) contains the workflow ID.
-        # Since we're in the same process, we can reuse it directly.
-        # In production across process restarts, you'd reload using:
-        #   wf_ctx = await admin.get_workflow(wf_id)
-
         result = await crash_demo(wf_ctx, "test")
         print(f"Final result: {result}")
 
@@ -643,5 +634,4 @@ AND updated_at < NOW() - INTERVAL '1 hour';
 ## Next Steps
 
 - [Durable Workflows Concepts](../concepts/durable-workflows.md): Deeper understanding of the architecture
-- [Rust Workflow API](../rust/workflows.md): Complete Rust API reference
-- [Python Workflow API](../python/workflows.md): Complete Python API reference
+- [Workflow API](../api/workflows.md): Complete API reference

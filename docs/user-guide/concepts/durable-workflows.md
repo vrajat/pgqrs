@@ -340,5 +340,4 @@ Steps that fail are marked as `ERROR` and are terminal. Design accordingly:
 ## Next Steps
 
 - [Durable Workflows Guide](../guides/durable-workflows.md): Step-by-step tutorial
-- [Rust Workflow API](../rust/workflows.md): Detailed Rust API reference
-- [Python Workflow API](../python/workflows.md): Detailed Python API reference
+- [Workflow API](../api/workflows.md): Detailed API reference

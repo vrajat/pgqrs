@@ -138,7 +138,7 @@ use pgqrs::{Admin, Config};
 #[tokio::test]
 async fn test_create_queue() {
     let config = Config::from_env().expect("PGQRS_DSN required");
-    let admin = Admin::new(&config).await.unwrap();
+    let admin = pgqrs::connect(dsn).await.unwrap();
 
     // Setup
     admin.install().await.unwrap();
@@ -168,7 +168,7 @@ pub struct TestFixture {
 impl TestFixture {
     pub async fn new() -> Self {
         let config = Config::from_env().unwrap();
-        let admin = Admin::new(&config).await.unwrap();
+        let admin = pgqrs::connect(dsn).await.unwrap();
 
         admin.install().await.unwrap();
 

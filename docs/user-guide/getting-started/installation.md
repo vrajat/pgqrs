@@ -129,18 +129,18 @@ Before using pgqrs, you need to install its schema in your database. You can do 
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, Config};
+    use pgqrs::Config;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config::from_dsn("postgresql://localhost/mydb")?;
-        let admin = Admin::new(&config).await?;
+        let dsn = "postgresql://localhost/mydb";
+        let store = pgqrs::connect(dsn).await?;
 
         // Install schema
-        admin.install().await?;
+        pgqrs::admin(&store).install().await?;
 
         // Verify installation
-        admin.verify().await?;
+        pgqrs::admin(&store).verify().await?;
 
         println!("Schema installed successfully!");
         Ok(())
@@ -150,19 +150,23 @@ Before using pgqrs, you need to install its schema in your database. You can do 
 === "Python"
 
     ```python
+    import asyncio
     import pgqrs
 
-    # Connect to database
-    config = pgqrs.Config.from_dsn("postgresql://localhost/mydb")
-    admin = pgqrs.Admin(config)
+    async def main():
+        # Connect to database
+        dsn = "postgresql://localhost/mydb"
+        admin = pgqrs.admin(dsn)
 
-    # Install schema
-    admin.install()
+        # Install schema
+        await admin.install()
 
-    # Verify installation
-    admin.verify()
+        # Verify installation
+        await admin.verify()
 
-    print("Schema installed successfully!")
+        print("Schema installed successfully!")
+
+    asyncio.run(main())
     ```
 
 ## Custom Schema
