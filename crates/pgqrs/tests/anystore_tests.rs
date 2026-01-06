@@ -98,8 +98,8 @@ async fn test_anystore_query_access() {
     let store = create_store().await;
 
     // Verify we can execute queries through the Store trait
-    let result: i32 = store
-        .query_scalar_raw("SELECT 1")
+    let result: i64 = store
+        .query_int("SELECT 1")
         .await
         .expect("Failed to execute query");
 

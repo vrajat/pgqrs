@@ -580,7 +580,7 @@ async fn test_custom_schema_search_path() {
 
     // Check that we're using the correct schema by querying the search_path
     let search_path: String = store
-        .query_scalar_raw("SHOW search_path")
+        .query_string("SHOW search_path")
         .await
         .expect("Should get search_path");
 
@@ -605,7 +605,7 @@ async fn test_custom_schema_search_path() {
             table_name
         );
         let table_exists: bool = store
-            .query_scalar_raw(&sql)
+            .query_bool(&sql)
             .await
             .expect("Should check table existence");
 

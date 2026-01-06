@@ -82,7 +82,8 @@ pub async fn create_store_for_backend(
         match backend {
             TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
             TestBackend::Sqlite => {
-                panic!("PGQRS_TEST_SQLITE_DSN must be set for SQLite backend")
+                // Default to in-memory database if no DSN provided
+                "sqlite::memory:".to_string()
             }
             TestBackend::Turso => panic!("PGQRS_TEST_TURSO_DSN must be set for Turso backend"),
         }

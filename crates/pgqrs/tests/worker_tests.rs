@@ -272,7 +272,7 @@ async fn test_custom_schema_search_path() {
     let store = create_store().await;
 
     // Check search_path via store helper
-    let result: String = store.query_scalar_raw("SHOW search_path").await.unwrap();
+    let result: String = store.query_string("SHOW search_path").await.unwrap();
 
     // Should contain our custom schema
     assert!(

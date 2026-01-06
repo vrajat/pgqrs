@@ -25,6 +25,7 @@ pub enum ConcurrencyModel {
 
 pub mod any;
 pub mod postgres;
+pub mod sqlite;
 
 pub use any::AnyStore;
 
@@ -348,13 +349,14 @@ pub trait Store: Send + Sync + 'static {
         param2: i64,
     ) -> crate::error::Result<()>;
 
-    /// Query a single scalar value using raw SQL.
-    ///
-    /// This method is intended for test verification and administrative operations.
-    /// For production queries, prefer using the repository interfaces.
-    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
-    where
-        T: 'static + Send + Unpin + for<'r> sqlx::Decode<'r, Self::Db> + sqlx::Type<Self::Db>;
+    /// Query a single i64 value using raw SQL.
+    async fn query_int(&self, sql: &str) -> crate::error::Result<i64>;
+
+    /// Query a single string value using raw SQL.
+    async fn query_string(&self, sql: &str) -> crate::error::Result<String>;
+
+    /// Query a single boolean value using raw SQL.
+    async fn query_bool(&self, sql: &str) -> crate::error::Result<bool>;
 
     /// Get the configuration for this store
     fn config(&self) -> &Config;

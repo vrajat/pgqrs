@@ -6,6 +6,7 @@
 use super::*;
 use crate::config::Config;
 use crate::store::postgres::PostgresStore;
+use crate::store::sqlite::SqliteStore;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 /// Runtime-selectable database backend.
@@ -17,6 +18,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 pub enum AnyStore {
     /// PostgreSQL backend
     Postgres(PostgresStore),
+    /// SQLite backend
+    Sqlite(SqliteStore),
 }
 
 impl AnyStore {
@@ -56,10 +59,13 @@ impl AnyStore {
                 })?;
 
             Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
+        } else if config.dsn.starts_with("sqlite://") || config.dsn.starts_with("sqlite:") {
+            let store = SqliteStore::new(&config.dsn, config).await?;
+            Ok(AnyStore::Sqlite(store))
         } else {
             Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
-                message: "Unsupported DSN format (must start with postgres:// or postgresql://)"
+                message: "Unsupported DSN format (must start with postgres://, postgresql://, or sqlite://)"
                     .to_string(),
             })
         }
@@ -100,6 +106,10 @@ impl AnyStore {
                 pool,
                 &Config::from_dsn(dsn),
             )))
+        } else if dsn.starts_with("sqlite://") || dsn.starts_with("sqlite:") {
+            let config = Config::from_dsn(dsn);
+            let store = SqliteStore::new(dsn, &config).await?;
+            Ok(AnyStore::Sqlite(store))
         } else {
             Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
@@ -116,12 +126,14 @@ impl Store for AnyStore {
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
             AnyStore::Postgres(s) => s.execute_raw(sql).await,
+            AnyStore::Sqlite(s) => s.execute_raw(sql).await,
         }
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
         match self {
             AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
+            AnyStore::Sqlite(s) => s.execute_raw_with_i64(sql, param).await,
         }
     }
 
@@ -133,61 +145,77 @@ impl Store for AnyStore {
     ) -> crate::error::Result<()> {
         match self {
             AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
+            AnyStore::Sqlite(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
         }
     }
 
-    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
-    where
-        T: 'static
-            + Send
-            + Unpin
-            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
-            + sqlx::Type<sqlx::Postgres>,
-    {
+    async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
         match self {
-            AnyStore::Postgres(s) => s.query_scalar_raw(sql).await,
+            AnyStore::Postgres(s) => s.query_int(sql).await,
+            AnyStore::Sqlite(s) => s.query_int(sql).await,
+        }
+    }
+
+    async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
+        match self {
+            AnyStore::Postgres(s) => s.query_string(sql).await,
+            AnyStore::Sqlite(s) => s.query_string(sql).await,
+        }
+    }
+
+    async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
+        match self {
+            AnyStore::Postgres(s) => s.query_bool(sql).await,
+            AnyStore::Sqlite(s) => s.query_bool(sql).await,
         }
     }
 
     fn config(&self) -> &Config {
         match self {
             AnyStore::Postgres(s) => s.config(),
+            AnyStore::Sqlite(s) => s.config(),
         }
     }
 
     fn queues(&self) -> &dyn QueueTable {
         match self {
             AnyStore::Postgres(s) => s.queues(),
+            AnyStore::Sqlite(s) => s.queues(),
         }
     }
 
     fn messages(&self) -> &dyn MessageTable {
         match self {
             AnyStore::Postgres(s) => s.messages(),
+            AnyStore::Sqlite(s) => s.messages(),
         }
     }
 
     fn workers(&self) -> &dyn WorkerTable {
         match self {
             AnyStore::Postgres(s) => s.workers(),
+            AnyStore::Sqlite(s) => s.workers(),
         }
     }
 
     fn archive(&self) -> &dyn ArchiveTable {
         match self {
             AnyStore::Postgres(s) => s.archive(),
+            AnyStore::Sqlite(s) => s.archive(),
         }
     }
 
     fn workflows(&self) -> &dyn WorkflowTable {
         match self {
             AnyStore::Postgres(s) => s.workflows(),
+            AnyStore::Sqlite(s) => s.workflows(),
         }
     }
 
     async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>> {
         match self {
             AnyStore::Postgres(s) => s.admin(config).await,
+            AnyStore::Sqlite(s) => s.admin(config).await,
         }
     }
 
@@ -200,6 +228,7 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Producer>> {
         match self {
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
+            AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
         }
     }
 
@@ -212,18 +241,21 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Consumer>> {
         match self {
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
+            AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
         }
     }
 
     fn workflow(&self, id: i64) -> Box<dyn Workflow> {
         match self {
             AnyStore::Postgres(s) => s.workflow(id),
+            AnyStore::Sqlite(s) => s.workflow(id),
         }
     }
 
     fn worker(&self, id: i64) -> Box<dyn Worker> {
         match self {
             AnyStore::Postgres(s) => s.worker(id),
+            AnyStore::Sqlite(s) => s.worker(id),
         }
     }
 
@@ -234,6 +266,7 @@ impl Store for AnyStore {
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
         match self {
             AnyStore::Postgres(s) => s.acquire_step(workflow_id, step_id).await,
+            AnyStore::Sqlite(s) => s.acquire_step(workflow_id, step_id).await,
         }
     }
 
@@ -244,18 +277,21 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Workflow>> {
         match self {
             AnyStore::Postgres(s) => s.create_workflow(name, input).await,
+            AnyStore::Sqlite(s) => s.create_workflow(name, input).await,
         }
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
         match self {
             AnyStore::Postgres(s) => s.concurrency_model(),
+            AnyStore::Sqlite(s) => s.concurrency_model(),
         }
     }
 
     fn backend_name(&self) -> &'static str {
         match self {
             AnyStore::Postgres(s) => s.backend_name(),
+            AnyStore::Sqlite(s) => s.backend_name(),
         }
     }
 
@@ -266,6 +302,7 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Producer>> {
         match self {
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
+            AnyStore::Sqlite(s) => s.producer_ephemeral(queue, config).await,
         }
     }
 
@@ -276,6 +313,7 @@ impl Store for AnyStore {
     ) -> crate::error::Result<Box<dyn Consumer>> {
         match self {
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
+            AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
         }
     }
 }
