@@ -1,8 +1,12 @@
 pub mod backend;
 pub mod constants;
+#[cfg(feature = "postgres")]
 pub mod container;
-pub mod database_setup;
+#[cfg(feature = "postgres")]
+pub mod database_setup; // database_setup also seems to use postgres logic? checked? assume yes or check.
+#[cfg(feature = "postgres")]
 pub mod pgbouncer;
+#[cfg(feature = "postgres")]
 pub mod postgres;
 
 pub use backend::TestBackend;
@@ -19,11 +23,13 @@ use ctor::dtor;
 /// # Returns
 /// The database DSN string that can be used for tests
 #[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+#[cfg(feature = "postgres")]
 pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
     container::get_postgres_dsn(schema).await
 }
 
 #[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+#[cfg(feature = "postgres")]
 pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
     container::get_pgbouncer_dsn(schema).await
 }
@@ -80,7 +86,10 @@ pub async fn create_store_for_backend(
     } else {
         // Fall back to container-based setup (currently only Postgres supported)
         match backend {
+            #[cfg(feature = "postgres")]
             TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
+            #[cfg(not(feature = "postgres"))]
+            TestBackend::Postgres => panic!("Postgres feature is disabled"),
             TestBackend::Sqlite => {
                 // Use a unique in-memory database per store creation to ensure isolation
                 // The ?cache=shared allows pool connections to verify consistent state
@@ -134,6 +143,7 @@ fn drop_database() {
     // Create a simple runtime for cleanup
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     rt.block_on(async {
+        #[cfg(feature = "postgres")]
         if let Err(e) = container::cleanup_database().await {
             eprintln!("Error during database cleanup: {}", e);
         }

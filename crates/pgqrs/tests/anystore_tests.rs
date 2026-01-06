@@ -279,7 +279,10 @@ async fn test_anystore_connect_with_dsn() {
         d
     } else {
         match backend {
+            #[cfg(feature = "postgres")]
             TestBackend::Postgres => common::get_postgres_dsn(Some(schema)).await,
+            #[cfg(not(feature = "postgres"))]
+            TestBackend::Postgres => panic!("Postgres disabled"),
             TestBackend::Sqlite => "sqlite::memory:".to_string(),
             TestBackend::Turso => panic!("Turso DSN required"),
         }

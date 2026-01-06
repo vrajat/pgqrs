@@ -19,7 +19,7 @@ use std::sync::Arc;
 const CHECK_TABLE_EXISTS: &str = r#"
     SELECT EXISTS (
         SELECT 1 FROM sqlite_master
-        WHERE type = 'table' AND name = $1
+        WHERE type = 'table' AND name = ?
     )
 "#;
 
@@ -60,27 +60,27 @@ const RELEASE_ZOMBIE_MESSAGES: &str = r#"
     SET consumer_worker_id = NULL,
         vt = datetime('now'),
         dequeued_at = NULL
-    WHERE consumer_worker_id = $1
+    WHERE consumer_worker_id = ?
 "#;
 
 const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
     UPDATE pgqrs_workers
     SET status = 'stopped',
         shutdown_at = datetime('now')
-    WHERE id = $1
+    WHERE id = ?
 "#;
 
 const GET_WORKER_MESSAGES: &str = r#"
     SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
     FROM pgqrs_messages
-    WHERE consumer_worker_id = $1
+    WHERE consumer_worker_id = ?
     ORDER BY id
 "#;
 
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
-    WHERE consumer_worker_id = $1
+    WHERE consumer_worker_id = ?
 "#;
 
 const CHECK_WORKER_REFERENCES: &str = r#"
@@ -121,7 +121,7 @@ const GET_QUEUE_METRICS: &str = r#"
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
     LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
-    WHERE q.id = $1
+    WHERE q.id = ?
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -158,7 +158,7 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
         SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
         SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
         SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
-        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || $1 || ' seconds') THEN 1 ELSE 0 END) as stale_workers
+        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
     FROM pgqrs_workers
 "#;
 
@@ -169,7 +169,7 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
         SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
         SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
-        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || $1 || ' seconds') THEN 1 ELSE 0 END) as stale_workers
+        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
     GROUP BY q.queue_name
@@ -317,10 +317,10 @@ impl crate::store::Worker for SqliteAdmin {
 #[async_trait]
 impl crate::store::Admin for SqliteAdmin {
     async fn install(&self) -> Result<()> {
-        // Migrations are run on startup in SqliteStore::new
-        // But we can re-run specifically here if needed.
-        // For now, we assume it's done.
-        // Or we can invoke sqlx::migrate again.
+        sqlx::migrate!("migrations/sqlite")
+            .run(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Database(e.into()))?;
         Ok(())
     }
 
@@ -465,7 +465,7 @@ impl crate::store::Admin for SqliteAdmin {
             });
         }
 
-        sqlx::query("DELETE FROM pgqrs_queues WHERE id = $1")
+        sqlx::query("DELETE FROM pgqrs_queues WHERE id = ?")
             .bind(queue_info.id)
             .execute(&mut *tx)
             .await
@@ -475,9 +475,7 @@ impl crate::store::Admin for SqliteAdmin {
                 context: "Failed to delete queue".into(),
             })?;
 
-        tx.commit()
-            .await
-            .map_err(crate::error::Error::Database)?;
+        tx.commit().await.map_err(crate::error::Error::Database)?;
         Ok(())
     }
 
@@ -494,7 +492,7 @@ impl crate::store::Admin for SqliteAdmin {
         // To use transaction, we need methods that accept executor, or execute raw sql on tx.
         // Given SqliteStore layout, we might need to just execute SQL for purge.
 
-        sqlx::query("DELETE FROM pgqrs_messages WHERE queue_id = $1")
+        sqlx::query("DELETE FROM pgqrs_messages WHERE queue_id = ?")
             .bind(queue.id)
             .execute(&mut *tx)
             .await
@@ -503,7 +501,7 @@ impl crate::store::Admin for SqliteAdmin {
                 source: e,
                 context: "Purge messages".into(),
             })?;
-        sqlx::query("DELETE FROM pgqrs_archive WHERE queue_id = $1")
+        sqlx::query("DELETE FROM pgqrs_archive WHERE queue_id = ?")
             .bind(queue.id)
             .execute(&mut *tx)
             .await
@@ -512,7 +510,7 @@ impl crate::store::Admin for SqliteAdmin {
                 source: e,
                 context: "Purge archive".into(),
             })?;
-        sqlx::query("DELETE FROM pgqrs_workers WHERE queue_id = $1")
+        sqlx::query("DELETE FROM pgqrs_workers WHERE queue_id = ?")
             .bind(queue.id)
             .execute(&mut *tx)
             .await
@@ -522,9 +520,7 @@ impl crate::store::Admin for SqliteAdmin {
                 context: "Purge workers".into(),
             })?;
 
-        tx.commit()
-            .await
-            .map_err(crate::error::Error::Database)?;
+        tx.commit().await.map_err(crate::error::Error::Database)?;
         Ok(())
     }
 
@@ -538,7 +534,7 @@ impl crate::store::Admin for SqliteAdmin {
 
         // 1. Select
         let messages: Vec<SqliteRow> =
-            sqlx::query("SELECT * FROM pgqrs_messages WHERE read_ct >= $1")
+            sqlx::query("SELECT * FROM pgqrs_messages WHERE read_ct >= ?")
                 .bind(self.config.max_read_ct)
                 .fetch_all(&mut *tx)
                 .await
@@ -562,14 +558,14 @@ impl crate::store::Admin for SqliteAdmin {
             let deq: Option<String> = row.try_get("dequeued_at")?;
 
             // 2. Insert into Archive
-            sqlx::query("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+            sqlx::query("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
                  .bind(id).bind(q_id).bind(p_wid).bind(c_wid).bind(payload).bind(enq).bind(vt).bind(read_ct).bind(deq)
                  .execute(&mut *tx)
                  .await
                  .map_err(|e| crate::error::Error::QueryFailed { query: "DLQ_Insert".into(), source: e, context: "Insert DLQ archive".into() })?;
 
             // 3. Delete
-            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
+            sqlx::query("DELETE FROM pgqrs_messages WHERE id = ?")
                 .bind(id)
                 .execute(&mut *tx)
                 .await
@@ -582,9 +578,7 @@ impl crate::store::Admin for SqliteAdmin {
             moved_ids.push(id);
         }
 
-        tx.commit()
-            .await
-            .map_err(crate::error::Error::Database)?;
+        tx.commit().await.map_err(crate::error::Error::Database)?;
         Ok(moved_ids)
     }
 
@@ -831,9 +825,7 @@ impl crate::store::Admin for SqliteAdmin {
                 })?;
         }
 
-        tx.commit()
-            .await
-            .map_err(crate::error::Error::Database)?;
+        tx.commit().await.map_err(crate::error::Error::Database)?;
         Ok(total)
     }
 

@@ -1,3 +1,4 @@
+#![cfg(feature = "postgres")]
 use pgqrs::store::{AnyStore, Store};
 use serde_json::json;
 

@@ -860,6 +860,7 @@ async fn test_queue_deletion_with_references() {
     assert!(found_queue.is_none(), "Queue should be deleted");
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_payload_size_limit() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -923,6 +924,7 @@ async fn test_validation_payload_size_limit() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_forbidden_keys() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -982,6 +984,7 @@ async fn test_validation_forbidden_keys() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_required_keys() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -1041,6 +1044,7 @@ async fn test_validation_required_keys() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_object_depth() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -1101,6 +1105,7 @@ async fn test_validation_object_depth() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_batch_validation_atomic_failure() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -1164,6 +1169,7 @@ async fn test_batch_validation_atomic_failure() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_string_length() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
@@ -1224,6 +1230,7 @@ async fn test_validation_string_length() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_accessor_methods() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(

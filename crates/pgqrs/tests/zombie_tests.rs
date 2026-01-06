@@ -14,7 +14,10 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // For SQLite, we MUST use a file-based DB to share with the CLI process
     // common::create_store uses in-memory which CLI can't access
     let dsn = match common::current_backend() {
-        common::TestBackend::Postgres => common::get_postgres_dsn(Some(db_name)).await,
+            #[cfg(feature = "postgres")]
+            common::TestBackend::Postgres => common::get_postgres_dsn(Some(db_name)).await,
+            #[cfg(not(feature = "postgres"))]
+            common::TestBackend::Postgres => panic!("Postgres disabled"),
         common::TestBackend::Sqlite => {
             let path = std::env::temp_dir().join(format!("zombie_{}.db", uuid::Uuid::new_v4()));
             std::fs::File::create(&path).expect("Failed to create test DB file");
@@ -154,9 +157,18 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Run CLI command
     // cargo run -- -d <dsn> admin reclaim --queue <queue_name> --older-than 1m
-    let output = Command::new("cargo")
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run");
+
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+             cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        _ => {}
+    }
+
+    let output = cmd
         .args([
-            "run",
             "--",
             "-d",
             &store.config().dsn,

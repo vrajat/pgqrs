@@ -312,9 +312,7 @@ impl crate::store::Consumer for SqliteConsumer {
                     context: "Delete archived".into(),
                 })?;
 
-            tx.commit()
-                .await
-                .map_err(crate::error::Error::Database)?;
+            tx.commit().await.map_err(crate::error::Error::Database)?;
 
             // Construct result
             use serde_json::Value;

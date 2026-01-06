@@ -99,6 +99,7 @@ async fn test_valid_schema_names() {
     }
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 #[serial]
 async fn test_nonexistent_schema_operations() {
@@ -142,6 +143,7 @@ async fn test_nonexistent_schema_operations() {
     }
 }
 
+#[cfg(feature = "postgres")]
 #[tokio::test]
 #[serial]
 async fn test_verify_requires_existing_schema() {

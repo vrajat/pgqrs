@@ -2,7 +2,10 @@ fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
         match common::current_backend() {
+            #[cfg(feature = "postgres")]
             common::TestBackend::Postgres => common::get_postgres_dsn(Some("pgqrs_cli_test")).await,
+            #[cfg(not(feature = "postgres"))]
+            common::TestBackend::Postgres => panic!("Postgres disabled"),
             common::TestBackend::Sqlite => {
                 let path =
                     std::env::temp_dir().join(format!("cli_test_{}.db", uuid::Uuid::new_v4()));
@@ -15,8 +18,17 @@ fn get_test_db_url() -> String {
 }
 
 fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
-    Command::new("cargo")
-        .args(["run", "--quiet", "--"])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--quiet"]);
+
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        _ => {}
+    }
+
+    cmd.args(["--"])
         .args([
             "--dsn",
             db_url,
@@ -340,8 +352,17 @@ fn test_cli_admin_stats() {
 }
 
 fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
-    Command::new("cargo")
-        .args(["run", "--quiet", "--"])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--quiet"]);
+
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        _ => {}
+    }
+
+    cmd.args(["--"])
         .args([
             "--dsn",
             db_url,

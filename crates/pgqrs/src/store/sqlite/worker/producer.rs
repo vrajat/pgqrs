@@ -30,8 +30,7 @@ impl SqliteProducer {
         port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
-        let workers = SqliteWorkerTable::new(pool.clone());
-        Arc::new(workers); // We need Arc for struct storage
+
         let workers_arc = Arc::new(SqliteWorkerTable::new(pool.clone()));
 
         let worker_info = workers_arc
@@ -224,10 +223,12 @@ impl Drop for SqliteProducer {
         if self.worker_info.hostname.starts_with("__ephemeral__") {
             let workers = self.workers.clone();
             let worker_id = self.worker_info.id;
-            tokio::task::spawn(async move {
-                let _ = workers.suspend(worker_id).await;
-                let _ = workers.shutdown(worker_id).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = workers.suspend(worker_id).await;
+                    let _ = workers.shutdown(worker_id).await;
+                });
+            }
         }
     }
 }

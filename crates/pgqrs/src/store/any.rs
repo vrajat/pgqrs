@@ -121,13 +121,12 @@ impl AnyStore {
         if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
             #[cfg(feature = "postgres")]
             {
-                let pool =
-                    PgPool::connect(dsn)
-                        .await
-                        .map_err(|e| crate::error::Error::ConnectionFailed {
-                            source: e,
-                            context: "Failed to connect to postgres".into(),
-                        })?;
+                let pool = PgPool::connect(dsn).await.map_err(|e| {
+                    crate::error::Error::ConnectionFailed {
+                        source: e,
+                        context: "Failed to connect to postgres".into(),
+                    }
+                })?;
                 // Default config will be applied when new() creates the store
                 Ok(AnyStore::Postgres(PostgresStore::new(
                     pool,
@@ -166,8 +165,9 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
-#[cfg(feature = "postgres")]
+    #[cfg(feature = "postgres")]
     type Db = sqlx::Postgres;
+
     #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
     type Db = sqlx::Sqlite;
 

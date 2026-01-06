@@ -2,7 +2,10 @@ mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
     let dsn = match common::current_backend() {
-        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+            #[cfg(feature = "postgres")]
+            common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+            #[cfg(not(feature = "postgres"))]
+            common::TestBackend::Postgres => panic!("Postgres disabled"),
         common::TestBackend::Sqlite => format!(
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
@@ -26,7 +29,10 @@ async fn verify() {
 async fn test_default_schema_backward_compatibility() {
     // This test ensures that the default behavior works without any explicit schema configuration
     let database_url = match common::current_backend() {
-        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+            #[cfg(feature = "postgres")]
+            common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+            #[cfg(not(feature = "postgres"))]
+            common::TestBackend::Postgres => panic!("Postgres disabled"),
         common::TestBackend::Sqlite => format!(
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()

@@ -33,6 +33,12 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
+    /// Create a new SQLite store with default optimizations.
+    ///
+    /// This initializes the pool with:
+    /// - WAL mode enabled for concurrency
+    /// - 5s busy timeout
+    /// - Foreign Keys enforced
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
@@ -42,6 +48,9 @@ impl SqliteStore {
                         .execute(&mut *conn)
                         .await?;
                     sqlx::query("PRAGMA busy_timeout=5000")
+                        .execute(&mut *conn)
+                        .await?;
+                    sqlx::query("PRAGMA foreign_keys=ON")
                         .execute(&mut *conn)
                         .await?;
                     Ok(())
@@ -154,22 +163,15 @@ impl Store for SqliteStore {
     }
 
     async fn query_bool(&self, sql: &str) -> Result<bool> {
-        // SQLite doesn't have native BOOL, uses INTEGER 0/1.
-        // But sqlx might map boolean based on column type or handle dynamic type.
-        // However, query_scalar expects return type T.
-        // If the query returns 1 or 0, we might need to cast to i64 first or check if sqlx handles bool for sqlite int.
-        // sqlx-sqlite DOES map BOOLEAN columns to bool, but raw expressions might return int.
-        // Let's assume the query is constructed to return boolean-compatible value or we let sqlx handle it.
-        // For strictness, if the SQL returns an integer (COUNT > 0), sqlx might fail to decode to bool if not explicitly boolean type in schema?
-        // Let's rely on sqlx default mapping for now.
-        sqlx::query_scalar(sql)
+        let val: i64 = sqlx::query_scalar(sql)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
                 source: e,
                 context: "Failed to query bool".into(),
-            })
+            })?;
+        Ok(val != 0)
     }
 
     fn config(&self) -> &Config {
