@@ -49,7 +49,7 @@ impl SqliteStore {
             })
             .connect(dsn)
             .await
-            .map_err(|e| Error::Database(e.into()))?;
+            .map_err(Error::Database)?;
 
         // Run migrations
         sqlx::migrate!("migrations/sqlite")
@@ -123,13 +123,16 @@ impl Store for SqliteStore {
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
                 source: e,
-                context: format!("Failed to execute raw SQL with params {}, {}", param1, param2),
+                context: format!(
+                    "Failed to execute raw SQL with params {}, {}",
+                    param1, param2
+                ),
             })?;
         Ok(())
     }
 
     async fn query_int(&self, sql: &str) -> Result<i64> {
-         sqlx::query_scalar(sql)
+        sqlx::query_scalar(sql)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| Error::QueryFailed {
@@ -140,7 +143,7 @@ impl Store for SqliteStore {
     }
 
     async fn query_string(&self, sql: &str) -> Result<String> {
-         sqlx::query_scalar(sql)
+        sqlx::query_scalar(sql)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| Error::QueryFailed {
@@ -159,7 +162,7 @@ impl Store for SqliteStore {
         // Let's assume the query is constructed to return boolean-compatible value or we let sqlx handle it.
         // For strictness, if the SQL returns an integer (COUNT > 0), sqlx might fail to decode to bool if not explicitly boolean type in schema?
         // Let's rely on sqlx default mapping for now.
-         sqlx::query_scalar(sql)
+        sqlx::query_scalar(sql)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| Error::QueryFailed {
@@ -195,50 +198,71 @@ impl Store for SqliteStore {
 
     async fn create_workflow<T: serde::Serialize + Send + Sync>(
         &self,
-        _name: &str,
-        _input: &T,
+        name: &str,
+        input: &T,
     ) -> Result<Box<dyn Workflow>> {
-        todo!()
+        use self::workflow::handle::SqliteWorkflow;
+        let workflow = SqliteWorkflow::create(self.pool.clone(), name, input).await?;
+        Ok(Box::new(workflow))
     }
 
     async fn acquire_step(
         &self,
-        _workflow_id: i64,
-        _step_id: &str,
+        workflow_id: i64,
+        step_id: &str,
     ) -> Result<StepResult<serde_json::Value>> {
-        todo!()
+        use self::workflow::guard::SqliteStepGuard;
+        SqliteStepGuard::acquire(&self.pool, workflow_id, step_id).await
     }
 
-    async fn admin(&self, _config: &Config) -> Result<Box<dyn Admin>> {
-        todo!()
+    async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
+        use self::worker::admin::SqliteAdmin;
+        let admin = SqliteAdmin::new(self.pool.clone(), config.clone());
+        Ok(Box::new(admin))
     }
 
     async fn producer(
         &self,
-        _queue: &str,
-        _hostname: &str,
-        _port: i32,
-        _config: &Config,
+        queue_name: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
     ) -> Result<Box<dyn Producer>> {
-        todo!()
+        use self::worker::producer::SqliteProducer;
+
+        let queue_info = self.queues.get_by_name(queue_name).await?;
+
+        let producer =
+            SqliteProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+
+        Ok(Box::new(producer))
     }
 
     async fn consumer(
         &self,
-        _queue: &str,
-        _hostname: &str,
-        _port: i32,
-        _config: &Config,
+        queue_name: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
     ) -> Result<Box<dyn Consumer>> {
-        todo!()
+        use self::worker::consumer::SqliteConsumer;
+
+        let queue_info = self.queues.get_by_name(queue_name).await?;
+
+        let consumer =
+            SqliteConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
+
+        Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, _id: i64) -> Box<dyn Workflow> {
-        todo!()
+    fn workflow(&self, id: i64) -> Box<dyn Workflow> {
+        use self::workflow::handle::SqliteWorkflow;
+        Box::new(SqliteWorkflow::new(self.pool.clone(), id))
     }
 
-    fn worker(&self, _id: i64) -> Box<dyn Worker> {
-        todo!()
+    fn worker(&self, id: i64) -> Box<dyn Worker> {
+        use self::worker::SqliteWorkerHandle;
+        Box::new(SqliteWorkerHandle::new(self.pool.clone(), id))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
@@ -251,17 +275,25 @@ impl Store for SqliteStore {
 
     async fn producer_ephemeral(
         &self,
-        _queue: &str,
-        _config: &Config,
+        queue_name: &str,
+        config: &Config,
     ) -> Result<Box<dyn Producer>> {
-        todo!()
+        use self::worker::producer::SqliteProducer;
+        let queue_info = self.queues.get_by_name(queue_name).await?;
+        let producer =
+            SqliteProducer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(producer))
     }
 
     async fn consumer_ephemeral(
         &self,
-        _queue: &str,
-        _config: &Config,
+        queue_name: &str,
+        config: &Config,
     ) -> Result<Box<dyn Consumer>> {
-        todo!()
+        use self::worker::consumer::SqliteConsumer;
+        let queue_info = self.queues.get_by_name(queue_name).await?;
+        let consumer =
+            SqliteConsumer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
+        Ok(Box::new(consumer))
     }
 }

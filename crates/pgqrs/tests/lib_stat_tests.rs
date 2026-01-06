@@ -4,12 +4,7 @@ use serde_json::json;
 mod common;
 
 async fn create_store() -> AnyStore {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_lib_stat_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_lib_stat_test")
-        .expect("Failed to create config with lib_stat_test schema");
-    pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to connect store")
+    common::create_store("pgqrs_lib_stat_test").await
 }
 
 #[tokio::test]
@@ -192,14 +187,17 @@ async fn test_worker_health_stats() {
     let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
 
     // Insert a stale worker manually
-    // Using pgqrs_lib_stat_test schema
-    store.execute_raw_with_i64(
-        "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at)
-         VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
-        queue_info.id
-    )
-    .await
-    .unwrap();
+    use common::TestBackend;
+    let sql = match common::current_backend() {
+        TestBackend::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
+        TestBackend::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
+        _ => panic!("Unsupported backend"),
+    };
+
+    store
+        .execute_raw_with_i64(sql, queue_info.id)
+        .await
+        .unwrap();
 
     // Test Global Health
     let global_stats = pgqrs::admin(&store)
@@ -227,12 +225,14 @@ async fn test_worker_health_stats() {
     assert_eq!(q_stat.total_workers, 1);
 
     // Cleanup
-    store
-        .execute_raw(
-            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'",
-        )
-        .await
-        .unwrap();
+    let cleanup_sql = match common::current_backend() {
+        TestBackend::Postgres => {
+            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'"
+        }
+        TestBackend::Sqlite => "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'",
+        _ => panic!("Unsupported backend"),
+    };
+    store.execute_raw(cleanup_sql).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)
         .await

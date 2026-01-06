@@ -36,11 +36,6 @@ const DELETE_WORKER_BY_ID: &str = r#"
     WHERE id = $1;
 "#;
 
-const DELETE_WORKERS_BY_QUEUE: &str = r#"
-    DELETE FROM pgqrs_workers
-    WHERE queue_id = $1;
-"#;
-
 const INSERT_EPHEMERAL_WORKER: &str = r#"
     INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
     VALUES ($1, -1, $2, 'ready')
@@ -92,15 +87,16 @@ impl SqliteWorkerTable {
     }
 
     pub async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus> {
-        let status_str: String = sqlx::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
-            .bind(worker_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "GET_WORKER_STATUS".into(),
-                source: e,
-                context: format!("Failed to get worker {} status", worker_id),
-            })?;
+        let status_str: String =
+            sqlx::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
+                .bind(worker_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "GET_WORKER_STATUS".into(),
+                    source: e,
+                    context: format!("Failed to get worker {} status", worker_id),
+                })?;
 
         WorkerStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })
@@ -128,64 +124,69 @@ impl SqliteWorkerTable {
         let threshold = Utc::now() - max_age;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
-        let is_healthy: bool = sqlx::query_scalar("SELECT heartbeat_at >= $2 FROM pgqrs_workers WHERE id = $1")
-            .bind(worker_id)
-            .bind(threshold_str)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "CHECK_WORKER_HEALTH".into(),
-                source: e,
-                context: format!("Failed to check health for worker {}", worker_id),
-            })?;
+        let is_healthy: bool =
+            sqlx::query_scalar("SELECT heartbeat_at > $2 FROM pgqrs_workers WHERE id = $1")
+                .bind(worker_id)
+                .bind(threshold_str)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "CHECK_WORKER_HEALTH".into(),
+                    source: e,
+                    context: format!("Failed to check health for worker {}", worker_id),
+                })?;
 
         Ok(is_healthy)
     }
 
     pub async fn suspend(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query("UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status = 'ready'")
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "TRANSITION_READY_TO_SUSPENDED".into(),
-                source: e,
-                context: format!("Failed to suspend worker {}", worker_id),
-            })?;
+        let result = sqlx::query(
+            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status = 'ready'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "TRANSITION_READY_TO_SUSPENDED".into(),
+            source: e,
+            context: format!("Failed to suspend worker {}", worker_id),
+        })?;
 
         if result.rows_affected() == 0 {
-             let current_status = self.get_status(worker_id).await?;
-             // If status is already suspended, it's effectively a no-op / idempotent, but logic in postgres impl returns Err if not Ready.
-             // Postgres impl uses RETURNING id to check if update happened.
-             // Here we check rows_affected.
-             // If status is not ready, we error.
-             return Err(crate::error::Error::InvalidStateTransition {
-                 from: current_status.to_string(),
-                 to: "suspended".to_string(),
-                 reason: "Worker must be in Ready state to suspend".to_string(),
-             });
+            let current_status = self.get_status(worker_id).await?;
+            // If status is already suspended, it's effectively a no-op / idempotent, but logic in postgres impl returns Err if not Ready.
+            // Postgres impl uses RETURNING id to check if update happened.
+            // Here we check rows_affected.
+            // If status is not ready, we error.
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "suspended".to_string(),
+                reason: "Worker must be in Ready state to suspend".to_string(),
+            });
         }
         Ok(())
     }
 
     pub async fn resume(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query("UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'suspended'")
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "TRANSITION_SUSPENDED_TO_READY".into(),
-                source: e,
-                context: format!("Failed to resume worker {}", worker_id),
-            })?;
+        let result = sqlx::query(
+            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'suspended'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "TRANSITION_SUSPENDED_TO_READY".into(),
+            source: e,
+            context: format!("Failed to resume worker {}", worker_id),
+        })?;
 
         if result.rows_affected() == 0 {
-             let current_status = self.get_status(worker_id).await?;
-             return Err(crate::error::Error::InvalidStateTransition {
-                 from: current_status.to_string(),
-                 to: "ready".to_string(),
-                 reason: "Worker must be in Suspended state to resume".to_string(),
-             });
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "ready".to_string(),
+                reason: "Worker must be in Suspended state to resume".to_string(),
+            });
         }
         Ok(())
     }
@@ -206,12 +207,12 @@ impl SqliteWorkerTable {
             })?;
 
         if result.rows_affected() == 0 {
-             let current_status = self.get_status(worker_id).await?;
-             return Err(crate::error::Error::InvalidStateTransition {
-                 from: current_status.to_string(),
-                 to: "stopped".to_string(),
-                 reason: "Worker must be in Suspended state to shutdown".to_string(),
-             });
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "stopped".to_string(),
+                reason: "Worker must be in Suspended state to shutdown".to_string(),
+            });
         }
         Ok(())
     }
@@ -325,22 +326,32 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(workers)
     }
 
-    async fn count_for_queue(&self, queue_id: i64, state: crate::types::WorkerStatus) -> Result<i64> {
+    async fn count_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<i64> {
         let state_str = state.to_string();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status = $2")
-            .bind(queue_id)
-            .bind(state_str)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("COUNT_WORKERS_BY_STATE (queue_id={})", queue_id),
-                source: e,
-                context: format!("Failed to count workers for queue {}", queue_id),
-            })?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status = $2",
+        )
+        .bind(queue_id)
+        .bind(state_str)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_WORKERS_BY_STATE (queue_id={})", queue_id),
+            source: e,
+            context: format!("Failed to count workers for queue {}", queue_id),
+        })?;
         Ok(count)
     }
 
-    async fn count_zombies_for_queue(&self, queue_id: i64, older_than: chrono::Duration) -> Result<i64> {
+    async fn count_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> Result<i64> {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
@@ -357,7 +368,11 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(count)
     }
 
-    async fn list_for_queue(&self, queue_id: i64, state: crate::types::WorkerStatus) -> Result<Vec<WorkerInfo>> {
+    async fn list_for_queue(
+        &self,
+        queue_id: i64,
+        state: crate::types::WorkerStatus,
+    ) -> Result<Vec<WorkerInfo>> {
         let state_str = state.to_string();
         let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status = $2 ORDER BY started_at DESC")
             .bind(queue_id)
@@ -377,7 +392,11 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(workers)
     }
 
-    async fn list_zombies_for_queue(&self, queue_id: i64, older_than: chrono::Duration) -> Result<Vec<WorkerInfo>> {
+    async fn list_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: chrono::Duration,
+    ) -> Result<Vec<WorkerInfo>> {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
@@ -399,7 +418,12 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(workers)
     }
 
-    async fn register(&self, queue_id: Option<i64>, hostname: &str, port: i32) -> Result<WorkerInfo> {
+    async fn register(
+        &self,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> Result<WorkerInfo> {
         let existing = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = $1 AND port = $2")
             .bind(hostname)
             .bind(port)
@@ -412,13 +436,13 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
             })?;
 
         if let Some(row) = existing {
-             let worker = Self::map_row(row)?;
-             match worker.status {
-                 WorkerStatus::Stopped => {
-                     // Reset
-                     let now = Utc::now();
-                     let now_str = format_sqlite_timestamp(&now);
-                     let row = sqlx::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
+            let worker = Self::map_row(row)?;
+            match worker.status {
+                WorkerStatus::Stopped => {
+                    // Reset
+                    let now = Utc::now();
+                    let now_str = format_sqlite_timestamp(&now);
+                    let row = sqlx::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
                         .bind(worker.id)
                         .bind(queue_id)
                         .bind(now_str)
@@ -430,26 +454,29 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                             context: format!("Failed to reset worker {}:{}", hostname, port),
                         })?;
 
-                     Self::map_row(row)
-                 }
-                 WorkerStatus::Ready => {
-                     Err(crate::error::Error::ValidationFailed {
-                         reason: format!("Worker {}:{} is already active. Cannot register duplicate.", hostname, port),
-                     })
-                 }
-                 WorkerStatus::Suspended => {
-                     Err(crate::error::Error::ValidationFailed {
-                         reason: format!("Worker {}:{} is suspended. Use resume() to reactivate.", hostname, port),
-                     })
-                 }
-             }
+                    Self::map_row(row)
+                }
+                WorkerStatus::Ready => Err(crate::error::Error::ValidationFailed {
+                    reason: format!(
+                        "Worker {}:{} is already active. Cannot register duplicate.",
+                        hostname, port
+                    ),
+                }),
+                WorkerStatus::Suspended => Err(crate::error::Error::ValidationFailed {
+                    reason: format!(
+                        "Worker {}:{} is suspended. Use resume() to reactivate.",
+                        hostname, port
+                    ),
+                }),
+            }
         } else {
-             // Create new
-             self.insert(crate::types::NewWorker {
-                 hostname: hostname.to_string(),
-                 port,
-                 queue_id,
-             }).await
+            // Create new
+            self.insert(crate::types::NewWorker {
+                hostname: hostname.to_string(),
+                port,
+                queue_id,
+            })
+            .await
         }
     }
 

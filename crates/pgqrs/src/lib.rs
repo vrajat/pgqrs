@@ -65,18 +65,18 @@
 //! use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
 //!
 //! #[pgqrs_step]
-//! async fn fetch_data(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
+//! async fn fetch_data(ctx: &mut (impl pgqrs::Workflow + ?Sized), url: &str) -> Result<String, anyhow::Error> {
 //!     // Fetch data - only executes once per workflow run
 //!     Ok("data".to_string())
 //! }
 //!
 //! #[pgqrs_step]
-//! async fn process_data(ctx: &pgqrs::Workflow, data: String) -> Result<i32, anyhow::Error> {
+//! async fn process_data(ctx: &mut (impl pgqrs::Workflow + ?Sized), data: String) -> Result<i32, anyhow::Error> {
 //!     Ok(data.len() as i32)
 //! }
 //!
 //! #[pgqrs_workflow]
-//! async fn data_pipeline(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
+//! async fn data_pipeline(ctx: &mut (impl pgqrs::Workflow + ?Sized), url: &str) -> Result<String, anyhow::Error> {
 //!     let data = fetch_data(ctx, url).await?;
 //!     let count = process_data(ctx, data).await?;
 //!     Ok(format!("Processed {} bytes", count))
@@ -87,11 +87,14 @@
 //! pgqrs::admin(&store).install().await?;
 //!
 //! let url = "https://example.com/data";
-//! let workflow = pgqrs::admin(&store)
-//!     .create_workflow("data_pipeline", &url)
+
+//! let mut workflow = pgqrs::workflow()
+//!     .name("data_pipeline")
+//!     .arg(&url)?
+//!     .create(&store)
 //!     .await?;
 //!
-//! let result = data_pipeline(&workflow, url).await?;
+//! let result = data_pipeline(workflow.as_mut(), url).await?;
 //! println!("Result: {}", result);
 //! # Ok(())
 //! # }

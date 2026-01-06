@@ -79,11 +79,11 @@ impl crate::store::QueueTable for SqliteQueueTable {
                     // or sometimes 1555 (primary key) or 19 (constraint)
                     // sqlx might expose it via code()
                     if let Some(code) = db_err.code() {
-                         if code == "2067" || code == "1555" || code == "19" {
-                             return crate::error::Error::QueueAlreadyExists {
-                                 name: data.queue_name.clone(),
-                             };
-                         }
+                        if code == "2067" || code == "1555" || code == "19" {
+                            return crate::error::Error::QueueAlreadyExists {
+                                name: data.queue_name.clone(),
+                            };
+                        }
                     }
                 }
                 crate::error::Error::QueryFailed {

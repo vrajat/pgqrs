@@ -11,7 +11,12 @@ on:
       - main
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [postgres, sqlite]
 
     services:
       postgres:
@@ -75,8 +80,9 @@ jobs:
 
       - name: Run checks and tests
         run: |
-          make test UV=uv
+          make test-${{ matrix.backend }} UV=uv CARGO_FEATURES="--no-default-features --features ${{ matrix.backend }}"
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
           PGBOUNCER_TEST_DSN: postgres://postgres@localhost:6432/postgres
+          PGQRS_TEST_SQLITE_DSN: sqlite:///tmp/ci_test.db

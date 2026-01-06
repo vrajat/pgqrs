@@ -35,14 +35,6 @@ const DELETE_ARCHIVE_BY_ID: &str = r#"
     DELETE FROM pgqrs_archive WHERE id = $1;
 "#;
 
-const DELETE_ARCHIVE_BY_QUEUE: &str = r#"
-    DELETE FROM pgqrs_archive WHERE queue_id = $1;
-"#;
-
-const COUNT_ARCHIVE_BY_QUEUE_TX: &str = r#"
-    SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1;
-"#;
-
 #[derive(Debug, Clone)]
 pub struct SqliteArchiveTable {
     pool: SqlitePool,
@@ -230,7 +222,10 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_DLQ_MESSAGES".into(),
                 source: e,
-                context: format!("Failed to list DLQ messages (max_attempts={})", max_attempts),
+                context: format!(
+                    "Failed to list DLQ messages (max_attempts={})",
+                    max_attempts
+                ),
             })?;
 
         let mut archives = Vec::with_capacity(rows.len());
@@ -256,7 +251,10 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_DLQ_MESSAGES".into(),
                 source: e,
-                context: format!("Failed to count DLQ messages (max_attempts={})", max_attempts),
+                context: format!(
+                    "Failed to count DLQ messages (max_attempts={})",
+                    max_attempts
+                ),
             })?;
         Ok(count)
     }
@@ -309,8 +307,8 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     }
 
     async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
-         let sql = "DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1";
-         let result = sqlx::query(sql)
+        let sql = "DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1";
+        let result = sqlx::query(sql)
             .bind(worker_id)
             .execute(&self.pool)
             .await
@@ -346,10 +344,14 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             COMMIT;
         */
 
-        let mut tx = self.pool.begin().await.map_err(|e| crate::error::Error::TransactionFailed {
-            source: e,
-            context: "Failed to begin transaction for replay".into(),
-        })?;
+        let mut tx =
+            self.pool
+                .begin()
+                .await
+                .map_err(|e| crate::error::Error::TransactionFailed {
+                    source: e,
+                    context: "Failed to begin transaction for replay".into(),
+                })?;
 
         // 1. Get the archived message
         let row = sqlx::query(GET_ARCHIVE_BY_ID)
@@ -404,10 +406,12 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
                 context: "Failed to insert replayed message".into(),
             })?;
 
-        tx.commit().await.map_err(|e| crate::error::Error::TransactionFailed {
-             source: e,
-             context: "Failed to commit replay transaction".into(),
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| crate::error::Error::TransactionFailed {
+                source: e,
+                context: "Failed to commit replay transaction".into(),
+            })?;
 
         // Parse result manually since we don't have access to SqliteMessageTable from here easily without duplicating code
         let id: i64 = msg_row.try_get("id")?;
@@ -428,28 +432,29 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
         let consumer_worker_id: Option<i64> = msg_row.try_get("consumer_worker_id")?;
 
         Ok(Some(QueueMessage {
-             id,
-             queue_id,
-             payload,
-             vt: vt.unwrap_or(enqueued_at), // Should be set by default
-             enqueued_at,
-             read_ct,
-             dequeued_at,
-             producer_worker_id,
-             consumer_worker_id,
+            id,
+            queue_id,
+            payload,
+            vt: vt.unwrap_or(enqueued_at), // Should be set by default
+            enqueued_at,
+            read_ct,
+            dequeued_at,
+            producer_worker_id,
+            consumer_worker_id,
         }))
     }
 
     async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1")
-            .bind(queue_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
-                source: e,
-                context: format!("Failed to count archives for queue {}", queue_id),
-            })?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1")
+                .bind(queue_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
+                    source: e,
+                    context: format!("Failed to count archives for queue {}", queue_id),
+                })?;
         Ok(count)
     }
 }

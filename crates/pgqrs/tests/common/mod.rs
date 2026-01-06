@@ -82,8 +82,12 @@ pub async fn create_store_for_backend(
         match backend {
             TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
             TestBackend::Sqlite => {
-                // Default to in-memory database if no DSN provided
-                "sqlite::memory:".to_string()
+                // Use a unique in-memory database per store creation to ensure isolation
+                // The ?cache=shared allows pool connections to verify consistent state
+                format!(
+                    "sqlite:file:{}?mode=memory&cache=shared",
+                    uuid::Uuid::new_v4()
+                )
             }
             TestBackend::Turso => panic!("PGQRS_TEST_TURSO_DSN must be set for Turso backend"),
         }

@@ -33,8 +33,14 @@ once_cell = "1.19"
 
 serial_test = "3.2"
 
+[features]
+default = ["postgres"]
+full = ["postgres", "sqlite"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
+
 [dependencies]
-sqlx = { version = "0.8.6", features = ["postgres", "sqlite", "chrono", "uuid", "json", "runtime-tokio-rustls", "macros"] }
+sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 serde = { version = "1.0", features = ["derive"] }

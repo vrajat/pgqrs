@@ -13,18 +13,18 @@ requirements: docs-requirements  ## Install all Python requirements
 	$(UV) pip install -e "py-pgqrs[test]"
 
 build: requirements  ## Build Rust and Python bindings
-	cargo build -p pgqrs
-	$(UV) run maturin develop -m py-pgqrs/Cargo.toml
+	cargo build -p pgqrs $(CARGO_FEATURES)
+	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
 
 test-rust:  ## Run Rust tests only
 ifdef TEST
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES) --test $(TEST)
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
 endif
 
 test: build  ## Run all tests
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 test-py: build  ## Run Python tests only

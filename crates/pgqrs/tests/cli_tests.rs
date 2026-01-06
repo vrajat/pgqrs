@@ -1,6 +1,17 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
-    rt.block_on(async { common::get_postgres_dsn(Some("pgqrs_cli_test")).await })
+    rt.block_on(async {
+        match common::current_backend() {
+            common::TestBackend::Postgres => common::get_postgres_dsn(Some("pgqrs_cli_test")).await,
+            common::TestBackend::Sqlite => {
+                let path =
+                    std::env::temp_dir().join(format!("cli_test_{}.db", uuid::Uuid::new_v4()));
+                std::fs::File::create(&path).expect("Failed to create test DB file");
+                format!("sqlite://{}", path.display())
+            }
+            common::TestBackend::Turso => panic!("Turso not supported for CLI tests yet"),
+        }
+    })
 }
 
 fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
@@ -54,6 +65,7 @@ fn run_cli_command_json<T: DeserializeOwned>(db_url: &str, args: &[&str]) -> T {
 mod common;
 
 use pgqrs::types::{ArchivedMessage, QueueInfo, QueueMessage};
+use pgqrs::Store;
 use serde::de::DeserializeOwned;
 use std::process::Command;
 use tokio::runtime::Runtime;
@@ -375,17 +387,16 @@ fn test_cli_worker_health() {
     // Manually insert a stale worker directly into DB to test timeout logic
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
-        // Insert a worker with last_heartbeat 1 hour ago
-        // Ensure we use the correct schema
-        sqlx::query(
-            "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at)
-             VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')"
-        )
-        .bind(queue_info.id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").expect("Config");
+        let store = pgqrs::connect_with_config(&config).await.expect("Store");
+
+        let sql = match common::current_backend() {
+            common::TestBackend::Postgres => "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')",
+            common::TestBackend::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
+            _ => panic!("Unsupported"),
+        };
+
+        store.execute_raw_with_i64(sql, queue_info.id).await.expect("Insert failed");
     });
 
     // Test Global Health (JSON)
@@ -416,11 +427,20 @@ fn test_cli_worker_health() {
 
     // Cleanup
     rt.block_on(async {
-        let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
-        sqlx::query("DELETE FROM pgqrs_cli_test.pgqrs_workers WHERE hostname = 'stale_host'")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let config =
+            pgqrs::config::Config::from_dsn_with_schema(&db_url, "pgqrs_cli_test").expect("Config");
+        let store = pgqrs::connect_with_config(&config).await.expect("Store");
+
+        let sql = match common::current_backend() {
+            common::TestBackend::Postgres => {
+                "DELETE FROM pgqrs_cli_test.pgqrs_workers WHERE hostname = 'stale_host'"
+            }
+            common::TestBackend::Sqlite => {
+                "DELETE FROM pgqrs_workers WHERE hostname = 'stale_host'"
+            }
+            _ => panic!("Unsupported"),
+        };
+        store.execute_raw(sql).await.expect("Cleanup failed");
     });
 
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);

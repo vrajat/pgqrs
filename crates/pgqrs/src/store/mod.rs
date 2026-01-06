@@ -24,7 +24,9 @@ pub enum ConcurrencyModel {
 }
 
 pub mod any;
+#[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 
 pub use any::AnyStore;

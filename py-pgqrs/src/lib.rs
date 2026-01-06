@@ -793,6 +793,11 @@ impl Producer {
         })
     }
 
+    #[getter]
+    fn worker_id(&self) -> i64 {
+        self.inner.worker_id()
+    }
+
     fn enqueue<'a>(&self, py: Python<'a>, payload: &PyAny) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let json_payload = py_to_json(payload)?;
@@ -853,6 +858,11 @@ impl Consumer {
         Ok(Consumer {
             inner: Arc::new(consumer),
         })
+    }
+
+    #[getter]
+    fn worker_id(&self) -> i64 {
+        self.inner.worker_id()
     }
 
     fn dequeue<'a>(&self, py: Python<'a>, batch_size: Option<usize>) -> PyResult<&'a PyAny> {

@@ -4,13 +4,7 @@ use std::time::Duration;
 mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_builder_ergonomics_test")).await;
-    let config =
-        pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_builder_ergonomics_test")
-            .expect("Failed to create config with builder_ergonomics_test schema");
-    pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to create store")
+    common::create_store("pgqrs_builder_ergonomics_test").await
 }
 
 #[tokio::test]

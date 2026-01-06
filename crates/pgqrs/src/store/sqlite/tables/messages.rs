@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 
-
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -54,7 +53,7 @@ impl SqliteMessageTable {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<QueueMessage> {
+    pub fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<QueueMessage> {
         let id: i64 = row.try_get("id")?;
         let queue_id: i64 = row.try_get("queue_id")?;
 
@@ -207,18 +206,19 @@ impl crate::store::MessageTable for SqliteMessageTable {
         let mut query_builder = sqlx::QueryBuilder::new("INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id) ");
 
         query_builder.push_values(payloads, |mut b, payload| {
-             b.push_bind(queue_id)
-              .push_bind(payload.to_string())
-              .push_bind(params.read_ct)
-              .push_bind(format_sqlite_timestamp(&params.enqueued_at))
-              .push_bind(format_sqlite_timestamp(&params.vt))
-              .push_bind(params.producer_worker_id)
-              .push_bind(params.consumer_worker_id);
+            b.push_bind(queue_id)
+                .push_bind(payload.to_string())
+                .push_bind(params.read_ct)
+                .push_bind(format_sqlite_timestamp(&params.enqueued_at))
+                .push_bind(format_sqlite_timestamp(&params.vt))
+                .push_bind(params.producer_worker_id)
+                .push_bind(params.consumer_worker_id);
         });
 
         query_builder.push(" RETURNING id");
 
-        let ids = query_builder.build_query_scalar()
+        let ids = query_builder
+            .build_query_scalar()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -243,7 +243,8 @@ impl crate::store::MessageTable for SqliteMessageTable {
         }
         separated.push_unseparated(") ORDER BY id");
 
-        let rows = query_builder.build()
+        let rows = query_builder
+            .build()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -311,7 +312,8 @@ impl crate::store::MessageTable for SqliteMessageTable {
             return Ok(vec![]);
         }
 
-        let mut query_builder = sqlx::QueryBuilder::new("UPDATE pgqrs_messages SET vt = datetime(vt, '+' || ");
+        let mut query_builder =
+            sqlx::QueryBuilder::new("UPDATE pgqrs_messages SET vt = datetime(vt, '+' || ");
         query_builder.push_bind(additional_seconds as i32);
         query_builder.push(" || ' seconds') WHERE id IN (");
 
@@ -323,13 +325,17 @@ impl crate::store::MessageTable for SqliteMessageTable {
         query_builder.push_bind(worker_id);
         query_builder.push(" RETURNING id");
 
-        let extended_ids: Vec<i64> = query_builder.build_query_scalar()
+        let extended_ids: Vec<i64> = query_builder
+            .build_query_scalar()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "EXTEND_BATCH_VT_DYNAMIC".into(),
                 source: e,
-                context: format!("Failed to batch extend visibility for {} messages", message_ids.len()),
+                context: format!(
+                    "Failed to batch extend visibility for {} messages",
+                    message_ids.len()
+                ),
             })?;
 
         let extended_set: std::collections::HashSet<i64> = extended_ids.into_iter().collect();
@@ -360,7 +366,8 @@ impl crate::store::MessageTable for SqliteMessageTable {
         query_builder.push_bind(worker_id);
         query_builder.push(" RETURNING id");
 
-        let released_ids: Vec<i64> = query_builder.build_query_scalar()
+        let released_ids: Vec<i64> = query_builder
+            .build_query_scalar()
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -382,11 +389,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
         self.count_pending_filtered(queue_id, None).await
     }
 
-    async fn count_pending_filtered(
-        &self,
-        queue_id: i64,
-        worker_id: Option<i64>,
-    ) -> Result<i64> {
+    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
         let count: i64 = match worker_id {
             Some(wid) => {
                 sqlx::query_scalar(
@@ -431,12 +434,12 @@ impl crate::store::MessageTable for SqliteMessageTable {
         // If we do batch delete, we don't know which ones were deleted unless we use RETURNING id.
 
         if ids.is_empty() {
-             return Ok(vec![]);
+            return Ok(vec![]);
         }
 
         // The Postgres implementation loops and executes DELETE one by one. I'll do the same for consistency regarding return type.
         for &id in ids {
-             let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
+            let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
                 .bind(id)
                 .execute(&self.pool)
                 .await
@@ -446,7 +449,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
                     context: format!("Failed to delete message {}", id),
                 })?
                 .rows_affected();
-             results.push(rows_affected > 0);
+            results.push(rows_affected > 0);
         }
 
         Ok(results)

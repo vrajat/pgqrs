@@ -25,31 +25,47 @@ async fn test_sqlite_connect() {
         store.queues().delete_by_name(queue_name).await.unwrap();
     }
 
-    let queue = store.queues().insert(pgqrs::types::NewQueue {
-        queue_name: queue_name.to_string(),
-    }).await.expect("Failed to create queue");
+    let queue = store
+        .queues()
+        .insert(pgqrs::types::NewQueue {
+            queue_name: queue_name.to_string(),
+        })
+        .await
+        .expect("Failed to create queue");
     assert_eq!(queue.queue_name, queue_name);
 
     // 3. Worker Operations
-    let worker = store.workers().register(Some(queue.id), "test-host", 1234).await.expect("Failed to register worker");
+    let worker = store
+        .workers()
+        .register(Some(queue.id), "test-host", 1234)
+        .await
+        .expect("Failed to register worker");
     assert_eq!(worker.hostname, "test-host");
 
     // 4. Message Operations
     let payload = serde_json::json!({"foo": "bar"});
     let now = chrono::Utc::now();
-    let msg = store.messages().insert(pgqrs::types::NewMessage {
-        queue_id: queue.id,
-        payload: payload.clone(),
-        read_ct: 0,
-        enqueued_at: now,
-        vt: now,
-        producer_worker_id: Some(worker.id),
-        consumer_worker_id: None,
-    }).await.expect("Failed to insert message");
+    let msg = store
+        .messages()
+        .insert(pgqrs::types::NewMessage {
+            queue_id: queue.id,
+            payload: payload.clone(),
+            read_ct: 0,
+            enqueued_at: now,
+            vt: now,
+            producer_worker_id: Some(worker.id),
+            consumer_worker_id: None,
+        })
+        .await
+        .expect("Failed to insert message");
 
     assert_eq!(msg.payload, payload);
 
-    let count = store.messages().count_pending(queue.id).await.expect("Failed to count");
+    let count = store
+        .messages()
+        .count_pending(queue.id)
+        .await
+        .expect("Failed to count");
     // Should be 1 (vt <= now)
     assert!(count >= 1);
 }
