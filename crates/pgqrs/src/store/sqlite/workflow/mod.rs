@@ -1,2 +1,2 @@
-pub mod handle;
 pub mod guard;
+pub mod handle;

@@ -1,5 +1,5 @@
-pub mod pgqrs_queues;
-pub mod pgqrs_messages;
-pub mod pgqrs_workers;
-pub mod pgqrs_archive;
-pub mod pgqrs_workflows;
+pub mod queues;
+pub mod messages;
+pub mod workers;
+pub mod archive;
+pub mod workflows;
