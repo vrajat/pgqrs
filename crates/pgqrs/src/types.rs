@@ -379,6 +379,19 @@ impl fmt::Display for WorkerStatus {
     }
 }
 
+impl std::str::FromStr for WorkerStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ready" => Ok(WorkerStatus::Ready),
+            "suspended" => Ok(WorkerStatus::Suspended),
+            "stopped" => Ok(WorkerStatus::Stopped),
+            _ => Err(format!("Invalid worker status: {}", s)),
+        }
+    }
+}
+
 /// Worker statistics for monitoring and management
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerStats {
@@ -460,6 +473,31 @@ pub enum WorkflowStatus {
     Running,
     Success,
     Error,
+}
+
+impl fmt::Display for WorkflowStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkflowStatus::Pending => write!(f, "PENDING"),
+            WorkflowStatus::Running => write!(f, "RUNNING"),
+            WorkflowStatus::Success => write!(f, "SUCCESS"),
+            WorkflowStatus::Error => write!(f, "ERROR"),
+        }
+    }
+}
+
+impl std::str::FromStr for WorkflowStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PENDING" => Ok(WorkflowStatus::Pending),
+            "RUNNING" => Ok(WorkflowStatus::Running),
+            "SUCCESS" => Ok(WorkflowStatus::Success),
+            "ERROR" => Ok(WorkflowStatus::Error),
+            _ => Err(format!("Invalid workflow status: {}", s)),
+        }
+    }
 }
 
 // Moved from src/tables/pgqrs_workflows.rs

@@ -1,8 +1,18 @@
 mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
-    let database_url = common::get_postgres_dsn(None).await;
-    let config = pgqrs::config::Config::from_dsn(database_url);
+    let dsn = match common::current_backend() {
+        #[cfg(feature = "postgres")]
+        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+        #[cfg(not(feature = "postgres"))]
+        common::TestBackend::Postgres => panic!("Postgres disabled"),
+        common::TestBackend::Sqlite => format!(
+            "sqlite:file:{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        ),
+        common::TestBackend::Turso => panic!("Turso requires DSN"),
+    };
+    let config = pgqrs::config::Config::from_dsn(&dsn);
     pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to create Store")
@@ -17,13 +27,25 @@ async fn verify() {
 
 #[tokio::test]
 async fn test_default_schema_backward_compatibility() {
-    // This test ensures that the default behavior (using "public" schema)
-    // works without any explicit schema configuration
-    let database_url = common::get_postgres_dsn(None).await;
+    // This test ensures that the default behavior works without any explicit schema configuration
+    let database_url = match common::current_backend() {
+        #[cfg(feature = "postgres")]
+        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
+        #[cfg(not(feature = "postgres"))]
+        common::TestBackend::Postgres => panic!("Postgres disabled"),
+        common::TestBackend::Sqlite => format!(
+            "sqlite:file:{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        ),
+        common::TestBackend::Turso => panic!("Turso requires DSN"),
+    };
 
-    // Test Config::from_dsn creates config with default "public" schema
+    // Test Config::from_dsn creates config with default schema (public for Postgres)
     let config = pgqrs::config::Config::from_dsn(&database_url);
-    assert_eq!(config.schema, "public");
+
+    if common::current_backend() == common::TestBackend::Postgres {
+        assert_eq!(config.schema, "public");
+    }
 
     // Test that store operations work with default schema
     let store = pgqrs::connect_with_config(&config)

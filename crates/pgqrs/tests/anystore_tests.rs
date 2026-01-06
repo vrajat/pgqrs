@@ -3,20 +3,17 @@ use serde_json::json;
 
 mod common;
 
+use common::TestBackend;
+
 async fn create_store() -> pgqrs::store::AnyStore {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_anystore_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_anystore_test")
-        .expect("Failed to create config with anystore_test schema");
-    pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to create store")
+    common::create_store("pgqrs_anystore_test").await
 }
 
 #[tokio::test]
-async fn test_anystore_delegates_to_postgres() {
+async fn test_anystore_delegates_to_backend() {
     let store = create_store().await;
 
-    // Test that AnyStore correctly delegates to PostgresStore
+    // Test that AnyStore correctly delegates to the underlying store
     // by performing basic operations
 
     // Create a queue
@@ -71,16 +68,25 @@ async fn test_anystore_backend_name() {
 
     // Verify backend name is correct
     let backend_name = store.backend_name();
-    assert_eq!(backend_name, "postgres");
+    let expected = match common::current_backend() {
+        TestBackend::Postgres => "postgres",
+        TestBackend::Sqlite => "sqlite",
+        TestBackend::Turso => "turso",
+    };
+    assert_eq!(backend_name, expected);
 }
 
 #[tokio::test]
 async fn test_anystore_concurrency_model() {
     let store = create_store().await;
 
-    // Verify concurrency model is correct for Postgres
+    // Verify concurrency model matches backend capability
     let concurrency_model = store.concurrency_model();
-    assert_eq!(concurrency_model, ConcurrencyModel::MultiProcess);
+    let expected = match common::current_backend() {
+        TestBackend::Postgres => ConcurrencyModel::MultiProcess,
+        TestBackend::Sqlite | TestBackend::Turso => ConcurrencyModel::SingleProcess,
+    };
+    assert_eq!(concurrency_model, expected);
 }
 
 #[tokio::test]
@@ -90,7 +96,14 @@ async fn test_anystore_config_access() {
     // Verify we can access the config through AnyStore
     let config = store.config();
     assert_eq!(config.schema, "pgqrs_anystore_test");
-    assert!(config.dsn.contains("postgres"));
+
+    // Check DSN scheme matches backend
+    let scheme = match common::current_backend() {
+        TestBackend::Postgres => "postgres",
+        TestBackend::Sqlite => "sqlite",
+        TestBackend::Turso => "turso",
+    };
+    assert!(config.dsn.contains(scheme));
 }
 
 #[tokio::test]
@@ -98,10 +111,13 @@ async fn test_anystore_query_access() {
     let store = create_store().await;
 
     // Verify we can execute queries through the Store trait
-    let result: i32 = store
-        .query_scalar_raw("SELECT 1")
-        .await
-        .expect("Failed to execute query");
+    // Use dialect-agnostic query or backend-specific one
+    let sql = match common::current_backend() {
+        TestBackend::Postgres => "SELECT 1::bigint", // Postgres returns int4 by default for SELECT 1
+        _ => "SELECT 1",
+    };
+
+    let result: i64 = store.query_int(sql).await.expect("Failed to execute query");
 
     assert_eq!(result, 1);
 }
@@ -243,16 +259,48 @@ async fn test_anystore_worker_creation() {
 
 #[tokio::test]
 async fn test_anystore_connect_with_dsn() {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_anystore_dsn_test")).await;
+    // This test specifically tests connect_with_dsn for Postgres
+    // We should skip if not on Postgres, or adapt it to test current backend's DSN
+    // But get_postgres_dsn is generic? No, it's specific.
+    // Let's use get_dsn_from_env or similar.
+
+    let backend = common::current_backend();
+    let schema = "pgqrs_anystore_dsn_test";
+
+    // We need a helper to get DSN for current backend
+    // Since get_postgres_dsn is public but specific, let's use create_store logic basically
+    // but we want just the DSN string.
+
+    // Hack: create a store just to get its DSN from config, then connect again?
+    // Or assume we can get it via env vars using common logic (but common logic for DSN is internal/private?)
+    // Ah common::get_dsn_from_env is pub.
+
+    let dsn = if let Some(d) = common::get_dsn_from_env(backend, Some(schema)) {
+        d
+    } else {
+        match backend {
+            #[cfg(feature = "postgres")]
+            TestBackend::Postgres => common::get_postgres_dsn(Some(schema)).await,
+            #[cfg(not(feature = "postgres"))]
+            TestBackend::Postgres => panic!("Postgres disabled"),
+            TestBackend::Sqlite => "sqlite::memory:".to_string(),
+            TestBackend::Turso => panic!("Turso DSN required"),
+        }
+    };
 
     // Test connect_with_dsn method
-    let store = pgqrs::store::AnyStore::connect_with_dsn(&database_url)
+    let store = pgqrs::store::AnyStore::connect_with_dsn(&dsn)
         .await
         .expect("Failed to connect with DSN");
 
     // Verify it works
-    let backend = store.backend_name();
-    assert_eq!(backend, "postgres");
+    let backend_name = store.backend_name();
+    let expected = match backend {
+        TestBackend::Postgres => "postgres",
+        TestBackend::Sqlite => "sqlite",
+        TestBackend::Turso => "turso",
+    };
+    assert_eq!(backend_name, expected);
 
     // Install schema first
     pgqrs::admin(&store)

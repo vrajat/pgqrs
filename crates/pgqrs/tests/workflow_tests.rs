@@ -1,5 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{Config, StepGuardExt, StepResult, WorkflowExt};
+use pgqrs::{StepGuardExt, StepResult, WorkflowExt};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -10,12 +10,7 @@ struct TestData {
 }
 
 async fn create_store() -> AnyStore {
-    let schema = "workflow_test";
-    let dsn = common::get_postgres_dsn(Some(schema)).await;
-    let config = Config::from_dsn_with_schema(dsn, schema).expect("Failed to create config");
-    pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to connect store")
+    common::create_store("workflow_test").await
 }
 
 #[tokio::test]

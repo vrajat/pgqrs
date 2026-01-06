@@ -5,12 +5,7 @@ use serial_test::serial;
 mod common;
 
 async fn create_store() -> AnyStore {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_concurrent_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_concurrent_test")
-        .expect("Failed to create config with concurrent_test schema");
-    pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to connect store")
+    common::create_store("pgqrs_concurrent_test").await
 }
 
 #[tokio::test]

@@ -8,10 +8,25 @@ mod common;
 #[serial]
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // 1. Setup
+    // 1. Setup
     let db_name = "test_zombie_reclamation";
-    let dsn = common::get_postgres_dsn(Some(db_name)).await;
-    let config = Config::from_dsn(dsn.clone());
 
+    // For SQLite, we MUST use a file-based DB to share with the CLI process
+    // common::create_store uses in-memory which CLI can't access
+    let dsn = match common::current_backend() {
+        #[cfg(feature = "postgres")]
+        common::TestBackend::Postgres => common::get_postgres_dsn(Some(db_name)).await,
+        #[cfg(not(feature = "postgres"))]
+        common::TestBackend::Postgres => panic!("Postgres disabled"),
+        common::TestBackend::Sqlite => {
+            let path = std::env::temp_dir().join(format!("zombie_{}.db", uuid::Uuid::new_v4()));
+            std::fs::File::create(&path).expect("Failed to create test DB file");
+            format!("sqlite://{}", path.display())
+        }
+        common::TestBackend::Turso => panic!("Turso requires DSN"),
+    };
+
+    let config = Config::from_dsn(&dsn);
     let store = pgqrs::connect_with_config(&config).await?;
 
     // Create admin via builder
@@ -54,12 +69,17 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // 5. Simulate Zombie (Update Heartbeat)
     // Manually set the worker's heartbeat to be old (e.g., 1 hour ago)
     let consumer_worker_id = consumer.worker_id();
+
+    let update_sql = match common::current_backend() {
+        common::TestBackend::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+        // SQLite: datetime(now, -N seconds)
+        // Bind $1 is duration in seconds
+        common::TestBackend::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || $1 || ' seconds') WHERE id = $2",
+        _ => panic!("Unsupported backend"),
+    };
+
     store
-        .execute_raw_with_two_i64(
-            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            3600,
-            consumer_worker_id,
-        )
+        .execute_raw_with_two_i64(update_sql, 3600, consumer_worker_id)
         .await?;
 
     // 6. Test pgqrs_workers functions
@@ -125,19 +145,30 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // Make consumer_2 a zombie
     let c2_id = consumer_2.worker_id();
+    let update_sql = match common::current_backend() {
+        common::TestBackend::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+        common::TestBackend::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || $1 || ' seconds') WHERE id = $2",
+        _ => panic!("Unsupported backend"),
+    };
+
     store
-        .execute_raw_with_two_i64(
-            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            3600,
-            c2_id,
-        )
+        .execute_raw_with_two_i64(update_sql, 3600, c2_id)
         .await?;
 
     // Run CLI command
     // cargo run -- -d <dsn> admin reclaim --queue <queue_name> --older-than 1m
-    let output = Command::new("cargo")
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run");
+
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        _ => {}
+    }
+
+    let output = cmd
         .args([
-            "run",
             "--",
             "-d",
             &store.config().dsn,

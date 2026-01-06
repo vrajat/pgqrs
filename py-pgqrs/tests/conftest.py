@@ -75,25 +75,56 @@ def skip_on_backend(backend: TestBackend):
     )
 
 
-# Legacy alias for postgres_dsn compatibility during migration
-@pytest.fixture(scope="session")
-def postgres_dsn(database_dsn: str) -> Generator[str, None, None]:
-    """Legacy alias for database_dsn."""
-    yield database_dsn
+# Legacy alias for postgres_dsn compatibility, but now function-scoped to support SQLite isolation
+@pytest.fixture(scope="function")
+def postgres_dsn(test_backend: TestBackend, database_dsn: str) -> Generator[str, None, None]:
+    """
+    Provides a per-test DSN.
+    - Postgres: Returns the session-shared DSN.
+    - SQLite: Creates a new unique database file for isolation.
+    """
+    if test_backend == TestBackend.POSTGRES:
+        yield database_dsn
+    elif test_backend == TestBackend.SQLITE:
+        # Create a unique temporary file
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        dsn = f"sqlite://{tmp_path}"
+        yield dsn
+
+        # Cleanup
+        try:
+            os.remove(tmp_path)
+            # Also remove limit/wal files if they exist
+            if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
+            if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+        except OSError:
+            pass
+    elif test_backend == TestBackend.TURSO:
+        # For Turso, we might need a similar isolation strategy or dedicated test database
+        yield database_dsn
 
 @pytest.fixture(scope="function")
-def schema(postgres_dsn, request):
+def schema(test_backend: TestBackend, postgres_dsn: str, request) -> Generator[str, None, None]:
     """
-    Creates a unique schema for the test module and tears it down after.
+    Creates a unique schema for the test module (Postgres) or returns None (SQLite).
     """
-    # Use test module name + hash or similar to ensure uniqueness but readability
-    # Santize module name
-    module_name = request.module.__name__.replace(".", "_")
-    # Add a short unique suffix to avoid collisions if tests run in parallel or rapid sequence
-    unique_suffix = str(uuid.uuid4())[:8]
-    schema_name = f"test_{module_name}_{unique_suffix}"
+    if test_backend == TestBackend.POSTGRES:
+        # Santize module name
+        module_name = request.module.__name__.replace(".", "_")
+        unique_suffix = str(uuid.uuid4())[:8]
+        schema_name = f"test_{module_name}_{unique_suffix}"
 
-    with psycopg.connect(postgres_dsn, autocommit=True) as conn:
-        conn.execute(f"CREATE SCHEMA {schema_name}")
-        yield schema_name
-        conn.execute(f"DROP SCHEMA {schema_name} CASCADE")
+        with psycopg.connect(postgres_dsn, autocommit=True) as conn:
+            conn.execute(f"CREATE SCHEMA {schema_name}")
+            try:
+                yield schema_name
+            finally:
+                try:
+                    conn.execute(f"DROP SCHEMA {schema_name} CASCADE")
+                except Exception:
+                    pass
+    else:
+        # SQLite doesn't use schemas for isolation (we use separate DB files)
+        yield None

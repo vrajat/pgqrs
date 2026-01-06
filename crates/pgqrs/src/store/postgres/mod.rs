@@ -87,18 +87,22 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn query_scalar_raw<T>(&self, sql: &str) -> crate::error::Result<T>
-    where
-        T: 'static
-            + Send
-            + Unpin
-            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
-            + sqlx::Type<sqlx::Postgres>,
-    {
+    async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
         use sqlx::Row;
         let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
-        let result: T = row.try_get(0)?;
-        Ok(result)
+        Ok(row.try_get(0)?)
+    }
+
+    async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
+    }
+
+    async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
     }
 
     fn config(&self) -> &Config {

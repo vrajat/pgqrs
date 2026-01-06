@@ -10,23 +10,20 @@ use serial_test::serial;
 mod common;
 
 async fn create_store() -> AnyStore {
-    let database_url = common::get_postgres_dsn(Some("pgqrs_worker_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_worker_test")
-        .expect("Failed to create config with worker_test schema");
-
-    let store = pgqrs::connect_with_config(&config)
-        .await
-        .expect("Failed to connect to store");
+    let store = common::create_store("pgqrs_worker_test").await;
 
     // Clean up any existing workers to ensure test isolation
-    if let Err(e) = store
-        .execute_raw("TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE")
-        .await
-    {
-        // Ignore error in case table doesn't exist yet
-        eprintln!("Warning: Failed to truncate workers table: {}", e);
-    }
+    // SQLite doesn't support TRUNCATE, use DELETE
+    let sql = if store.backend_name() == "sqlite" {
+        "DELETE FROM pgqrs_workers"
+    } else {
+        "TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE"
+    };
 
+    if let Err(e) = store.execute_raw(sql).await {
+        // Ignore error in case table doesn't exist yet
+        eprintln!("Warning: Failed to clear workers table: {}", e);
+    }
     store
 }
 
@@ -269,10 +266,13 @@ async fn test_worker_health_check() {
 #[tokio::test]
 #[serial]
 async fn test_custom_schema_search_path() {
+    use common::TestBackend;
+    skip_on_backend!(TestBackend::Sqlite);
+
     let store = create_store().await;
 
     // Check search_path via store helper
-    let result: String = store.query_scalar_raw("SHOW search_path").await.unwrap();
+    let result: String = store.query_string("SHOW search_path").await.unwrap();
 
     // Should contain our custom schema
     assert!(
@@ -524,20 +524,19 @@ async fn test_purge_old_workers() {
 
     // Set old heartbeat ONLY for producer1 and producer2
     let old_seconds = Duration::days(30).num_seconds();
+
+    let sql = if store.backend_name() == "sqlite" {
+        "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || $1 || ' seconds') WHERE id = $2"
+    } else {
+        "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2"
+    };
+
     store
-        .execute_raw_with_two_i64(
-            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            old_seconds,
-            producer1.worker_id(),
-        )
+        .execute_raw_with_two_i64(sql, old_seconds, producer1.worker_id())
         .await
         .unwrap();
     store
-        .execute_raw_with_two_i64(
-            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            old_seconds,
-            producer2.worker_id(),
-        )
+        .execute_raw_with_two_i64(sql, old_seconds, producer2.worker_id())
         .await
         .unwrap();
 

@@ -232,9 +232,8 @@ async def test_archive_advanced_methods(postgres_dsn, schema):
 
     # 1. Test get()
     # We need to list to find the ID of the archived message
-    # Since we only have one worker, we can list by it.
-    workers = await (await admin.get_workers()).list()
-    worker_id = workers[0].id
+    # We can use the consumer's ID since we exposed it.
+    worker_id = consumer.worker_id
 
     arch_msgs = await archive.list_by_worker(worker_id, 10, 0)
     assert len(arch_msgs) == 1
