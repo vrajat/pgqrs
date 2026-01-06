@@ -4,6 +4,7 @@ use pgqrs::store::{ConcurrencyModel, Store};
 
 mod common;
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn test_sqlite_connect() {
     let dsn = "sqlite::memory:";

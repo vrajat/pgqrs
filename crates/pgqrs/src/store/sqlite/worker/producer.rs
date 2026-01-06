@@ -30,7 +30,6 @@ impl SqliteProducer {
         port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
-
         let workers_arc = Arc::new(SqliteWorkerTable::new(pool.clone()));
 
         let worker_info = workers_arc
