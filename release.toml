@@ -15,4 +15,7 @@ tag-message = "Release v{{version}}"
 push = false
 
 # Update pyproject.toml version
-pre-release-hook = ["sh", "-c", "if [ -f py-pgqrs/pyproject.toml ]; then sed -i.bak 's/version = \"[^\"]*\"/version = \"{{version}}\"/' py-pgqrs/pyproject.toml && rm py-pgqrs/pyproject.toml.bak; fi"]
+[[pre-release-replacements]]
+file = "py-pgqrs/pyproject.toml"
+search = "version = \"[0-9.]+\""
+replace = "version = \"{{version}}\""
