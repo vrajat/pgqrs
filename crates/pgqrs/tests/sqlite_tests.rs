@@ -1,5 +1,7 @@
+#[cfg(feature = "sqlite")]
 use pgqrs::config::Config;
 
+#[cfg(feature = "sqlite")]
 use pgqrs::store::{ConcurrencyModel, Store};
 
 mod common;
