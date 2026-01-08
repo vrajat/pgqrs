@@ -14,11 +14,5 @@ tag-message = "Release v{{version}}"
 # Don't push automatically; Makefile does this after confirmation
 push = false
 
-# Update pyproject.toml version
-[[pre-release-replacements]]
-file = "py-pgqrs/pyproject.toml"
-search = "version = \"[0-9.]+\""
-replace = "version = \"{{version}}\""
-
 # Update documentation via Makefile target
 pre-release-hook = ["make bump-version VERSION={{version}}"]

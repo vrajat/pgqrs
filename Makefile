@@ -35,7 +35,6 @@ test-postgres:  ## Run tests on Postgres backend
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres
 
 test-sqlite:  ## Run tests on SQLite backend
-test-sqlite:  ## Run tests on SQLite backend
 	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" PGQRS_TEST_SQLITE_DSN="sqlite::memory:"
 
 test-turso:  ## Run tests on Turso backend
@@ -114,7 +113,7 @@ bump-version: ## Update version in documentation files (Usage: make bump-version
 	@if [ -z "$(VERSION)" ]; then echo "Error: VERSION not set"; exit 1; fi
 	@echo "Bumping documentation versions to $(VERSION)..."
 	@$(UV) run python3 -c "import re; \
-		files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md']; \
-		pattern = r'(pgqrs(?:-macros)?\s*=\s*)\"[^\"]+\"'; \
+		files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md', 'py-pgqrs/pyproject.toml']; \
+		pattern = r'(pgqrs(?:-macros)?\s*=\s*|version\s*=\s*)\"[^\"]+\"'; \
 		repl = r'\1\"$(VERSION)\"'; \
-		[open(f, 'w').write(re.sub(pattern, repl, open(f).read())) for f in files]"
+		[(lambda c: open(f, 'w').write(re.sub(pattern, repl, c)))(open(f, 'r').read()) for f in files]"
