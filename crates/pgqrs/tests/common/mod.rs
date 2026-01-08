@@ -82,6 +82,16 @@ pub async fn create_store_for_backend(
     schema: &str,
 ) -> pgqrs::store::AnyStore {
     let dsn = if let Some(env_dsn) = get_dsn_from_env(backend, Some(schema)) {
+        #[cfg(feature = "postgres")]
+        if backend == TestBackend::Postgres {
+            crate::common::database_setup::setup_database_common(
+                env_dsn.clone(),
+                schema,
+                "External Env Postgres",
+            )
+            .await
+            .expect("Failed to setup env postgres");
+        }
         env_dsn
     } else {
         // Fall back to container-based setup (currently only Postgres supported)
