@@ -3,23 +3,42 @@
 [![Rust](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml/badge.svg)](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/pgqrs.svg)](https://badge.fury.io/py/pgqrs)
 
-**pgqrs** is a PostgreSQL-backed durable workflow engine and job queue. Written in Rust with Python bindings.
+**pgqrs** is a durable workflow engine and job queue that works with **both PostgreSQL and SQLite**. Written in Rust with Python bindings.
+
+Use PostgreSQL for production scale. Use SQLite for CLI tools, testing, and embedded apps.
 
 ## Features
 
+### Multi-Backend Support
+* **PostgreSQL**: Production-ready with unlimited concurrent workers
+* **SQLite**: Zero-config embedded option for single-process applications
+* **Unified API**: Switch backends by changing your connection string
+
 ### Core
 * **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-* **Connection Pooler Compatible**: Works with pgBouncer and pgcat for connection scaling.
+* **Connection Pooler Compatible**: Works with pgBouncer and pgcat for connection scaling (PostgreSQL).
 
 ### Job Queue
-* **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching.
+* **Efficient**: Uses `SKIP LOCKED` (PostgreSQL) for concurrent job fetching.
 * **Exactly-once Delivery**: Guarantees within visibility timeout window.
 * **Message Archiving**: Built-in audit trails and historical data retention.
 
 ### Durable Workflows
 * **Crash Recovery**: Resume from the last completed step after failures.
 * **Exactly-once Steps**: Completed steps are never re-executed.
-* **Persistent State**: All workflow progress stored in PostgreSQL.
+* **Persistent State**: All workflow progress stored durably.
+
+## Choose Your Backend
+
+| Scenario | Recommended Backend | Why |
+|----------|---------------------|-----|
+| Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
+| CLI tools & scripts | **SQLite** | Zero-config, embedded, portable |
+| Testing & prototyping | **SQLite** | Fast setup, no external dependencies |
+| Embedded applications | **SQLite** | Single-file database, no server |
+| High write throughput | **PostgreSQL** | SQLite allows only 1 writer at a time |
+
+> ⚠️ **SQLite Concurrency Limit**: SQLite uses database-level locks. With many concurrent writers, you may hit lock contention. See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/). pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
 
 ## Quick Start
 
@@ -187,8 +206,17 @@ pip install pgqrs
 
 ```toml
 [dependencies]
-pgqrs = "0.5"
-pgqrs-macros = "0.5"  # For workflow macros
+# PostgreSQL only (default)
+pgqrs = "0.11"
+
+# SQLite only
+pgqrs = { version = "0.11", default-features = false, features = ["sqlite"] }
+
+# Both backends
+pgqrs = { version = "0.11", features = ["full"] }
+
+# Workflow macros (optional)
+pgqrs-macros = "0.11"
 ```
 
 ## Documentation

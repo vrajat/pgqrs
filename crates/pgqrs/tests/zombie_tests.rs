@@ -160,11 +160,8 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
-    match common::current_backend() {
-        common::TestBackend::Sqlite => {
-            cmd.args(["--no-default-features", "--features", "sqlite"]);
-        }
-        _ => {}
+    if common::current_backend() == common::TestBackend::Sqlite {
+        cmd.args(["--no-default-features", "--features", "sqlite"]);
     }
 
     let output = cmd

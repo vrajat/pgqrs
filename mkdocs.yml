@@ -1,6 +1,6 @@
 site_name: pgqrs
 site_url: https://pgqrs.com
-site_description: A lightweight PostgreSQL-backed job queue library for Rust and Python
+site_description: A durable workflow engine and job queue for PostgreSQL and SQLite - Rust and Python
 site_author: vrajat
 repo_url: https://github.com/vrajat/pgqrs
 repo_name: vrajat/pgqrs
@@ -59,6 +59,7 @@ nav:
       - Installation: user-guide/getting-started/installation.md
       - Quickstart: user-guide/getting-started/quickstart.md
     - Concepts:
+      - Backend Selection: user-guide/concepts/backends.md
       - Architecture: user-guide/concepts/architecture.md
       - Producer & Consumer: user-guide/concepts/producer-consumer.md
       - Workers: user-guide/concepts/workers.md
