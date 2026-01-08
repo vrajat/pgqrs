@@ -7,15 +7,12 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
-    // 1. Setup
-    // 1. Setup
-    let db_name = "test_zombie_reclamation";
-
-    // For SQLite, we MUST use a file-based DB to share with the CLI process
-    // common::create_store uses in-memory which CLI can't access
     let dsn = match common::current_backend() {
         #[cfg(feature = "postgres")]
-        common::TestBackend::Postgres => common::get_postgres_dsn(Some(db_name)).await,
+        common::TestBackend::Postgres => {
+            let db_name = "test_zombie_reclamation";
+            common::get_postgres_dsn(Some(db_name)).await
+        },
         #[cfg(not(feature = "postgres"))]
         common::TestBackend::Postgres => panic!("Postgres disabled"),
         common::TestBackend::Sqlite => {

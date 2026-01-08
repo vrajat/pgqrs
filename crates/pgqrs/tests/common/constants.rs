@@ -1,14 +1,21 @@
 // Test configuration constants
 
 // Database configuration
+#[cfg(feature = "postgres")]
 pub const TEST_DB_NAME: &str = "test_db";
+#[cfg(feature = "postgres")]
 pub const TEST_DB_USER: &str = "test_user";
+#[cfg(feature = "postgres")]
 pub const TEST_DB_PASSWORD: &str = "test_password";
+#[cfg(feature = "postgres")]
 pub const POSTGRES_PORT: u16 = 5432;
 
 // Connection configuration
+#[cfg(feature = "postgres")]
 pub const MAX_CONNECTIONS: u32 = 1;
+#[cfg(feature = "postgres")]
 pub const CONNECTION_TIMEOUT_SECS: u64 = 5;
+#[cfg(feature = "postgres")]
 pub const VERIFICATION_QUERY: &str = "SELECT 1";
 
 // PgBouncer configuration
