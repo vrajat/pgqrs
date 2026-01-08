@@ -279,17 +279,18 @@ impl crate::store::Consumer for SqliteConsumer {
             msg_id: i64,
             worker_id: i64,
         ) -> Result<Option<ArchivedMessage>> {
-            let row =
-                sqlx::query("SELECT * FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
-                    .bind(msg_id)
-                    .bind(worker_id)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .map_err(|e| crate::error::Error::QueryFailed {
-                        query: "SelArchive".into(),
-                        source: e,
-                        context: "Select for archive".into(),
-                    })?;
+            let row = sqlx::query(
+                "SELECT * FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2",
+            )
+            .bind(msg_id)
+            .bind(worker_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SelArchive".into(),
+                source: e,
+                context: "Select for archive".into(),
+            })?;
 
             if let Some(r) = row {
                 let q_id: i64 = r.try_get("queue_id")?;

@@ -12,7 +12,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         common::TestBackend::Postgres => {
             let db_name = "test_zombie_reclamation";
             common::get_postgres_dsn(Some(db_name)).await
-        },
+        }
         #[cfg(not(feature = "postgres"))]
         common::TestBackend::Postgres => panic!("Postgres disabled"),
         common::TestBackend::Sqlite => {
