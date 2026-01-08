@@ -25,7 +25,7 @@ endif
 
 test: build  ## Run all tests
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_TEST_SQLITE_DSN=$(PGQRS_TEST_SQLITE_DSN) $(UV) run pytest py-pgqrs
 
 test-py: build  ## Run Python tests only
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
@@ -35,7 +35,8 @@ test-postgres:  ## Run tests on Postgres backend
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres
 
 test-sqlite:  ## Run tests on SQLite backend
-	$(MAKE) test PGQRS_TEST_BACKEND=sqlite
+test-sqlite:  ## Run tests on SQLite backend
+	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" PGQRS_TEST_SQLITE_DSN="sqlite::memory:"
 
 test-turso:  ## Run tests on Turso backend
 	@if [ -z "$$PGQRS_TEST_TURSO_DSN" ]; then \
