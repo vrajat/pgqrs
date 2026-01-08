@@ -97,10 +97,6 @@ help:  ## Display this help screen
 
 release-dry-run: requirements  ## Dry run of the release process
 	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
-	if [ "$$BRANCH" != "main" ]; then \
-		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
-		exit 1; \
-	fi
 	cargo release $${LEVEL:-minor} --no-push --no-publish
 	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
 
@@ -113,3 +109,12 @@ release: requirements  ## Execute the release process (LEVEL=patch|minor|major, 
 	@echo "Creating release with version bump: $${LEVEL:-minor}"
 	@echo "Note: CI will build multi-platform wheels and publish to PyPI on tag push"
 	cargo release $${LEVEL:-minor} --execute --no-publish
+
+bump-version: ## Update version in documentation files (Usage: make bump-version VERSION=x.y.z)
+	@if [ -z "$(VERSION)" ]; then echo "Error: VERSION not set"; exit 1; fi
+	@echo "Bumping documentation versions to $(VERSION)..."
+	@$(UV) run python3 -c "import re; \
+		files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md']; \
+		pattern = r'(pgqrs(?:-macros)?\s*=\s*)\"[^\"]+\"'; \
+		repl = r'\1\"$(VERSION)\"'; \
+		[open(f, 'w').write(re.sub(pattern, repl, open(f).read())) for f in files]"
