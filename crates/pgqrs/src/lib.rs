@@ -1,22 +1,41 @@
 //! # pgqrs
 //!
-//! **pgqrs** is a PostgreSQL-backed durable workflow engine and job queue. Written in Rust with Python bindings.
+//! **pgqrs** is a durable workflow engine and job queue that works with **both PostgreSQL and SQLite**.
+//! Written in Rust with Python bindings.
+//!
+//! Use PostgreSQL for production scale. Use SQLite for CLI tools, testing, and embedded apps.
+//!
+//! ## Supported Backends
+//!
+//! - **PostgreSQL** (default): Production-ready with unlimited concurrent workers
+//! - **SQLite**: Zero-config embedded option for single-process applications
+//!
+//! ```rust,no_run
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // PostgreSQL
+//! let pg_store = pgqrs::connect("postgresql://localhost/mydb").await?;
+//!
+//! // SQLite (requires `sqlite` feature)
+//! let sqlite_store = pgqrs::connect("sqlite:///path/to/db.sqlite").await?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! ## Features
 //!
 //! ### Core
 //! - **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-//! - **Connection Pooler Compatible**: Works with [pgBouncer](https://www.pgbouncer.org) and [pgcat](https://github.com/postgresml/pgcat) for connection scaling.
+//! - **Connection Pooler Compatible**: Works with [pgBouncer](https://www.pgbouncer.org) and [pgcat](https://github.com/postgresml/pgcat) for connection scaling (PostgreSQL).
 //!
 //! ### Job Queue
-//! - **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
+//! - **Efficient**: Uses `SKIP LOCKED` (PostgreSQL) for concurrent job fetching.
 //! - **Exactly-once Delivery**: Guarantees within visibility timeout window.
 //! - **Message Archiving**: Built-in audit trails and historical data retention.
 //!
 //! ### Durable Workflows
 //! - **Crash Recovery**: Resume from the last completed step after failures.
 //! - **Exactly-once Steps**: Completed steps are never re-executed.
-//! - **Persistent State**: All workflow progress stored in PostgreSQL.
+//! - **Persistent State**: All workflow progress stored durably.
 //!
 //! ## Quick Start
 //!

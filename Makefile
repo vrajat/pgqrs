@@ -25,7 +25,7 @@ endif
 
 test: build  ## Run all tests
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_TEST_SQLITE_DSN=$(PGQRS_TEST_SQLITE_DSN) $(UV) run pytest py-pgqrs
 
 test-py: build  ## Run Python tests only
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
@@ -35,7 +35,8 @@ test-postgres:  ## Run tests on Postgres backend
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres
 
 test-sqlite:  ## Run tests on SQLite backend
-	$(MAKE) test PGQRS_TEST_BACKEND=sqlite
+test-sqlite:  ## Run tests on SQLite backend
+	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" PGQRS_TEST_SQLITE_DSN="sqlite::memory:"
 
 test-turso:  ## Run tests on Turso backend
 	@if [ -z "$$PGQRS_TEST_TURSO_DSN" ]; then \
@@ -96,11 +97,6 @@ help:  ## Display this help screen
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 release-dry-run: requirements  ## Dry run of the release process
-	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
-	if [ "$$BRANCH" != "main" ]; then \
-		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
-		exit 1; \
-	fi
 	cargo release $${LEVEL:-minor} --no-push --no-publish
 	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
 
@@ -113,3 +109,12 @@ release: requirements  ## Execute the release process (LEVEL=patch|minor|major, 
 	@echo "Creating release with version bump: $${LEVEL:-minor}"
 	@echo "Note: CI will build multi-platform wheels and publish to PyPI on tag push"
 	cargo release $${LEVEL:-minor} --execute --no-publish
+
+bump-version: ## Update version in documentation files (Usage: make bump-version VERSION=x.y.z)
+	@if [ -z "$(VERSION)" ]; then echo "Error: VERSION not set"; exit 1; fi
+	@echo "Bumping documentation versions to $(VERSION)..."
+	@$(UV) run python3 -c "import re; \
+		files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md']; \
+		pattern = r'(pgqrs(?:-macros)?\s*=\s*)\"[^\"]+\"'; \
+		repl = r'\1\"$(VERSION)\"'; \
+		[open(f, 'w').write(re.sub(pattern, repl, open(f).read())) for f in files]"

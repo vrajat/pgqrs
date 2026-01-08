@@ -2,10 +2,16 @@
 
 This guide covers how to install pgqrs for both Rust and Python projects.
 
-## Prerequisites
+## Choose Your Backend
 
-- **PostgreSQL 12+** - pgqrs uses `SKIP LOCKED` and other features from PostgreSQL 12+
-- A PostgreSQL database you have access to (local, Docker, or cloud-hosted)
+pgqrs supports both PostgreSQL and SQLite. Choose based on your needs:
+
+| Backend | Best For | Prerequisites |
+|---------|----------|---------------|
+| **PostgreSQL** | Production, multi-worker | PostgreSQL 12+ server |
+| **SQLite** | CLI tools, testing, embedded | None (embedded) |
+
+See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
 
 ## Library Installation
 
@@ -17,7 +23,16 @@ This guide covers how to install pgqrs for both Rust and Python projects.
 
     ```toml
     [dependencies]
-    pgqrs = "0.4"
+    # PostgreSQL only (default)
+    pgqrs = "0.11"
+
+    # SQLite only
+    pgqrs = { version = "0.11", default-features = false, features = ["sqlite"] }
+
+    # Both backends
+    pgqrs = { version = "0.11", features = ["full"] }
+
+    # Required dependencies
     tokio = { version = "1", features = ["full"] }
     serde_json = "1"
     ```
@@ -30,7 +45,12 @@ This guide covers how to install pgqrs for both Rust and Python projects.
     use pgqrs::Config;
 
     fn main() {
-        let config = Config::from_dsn("postgresql://localhost/mydb");
+        // PostgreSQL
+        let pg_config = Config::from_dsn("postgresql://localhost/mydb");
+
+        // SQLite (requires `sqlite` feature)
+        let sqlite_config = Config::from_dsn("sqlite:///path/to/db.sqlite");
+
         println!("pgqrs configured successfully!");
     }
     ```

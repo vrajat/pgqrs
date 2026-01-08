@@ -256,86 +256,116 @@ impl crate::store::Consumer for SqliteConsumer {
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
         // Manual Move: Select -> Insert -> Delete
-        let mut tx = self
+        // specific SQLite optimization: Use BEGIN IMMEDIATE to avoid "upgrade to write" deadlocks
+        // caused by starting with SELECT (Reader) and then INSERT (Writer).
+        let mut conn = self
             .pool
-            .begin()
+            .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
 
-        let row =
-            sqlx::query("SELECT * FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
-                .bind(msg_id)
-                .bind(self.worker_info.id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "SelArchive".into(),
-                    source: e,
-                    context: "Select for archive".into(),
-                })?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "BEGIN IMMEDIATE".into(),
+                source: e,
+                context: "Begin transaction".into(),
+            })?;
 
-        if let Some(r) = row {
-            // We need to map it to struct variables to insert.
-            // Or raw copy columns.
-            let q_id: i64 = r.try_get("queue_id")?;
-            let p_wid: Option<i64> = r.try_get("producer_worker_id")?;
-            let c_wid: Option<i64> = r.try_get("consumer_worker_id")?; // should match self.worker_info.id
-            let payload: String = r.try_get("payload")?;
-            let enq: String = r.try_get("enqueued_at")?;
-            let vt: String = r.try_get("vt")?;
-            let read_ct: i32 = r.try_get("read_ct")?;
-            let deq: Option<String> = r.try_get("dequeued_at")?;
+        // Logic isolated to allow rollback on error
+        async fn perform_archive(
+            conn: &mut sqlx::SqliteConnection,
+            msg_id: i64,
+            worker_id: i64,
+        ) -> Result<Option<ArchivedMessage>> {
+            let row = sqlx::query(
+                "SELECT * FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2",
+            )
+            .bind(msg_id)
+            .bind(worker_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SelArchive".into(),
+                source: e,
+                context: "Select for archive".into(),
+            })?;
 
-            // Insert
-            let arch_id: i64 = sqlx::query_scalar("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id")
-                 .bind(msg_id)
-                 .bind(q_id)
-                 .bind(p_wid)
-                 .bind(c_wid)
-                 .bind(payload.clone()) // payload string clone
-                 .bind(enq.clone())
-                 .bind(vt.clone())
-                 .bind(read_ct)
-                 .bind(deq.clone())
-                 .fetch_one(&mut *tx)
-                 .await
-                 .map_err(|e| crate::error::Error::QueryFailed { query: "InsArchive".into(), source: e, context: "Insert archive".into() })?;
+            if let Some(r) = row {
+                let q_id: i64 = r.try_get("queue_id")?;
+                let p_wid: Option<i64> = r.try_get("producer_worker_id")?;
+                let c_wid: Option<i64> = r.try_get("consumer_worker_id")?;
+                let payload: String = r.try_get("payload")?;
+                let enq: String = r.try_get("enqueued_at")?;
+                let vt: String = r.try_get("vt")?;
+                let read_ct: i32 = r.try_get("read_ct")?;
+                let deq: Option<String> = r.try_get("dequeued_at")?;
 
-            // Delete
-            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
-                .bind(msg_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "DelArchive".into(),
-                    source: e,
-                    context: "Delete archived".into(),
-                })?;
+                let arch_id: i64 = sqlx::query_scalar("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id")
+                     .bind(msg_id)
+                     .bind(q_id)
+                     .bind(p_wid)
+                     .bind(c_wid)
+                     .bind(payload.clone()) // payload string clone
+                     .bind(enq.clone())
+                     .bind(vt.clone())
+                     .bind(read_ct)
+                     .bind(deq.clone())
+                     .fetch_one(&mut *conn)
+                     .await
+                     .map_err(|e| crate::error::Error::QueryFailed { query: "InsArchive".into(), source: e, context: "Insert archive".into() })?;
 
-            tx.commit().await.map_err(crate::error::Error::Database)?;
+                sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
+                    .bind(msg_id)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "DelArchive".into(),
+                        source: e,
+                        context: "Delete archived".into(),
+                    })?;
 
-            // Construct result
-            use serde_json::Value;
-            let val: Value = serde_json::from_str(&payload)?;
-            Ok(Some(ArchivedMessage {
-                id: arch_id,
-                original_msg_id: msg_id,
-                queue_id: q_id,
-                producer_worker_id: p_wid,
-                consumer_worker_id: c_wid,
-                payload: val,
-                enqueued_at: parse_sqlite_timestamp(&enq)?,
-                vt: parse_sqlite_timestamp(&vt)?,
-                read_ct,
-                archived_at: Utc::now(), // Approx
-                dequeued_at: if let Some(d) = deq {
-                    Some(parse_sqlite_timestamp(&d)?)
-                } else {
-                    None
-                },
-            }))
-        } else {
-            Ok(None)
+                use serde_json::Value;
+                let val: Value = serde_json::from_str(&payload)?;
+                Ok(Some(ArchivedMessage {
+                    id: arch_id,
+                    original_msg_id: msg_id,
+                    queue_id: q_id,
+                    producer_worker_id: p_wid,
+                    consumer_worker_id: c_wid,
+                    payload: val,
+                    enqueued_at: parse_sqlite_timestamp(&enq)?,
+                    vt: parse_sqlite_timestamp(&vt)?,
+                    read_ct,
+                    archived_at: Utc::now(), // Approx
+                    dequeued_at: if let Some(d) = deq {
+                        Some(parse_sqlite_timestamp(&d)?)
+                    } else {
+                        None
+                    },
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+
+        match perform_archive(&mut *conn, msg_id, self.worker_info.id).await {
+            Ok(res) => {
+                sqlx::query("COMMIT")
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "COMMIT".into(),
+                        source: e,
+                        context: "Commit archive".into(),
+                    })?;
+                Ok(res)
+            }
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(e)
+            }
         }
     }
 

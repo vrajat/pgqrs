@@ -19,3 +19,6 @@ push = false
 file = "py-pgqrs/pyproject.toml"
 search = "version = \"[0-9.]+\""
 replace = "version = \"{{version}}\""
+
+# Update documentation via Makefile target
+pre-release-hook = ["make bump-version VERSION={{version}}"]

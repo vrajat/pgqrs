@@ -21,11 +21,8 @@ fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "--quiet"]);
 
-    match common::current_backend() {
-        common::TestBackend::Sqlite => {
-            cmd.args(["--no-default-features", "--features", "sqlite"]);
-        }
-        _ => {}
+    if common::current_backend() == common::TestBackend::Sqlite {
+        cmd.args(["--no-default-features", "--features", "sqlite"]);
     }
 
     cmd.args(["--"])
@@ -355,11 +352,8 @@ fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "--quiet"]);
 
-    match common::current_backend() {
-        common::TestBackend::Sqlite => {
-            cmd.args(["--no-default-features", "--features", "sqlite"]);
-        }
-        _ => {}
+    if common::current_backend() == common::TestBackend::Sqlite {
+        cmd.args(["--no-default-features", "--features", "sqlite"]);
     }
 
     cmd.args(["--"])
