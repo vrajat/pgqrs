@@ -35,9 +35,13 @@ serial_test = "3.2"
 
 [features]
 default = ["postgres"]
-full = ["postgres", "sqlite"]
+full = ["postgres", "sqlite", "turso"]
 postgres = ["sqlx/postgres"]
 sqlite = ["sqlx/sqlite"]
+# Turso uses the SQLite SQLx database type for trait compatibility, but is backed by
+# the native Rust turso engine. The sqlx/sqlite feature is enabled to satisfy the
+# Store::Db associated type bound without pulling in SQLite runtime dependencies.
+turso = ["dep:turso", "sqlx/sqlite"]
 
 [dependencies]
 sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"] }
@@ -58,6 +62,7 @@ serde_yaml = "0.9"
 tabled = "0.20.0"
 humantime = "2.1"
 async-trait = "0.1"
+turso = { version = "0.4.2", optional = true }
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)
