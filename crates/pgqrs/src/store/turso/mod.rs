@@ -44,14 +44,15 @@ impl TursoStore {
             message: format!("Failed to initialize Turso database: {e}"),
         })?;
 
+        let db = Arc::new(db);
         Ok(Self {
-            db: Arc::new(db),
+            db: Arc::clone(&db),
             config: config.clone(),
-            queues: Arc::new(TursoQueueTable::default()),
-            messages: Arc::new(TursoMessageTable::default()),
-            workers: Arc::new(TursoWorkerTable::default()),
-            archive: Arc::new(TursoArchiveTable::default()),
-            workflows: Arc::new(TursoWorkflowTable::default()),
+            queues: Arc::new(TursoQueueTable::new(Arc::clone(&db))),
+            messages: Arc::new(TursoMessageTable::new(Arc::clone(&db))),
+            workers: Arc::new(TursoWorkerTable::new(Arc::clone(&db))),
+            archive: Arc::new(TursoArchiveTable::new(Arc::clone(&db))),
+            workflows: Arc::new(TursoWorkflowTable::new(Arc::clone(&db))),
         })
     }
 
@@ -234,18 +235,14 @@ impl Store for TursoStore {
 
 #[derive(Clone, Debug)]
 struct TursoQueueTable {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl Default for TursoQueueTable {
-    fn default() -> Self {
-        Self {
-            _marker: std::marker::PhantomData,
-        }
-    }
+    db: Arc<Database>,
 }
 
 impl TursoQueueTable {
+    fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
     fn map_row(row: &turso::Row) -> Result<QueueInfo> {
         let id: i64 = row
             .get_value(0)
@@ -345,18 +342,14 @@ impl QueueTable for TursoQueueTable {
 
 #[derive(Clone, Debug)]
 struct TursoMessageTable {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl Default for TursoMessageTable {
-    fn default() -> Self {
-        TursoMessageTable {
-            _marker: std::marker::PhantomData,
-        }
-    }
+    db: Arc<Database>,
 }
 
 impl TursoMessageTable {
+    fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
     fn map_row(row: &turso::Row) -> Result<QueueMessage> {
         let id: i64 = row
             .get_value(0)
@@ -572,18 +565,14 @@ impl MessageTable for TursoMessageTable {
 
 #[derive(Clone, Debug)]
 struct TursoWorkerTable {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl Default for TursoWorkerTable {
-    fn default() -> Self {
-        TursoWorkerTable {
-            _marker: std::marker::PhantomData,
-        }
-    }
+    db: Arc<Database>,
 }
 
 impl TursoWorkerTable {
+    fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
     fn map_row(row: &turso::Row) -> Result<WorkerInfo> {
         let id: i64 = row
             .get_value(0)
@@ -767,18 +756,14 @@ impl WorkerTable for TursoWorkerTable {
 
 #[derive(Clone, Debug)]
 struct TursoArchiveTable {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl Default for TursoArchiveTable {
-    fn default() -> Self {
-        TursoArchiveTable {
-            _marker: std::marker::PhantomData,
-        }
-    }
+    db: Arc<Database>,
 }
 
 impl TursoArchiveTable {
+    fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
     fn map_row(row: &turso::Row) -> Result<ArchivedMessage> {
         let id: i64 = row
             .get_value(0)
@@ -988,18 +973,14 @@ impl ArchiveTable for TursoArchiveTable {
 
 #[derive(Clone, Debug)]
 struct TursoWorkflowTable {
-    _marker: std::marker::PhantomData<()>,
-}
-
-impl Default for TursoWorkflowTable {
-    fn default() -> Self {
-        TursoWorkflowTable {
-            _marker: std::marker::PhantomData,
-        }
-    }
+    db: Arc<Database>,
 }
 
 impl TursoWorkflowTable {
+    fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
     fn map_row(row: &turso::Row) -> Result<WorkflowRecord> {
         let workflow_id: i64 = row
             .get_value(0)
