@@ -7,8 +7,8 @@ use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::Worker;
 use crate::types::WorkerStatus;
 use async_trait::async_trait;
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 pub struct TursoWorkerHandle {
     id: i64,

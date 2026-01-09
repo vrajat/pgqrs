@@ -4,9 +4,9 @@ use crate::types::{NewWorkflow, WorkflowRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
-use turso::Database;
 use std::str::FromStr;
 use std::sync::Arc;
+use turso::Database;
 
 #[derive(Debug, Clone)]
 pub struct TursoWorkflowTable {
@@ -62,11 +62,7 @@ impl TursoWorkflowTable {
         })
     }
 
-    pub async fn complete_workflow(
-        &self,
-        id: i64,
-        output: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn complete_workflow(&self, id: i64, output: serde_json::Value) -> Result<()> {
         let output_str = output.to_string();
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
@@ -87,11 +83,7 @@ impl TursoWorkflowTable {
         Ok(())
     }
 
-    pub async fn fail_workflow(
-        &self,
-        id: i64,
-        error: serde_json::Value,
-    ) -> Result<()> {
+    pub async fn fail_workflow(&self, id: i64, error: serde_json::Value) -> Result<()> {
         let error_str = error.to_string();
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
@@ -177,10 +169,11 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count = crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
-            .bind(id)
-            .execute(&self.db)
-            .await?;
+        let count =
+            crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
+                .bind(id)
+                .execute(&self.db)
+                .await?;
         Ok(count)
     }
 }
@@ -191,37 +184,10 @@ mod tests {
     use crate::store::WorkflowTable;
     use crate::types::NewWorkflow;
 
-    async fn create_test_pool() -> Database {
-        let db = turso::Builder::new_local(":memory:").build().await.expect("Failed to create db");
-        let conn = db.connect().expect("Failed to connect");
-
-        crate::store::turso::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_workflows (
-                workflow_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                input TEXT,
-                output TEXT,
-                error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                executor_id TEXT
-            );
-            "#,
-        )
-        .execute_on_connection(&conn)
-        .await
-        .expect("Failed to create workflows table");
-
-        db
-    }
-
     #[tokio::test]
     async fn test_workflow_insert_and_get() {
-        let pool = create_test_pool().await;
-        // Need Arc<Database>
-        let pool = Arc::new(pool);
+        let pool = crate::store::turso::test_utils::create_test_db().await;
+        // pool is already Arc
         let table = TursoWorkflowTable::new(pool.clone());
 
         let workflow = table
@@ -235,7 +201,10 @@ mod tests {
         assert_eq!(workflow.name, "test_wf");
         assert_eq!(workflow.status, WorkflowStatus::Pending);
 
-        let fetched = table.get(workflow.workflow_id).await.expect("Failed to get");
+        let fetched = table
+            .get(workflow.workflow_id)
+            .await
+            .expect("Failed to get");
         assert_eq!(fetched.workflow_id, workflow.workflow_id);
     }
 }

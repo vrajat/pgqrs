@@ -569,7 +569,7 @@ mod tests {
             .expect("Failed to insert");
 
         let messages = msg_table.list().await.expect("Failed to list");
-        assert!(messages.len() >= 1);
+        assert!(!messages.is_empty());
 
         let count = msg_table.count().await.expect("Failed to count");
         assert!(count >= 1);

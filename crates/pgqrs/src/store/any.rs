@@ -197,15 +197,6 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
-    #[cfg(feature = "postgres")]
-    type Db = sqlx::Postgres;
-
-    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
-    type Db = sqlx::Sqlite;
-
-    #[cfg(all(feature = "turso", not(any(feature = "postgres", feature = "sqlite"))))]
-    type Db = sqlx::Sqlite;
-
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]

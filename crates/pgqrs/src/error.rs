@@ -34,6 +34,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     /// Database operation failed (SQLx errors)
+    #[cfg(feature = "sqlx")]
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -82,6 +83,7 @@ pub enum Error {
     Timeout { operation: String },
 
     /// Database connection failed or was lost
+    #[cfg(feature = "sqlx")]
     #[error("Database connection failed: {source}. Context: {context}")]
     ConnectionFailed {
         #[source]
@@ -90,6 +92,7 @@ pub enum Error {
     },
 
     /// SQL query failed
+    #[cfg(feature = "sqlx")]
     #[error("Database query failed: {query}. Context: {context}. Source: {source}")]
     QueryFailed {
         #[source]
@@ -99,6 +102,7 @@ pub enum Error {
     },
 
     /// Database transaction operation failed
+    #[cfg(feature = "sqlx")]
     #[error("Database transaction failed: {source}. Context: {context}")]
     TransactionFailed {
         #[source]
@@ -107,6 +111,7 @@ pub enum Error {
     },
 
     /// Database connection pool is exhausted
+    #[cfg(feature = "sqlx")]
     #[error("Database connection pool exhausted: {source}. Context: {context}")]
     PoolExhausted {
         #[source]
@@ -115,6 +120,7 @@ pub enum Error {
     },
 
     /// Database migration failed
+    #[cfg(feature = "sqlx")]
     #[error("Database migration failed: {0}")]
     MigrationFailed(#[from] sqlx::migrate::MigrateError),
 

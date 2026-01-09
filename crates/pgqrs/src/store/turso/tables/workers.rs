@@ -4,8 +4,8 @@ use crate::types::{WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::str::FromStr;
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 const INSERT_WORKER: &str = r#"
     INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
@@ -115,12 +115,13 @@ impl TursoWorkerTable {
         let threshold = Utc::now() - max_age;
         let threshold_str = format_turso_timestamp(&threshold);
 
-        let is_healthy: bool =
-            crate::store::turso::query_scalar("SELECT heartbeat_at > $2 FROM pgqrs_workers WHERE id = $1")
-                .bind(worker_id)
-                .bind(threshold_str)
-                .fetch_one(&self.db)
-                .await?;
+        let is_healthy: bool = crate::store::turso::query_scalar(
+            "SELECT heartbeat_at > $2 FROM pgqrs_workers WHERE id = $1",
+        )
+        .bind(worker_id)
+        .bind(threshold_str)
+        .fetch_one(&self.db)
+        .await?;
 
         Ok(is_healthy)
     }
@@ -406,44 +407,10 @@ mod tests {
     use crate::store::WorkerTable;
     use crate::types::NewWorker;
 
-    async fn create_test_pool() -> Database {
-        let db = turso::Builder::new_local(":memory:").build().await.expect("Failed to create db");
-        let conn = db.connect().expect("Failed to connect");
-        // ... (standard schema setup, same as before)
-         crate::store::turso::query(r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_queues (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-        "#).execute_on_connection(&conn).await.expect("Create queues");
-
-        crate::store::turso::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_workers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hostname TEXT NOT NULL,
-                port INTEGER NOT NULL,
-                queue_id INTEGER,
-                started_at TEXT NOT NULL,
-                heartbeat_at TEXT NOT NULL,
-                shutdown_at TEXT,
-                status TEXT NOT NULL,
-                FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
-            );
-            "#,
-        )
-        .execute_on_connection(&conn)
-        .await
-        .expect("Failed to create workers table");
-
-        db
-    }
-
     #[tokio::test]
     async fn test_worker_insert_and_get() {
-        let db = create_test_pool().await;
-        let db = Arc::new(db);
+        let db = crate::store::turso::test_utils::create_test_db().await;
+        // db is already Arc
         let table = TursoWorkerTable::new(db.clone());
 
         let worker = table

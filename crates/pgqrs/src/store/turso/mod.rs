@@ -6,10 +6,12 @@ use crate::store::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use turso::{Database, Row};
 use std::sync::Arc;
+use turso::{Database, Row};
 
+pub mod schema;
 pub mod tables;
+pub mod test_utils;
 pub mod worker;
 pub mod workflow;
 
@@ -32,13 +34,17 @@ pub struct TursoStore {
 
 impl TursoStore {
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
-        let builder = turso::Builder::new_local(dsn);
-        let db = builder
-            .build()
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to connect to Turso: {}", e),
-            })?;
+        let path = if let Some(remaining) = dsn.strip_prefix("file://") {
+            remaining
+        } else if let Some(remaining) = dsn.strip_prefix("file:") {
+            remaining
+        } else {
+            dsn
+        };
+        let builder = turso::Builder::new_local(path);
+        let db = builder.build().await.map_err(|e| Error::Internal {
+            message: format!("Failed to connect to Turso: {}", e),
+        })?;
 
         let db = Arc::new(db);
 
@@ -89,19 +95,25 @@ pub trait FromTursoRow: Sized {
 
 impl FromTursoRow for i64 {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        row.get(idx).map_err(|e| Error::Internal { message: e.to_string() })
+        row.get(idx).map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })
     }
 }
 
 impl FromTursoRow for String {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        row.get(idx).map_err(|e| Error::Internal { message: e.to_string() })
+        row.get(idx).map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })
     }
 }
 
 impl FromTursoRow for bool {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        let val: i64 = row.get(idx).map_err(|e| Error::Internal { message: e.to_string() })?;
+        let val: i64 = row.get(idx).map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
         Ok(val != 0)
     }
 }
@@ -129,32 +141,40 @@ impl TursoQueryBuilder {
 
     pub async fn execute(self, db: &Database) -> Result<u64> {
         let conn = db.connect().map_err(|e| Error::Internal {
-             message: format!("Connect failed: {}", e)
+            message: format!("Connect failed: {}", e),
         })?;
 
         self.execute_on_connection(&conn).await
     }
 
     pub async fn execute_on_connection(self, conn: &turso::Connection) -> Result<u64> {
-        let res = conn.execute(&self.sql, self.params).await.map_err(|e| Error::TursoQueryFailed {
-            query: self.sql,
-            source: e,
-            context: "Execute on conn failed".into(),
-        })?;
+        let res =
+            conn.execute(&self.sql, self.params)
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: self.sql,
+                    source: e,
+                    context: "Execute on conn failed".into(),
+                })?;
         Ok(res as u64)
     }
 
     pub async fn fetch_all(self, db: &Database) -> Result<Vec<Row>> {
-        let conn = db.connect().map_err(|e| Error::Internal { message: e.to_string() })?;
+        let conn = db.connect().map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
         self.fetch_all_on_connection(&conn).await
     }
 
     pub async fn fetch_all_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
-        let mut rows = conn.query(&self.sql, self.params).await.map_err(|e| Error::TursoQueryFailed {
-            query: self.sql.clone(),
-            source: e,
-            context: "Query on conn failed".into(),
-        })?;
+        let mut rows =
+            conn.query(&self.sql, self.params)
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: self.sql.clone(),
+                    source: e,
+                    context: "Query on conn failed".into(),
+                })?;
 
         let mut result = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
@@ -164,38 +184,51 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_one(self, db: &Database) -> Result<Row> {
-        let conn = db.connect().map_err(|e| Error::Internal { message: e.to_string() })?;
+        let conn = db.connect().map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
         self.fetch_one_on_connection(&conn).await
     }
 
     pub async fn fetch_one_on_connection(self, conn: &turso::Connection) -> Result<Row> {
-        let mut rows = conn.query(&self.sql, self.params).await.map_err(|e| Error::TursoQueryFailed {
-            query: self.sql.clone(),
-            source: e,
-            context: "Query scalar on conn failed".into(),
-        })?;
+        let mut rows =
+            conn.query(&self.sql, self.params)
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: self.sql.clone(),
+                    source: e,
+                    context: "Query scalar on conn failed".into(),
+                })?;
 
         if let Ok(Some(row)) = rows.next().await {
             Ok(row)
         } else {
-             Err(Error::NotFound {
-                 entity: "Row".into(),
-                 id: "None".into(),
-             })
+            Err(Error::NotFound {
+                entity: "Row".into(),
+                id: "None".into(),
+            })
         }
     }
 
     pub async fn fetch_optional(self, db: &Database) -> Result<Option<Row>> {
-        let conn = db.connect().map_err(|e| Error::Internal { message: e.to_string() })?;
+        let conn = db.connect().map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
         self.fetch_optional_on_connection(&conn).await
     }
 
-    pub async fn fetch_optional_on_connection(self, conn: &turso::Connection) -> Result<Option<Row>> {
-         let mut rows = conn.query(&self.sql, self.params).await.map_err(|e| Error::TursoQueryFailed {
-            query: self.sql.clone(),
-            source: e,
-            context: "Query optional on conn failed".into(),
-        })?;
+    pub async fn fetch_optional_on_connection(
+        self,
+        conn: &turso::Connection,
+    ) -> Result<Option<Row>> {
+        let mut rows =
+            conn.query(&self.sql, self.params)
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: self.sql.clone(),
+                    source: e,
+                    context: "Query optional on conn failed".into(),
+                })?;
 
         if let Ok(Some(row)) = rows.next().await {
             Ok(Some(row))
@@ -220,43 +253,41 @@ impl GenericScalarBuilder {
     }
 
     pub async fn fetch_one<T>(self, db: &Database) -> Result<T>
-    where T: FromTursoRow
+    where
+        T: FromTursoRow,
     {
         let row = self.builder.fetch_one(db).await?;
         T::from_row(&row, 0)
     }
 
     pub async fn fetch_optional<T>(self, db: &Database) -> Result<Option<T>>
-    where T: FromTursoRow {
-         let row = self.builder.fetch_optional(db).await?;
-         if let Some(r) = row {
-             Ok(Some(T::from_row(&r, 0)?))
-         } else {
-             Ok(None)
-         }
+    where
+        T: FromTursoRow,
+    {
+        let row = self.builder.fetch_optional(db).await?;
+        if let Some(r) = row {
+            Ok(Some(T::from_row(&r, 0)?))
+        } else {
+            Ok(None)
+        }
     }
 }
 
 pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
-    GenericScalarBuilder { builder: TursoQueryBuilder::new(sql) }
+    GenericScalarBuilder {
+        builder: TursoQueryBuilder::new(sql),
+    }
 }
 
 #[async_trait]
 impl Store for TursoStore {
-    type Db = sqlx::Sqlite;
-
     async fn execute_raw(&self, sql: &str) -> Result<()> {
-        query(sql)
-            .execute(&self.db)
-            .await?;
+        query(sql).execute(&self.db).await?;
         Ok(())
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
-        query(sql)
-            .bind(param)
-            .execute(&self.db)
-            .await?;
+        query(sql).bind(param).execute(&self.db).await?;
         Ok(())
     }
 
@@ -270,21 +301,15 @@ impl Store for TursoStore {
     }
 
     async fn query_int(&self, sql: &str) -> Result<i64> {
-        query_scalar(sql)
-            .fetch_one(&self.db)
-            .await
+        query_scalar(sql).fetch_one(&self.db).await
     }
 
     async fn query_string(&self, sql: &str) -> Result<String> {
-        query_scalar(sql)
-            .fetch_one(&self.db)
-            .await
+        query_scalar(sql).fetch_one(&self.db).await
     }
 
     async fn query_bool(&self, sql: &str) -> Result<bool> {
-        query_scalar(sql)
-            .fetch_one(&self.db)
-            .await
+        query_scalar(sql).fetch_one(&self.db).await
     }
 
     fn config(&self) -> &Config {
@@ -355,7 +380,7 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
+        _config: &Config,
     ) -> Result<Box<dyn Consumer>> {
         use self::worker::consumer::TursoConsumer;
         let queue_info = self.queues.get_by_name(queue_name).await?;
@@ -371,8 +396,7 @@ impl Store for TursoStore {
     ) -> Result<Box<dyn Producer>> {
         use self::worker::producer::TursoProducer;
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let producer =
-            TursoProducer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
+        let producer = TursoProducer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
         Ok(Box::new(producer))
     }
 
@@ -383,8 +407,7 @@ impl Store for TursoStore {
     ) -> Result<Box<dyn Consumer>> {
         use self::worker::consumer::TursoConsumer;
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer =
-            TursoConsumer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
+        let consumer = TursoConsumer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
         Ok(Box::new(consumer))
     }
 
@@ -405,5 +428,4 @@ impl Store for TursoStore {
     fn backend_name(&self) -> &'static str {
         "turso"
     }
-
 }

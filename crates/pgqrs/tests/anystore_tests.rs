@@ -284,7 +284,14 @@ async fn test_anystore_connect_with_dsn() {
             #[cfg(not(feature = "postgres"))]
             TestBackend::Postgres => panic!("Postgres disabled"),
             TestBackend::Sqlite => "sqlite::memory:".to_string(),
-            TestBackend::Turso => panic!("Turso DSN required"),
+            TestBackend::Turso => {
+                format!(
+                    "file:{}",
+                    std::env::temp_dir()
+                        .join(format!("pgqrs_turso_test_dsn_{}.db", uuid::Uuid::new_v4()))
+                        .display()
+                )
+            }
         }
     };
 

@@ -350,7 +350,7 @@ impl crate::store::Consumer for SqliteConsumer {
             }
         }
 
-        match perform_archive(&mut *conn, msg_id, self.worker_info.id).await {
+        match perform_archive(&mut conn, msg_id, self.worker_info.id).await {
             Ok(res) => {
                 sqlx::query("COMMIT")
                     .execute(&mut *conn)

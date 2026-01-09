@@ -325,9 +325,6 @@ pub enum StepResult<T> {
 /// and transaction management.
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
-    /// Database backend type for implementations.
-    type Db: sqlx::Database;
-
     /// Execute raw SQL without parameters.
     ///
     /// This method is intended for test setup/cleanup and administrative operations.

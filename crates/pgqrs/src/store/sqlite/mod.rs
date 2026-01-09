@@ -7,7 +7,6 @@ use crate::store::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use sqlx::Sqlite;
 
 use std::sync::Arc;
 
@@ -96,8 +95,6 @@ pub fn format_sqlite_timestamp(dt: &DateTime<Utc>) -> String {
 
 #[async_trait]
 impl Store for SqliteStore {
-    type Db = Sqlite;
-
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
             .execute(&self.pool)

@@ -5,8 +5,8 @@ use crate::store::{ArchiveTable, Consumer, MessageTable, Worker};
 use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 pub struct TursoConsumer {
     db: Arc<Database>,
@@ -19,40 +19,42 @@ pub struct TursoConsumer {
 }
 
 impl TursoConsumer {
-    pub async fn new(
-        db: Arc<Database>,
-        queue: &str,
-        hostname: &str,
-        port: i32,
-    ) -> Result<Self> {
-         // Load queue
-         let queue_row = crate::store::turso::query("SELECT id, queue_name, created_at FROM pgqrs_queues WHERE queue_name = $1")
-            .bind(queue)
-            .fetch_one(&db)
-            .await?;
+    pub async fn new(db: Arc<Database>, queue: &str, hostname: &str, port: i32) -> Result<Self> {
+        // Load queue
+        let queue_row = crate::store::turso::query(
+            "SELECT id, queue_name, created_at FROM pgqrs_queues WHERE queue_name = $1",
+        )
+        .bind(queue)
+        .fetch_one(&db)
+        .await?;
 
-         let queue_id: i64 = queue_row.get(0)?;
-         let queue_name: String = queue_row.get(1)?;
-         let created_at_str: String = queue_row.get(2)?;
-         let created_at = parse_turso_timestamp(&created_at_str)?;
+        let queue_id: i64 = queue_row.get(0)?;
+        let queue_name: String = queue_row.get(1)?;
+        let created_at_str: String = queue_row.get(2)?;
+        let created_at = parse_turso_timestamp(&created_at_str)?;
 
-         let queue_info = QueueInfo { id: queue_id, queue_name, created_at };
+        let queue_info = QueueInfo {
+            id: queue_id,
+            queue_name,
+            created_at,
+        };
 
-         // Register worker
-         let worker_info = crate::store::WorkerTable::register(
-             &crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone()),
-             Some(queue_id),
-             hostname,
-             port
-         ).await?;
+        // Register worker
+        let worker_info = crate::store::WorkerTable::register(
+            &crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone()),
+            Some(queue_id),
+            hostname,
+            port,
+        )
+        .await?;
 
-         Ok(Self {
-             db,
-             queue_id,
-             worker_id: worker_info.id,
-             worker_info,
-             queue_info,
-         })
+        Ok(Self {
+            db,
+            queue_id,
+            worker_id: worker_info.id,
+            worker_info,
+            queue_info,
+        })
     }
 
     pub async fn new_ephemeral(
@@ -60,18 +62,19 @@ impl TursoConsumer {
         queue_info: &QueueInfo,
         _config: &crate::config::Config,
     ) -> Result<Self> {
-         let worker_info = crate::store::WorkerTable::register_ephemeral(
-             &crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone()),
-             Some(queue_info.id),
-         ).await?;
+        let worker_info = crate::store::WorkerTable::register_ephemeral(
+            &crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone()),
+            Some(queue_info.id),
+        )
+        .await?;
 
-         Ok(Self {
-             db,
-             queue_id: queue_info.id,
-             worker_id: worker_info.id,
-             worker_info,
-             queue_info: queue_info.clone(),
-         })
+        Ok(Self {
+            db,
+            queue_id: queue_info.id,
+            worker_id: worker_info.id,
+            worker_info,
+            queue_info: queue_info.clone(),
+        })
     }
 }
 
@@ -82,32 +85,38 @@ impl Worker for TursoConsumer {
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.status().await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.suspend().await
     }
 
     async fn resume(&self) -> Result<()> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.resume().await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.shutdown().await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.heartbeat().await
     }
 
     async fn is_healthy(&self, max_age: Duration) -> Result<bool> {
-        let admin = crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
+        let admin =
+            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
         admin.is_healthy(max_age).await
     }
 }
@@ -126,11 +135,7 @@ impl Consumer for TursoConsumer {
         self.dequeue_many_with_delay(1, vt).await
     }
 
-    async fn dequeue_many_with_delay(
-        &self,
-        limit: usize,
-        vt: u32,
-    ) -> Result<Vec<QueueMessage>> {
+    async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
         let now = Utc::now();
         self.dequeue_at(limit, vt, now).await
     }
@@ -143,9 +148,17 @@ impl Consumer for TursoConsumer {
     ) -> Result<Vec<QueueMessage>> {
         // Implement Manual Transaction Dequeue
         let now_str = format_turso_timestamp(&now);
-        let conn = self.db.connect().map_err(|e| Error::Internal { message: e.to_string() })?;
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
 
-        conn.execute("BEGIN", ()).await.map_err(|e| Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Dequeue start".into() })?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "Dequeue start".into(),
+            })?;
 
         // 1. Select candidates
         let sql_select = r#"
@@ -163,8 +176,15 @@ impl Consumer for TursoConsumer {
             .bind(now_str.clone())
             .bind(limit as i64)
             .fetch_all_on_connection(&conn)
-            .await
-            .map_err(|e| { let _ = conn.execute("ROLLBACK", ()); e })?;
+            .await;
+
+        let rows = match rows {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
 
         for row in rows {
             let id: i64 = row.get(0)?;
@@ -172,8 +192,14 @@ impl Consumer for TursoConsumer {
         }
 
         if grabbed_ids.is_empty() {
-             conn.execute("ROLLBACK", ()).await.map_err(|e| Error::TursoQueryFailed { query: "ROLLBACK".into(), source: e, context: "Dequeue empty".into() })?;
-             return Ok(vec![]);
+            conn.execute("ROLLBACK", ())
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: "ROLLBACK".into(),
+                    source: e,
+                    context: "Dequeue empty".into(),
+                })?;
+            return Ok(vec![]);
         }
 
         // 2. Update them
@@ -181,30 +207,38 @@ impl Consumer for TursoConsumer {
         let new_vt_str = format_turso_timestamp(&new_vt);
 
         for id in &grabbed_ids {
-            crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = ? WHERE id = ?")
+            let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = ? WHERE id = ?")
                 .bind(self.worker_id)
                 .bind(new_vt_str.clone())
                 .bind(now_str.clone())
                 .bind(*id)
                 .execute_on_connection(&conn)
-                .await
-                .map_err(|e| { let _ = conn.execute("ROLLBACK", ()); e})?;
+                .await;
+
+            if let Err(e) = update_res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
         }
 
-        conn.execute("COMMIT", ()).await.map_err(|e| Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Dequeue commit".into() })?;
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| Error::TursoQueryFailed {
+                query: "COMMIT".into(),
+                source: e,
+                context: "Dequeue commit".into(),
+            })?;
 
         // 3. Fetch full objects
         let msg_table = TursoMessageTable::new(self.db.clone());
         msg_table.get_by_ids(&grabbed_ids).await
     }
 
-    async fn extend_visibility(
-        &self,
-        message_id: i64,
-        additional_seconds: u32,
-    ) -> Result<bool> {
+    async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
         let msg_table = TursoMessageTable::new(self.db.clone());
-        let count = msg_table.extend_visibility(message_id, self.worker_id, additional_seconds).await?;
+        let count = msg_table
+            .extend_visibility(message_id, self.worker_id, additional_seconds)
+            .await?;
         Ok(count > 0)
     }
 
@@ -220,22 +254,37 @@ impl Consumer for TursoConsumer {
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-         // Manual Transaction: Select, Insert Archive, Delete Message
-         let conn = self.db.connect().map_err(|e| Error::Internal { message: e.to_string() })?;
-         conn.execute("BEGIN", ()).await.map_err(|e| Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Archive start".into() })?;
+        // Manual Transaction: Select, Insert Archive, Delete Message
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: e.to_string(),
+        })?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "Archive start".into(),
+            })?;
 
-         let msg_row_opt = crate::store::turso::query("SELECT id, queue_id, payload, enqueued_at, vt, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id = ?")
+        let msg_row_opt = crate::store::turso::query("SELECT id, queue_id, payload, enqueued_at, vt, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id = ?")
              .bind(msg_id)
              .fetch_optional_on_connection(&conn)
-             .await
-             .map_err(|e| { let _ = conn.execute("ROLLBACK", ()); e })?;
+             .await;
 
-         if let Some(row) = msg_row_opt {
-              let payload_str: String = row.get(2)?;
-              let now_str = format_turso_timestamp(&Utc::now());
+        let msg_row_opt = match msg_row_opt {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
 
-              // Insert Archive
-              let archive_row = crate::store::turso::query(r#"
+        if let Some(row) = msg_row_opt {
+            let payload_str: String = row.get(2)?;
+            let now_str = format_turso_timestamp(&Utc::now());
+
+            // Insert Archive
+            let archive_row = crate::store::turso::query(r#"
                   INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at)
                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                   RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at;
@@ -251,27 +300,50 @@ impl Consumer for TursoConsumer {
               .bind(row.get::<Option<String>>(6)?)
               .bind(now_str)
               .fetch_one_on_connection(&conn)
-              .await
-             .map_err(|e| { let _ = conn.execute("ROLLBACK", ()); e })?;
+              .await;
 
-             // Delete Original
-             crate::store::turso::query("DELETE FROM pgqrs_messages WHERE id = ?")
-                 .bind(msg_id)
-                 .execute_on_connection(&conn)
-                 .await
-                 .map_err(|e| { let _ = conn.execute("ROLLBACK", ()); e })?;
+            let archive_row = match archive_row {
+                Ok(res) => res,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            };
 
-             conn.execute("COMMIT", ()).await.map_err(|e| Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Archive commit".into() })?;
+            // Delete Original
+            let delete_res = crate::store::turso::query("DELETE FROM pgqrs_messages WHERE id = ?")
+                .bind(msg_id)
+                .execute_on_connection(&conn)
+                .await;
 
-             let archive_table = crate::store::turso::tables::archive::TursoArchiveTable::new(self.db.clone());
+            if let Err(e) = delete_res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
 
-             let id: i64 = archive_row.get(0)?;
-             archive_table.get(id).await.map(Some)
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: "COMMIT".into(),
+                    source: e,
+                    context: "Archive commit".into(),
+                })?;
 
-         } else {
-              conn.execute("ROLLBACK", ()).await.map_err(|e| Error::TursoQueryFailed { query: "ROLLBACK".into(), source: e, context: "Archive not found".into() })?;
-              Ok(None)
-         }
+            let archive_table =
+                crate::store::turso::tables::archive::TursoArchiveTable::new(self.db.clone());
+
+            let id: i64 = archive_row.get(0)?;
+            archive_table.get(id).await.map(Some)
+        } else {
+            conn.execute("ROLLBACK", ())
+                .await
+                .map_err(|e| Error::TursoQueryFailed {
+                    query: "ROLLBACK".into(),
+                    source: e,
+                    context: "Archive not found".into(),
+                })?;
+            Ok(None)
+        }
     }
 
     async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
@@ -283,8 +355,10 @@ impl Consumer for TursoConsumer {
     }
 
     async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
-         let msg_table = TursoMessageTable::new(self.db.clone());
-         let res = msg_table.release_messages_by_ids(message_ids, self.worker_id).await?;
-         Ok(res.iter().filter(|&&x| x).count() as u64)
+        let msg_table = TursoMessageTable::new(self.db.clone());
+        let res = msg_table
+            .release_messages_by_ids(message_ids, self.worker_id)
+            .await?;
+        Ok(res.iter().filter(|&&x| x).count() as u64)
     }
 }

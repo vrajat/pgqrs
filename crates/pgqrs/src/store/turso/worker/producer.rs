@@ -7,8 +7,8 @@ use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
 use chrono::Utc;
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 /// Producer interface for enqueueing messages to a specific queue.
 pub struct TursoProducer {

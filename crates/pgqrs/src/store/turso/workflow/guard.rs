@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::store::{StepGuard, StepResult};
 use async_trait::async_trait;
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 pub struct TursoStepGuard {
     db: Arc<Database>,
@@ -35,23 +35,27 @@ impl TursoStepGuard {
         workflow_id: i64,
         step_id: &str,
     ) -> Result<StepResult<serde_json::Value>> {
-
         let row = crate::store::turso::query(SQL_ACQUIRE_STEP)
             .bind(workflow_id)
             .bind(step_id) // step_id is &str, implements Into<Value>
             .fetch_one(db)
             .await?;
 
-        let status: String = row.get(0).map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
+        let status: String = row.get(0).map_err(|e| crate::error::Error::Internal {
+            message: e.to_string(),
+        })?;
 
         if status == "SUCCESS" {
-             let output_str: Option<String> = row.get(1).map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
-             let output = if let Some(s) = output_str {
-                 serde_json::from_str(&s)?
-             } else {
-                 serde_json::Value::Null
-             };
-             return Ok(StepResult::Skipped(output));
+            let output_str: Option<String> =
+                row.get(1).map_err(|e| crate::error::Error::Internal {
+                    message: e.to_string(),
+                })?;
+            let output = if let Some(s) = output_str {
+                serde_json::from_str(&s)?
+            } else {
+                serde_json::Value::Null
+            };
+            return Ok(StepResult::Skipped(output));
         }
 
         Ok(StepResult::Execute(Box::new(Self {

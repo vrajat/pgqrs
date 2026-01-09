@@ -4,9 +4,9 @@ use crate::store::turso::workflow::guard::TursoStepGuard;
 use crate::types::WorkflowStatus;
 use async_trait::async_trait;
 use serde::Serialize;
-use turso::Database;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
+use turso::Database;
 
 const SQL_CREATE_WORKFLOW: &str = r#"
 INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at)
@@ -39,9 +39,15 @@ impl TursoWorkflow {
             .bind(input_json)
             .fetch_one(&db)
             .await
-            .map_err(|e| crate::error::Error::Internal { message: format!("Failed to create workflow: {}", e) })?;
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to create workflow: {}", e),
+            })?;
 
-        let id: i64 = row.get::<i64>(0).map_err(|e| crate::error::Error::Internal{message:e.to_string()})?;
+        let id: i64 = row
+            .get::<i64>(0)
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
 
         Ok(Self { id, db })
     }
@@ -74,11 +80,12 @@ impl crate::store::Workflow for TursoWorkflow {
 
         // If no row update, check current status
         if result.is_none() {
-            let status_str: Option<String> =
-                crate::store::turso::query_scalar("SELECT status FROM pgqrs_workflows WHERE workflow_id = $1")
-                    .bind(self.id)
-                    .fetch_optional(&self.db)
-                    .await?;
+            let status_str: Option<String> = crate::store::turso::query_scalar(
+                "SELECT status FROM pgqrs_workflows WHERE workflow_id = $1",
+            )
+            .bind(self.id)
+            .fetch_optional(&self.db)
+            .await?;
 
             if let Some(s) = status_str {
                 if let Ok(WorkflowStatus::Error) = WorkflowStatus::from_str(&s) {

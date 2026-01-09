@@ -2,8 +2,8 @@ use crate::error::Result;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::{ArchivedMessage, NewArchivedMessage, QueueMessage};
 use async_trait::async_trait;
-use turso::Database;
 use std::sync::Arc;
+use turso::Database;
 
 const INSERT_ARCHIVED_MESSAGE: &str = r#"
     INSERT INTO pgqrs_archive (
@@ -107,26 +107,6 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
         let enqueued_at_str = format_turso_timestamp(&data.enqueued_at);
         let vt_str = format_turso_timestamp(&data.vt);
         let dequeued_at_str = data.dequeued_at.map(|t| format_turso_timestamp(&t));
-        let _archived_at_str = format_turso_timestamp(&crate::store::turso::Utc::now()); // Override with now or use data? data doesn't have archived_at usually?
-        // Wait, traits says NewArchivedMessage has archived_at? No?
-        // NewArchivedMessage definition in my types.rs view didn't have archived_at?
-        // Let's check definition again.
-        // It DOES NOT have archived_at. It has `dequeued_at`.
-        // So I should use Utc::now() for archived_at.
-
-        // Wait, my view of types.rs earlier showed NewArchivedMessage:
-        // pub struct NewArchivedMessage { ... pub vt: DateTime<Utc> ... }
-        // It did not show archived_at.
-        // But ArchiveTable::insert logic in step 404 used `data.archived_at`.
-        // This means `data` might NOT have `archived_at`. My previous code was wrong?
-        // The compiler error didn't complain about `archived_at` field access though.
-        // Ah, verifying types.rs again...
-        // lines 281-300: no archived_at.
-        // So step 404 code `data.archived_at` would have failed if I ran it?
-        // Previous compilation error was about `vt` type, not `archived_at` field.
-        // Maybe I missed it or types.rs is different?
-        // I will assume NewArchivedMessage DOES NOT have archived_at and I calculate it.
-
         let now_str = format_turso_timestamp(&chrono::Utc::now());
 
         let row = crate::store::turso::query(INSERT_ARCHIVED_MESSAGE)
@@ -218,10 +198,12 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
     }
 
     async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= $1")
-            .bind(max_attempts)
-            .fetch_one(&self.db)
-            .await?;
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= $1",
+        )
+        .bind(max_attempts)
+        .fetch_one(&self.db)
+        .await?;
         Ok(count)
     }
 
@@ -258,69 +240,104 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
     }
 
     async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
-        let count = crate::store::turso::query("DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1")
-            .bind(worker_id)
-            .execute(&self.db)
-            .await?;
+        let count =
+            crate::store::turso::query("DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1")
+                .bind(worker_id)
+                .execute(&self.db)
+                .await?;
         Ok(count)
     }
 
     async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
         // Need manual transaction to delete from archive and insert into messages
-        let conn = self.db.connect().map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
 
-        conn.execute("BEGIN", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Begin replay".into() })?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "Begin replay".into(),
+            })?;
 
         let row_opt = crate::store::turso::query(GET_ARCHIVED_MESSAGE_BY_ID)
             .bind(msg_id)
             .fetch_optional_on_connection(&conn)
-            .await
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", ()); // best effort
-                e
-            })?;
+            .await;
+
+        let row_opt = match row_opt {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
 
         if let Some(row) = row_opt {
-             let archive_msg = Self::map_row(&row)?;
-             let payload_str = archive_msg.payload.to_string();
-             let now_str = format_turso_timestamp(&chrono::Utc::now());
+            let archive_msg = Self::map_row(&row)?;
+            let payload_str = archive_msg.payload.to_string();
+            let now_str = format_turso_timestamp(&chrono::Utc::now());
 
-             let msg_row = crate::store::turso::query(REPLAY_MESSAGE_INSERT)
-                 .bind(archive_msg.queue_id)
-                 .bind(payload_str)
-                 .bind(now_str)
-                 .fetch_one_on_connection(&conn)
-                 .await
-                 .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", ());
-                    e
-                 })?;
+            let msg_row = crate::store::turso::query(REPLAY_MESSAGE_INSERT)
+                .bind(archive_msg.queue_id)
+                .bind(payload_str)
+                .bind(now_str)
+                .fetch_one_on_connection(&conn)
+                .await;
 
-             // Delete from archive
-             crate::store::turso::query(DELETE_ARCHIVED_MESSAGE_BY_ID)
-                 .bind(msg_id)
-                 .execute_on_connection(&conn)
-                 .await
-                 .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", ());
-                    e
-                 })?;
+            let msg_row = match msg_row {
+                Ok(res) => res,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            };
 
-             conn.execute("COMMIT", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Commit replay".into() })?;
+            // Delete from archive
+            let delete_res = crate::store::turso::query(DELETE_ARCHIVED_MESSAGE_BY_ID)
+                .bind(msg_id)
+                .execute_on_connection(&conn)
+                .await;
 
-             let msg = crate::store::turso::tables::messages::TursoMessageTable::map_row(&msg_row)?;
-             Ok(Some(msg))
+            if let Err(e) = delete_res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+
+            conn.execute("COMMIT", ()).await.map_err(|e| {
+                crate::error::Error::TursoQueryFailed {
+                    query: "COMMIT".into(),
+                    source: e,
+                    context: "Commit replay".into(),
+                }
+            })?;
+
+            let msg = crate::store::turso::tables::messages::TursoMessageTable::map_row(&msg_row)?;
+            Ok(Some(msg))
         } else {
-             conn.execute("ROLLBACK", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "ROLLBACK".into(), source: e, context: "Rollback replay (not found)".into() })?;
-             Ok(None)
+            conn.execute("ROLLBACK", ()).await.map_err(|e| {
+                crate::error::Error::TursoQueryFailed {
+                    query: "ROLLBACK".into(),
+                    source: e,
+                    context: "Rollback replay (not found)".into(),
+                }
+            })?;
+            Ok(None)
         }
     }
 
     async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1")
-            .bind(queue_id)
-            .fetch_one(&self.db)
-            .await?;
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.db)
+        .await?;
         Ok(count)
     }
 }
@@ -330,62 +347,11 @@ mod tests {
     use super::*;
     use crate::store::ArchiveTable;
     use crate::types::NewArchivedMessage;
-    use turso::Database;
-
-    async fn create_test_pool() -> Database {
-        let db = turso::Builder::new_local(":memory:")
-            .build()
-            .await
-            .expect("Failed to create db");
-        let conn = db.connect().expect("Failed to connect");
-
-        crate::store::turso::query(r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_queues (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-        "#).execute_on_connection(&conn).await.expect("Create queues");
-
-         crate::store::turso::query(r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_id INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                read_ct INTEGER NOT NULL DEFAULT 0,
-                enqueued_at TEXT NOT NULL,
-                vt TEXT,
-                dequeued_at TEXT,
-                producer_worker_id INTEGER,
-                consumer_worker_id INTEGER,
-                FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
-            );
-         "#).execute_on_connection(&conn).await.expect("Create messages"); // For replay
-
-        crate::store::turso::query(r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_archive (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                original_msg_id INTEGER NOT NULL,
-                queue_id INTEGER NOT NULL,
-                producer_worker_id INTEGER,
-                consumer_worker_id INTEGER,
-                payload TEXT NOT NULL,
-                enqueued_at TEXT NOT NULL,
-                vt TEXT,
-                read_ct INTEGER NOT NULL,
-                dequeued_at TEXT,
-                archived_at TEXT NOT NULL,
-                FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
-            );
-        "#).execute_on_connection(&conn).await.expect("Create archive");
-
-        db
-    }
 
     #[tokio::test]
     async fn test_archive_insert_and_get() {
-        let db = create_test_pool().await;
-        let db = Arc::new(db);
+        let db = crate::store::turso::test_utils::create_test_db().await;
+        // db is already Arc
         let table = TursoArchiveTable::new(db.clone());
 
         let now = chrono::Utc::now();

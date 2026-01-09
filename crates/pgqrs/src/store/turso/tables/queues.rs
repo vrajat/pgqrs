@@ -80,9 +80,9 @@ impl crate::store::QueueTable for TursoQueueTable {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
-                     return Err(crate::error::Error::QueueAlreadyExists {
+                    return Err(crate::error::Error::QueueAlreadyExists {
                         name: data.queue_name.clone(),
-                     });
+                    });
                 }
                 Err(e) // Propagate original error (TursoQueryFailed)
             }
@@ -162,30 +162,9 @@ mod tests {
     use crate::store::QueueTable;
     use crate::types::NewQueue;
 
-    async fn create_test_pool() -> Database {
-        let db = turso::Builder::new_local(":memory:").build().await.expect("Failed to create db");
-        let conn = db.connect().expect("Failed to connect");
-
-        crate::store::turso::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS pgqrs_queues (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            "#,
-        )
-        .execute_on_connection(&conn)
-        .await
-        .expect("Failed to create queues table");
-
-        db
-    }
-
     #[tokio::test]
     async fn test_queue_insert_and_get() {
-        let db = create_test_pool().await;
-        let db = Arc::new(db);
+        let db = crate::store::turso::test_utils::create_test_db().await;
         let table = TursoQueueTable::new(db.clone());
 
         let queue = table
@@ -202,6 +181,4 @@ mod tests {
         assert_eq!(fetched.queue_name, "test_queue");
         assert_eq!(fetched.id, queue.id);
     }
-
-    // ... Copy other tests if needed, but structure is same.
 }

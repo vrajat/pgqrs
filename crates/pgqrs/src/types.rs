@@ -27,7 +27,8 @@ use std::fmt::{self};
 use tabled::Tabled;
 
 /// A message in the queue
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueMessage {
     /// Unique message ID
     pub id: i64,
@@ -66,7 +67,8 @@ impl fmt::Display for QueueMessage {
 }
 
 /// Queue metrics
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueMetrics {
     /// Name of the queue
     pub name: String,
@@ -123,7 +125,8 @@ pub fn display_option_datetime(o: &Option<DateTime<Utc>>) -> String {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Clone, Debug, Serialize, Deserialize, Tabled)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueInfo {
     /// Queue ID (primary key)
     pub id: i64,
@@ -144,7 +147,8 @@ impl fmt::Display for QueueInfo {
 }
 
 /// System-wide statistics
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct SystemStats {
     /// Total number of queues
     pub total_queues: i64,
@@ -198,7 +202,8 @@ impl Tabled for SystemStats {
 }
 
 /// Worker health statistics
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkerHealthStats {
     /// Queue name (or "Global" for global stats)
     pub queue_name: String,
@@ -244,7 +249,8 @@ impl Tabled for WorkerHealthStats {
 }
 
 /// An archived message with additional tracking information
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, Tabled)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct ArchivedMessage {
     /// Unique archive entry ID
     pub id: i64,
@@ -317,7 +323,8 @@ impl ArchivedMessage {
 }
 
 /// A worker instance that processes messages from queues
-#[derive(Debug, Clone, Serialize, Deserialize, Tabled, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkerInfo {
     /// Unique worker ID
     pub id: i64,
@@ -358,8 +365,12 @@ impl fmt::Display for WorkerInfo {
 }
 
 /// Worker status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::Type)]
-#[sqlx(type_name = "worker_status", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "worker_status", rename_all = "snake_case")
+)]
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,
@@ -463,10 +474,14 @@ pub struct BatchInsertParams {
 }
 
 // Moved from src/workflow/mod.rs
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(
-    type_name = "pgqrs_workflow_status",
-    rename_all = "SCREAMING_SNAKE_CASE"
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(
+        type_name = "pgqrs_workflow_status",
+        rename_all = "SCREAMING_SNAKE_CASE"
+    )
 )]
 pub enum WorkflowStatus {
     Pending,
@@ -501,7 +516,8 @@ impl std::str::FromStr for WorkflowStatus {
 }
 
 // Moved from src/tables/pgqrs_workflows.rs
-#[derive(Debug, sqlx::FromRow, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkflowRecord {
     pub workflow_id: i64,
     pub name: String,
