@@ -13,6 +13,3 @@ tag-message = "Release v{{version}}"
 
 # Don't push automatically; Makefile does this after confirmation
 push = false
-
-# Update documentation via Makefile target
-pre-release-hook = ["make bump-version VERSION={{version}}"]

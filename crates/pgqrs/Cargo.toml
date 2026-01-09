@@ -58,3 +58,8 @@ serde_yaml = "0.9"
 tabled = "0.20.0"
 humantime = "2.1"
 async-trait = "0.1"
+
+# cargo-release configuration for this crate only
+# This hook runs once per workspace release (when processing this crate)
+[package.metadata.release]
+pre-release-hook = ["sh", "-c", "make -C $(git rev-parse --show-toplevel) bump-version VERSION={{version}}"]
