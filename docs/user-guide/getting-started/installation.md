@@ -24,16 +24,16 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     ```toml
     [dependencies]
     # PostgreSQL only (default)
-    pgqrs = "0.11"
+    pgqrs = "0.12.0"
 
     # SQLite only
-    pgqrs = { version = "0.11", default-features = false, features = ["sqlite"] }
+    pgqrs = { version = "0.12.0", default-features = false, features = ["sqlite"] }
 
     # Both backends
-    pgqrs = { version = "0.11", features = ["full"] }
+    pgqrs = { version = "0.12.0", features = ["full"] }
 
     # Required dependencies
-    tokio = { version = "1", features = ["full"] }
+    tokio = { version = "0.12.0", features = ["full"] }
     serde_json = "1"
     ```
 

@@ -207,16 +207,16 @@ pip install pgqrs
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.11"
+pgqrs = "0.12.0"
 
 # SQLite only
-pgqrs = { version = "0.11", default-features = false, features = ["sqlite"] }
+pgqrs = { version = "0.12.0", default-features = false, features = ["sqlite"] }
 
 # Both backends
-pgqrs = { version = "0.11", features = ["full"] }
+pgqrs = { version = "0.12.0", features = ["full"] }
 
 # Workflow macros (optional)
-pgqrs-macros = "0.11"
+pgqrs-macros = "0.12.0"
 ```
 
 ## Documentation

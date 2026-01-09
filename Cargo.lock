@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "pgqrs"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "pgqrs-macros"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "quote",
  "syn",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "py-pgqrs"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "gethostname",
