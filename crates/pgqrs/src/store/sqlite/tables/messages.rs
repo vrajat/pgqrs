@@ -459,8 +459,8 @@ impl crate::store::MessageTable for SqliteMessageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{MessageTable, QueueTable};
     use crate::store::sqlite::tables::queues::SqliteQueueTable;
+    use crate::store::{MessageTable, QueueTable};
     use crate::types::{BatchInsertParams, NewMessage, NewQueue};
 
     async fn create_test_pool() -> SqlitePool {
@@ -611,4 +611,3 @@ mod tests {
         assert_eq!(ids.len(), 3);
     }
 }
-

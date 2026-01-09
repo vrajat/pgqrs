@@ -359,4 +359,3 @@ mod tests {
         assert_eq!(deleted, 1);
     }
 }
-

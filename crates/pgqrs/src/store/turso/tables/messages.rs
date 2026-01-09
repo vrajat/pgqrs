@@ -1,0 +1,637 @@
+use crate::error::Result;
+use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
+use crate::types::QueueMessage;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use std::collections::HashSet;
+use turso::Database;
+use std::sync::Arc;
+
+const INSERT_MESSAGE: &str = r#"
+    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+"#;
+
+const GET_MESSAGE_BY_ID: &str = r#"
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    FROM pgqrs_messages
+    WHERE id = $1;
+"#;
+
+const LIST_ALL_MESSAGES: &str = r#"
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    FROM pgqrs_messages
+    ORDER BY enqueued_at DESC;
+"#;
+
+const DELETE_MESSAGE_BY_ID: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = $1;
+"#;
+
+const LIST_MESSAGES_BY_QUEUE: &str = r#"
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    FROM pgqrs_messages
+    WHERE queue_id = $1
+    ORDER BY enqueued_at DESC
+    LIMIT 1000;
+"#;
+
+const UPDATE_MESSAGE_VT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = $2
+    WHERE id = $1;
+"#;
+
+#[derive(Debug, Clone)]
+pub struct TursoMessageTable {
+    db: Arc<Database>,
+}
+
+impl TursoMessageTable {
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+
+    pub fn map_row(row: &turso::Row) -> Result<QueueMessage> {
+        let id: i64 = row.get(0)?; // ? works if From<turso::Error> for Error exists, which we added
+        let queue_id: i64 = row.get(1)?;
+
+        let payload_str: String = row.get(2)?;
+        let payload: Value = serde_json::from_str(&payload_str)?;
+
+        let vt_str: Option<String> = row.get(3)?;
+        let vt = match vt_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
+
+        let enqueued_at_str: String = row.get(4)?;
+        let enqueued_at = parse_turso_timestamp(&enqueued_at_str)?;
+
+        let read_ct: i32 = row.get(5)?;
+
+        let dequeued_at_str: Option<String> = row.get(6)?;
+        let dequeued_at = match dequeued_at_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
+
+        let producer_worker_id: Option<i64> = row.get(7)?;
+        let consumer_worker_id: Option<i64> = row.get(8)?;
+
+        Ok(QueueMessage {
+            id,
+            queue_id,
+            payload,
+            vt: vt.unwrap_or(enqueued_at),
+            enqueued_at,
+            read_ct,
+            dequeued_at,
+            producer_worker_id,
+            consumer_worker_id,
+        })
+    }
+}
+
+#[async_trait]
+impl crate::store::MessageTable for TursoMessageTable {
+    async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+        let payload_str = data.payload.to_string();
+        let enqueued_at_str = format_turso_timestamp(&data.enqueued_at);
+        let vt_str = format_turso_timestamp(&data.vt);
+
+        let row = crate::store::turso::query(INSERT_MESSAGE)
+            .bind(data.queue_id)
+            .bind(payload_str)
+            .bind(data.read_ct)
+            .bind(enqueued_at_str)
+            .bind(vt_str)
+            .bind(data.producer_worker_id)
+            .bind(data.consumer_worker_id)
+            .fetch_one(&self.db)
+            .await?;
+
+        Self::map_row(&row)
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueMessage> {
+        let row = crate::store::turso::query(GET_MESSAGE_BY_ID)
+            .bind(id)
+            .fetch_one(&self.db)
+            .await?;
+
+        Self::map_row(&row)
+    }
+
+    async fn list(&self) -> Result<Vec<QueueMessage>> {
+        let rows = crate::store::turso::query(LIST_ALL_MESSAGES)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
+            .fetch_one(&self.db)
+            .await?;
+        Ok(count)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let rows = crate::store::turso::query(DELETE_MESSAGE_BY_ID)
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = crate::store::turso::query(LIST_MESSAGES_BY_QUEUE)
+            .bind(queue_id)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn batch_insert(
+        &self,
+        queue_id: i64,
+        payloads: &[serde_json::Value],
+        params: crate::types::BatchInsertParams,
+    ) -> Result<Vec<i64>> {
+        if payloads.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
+
+        conn.execute("BEGIN", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Begin batch".into() })?;
+
+        let mut ids = Vec::with_capacity(payloads.len());
+        let enqueued_at_str = format_turso_timestamp(&params.enqueued_at);
+        let vt_str = format_turso_timestamp(&params.vt);
+
+        for payload in payloads {
+             // We can check if loop fails, we should ROLLBACK ideally.
+             let res = async {
+                crate::store::turso::query(
+                    r#"
+                    INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                    "#,
+                )
+                .bind(queue_id)
+                .bind(payload.to_string())
+                .bind(params.read_ct)
+                .bind(enqueued_at_str.as_str())
+                .bind(vt_str.as_str())
+                .bind(params.producer_worker_id)
+                .bind(params.consumer_worker_id)
+                .fetch_one_on_connection(&conn)
+                .await
+             }.await;
+
+             match res {
+                 Ok(row) => {
+                     let id: i64 = row.get(0)?;
+                     ids.push(id);
+                 }
+                 Err(e) => {
+                     let _ = conn.execute("ROLLBACK", ()).await;
+                     return Err(e);
+                 }
+             }
+        }
+
+        conn.execute("COMMIT", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Commit batch".into() })?;
+
+        Ok(ids)
+    }
+
+    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN ({}) ORDER BY id",
+            placeholders.join(", ")
+        );
+
+        let mut query = crate::store::turso::query(&sql);
+        for id in ids {
+            query = query.bind(*id);
+        }
+
+        // Simpler: just bubble up the error from fetch_all, it is already a proper Error (TursoQueryFailed)
+        let rows = query.fetch_all(&self.db).await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
+        let vt_str = format_turso_timestamp(&vt);
+        let rows = crate::store::turso::query(UPDATE_MESSAGE_VT)
+            .bind(id)
+            .bind(vt_str)
+            .execute(&self.db)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn extend_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<u64> {
+        let sql = r#"
+            UPDATE pgqrs_messages
+            SET vt = datetime(vt, '+' || ? || ' seconds')
+            WHERE id = ? AND consumer_worker_id = ?;
+        "#;
+
+        let rows = crate::store::turso::query(sql)
+            .bind(additional_seconds as i32)
+            .bind(id)
+            .bind(worker_id)
+            .execute(&self.db)
+            .await?;
+
+        Ok(rows)
+    }
+
+    async fn extend_visibility_batch(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<Vec<bool>> {
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
+        conn.execute("BEGIN", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Begin extend batch".into() })?;
+
+        let mut extended_set = HashSet::new();
+        let sql = r#"
+            UPDATE pgqrs_messages
+            SET vt = datetime(vt, '+' || ? || ' seconds')
+            WHERE id = ? AND consumer_worker_id = ?
+        "#;
+
+        for id in message_ids {
+            let res = async {
+                crate::store::turso::query(sql)
+                    .bind(additional_seconds as i32)
+                    .bind(*id)
+                    .bind(worker_id)
+                    .execute_on_connection(&conn)
+                    .await
+            }.await;
+
+            match res {
+                Ok(rows) => {
+                    if rows > 0 {
+                        extended_set.insert(*id);
+                    }
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        conn.execute("COMMIT", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Commit extend batch".into() })?;
+
+        let result = message_ids
+            .iter()
+            .map(|id| extended_set.contains(id))
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn release_messages_by_ids(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+    ) -> Result<Vec<bool>> {
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| crate::error::Error::Internal { message: e.to_string() })?;
+        conn.execute("BEGIN", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "BEGIN".into(), source: e, context: "Begin release batch".into() })?;
+
+        let mut released_set = HashSet::new();
+        let sql = r#"
+            UPDATE pgqrs_messages
+            SET vt = datetime('now'), consumer_worker_id = NULL
+            WHERE id = ? AND consumer_worker_id = ?
+        "#;
+
+        for id in message_ids {
+             let res = async {
+                crate::store::turso::query(sql)
+                .bind(*id)
+                .bind(worker_id)
+                .execute_on_connection(&conn)
+                .await
+            }.await;
+
+            match res {
+                Ok(rows) => {
+                     if rows > 0 {
+                        released_set.insert(*id);
+                    }
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        conn.execute("COMMIT", ()).await.map_err(|e| crate::error::Error::TursoQueryFailed { query: "COMMIT".into(), source: e, context: "Commit release batch".into() })?;
+
+        let result = message_ids
+            .iter()
+            .map(|id| released_set.contains(id))
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
+        self.count_pending_filtered(queue_id, None).await
+    }
+
+    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
+        let count: i64 = match worker_id {
+            Some(wid) => {
+                crate::store::turso::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM pgqrs_messages
+                    WHERE queue_id = $1 AND consumer_worker_id = $2
+                    "#,
+                )
+                .bind(queue_id)
+                .bind(wid)
+                .fetch_one(&self.db)
+                .await
+            }
+            None => {
+                crate::store::turso::query_scalar(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM pgqrs_messages
+                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
+                    "#,
+                )
+                .bind(queue_id)
+                .fetch_one(&self.db)
+                .await
+            }
+        }?; // Error already mapped
+
+        Ok(count)
+    }
+
+    async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
+        let mut results = Vec::with_capacity(ids.len());
+
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        for &id in ids {
+            let rows = crate::store::turso::query(DELETE_MESSAGE_BY_ID)
+                .bind(id)
+                .execute(&self.db)
+                .await?;
+            results.push(rows > 0);
+        }
+
+        Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::turso::tables::queues::TursoQueueTable;
+    use crate::store::{MessageTable, QueueTable};
+    use crate::types::{BatchInsertParams, NewMessage, NewQueue};
+
+    async fn create_test_pool() -> Database {
+        let db = turso::Builder::new_local(":memory:")
+            .build()
+            .await
+            .expect("Failed to create db");
+
+        let conn = db.connect().expect("Failed to connect");
+
+        crate::store::turso::query(r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_queues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        "#).execute_on_connection(&conn).await.expect("Failed to create queues");
+
+        crate::store::turso::query(r#"
+                CREATE TABLE IF NOT EXISTS pgqrs_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    queue_id INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    read_ct INTEGER NOT NULL DEFAULT 0,
+                    enqueued_at TEXT NOT NULL,
+                    vt TEXT,
+                    dequeued_at TEXT,
+                    producer_worker_id INTEGER,
+                    consumer_worker_id INTEGER,
+                    FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
+                );
+        "#).execute_on_connection(&conn).await.expect("Failed to create messages");
+
+        db
+    }
+
+    #[tokio::test]
+    async fn test_message_insert_and_get() {
+        let db = create_test_pool().await;
+        let db = std::sync::Arc::new(db);
+
+        let queue_table = TursoQueueTable::new(db.clone());
+        let msg_table = TursoMessageTable::new(db.clone());
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({"test": "data"});
+
+        let msg = msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: payload.clone(),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await
+            .expect("Failed to insert message");
+
+        assert_eq!(msg.payload, payload);
+        assert_eq!(msg.queue_id, queue.id);
+
+        let fetched = msg_table.get(msg.id).await.expect("Failed to get message");
+        assert_eq!(fetched.id, msg.id);
+    }
+
+    #[tokio::test]
+    async fn test_message_list_and_count() {
+        let db = create_test_pool().await;
+        let db = std::sync::Arc::new(db);
+
+        let queue_table = TursoQueueTable::new(db.clone());
+        let msg_table = TursoMessageTable::new(db.clone());
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+
+        msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: serde_json::json!({"msg": 1}),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await
+            .expect("Failed to insert");
+
+        let messages = msg_table.list().await.expect("Failed to list");
+        assert!(messages.len() >= 1);
+
+        let count = msg_table.count().await.expect("Failed to count");
+        assert!(count >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_message_batch_insert() {
+        let db = create_test_pool().await;
+        let db = std::sync::Arc::new(db);
+
+        let queue_table = TursoQueueTable::new(db.clone());
+        let msg_table = TursoMessageTable::new(db.clone());
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "batch_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let payloads = vec![
+            serde_json::json!({"msg": 1}),
+            serde_json::json!({"msg": 2}),
+            serde_json::json!({"msg": 3}),
+        ];
+
+        let now = chrono::Utc::now();
+        let params = BatchInsertParams {
+            read_ct: 0,
+            enqueued_at: now,
+            vt: now,
+            producer_worker_id: None,
+            consumer_worker_id: None,
+        };
+
+        let ids = msg_table
+            .batch_insert(queue.id, &payloads, params)
+            .await
+            .expect("Failed to batch insert");
+
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_batch_visibility_and_release() {
+        let db = create_test_pool().await;
+        let db = std::sync::Arc::new(db);
+
+        let queue_table = TursoQueueTable::new(db.clone());
+        let msg_table = TursoMessageTable::new(db.clone());
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "vis_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+        // Insert with worker 1 assigned
+        let msg = msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: serde_json::json!({"msg": 1}),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: Some(1),
+            })
+            .await
+            .expect("failed");
+
+        // Extend visibility
+        let res = msg_table.extend_visibility_batch(&[msg.id], 1, 60).await.expect("failed");
+        assert_eq!(res, vec![true]);
+
+        // Release
+        let res = msg_table.release_messages_by_ids(&[msg.id], 1).await.expect("failed");
+        assert_eq!(res, vec![true]);
+
+        let fetched = msg_table.get(msg.id).await.expect("failed");
+        assert!(fetched.consumer_worker_id.is_none());
+    }
+}

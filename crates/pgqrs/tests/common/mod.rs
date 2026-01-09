@@ -127,14 +127,6 @@ pub async fn create_store_for_backend(
         .await
         .expect("Failed to create store");
 
-    // Ensure schema is installed for Turso when using ephemeral test databases.
-    if backend == TestBackend::Turso {
-        pgqrs::admin(&store)
-            .install()
-            .await
-            .expect("Failed to install Turso schema for tests");
-    }
-
     store
 }
 

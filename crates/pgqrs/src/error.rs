@@ -37,6 +37,10 @@ pub enum Error {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    /// Turso database error
+    #[error("Turso error: {0}")]
+    Turso(#[from] turso::Error),
+
     /// JSON serialization/deserialization failed
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -164,4 +168,17 @@ pub enum Error {
     )]
     #[error("Connection error: {message}")]
     Connection { message: String },
+
+    /// Entity not found
+    #[error("{entity} with id '{id}' not found")]
+    NotFound { entity: String, id: String },
+
+    /// Turso query failed
+    #[error("Turso query failed: {query}. Context: {context}. Source: {source}")]
+    TursoQueryFailed {
+        #[source]
+        source: turso::Error,
+        query: String,
+        context: String,
+    },
 }
