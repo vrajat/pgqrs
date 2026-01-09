@@ -288,7 +288,8 @@ impl QueueTable for TursoQueueTable {
             message: format!("Failed to open database connection: {e}"),
         })?;
 
-        let sql = "INSERT INTO pgqrs_queues (queue_name) VALUES (?) RETURNING id, queue_name, created_at";
+        let sql =
+            "INSERT INTO pgqrs_queues (queue_name) VALUES (?) RETURNING id, queue_name, created_at";
         let mut rows = conn
             .query(sql, [data.queue_name.clone()])
             .await
@@ -342,12 +343,9 @@ impl QueueTable for TursoQueueTable {
         })?;
 
         let sql = "SELECT id, queue_name, created_at FROM pgqrs_queues ORDER BY created_at DESC";
-        let mut rows = conn
-            .query(sql, ())
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to query queues: {e}"),
-            })?;
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query queues: {e}"),
+        })?;
 
         let mut queues = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -364,12 +362,9 @@ impl QueueTable for TursoQueueTable {
         })?;
 
         let sql = "SELECT COUNT(*) FROM pgqrs_queues";
-        let mut rows = conn
-            .query(sql, ())
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to count queues: {e}"),
-            })?;
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count queues: {e}"),
+        })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -391,11 +386,9 @@ impl QueueTable for TursoQueueTable {
         })?;
 
         let sql = "DELETE FROM pgqrs_queues WHERE id = ?";
-        conn.execute(sql, [id])
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to delete queue: {e}"),
-            })?;
+        conn.execute(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to delete queue: {e}"),
+        })?;
 
         Ok(1) // Turso doesn't directly return affected rows, so we assume 1
     }
@@ -665,11 +658,9 @@ impl MessageTable for TursoMessageTable {
         })?;
 
         let sql = "DELETE FROM pgqrs_messages WHERE id = ?";
-        conn.execute(sql, [id])
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to delete message: {e}"),
-            })?;
+        conn.execute(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to delete message: {e}"),
+        })?;
 
         Ok(1)
     }
@@ -680,9 +671,12 @@ impl MessageTable for TursoMessageTable {
         })?;
 
         let sql = "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE queue_id = ? ORDER BY enqueued_at DESC LIMIT 1000";
-        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to query messages: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [queue_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query messages: {e}"),
+            })?;
 
         let mut messages = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -761,12 +755,12 @@ impl MessageTable for TursoMessageTable {
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let sql = format!("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN ({}) ORDER BY id", placeholders);
 
-        let mut rows = conn
-            .query(sql.as_str(), ids.to_vec())
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to query messages by ids: {e}"),
-            })?;
+        let mut rows =
+            conn.query(sql.as_str(), ids.to_vec())
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Failed to query messages by ids: {e}"),
+                })?;
 
         let mut messages = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -831,16 +825,23 @@ impl MessageTable for TursoMessageTable {
             message: format!("Failed to open database connection: {e}"),
         })?;
 
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!("UPDATE pgqrs_messages SET vt = datetime(vt, '+' || ? || ' seconds') WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id", placeholders);
 
         let mut params = vec![additional_seconds as i64];
         params.extend(message_ids.iter().copied());
         params.push(worker_id);
 
-        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
-            message: format!("Failed to batch extend visibility: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql.as_str(), params)
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to batch extend visibility: {e}"),
+            })?;
 
         let mut extended_ids = std::collections::HashSet::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -870,15 +871,22 @@ impl MessageTable for TursoMessageTable {
             message: format!("Failed to open database connection: {e}"),
         })?;
 
-        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = message_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let sql = format!("UPDATE pgqrs_messages SET vt = datetime('now'), consumer_worker_id = NULL WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id", placeholders);
 
         let mut params = message_ids.to_vec();
         params.push(worker_id);
 
-        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
-            message: format!("Failed to release messages: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql.as_str(), params)
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to release messages: {e}"),
+            })?;
 
         let mut released_ids = std::collections::HashSet::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -915,9 +923,12 @@ impl MessageTable for TursoMessageTable {
             ),
         };
 
-        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
-            message: format!("Failed to count pending messages: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql.as_str(), params)
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count pending messages: {e}"),
+            })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -1168,11 +1179,9 @@ impl WorkerTable for TursoWorkerTable {
         })?;
 
         let sql = "DELETE FROM pgqrs_workers WHERE id = ?";
-        conn.execute(sql, [id])
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to delete worker: {e}"),
-            })?;
+        conn.execute(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to delete worker: {e}"),
+        })?;
 
         Ok(1)
     }
@@ -1183,9 +1192,12 @@ impl WorkerTable for TursoWorkerTable {
         })?;
 
         let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? ORDER BY started_at DESC";
-        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to query workers: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [queue_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query workers: {e}"),
+            })?;
 
         let mut workers = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -1203,12 +1215,12 @@ impl WorkerTable for TursoWorkerTable {
 
         let state_str = state.to_string();
         let sql = "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ? AND status = ?";
-        let mut rows = conn
-            .query(sql, (queue_id, state_str))
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to count workers: {e}"),
-            })?;
+        let mut rows =
+            conn.query(sql, (queue_id, state_str))
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Failed to count workers: {e}"),
+                })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -1258,23 +1270,19 @@ impl WorkerTable for TursoWorkerTable {
         }
     }
 
-    async fn list_for_queue(
-        &self,
-        queue_id: i64,
-        state: WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
+    async fn list_for_queue(&self, queue_id: i64, state: WorkerStatus) -> Result<Vec<WorkerInfo>> {
         let conn = self.db.connect().map_err(|e| Error::Internal {
             message: format!("Failed to open database connection: {e}"),
         })?;
 
         let state_str = state.to_string();
         let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC";
-        let mut rows = conn
-            .query(sql, (queue_id, state_str))
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to query workers: {e}"),
-            })?;
+        let mut rows =
+            conn.query(sql, (queue_id, state_str))
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Failed to query workers: {e}"),
+                })?;
 
         let mut workers = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -1388,12 +1396,12 @@ impl WorkerTable for TursoWorkerTable {
 
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
         let sql = "INSERT INTO pgqrs_workers (hostname, port, queue_id, status) VALUES (?, -1, ?, 'ready') RETURNING id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status";
-        let mut rows = conn
-            .query(sql, (hostname, queue_id))
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to insert ephemeral worker: {e}"),
-            })?;
+        let mut rows =
+            conn.query(sql, (hostname, queue_id))
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Failed to insert ephemeral worker: {e}"),
+                })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch inserted row: {e}"),
@@ -1657,11 +1665,9 @@ impl ArchiveTable for TursoArchiveTable {
         })?;
 
         let sql = "DELETE FROM pgqrs_archive WHERE id = ?";
-        conn.execute(sql, [id])
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to delete archive: {e}"),
-            })?;
+        conn.execute(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to delete archive: {e}"),
+        })?;
 
         Ok(1)
     }
@@ -1672,9 +1678,12 @@ impl ArchiveTable for TursoArchiveTable {
         })?;
 
         let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE queue_id = ? ORDER BY archived_at DESC";
-        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to query archives: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [queue_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query archives: {e}"),
+            })?;
 
         let mut archives = Vec::new();
         while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
@@ -1718,9 +1727,12 @@ impl ArchiveTable for TursoArchiveTable {
         })?;
 
         let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= ? AND consumer_worker_id IS NULL AND dequeued_at IS NULL";
-        let mut rows = conn.query(sql, [max_attempts]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to count DLQ messages: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [max_attempts])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count DLQ messages: {e}"),
+            })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -1769,9 +1781,12 @@ impl ArchiveTable for TursoArchiveTable {
         })?;
 
         let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = ?";
-        let mut rows = conn.query(sql, [worker_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to count archives by worker: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [worker_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count archives by worker: {e}"),
+            })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -1809,9 +1824,12 @@ impl ArchiveTable for TursoArchiveTable {
 
         // Get archive
         let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE id = ?";
-        let mut rows = conn.query(sql, [msg_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to query archive: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [msg_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query archive: {e}"),
+            })?;
 
         let archive = if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -1910,8 +1928,10 @@ impl ArchiveTable for TursoArchiveTable {
                 .ok()
                 .and_then(|v| v.as_integer().copied().map(|i| i as i32))
                 .unwrap_or(0);
-            let dequeued_at_str: Option<String> =
-                row.get_value(6).ok().and_then(|v| v.as_text().map(|s| s.to_string()));
+            let dequeued_at_str: Option<String> = row
+                .get_value(6)
+                .ok()
+                .and_then(|v| v.as_text().map(|s| s.to_string()));
             let dequeued_at = dequeued_at_str.and_then(|s| {
                 chrono::DateTime::parse_from_rfc3339(&s)
                     .ok()
@@ -1945,9 +1965,12 @@ impl ArchiveTable for TursoArchiveTable {
         })?;
 
         let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = ?";
-        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
-            message: format!("Failed to count archives for queue: {e}"),
-        })?;
+        let mut rows = conn
+            .query(sql, [queue_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count archives for queue: {e}"),
+            })?;
 
         if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
             message: format!("Failed to fetch row: {e}"),
@@ -2068,7 +2091,10 @@ impl WorkflowTable for TursoWorkflowTable {
 
         let sql = "INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at) VALUES (?, 'PENDING', ?, ?, ?) RETURNING workflow_id, name, status, input, output, error, created_at, updated_at, executor_id";
         let mut rows = conn
-            .query(sql, (data.name.clone(), input_str, now_str.clone(), now_str))
+            .query(
+                sql,
+                (data.name.clone(), input_str, now_str.clone(), now_str),
+            )
             .await
             .map_err(|e| Error::Internal {
                 message: format!("Failed to insert workflow: {e}"),
@@ -2155,11 +2181,9 @@ impl WorkflowTable for TursoWorkflowTable {
         })?;
 
         let sql = "DELETE FROM pgqrs_workflows WHERE workflow_id = ?";
-        conn.execute(sql, [id])
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("Failed to delete workflow: {e}"),
-            })?;
+        conn.execute(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to delete workflow: {e}"),
+        })?;
 
         Ok(1)
     }
@@ -2722,5 +2746,494 @@ impl Workflow for TursoWorkflowHandle {
         Err(Error::Internal {
             message: "turso workflow not implemented".to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{NewMessage, NewWorker};
+
+    async fn create_test_db() -> Arc<Database> {
+        let builder = Builder::new_local(":memory:");
+        let db = builder.build().await.expect("Failed to create test db");
+        
+        // Run migrations to set up schema
+        let conn = db.connect().expect("Failed to connect");
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_queues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+            (),
+        )
+        .await
+        .expect("Failed to create queues table");
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_id INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                read_ct INTEGER NOT NULL DEFAULT 0,
+                enqueued_at TEXT NOT NULL,
+                vt TEXT,
+                dequeued_at TEXT,
+                producer_worker_id INTEGER,
+                consumer_worker_id INTEGER,
+                FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
+            );
+            "#,
+            (),
+        )
+        .await
+        .expect("Failed to create messages table");
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_workers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                queue_id INTEGER,
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+                shutdown_at TEXT,
+                status TEXT NOT NULL DEFAULT 'ready',
+                UNIQUE(hostname, port)
+            );
+            "#,
+            (),
+        )
+        .await
+        .expect("Failed to create workers table");
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_archive (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_msg_id INTEGER NOT NULL,
+                queue_id INTEGER NOT NULL,
+                producer_worker_id INTEGER,
+                consumer_worker_id INTEGER,
+                payload TEXT NOT NULL,
+                enqueued_at TEXT NOT NULL,
+                vt TEXT,
+                read_ct INTEGER NOT NULL DEFAULT 0,
+                dequeued_at TEXT,
+                archived_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+            (),
+        )
+        .await
+        .expect("Failed to create archive table");
+
+        conn.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_workflows (
+                workflow_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                input TEXT,
+                output TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                executor_id TEXT
+            );
+            "#,
+            (),
+        )
+        .await
+        .expect("Failed to create workflows table");
+
+        Arc::new(db)
+    }
+
+    #[tokio::test]
+    async fn test_queue_table_crud() {
+        let db = create_test_db().await;
+        let table = TursoQueueTable::new(Arc::clone(&db));
+
+        // Insert
+        let queue = table
+            .insert(NewQueue {
+                queue_name: "test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to insert queue");
+        assert_eq!(queue.queue_name, "test_queue");
+        assert!(queue.id > 0);
+
+        // Get by ID
+        let fetched = table.get(queue.id).await.expect("Failed to get queue");
+        assert_eq!(fetched.queue_name, "test_queue");
+
+        // Get by name
+        let by_name = table
+            .get_by_name("test_queue")
+            .await
+            .expect("Failed to get queue by name");
+        assert_eq!(by_name.id, queue.id);
+
+        // List
+        let queues = table.list().await.expect("Failed to list queues");
+        assert!(queues.len() >= 1);
+
+        // Count
+        let count = table.count().await.expect("Failed to count queues");
+        assert!(count >= 1);
+
+        // Exists
+        let exists = table
+            .exists("test_queue")
+            .await
+            .expect("Failed to check exists");
+        assert!(exists);
+
+        let not_exists = table
+            .exists("nonexistent")
+            .await
+            .expect("Failed to check exists");
+        assert!(!not_exists);
+
+        // Delete by name
+        let deleted = table
+            .delete_by_name("test_queue")
+            .await
+            .expect("Failed to delete by name");
+        assert_eq!(deleted, 1);
+
+        let exists_after = table
+            .exists("test_queue")
+            .await
+            .expect("Failed to check exists");
+        assert!(!exists_after);
+    }
+
+    #[tokio::test]
+    async fn test_message_table_crud() {
+        let db = create_test_db().await;
+        let queue_table = TursoQueueTable::new(Arc::clone(&db));
+        let msg_table = TursoMessageTable::new(Arc::clone(&db));
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "msg_test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({"test": "data"});
+
+        // Insert message
+        let msg = msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: payload.clone(),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await
+            .expect("Failed to insert message");
+        assert_eq!(msg.payload, payload);
+        assert_eq!(msg.queue_id, queue.id);
+
+        // Get
+        let fetched = msg_table.get(msg.id).await.expect("Failed to get message");
+        assert_eq!(fetched.id, msg.id);
+        assert_eq!(fetched.payload, payload);
+
+        // List
+        let messages = msg_table.list().await.expect("Failed to list messages");
+        assert!(messages.len() >= 1);
+
+        // Count
+        let count = msg_table.count().await.expect("Failed to count messages");
+        assert!(count >= 1);
+
+        // Filter by FK
+        let filtered = msg_table
+            .filter_by_fk(queue.id)
+            .await
+            .expect("Failed to filter by queue");
+        assert!(filtered.len() >= 1);
+
+        // Update visibility timeout
+        let new_vt = now + chrono::Duration::seconds(60);
+        msg_table
+            .update_visibility_timeout(msg.id, new_vt)
+            .await
+            .expect("Failed to update vt");
+
+        // Count pending
+        let pending = msg_table
+            .count_pending(queue.id)
+            .await
+            .expect("Failed to count pending");
+        assert!(pending >= 0);
+
+        // Delete
+        let deleted = msg_table.delete(msg.id).await.expect("Failed to delete");
+        assert_eq!(deleted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_worker_table_crud() {
+        let db = create_test_db().await;
+        let queue_table = TursoQueueTable::new(Arc::clone(&db));
+        let worker_table = TursoWorkerTable::new(Arc::clone(&db));
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "worker_test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        // Insert worker
+        let worker = worker_table
+            .insert(NewWorker {
+                hostname: "test-host".to_string(),
+                port: 8080,
+                queue_id: Some(queue.id),
+            })
+            .await
+            .expect("Failed to insert worker");
+        assert_eq!(worker.hostname, "test-host");
+        assert_eq!(worker.port, 8080);
+        assert_eq!(worker.status, WorkerStatus::Ready);
+
+        // Get
+        let fetched = worker_table
+            .get(worker.id)
+            .await
+            .expect("Failed to get worker");
+        assert_eq!(fetched.hostname, "test-host");
+
+        // List
+        let workers = worker_table.list().await.expect("Failed to list workers");
+        assert!(workers.len() >= 1);
+
+        // Count
+        let count = worker_table.count().await.expect("Failed to count workers");
+        assert!(count >= 1);
+
+        // Filter by FK
+        let filtered = worker_table
+            .filter_by_fk(queue.id)
+            .await
+            .expect("Failed to filter by queue");
+        assert!(filtered.len() >= 1);
+
+        // Count for queue
+        let queue_count = worker_table
+            .count_for_queue(queue.id, WorkerStatus::Ready)
+            .await
+            .expect("Failed to count for queue");
+        assert!(queue_count >= 1);
+
+        // List for queue
+        let queue_workers = worker_table
+            .list_for_queue(queue.id, WorkerStatus::Ready)
+            .await
+            .expect("Failed to list for queue");
+        assert!(queue_workers.len() >= 1);
+
+        // Register ephemeral
+        let ephemeral = worker_table
+            .register_ephemeral(Some(queue.id))
+            .await
+            .expect("Failed to register ephemeral");
+        assert!(ephemeral.hostname.starts_with("__ephemeral__"));
+        assert_eq!(ephemeral.port, -1);
+
+        // Delete
+        let deleted = worker_table
+            .delete(worker.id)
+            .await
+            .expect("Failed to delete");
+        assert_eq!(deleted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_archive_table_crud() {
+        let db = create_test_db().await;
+        let queue_table = TursoQueueTable::new(Arc::clone(&db));
+        let archive_table = TursoArchiveTable::new(Arc::clone(&db));
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "archive_test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({"archived": "message"});
+
+        // Insert archived message
+        let archive = archive_table
+            .insert(NewArchivedMessage {
+                original_msg_id: 123,
+                queue_id: queue.id,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+                payload: payload.clone(),
+                enqueued_at: now,
+                vt: now,
+                read_ct: 3,
+                dequeued_at: None, // DLQ messages should not have dequeued_at
+            })
+            .await
+            .expect("Failed to insert archive");
+        assert_eq!(archive.payload, payload);
+        assert_eq!(archive.read_ct, 3);
+
+        // Get
+        let fetched = archive_table
+            .get(archive.id)
+            .await
+            .expect("Failed to get archive");
+        assert_eq!(fetched.original_msg_id, 123);
+
+        // List
+        let archives = archive_table.list().await.expect("Failed to list archives");
+        assert!(archives.len() >= 1);
+
+        // Count
+        let count = archive_table
+            .count()
+            .await
+            .expect("Failed to count archives");
+        assert!(count >= 1);
+
+        // Filter by FK
+        let filtered = archive_table
+            .filter_by_fk(queue.id)
+            .await
+            .expect("Failed to filter by queue");
+        assert!(filtered.len() >= 1);
+
+        // Count for queue
+        let queue_count = archive_table
+            .count_for_queue(queue.id)
+            .await
+            .expect("Failed to count for queue");
+        assert!(queue_count >= 1);
+
+        // DLQ count (read_ct >= 3)
+        let dlq = archive_table
+            .dlq_count(3)
+            .await
+            .expect("Failed to count DLQ");
+        assert!(dlq >= 1);
+
+        // Delete
+        let deleted = archive_table
+            .delete(archive.id)
+            .await
+            .expect("Failed to delete");
+        assert_eq!(deleted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_workflow_table_crud() {
+        let db = create_test_db().await;
+        let workflow_table = TursoWorkflowTable::new(Arc::clone(&db));
+
+        let input = Some(serde_json::json!({"step": 1}));
+
+        // Insert workflow
+        let workflow = workflow_table
+            .insert(NewWorkflow {
+                name: "test_workflow".to_string(),
+                input: input.clone(),
+            })
+            .await
+            .expect("Failed to insert workflow");
+        assert_eq!(workflow.name, "test_workflow");
+        assert_eq!(workflow.status, WorkflowStatus::Pending);
+        assert_eq!(workflow.input, input);
+
+        // Get
+        let fetched = workflow_table
+            .get(workflow.workflow_id)
+            .await
+            .expect("Failed to get workflow");
+        assert_eq!(fetched.name, "test_workflow");
+
+        // List
+        let workflows = workflow_table
+            .list()
+            .await
+            .expect("Failed to list workflows");
+        assert!(workflows.len() >= 1);
+
+        // Count
+        let count = workflow_table
+            .count()
+            .await
+            .expect("Failed to count workflows");
+        assert!(count >= 1);
+
+        // Delete
+        let deleted = workflow_table
+            .delete(workflow.workflow_id)
+            .await
+            .expect("Failed to delete");
+        assert_eq!(deleted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_batch_insert_messages() {
+        let db = create_test_db().await;
+        let queue_table = TursoQueueTable::new(Arc::clone(&db));
+        let msg_table = TursoMessageTable::new(Arc::clone(&db));
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "batch_test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let payloads = vec![
+            serde_json::json!({"msg": 1}),
+            serde_json::json!({"msg": 2}),
+            serde_json::json!({"msg": 3}),
+        ];
+
+        let now = chrono::Utc::now();
+        let params = crate::types::BatchInsertParams {
+            read_ct: 0,
+            enqueued_at: now,
+            vt: now,
+            producer_worker_id: None,
+            consumer_worker_id: None,
+        };
+
+        // Batch insert
+        let ids = msg_table
+            .batch_insert(queue.id, &payloads, params)
+            .await
+            .expect("Failed to batch insert");
+        assert_eq!(ids.len(), 3);
+
+        // Get by IDs
+        let messages = msg_table
+            .get_by_ids(&ids)
+            .await
+            .expect("Failed to get by ids");
+        assert_eq!(messages.len(), 3);
     }
 }

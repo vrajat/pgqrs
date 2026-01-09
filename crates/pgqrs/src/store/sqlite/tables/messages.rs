@@ -455,3 +455,160 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{MessageTable, QueueTable};
+    use crate::store::sqlite::tables::queues::SqliteQueueTable;
+    use crate::types::{BatchInsertParams, NewMessage, NewQueue};
+
+    async fn create_test_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create pool");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_queues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create queues table");
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS pgqrs_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_id INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                read_ct INTEGER NOT NULL DEFAULT 0,
+                enqueued_at TEXT NOT NULL,
+                vt TEXT,
+                dequeued_at TEXT,
+                producer_worker_id INTEGER,
+                consumer_worker_id INTEGER,
+                FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create messages table");
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_message_insert_and_get() {
+        let pool = create_test_pool().await;
+        let queue_table = SqliteQueueTable::new(pool.clone());
+        let msg_table = SqliteMessageTable::new(pool);
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({"test": "data"});
+
+        let msg = msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: payload.clone(),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await
+            .expect("Failed to insert message");
+
+        assert_eq!(msg.payload, payload);
+        assert_eq!(msg.queue_id, queue.id);
+
+        let fetched = msg_table.get(msg.id).await.expect("Failed to get message");
+        assert_eq!(fetched.id, msg.id);
+    }
+
+    #[tokio::test]
+    async fn test_message_list_and_count() {
+        let pool = create_test_pool().await;
+        let queue_table = SqliteQueueTable::new(pool.clone());
+        let msg_table = SqliteMessageTable::new(pool);
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let now = chrono::Utc::now();
+
+        msg_table
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload: serde_json::json!({"msg": 1}),
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await
+            .expect("Failed to insert");
+
+        let messages = msg_table.list().await.expect("Failed to list");
+        assert!(messages.len() >= 1);
+
+        let count = msg_table.count().await.expect("Failed to count");
+        assert!(count >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_message_batch_insert() {
+        let pool = create_test_pool().await;
+        let queue_table = SqliteQueueTable::new(pool.clone());
+        let msg_table = SqliteMessageTable::new(pool);
+
+        let queue = queue_table
+            .insert(NewQueue {
+                queue_name: "batch_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
+        let payloads = vec![
+            serde_json::json!({"msg": 1}),
+            serde_json::json!({"msg": 2}),
+            serde_json::json!({"msg": 3}),
+        ];
+
+        let now = chrono::Utc::now();
+        let params = BatchInsertParams {
+            read_ct: 0,
+            enqueued_at: now,
+            vt: now,
+            producer_worker_id: None,
+            consumer_worker_id: None,
+        };
+
+        let ids = msg_table
+            .batch_insert(queue.id, &payloads, params)
+            .await
+            .expect("Failed to batch insert");
+
+        assert_eq!(ids.len(), 3);
+    }
+}
+
