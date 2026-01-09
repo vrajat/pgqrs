@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use turso::{Builder, Database};
+use turso::{Builder, Connection, Database, Value};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -60,6 +60,12 @@ impl TursoStore {
             message: format!("turso backend not yet implemented: {what}"),
         })
     }
+
+    fn connect(&self) -> Result<Connection> {
+        self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open Turso connection: {e}"),
+        })
+    }
 }
 
 #[async_trait]
@@ -68,27 +74,73 @@ impl Store for TursoStore {
     type Db = sqlx::Sqlite;
 
     async fn execute_raw(&self, _sql: &str) -> Result<()> {
-        self.not_implemented("execute_raw")
+        let conn = self.connect()?;
+        conn.execute(_sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Turso execute failed: {e}"),
+        })?;
+        Ok(())
     }
 
     async fn execute_raw_with_i64(&self, _sql: &str, _param: i64) -> Result<()> {
-        self.not_implemented("execute_raw_with_i64")
+        let conn = self.connect()?;
+        conn.execute(_sql, [_param])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Turso execute failed: {e}"),
+            })?;
+        Ok(())
     }
 
     async fn execute_raw_with_two_i64(&self, _sql: &str, _param1: i64, _param2: i64) -> Result<()> {
-        self.not_implemented("execute_raw_with_two_i64")
+        let conn = self.connect()?;
+        conn.execute(_sql, [_param1, _param2])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Turso execute failed: {e}"),
+            })?;
+        Ok(())
     }
 
     async fn query_int(&self, _sql: &str) -> Result<i64> {
-        self.not_implemented("query_int")
+        let conn = self.connect()?;
+        let mut rows = conn.query(_sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Turso query failed: {e}"),
+        })?;
+        match rows.next().await {
+            Ok(Some(row)) => {
+                let v: Value = row.get_value(0).map_err(|e| Error::Internal {
+                    message: format!("Turso value get failed: {e}"),
+                })?;
+                Ok(*v.as_integer().unwrap_or(&0))
+            }
+            Ok(None) => Ok(0),
+            Err(e) => Err(Error::Internal {
+                message: format!("Turso row read failed: {e}"),
+            }),
+        }
     }
 
     async fn query_string(&self, _sql: &str) -> Result<String> {
-        self.not_implemented("query_string")
+        let conn = self.connect()?;
+        let mut rows = conn.query(_sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Turso query failed: {e}"),
+        })?;
+        match rows.next().await {
+            Ok(Some(row)) => {
+                let v: Value = row.get_value(0).map_err(|e| Error::Internal {
+                    message: format!("Turso value get failed: {e}"),
+                })?;
+                Ok(v.as_text().cloned().unwrap_or_default())
+            }
+            Ok(None) => Ok(String::new()),
+            Err(e) => Err(Error::Internal {
+                message: format!("Turso row read failed: {e}"),
+            }),
+        }
     }
 
     async fn query_bool(&self, _sql: &str) -> Result<bool> {
-        self.not_implemented("query_bool")
+        Ok(self.query_int(_sql).await? != 0)
     }
 
     fn config(&self) -> &Config {
@@ -628,14 +680,14 @@ impl Worker for TursoWorkerHandle {
 
 struct TursoAdmin {
     worker: TursoWorkerHandle,
-    _store: TursoStore,
+    store: TursoStore,
 }
 
 impl TursoAdmin {
     fn new(store: TursoStore) -> Self {
         Self {
             worker: TursoWorkerHandle { id: 0 },
-            _store: store,
+            store,
         }
     }
 }
@@ -674,44 +726,97 @@ impl Worker for TursoAdmin {
 #[async_trait]
 impl Admin for TursoAdmin {
     async fn install(&self) -> Result<()> {
-        Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
-        })
+        let conn = self.store.connect()?;
+        // Execute SQLite-compatible migrations for Turso
+        const Q1: &str = include_str!("../../../migrations/sqlite/01_create_queues.sql");
+        const Q2: &str = include_str!("../../../migrations/sqlite/02_create_workers.sql");
+        const Q3: &str = include_str!("../../../migrations/sqlite/03_create_messages.sql");
+        const Q4: &str = include_str!("../../../migrations/sqlite/04_create_archive.sql");
+        const Q5: &str = include_str!("../../../migrations/sqlite/05_create_workflows.sql");
+
+        for sql in [Q1, Q2, Q3, Q4, Q5] {
+            conn.execute(sql, ()).await.map_err(|e| Error::Internal {
+                message: format!("Turso migration failed: {e}"),
+            })?;
+        }
+        Ok(())
     }
 
     async fn verify(&self) -> Result<()> {
-        Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
-        })
+        let conn = self.store.connect()?;
+
+        let required_tables = [
+            ("pgqrs_queues", "Queue repository table"),
+            ("pgqrs_workers", "Worker repository table"),
+            ("pgqrs_messages", "Unified messages table"),
+            ("pgqrs_archive", "Unified archive table"),
+            ("pgqrs_workflows", "Workflow table"),
+            ("pgqrs_workflow_steps", "Workflow steps table"),
+        ];
+
+        for (table_name, description) in &required_tables {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [*table_name],
+                )
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Turso verify query failed: {e}"),
+                })?;
+
+            let exists = match rows.next().await {
+                Ok(Some(row)) => {
+                    let v = row.get_value(0).map_err(|e| Error::Internal {
+                        message: format!("Turso value get failed: {e}"),
+                    })?;
+                    *v.as_integer().unwrap_or(&0) > 0
+                }
+                Ok(None) => false,
+                Err(e) => {
+                    return Err(Error::Internal {
+                        message: format!("Turso verify row failed: {e}"),
+                    })
+                }
+            };
+
+            if !exists {
+                return Err(Error::SchemaValidation {
+                    message: format!("{} ('{}') does not exist", description, table_name),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     async fn register(&mut self, _hostname: String, _port: i32) -> Result<WorkerInfo> {
         Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
+            message: "turso admin register not yet implemented".to_string(),
         })
     }
 
     async fn create_queue(&self, _name: &str) -> Result<QueueInfo> {
         Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
+            message: "turso admin create_queue not yet implemented".to_string(),
         })
     }
 
     async fn get_queue(&self, _name: &str) -> Result<QueueInfo> {
         Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
+            message: "turso admin get_queue not yet implemented".to_string(),
         })
     }
 
     async fn delete_queue(&self, _queue_info: &QueueInfo) -> Result<()> {
         Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
+            message: "turso admin delete_queue not yet implemented".to_string(),
         })
     }
 
     async fn purge_queue(&self, _name: &str) -> Result<()> {
         Err(Error::Internal {
-            message: "turso admin not implemented".to_string(),
+            message: "turso admin purge_queue not yet implemented".to_string(),
         })
     }
 
