@@ -17,7 +17,7 @@ use crate::store::{
 };
 use crate::types::{
     ArchivedMessage, NewArchivedMessage, NewQueue, NewWorkflow, QueueInfo, QueueMessage,
-    WorkerInfo, WorkerStatus, WorkflowRecord,
+    WorkerInfo, WorkerStatus, WorkflowRecord, WorkflowStatus,
 };
 
 #[derive(Clone, Debug)]
@@ -232,98 +232,254 @@ impl Store for TursoStore {
     }
 }
 
-#[derive(Clone, Default, Debug)]
-struct TursoQueueTable;
+#[derive(Clone, Debug)]
+struct TursoQueueTable {
+    _marker: std::marker::PhantomData<()>,
+}
 
-#[async_trait]
-impl QueueTable for TursoQueueTable {
-    async fn insert(&self, _data: NewQueue) -> Result<QueueInfo> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
+impl Default for TursoQueueTable {
+    fn default() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
     }
+}
 
-    async fn get(&self, _id: i64) -> Result<QueueInfo> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
+impl TursoQueueTable {
+    fn map_row(row: &turso::Row) -> Result<QueueInfo> {
+        let id: i64 = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "Failed to extract queue id from row".to_string(),
+            })?;
+        let queue_name: String = row
+            .get_value(1)
+            .ok()
+            .and_then(|v| v.as_text().cloned())
+            .ok_or_else(|| Error::Internal {
+                message: "Failed to extract queue name from row".to_string(),
+            })?;
+        let created_at_str: String = row
+            .get_value(2)
+            .ok()
+            .and_then(|v| v.as_text().cloned())
+            .ok_or_else(|| Error::Internal {
+                message: "Failed to extract created_at from row".to_string(),
+            })?;
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+            .unwrap_or_else(|_| {
+                chrono::DateTime::parse_from_rfc2822(&created_at_str).unwrap_or_else(|_| {
+                    chrono::Local::now().with_timezone(&chrono::FixedOffset::east_opt(0).unwrap())
+                })
+            })
+            .with_timezone(&chrono::Utc);
 
-    async fn list(&self) -> Result<Vec<QueueInfo>> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
-
-    async fn count(&self) -> Result<i64> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
-
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
-
-    async fn get_by_name(&self, _name: &str) -> Result<QueueInfo> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
-
-    async fn exists(&self, _name: &str) -> Result<bool> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
-        })
-    }
-
-    async fn delete_by_name(&self, _name: &str) -> Result<u64> {
-        Err(Error::Internal {
-            message: "turso queue table not implemented".to_string(),
+        Ok(QueueInfo {
+            id,
+            queue_name,
+            created_at,
         })
     }
 }
 
-#[derive(Clone, Default, Debug)]
-struct TursoMessageTable;
-
 #[async_trait]
-impl MessageTable for TursoMessageTable {
-    async fn insert(&self, _data: crate::types::NewMessage) -> Result<QueueMessage> {
+impl QueueTable for TursoQueueTable {
+    async fn insert(&self, _data: NewQueue) -> Result<QueueInfo> {
+        // TODO: Phase 2.1 - implement Turso queue insert
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso queue insert not yet implemented".to_string(),
         })
     }
 
-    async fn get(&self, _id: i64) -> Result<QueueMessage> {
+    async fn get(&self, _id: i64) -> Result<QueueInfo> {
+        // TODO: Phase 2.1 - implement Turso queue get
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso queue get not yet implemented".to_string(),
         })
     }
 
-    async fn list(&self) -> Result<Vec<QueueMessage>> {
+    async fn list(&self) -> Result<Vec<QueueInfo>> {
+        // TODO: Phase 2.1 - implement Turso queue list
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso queue list not yet implemented".to_string(),
         })
     }
 
     async fn count(&self) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso queue count
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso queue count not yet implemented".to_string(),
         })
     }
 
     async fn delete(&self, _id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso queue delete
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso queue delete not yet implemented".to_string(),
+        })
+    }
+
+    async fn get_by_name(&self, _name: &str) -> Result<QueueInfo> {
+        // TODO: Phase 2.1 - implement Turso queue get_by_name
+        Err(Error::Internal {
+            message: "turso queue get_by_name not yet implemented".to_string(),
+        })
+    }
+
+    async fn exists(&self, _name: &str) -> Result<bool> {
+        // TODO: Phase 2.1 - implement Turso queue exists
+        Err(Error::Internal {
+            message: "turso queue exists not yet implemented".to_string(),
+        })
+    }
+
+    async fn delete_by_name(&self, _name: &str) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso queue delete_by_name
+        Err(Error::Internal {
+            message: "turso queue delete_by_name not yet implemented".to_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TursoMessageTable {
+    _marker: std::marker::PhantomData<()>,
+}
+
+impl Default for TursoMessageTable {
+    fn default() -> Self {
+        TursoMessageTable {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl TursoMessageTable {
+    fn map_row(row: &turso::Row) -> Result<QueueMessage> {
+        let id: i64 = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid queue_id in message row".to_string(),
+            })?;
+        let queue_id: i64 = row
+            .get_value(1)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid queue_id in message row".to_string(),
+            })?;
+        let payload_str: String = row
+            .get_value(2)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid payload in message row".to_string(),
+            })?;
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_str).unwrap_or(serde_json::json!({}));
+        let vt_str: String = row
+            .get_value(3)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid vt in message row".to_string(),
+            })?;
+        let vt = chrono::DateTime::parse_from_rfc3339(&vt_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&vt_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let enqueued_at_str: String = row
+            .get_value(4)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid enqueued_at in message row".to_string(),
+            })?;
+        let enqueued_at = chrono::DateTime::parse_from_rfc3339(&enqueued_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&enqueued_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let read_ct: i32 = row
+            .get_value(5)
+            .ok()
+            .and_then(|v| v.as_integer().copied().map(|i| i as i32))
+            .unwrap_or(0);
+        let dequeued_at_str: Option<String> = row
+            .get_value(6)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let dequeued_at = dequeued_at_str.and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .or_else(|| chrono::DateTime::parse_from_rfc2822(&s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+        let producer_worker_id: Option<i64> =
+            row.get_value(7).ok().and_then(|v| v.as_integer().copied());
+        let consumer_worker_id: Option<i64> =
+            row.get_value(8).ok().and_then(|v| v.as_integer().copied());
+
+        Ok(QueueMessage {
+            id,
+            queue_id,
+            payload,
+            vt,
+            enqueued_at,
+            read_ct,
+            dequeued_at,
+            producer_worker_id,
+            consumer_worker_id,
+        })
+    }
+}
+
+#[async_trait]
+impl MessageTable for TursoMessageTable {
+    async fn insert(&self, _data: crate::types::NewMessage) -> Result<QueueMessage> {
+        // TODO: Phase 2.1 - implement Turso message insert
+        Err(Error::Internal {
+            message: "turso message insert not yet implemented".to_string(),
+        })
+    }
+
+    async fn get(&self, _id: i64) -> Result<QueueMessage> {
+        // TODO: Phase 2.1 - implement Turso message get
+        Err(Error::Internal {
+            message: "turso message get not yet implemented".to_string(),
+        })
+    }
+
+    async fn list(&self) -> Result<Vec<QueueMessage>> {
+        // TODO: Phase 2.1 - implement Turso message list
+        Err(Error::Internal {
+            message: "turso message list not yet implemented".to_string(),
+        })
+    }
+
+    async fn count(&self) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso message count
+        Err(Error::Internal {
+            message: "turso message count not yet implemented".to_string(),
+        })
+    }
+
+    async fn delete(&self, _id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso message delete
+        Err(Error::Internal {
+            message: "turso message delete not yet implemented".to_string(),
         })
     }
 
     async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<QueueMessage>> {
+        // TODO: Phase 2.1 - implement Turso message filter_by_fk
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message filter_by_fk not yet implemented".to_string(),
         })
     }
 
@@ -333,14 +489,16 @@ impl MessageTable for TursoMessageTable {
         _payloads: &[serde_json::Value],
         _params: crate::types::BatchInsertParams,
     ) -> Result<Vec<i64>> {
+        // TODO: Phase 2.1 - implement Turso message batch_insert
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message batch_insert not yet implemented".to_string(),
         })
     }
 
     async fn get_by_ids(&self, _ids: &[i64]) -> Result<Vec<QueueMessage>> {
+        // TODO: Phase 2.1 - implement Turso message get_by_ids
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message get_by_ids not yet implemented".to_string(),
         })
     }
 
@@ -349,8 +507,9 @@ impl MessageTable for TursoMessageTable {
         _id: i64,
         _vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso message update_visibility_timeout
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message update_visibility_timeout not yet implemented".to_string(),
         })
     }
 
@@ -360,8 +519,9 @@ impl MessageTable for TursoMessageTable {
         _worker_id: i64,
         _additional_seconds: u32,
     ) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso message extend_visibility
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message extend_visibility not yet implemented".to_string(),
         })
     }
 
@@ -371,8 +531,9 @@ impl MessageTable for TursoMessageTable {
         _worker_id: i64,
         _additional_seconds: u32,
     ) -> Result<Vec<bool>> {
+        // TODO: Phase 2.1 - implement Turso message extend_visibility_batch
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message extend_visibility_batch not yet implemented".to_string(),
         })
     }
 
@@ -381,74 +542,173 @@ impl MessageTable for TursoMessageTable {
         _message_ids: &[i64],
         _worker_id: i64,
     ) -> Result<Vec<bool>> {
+        // TODO: Phase 2.1 - implement Turso message release_messages_by_ids
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message release_messages_by_ids not yet implemented".to_string(),
         })
     }
 
     async fn count_pending(&self, _queue_id: i64) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso message count_pending
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message count_pending not yet implemented".to_string(),
         })
     }
 
     async fn count_pending_filtered(&self, _queue_id: i64, _worker_id: Option<i64>) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso message count_pending_filtered
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message count_pending_filtered not yet implemented".to_string(),
         })
     }
 
     async fn delete_by_ids(&self, _ids: &[i64]) -> Result<Vec<bool>> {
+        // TODO: Phase 2.1 - implement Turso message delete_by_ids
         Err(Error::Internal {
-            message: "turso message table not implemented".to_string(),
+            message: "turso message delete_by_ids not yet implemented".to_string(),
         })
     }
 }
 
-#[derive(Clone, Default, Debug)]
-struct TursoWorkerTable;
+#[derive(Clone, Debug)]
+struct TursoWorkerTable {
+    _marker: std::marker::PhantomData<()>,
+}
+
+impl Default for TursoWorkerTable {
+    fn default() -> Self {
+        TursoWorkerTable {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl TursoWorkerTable {
+    fn map_row(row: &turso::Row) -> Result<WorkerInfo> {
+        let id: i64 = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid id in worker row".to_string(),
+            })?;
+        let queue_id: Option<i64> = row.get_value(1).ok().and_then(|v| v.as_integer().copied());
+        let hostname: String = row
+            .get_value(2)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid hostname in worker row".to_string(),
+            })?;
+        let port: i32 = row
+            .get_value(3)
+            .ok()
+            .and_then(|v| v.as_integer().copied().map(|i| i as i32))
+            .unwrap_or(0);
+        let started_at_str: String = row
+            .get_value(4)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid started_at in worker row".to_string(),
+            })?;
+        let started_at = chrono::DateTime::parse_from_rfc3339(&started_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&started_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let heartbeat_at_str: String = row
+            .get_value(5)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid heartbeat_at in worker row".to_string(),
+            })?;
+        let heartbeat_at = chrono::DateTime::parse_from_rfc3339(&heartbeat_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&heartbeat_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let shutdown_at_str: Option<String> = row
+            .get_value(6)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let shutdown_at = shutdown_at_str.and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .or_else(|| chrono::DateTime::parse_from_rfc2822(&s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+        let status_str: String = row
+            .get_value(7)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .unwrap_or_else(|| "ready".to_string());
+        let status = status_str
+            .parse::<WorkerStatus>()
+            .unwrap_or(WorkerStatus::Ready);
+
+        Ok(WorkerInfo {
+            id,
+            hostname,
+            port,
+            queue_id,
+            started_at,
+            heartbeat_at,
+            shutdown_at,
+            status,
+        })
+    }
+}
 
 #[async_trait]
 impl WorkerTable for TursoWorkerTable {
     async fn insert(&self, _data: crate::types::NewWorker) -> Result<WorkerInfo> {
+        // TODO: Phase 2.1 - implement Turso worker insert
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker insert not yet implemented".to_string(),
         })
     }
 
     async fn get(&self, _id: i64) -> Result<WorkerInfo> {
+        // TODO: Phase 2.1 - implement Turso worker get
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker get not yet implemented".to_string(),
         })
     }
 
     async fn list(&self) -> Result<Vec<WorkerInfo>> {
+        // TODO: Phase 2.1 - implement Turso worker list
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker list not yet implemented".to_string(),
         })
     }
 
     async fn count(&self) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso worker count
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker count not yet implemented".to_string(),
         })
     }
 
     async fn delete(&self, _id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso worker delete
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker delete not yet implemented".to_string(),
         })
     }
 
     async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<WorkerInfo>> {
+        // TODO: Phase 2.1 - implement Turso worker filter_by_fk
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker filter_by_fk not yet implemented".to_string(),
         })
     }
 
     async fn count_for_queue(&self, _queue_id: i64, _state: WorkerStatus) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso worker count_for_queue
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker count_for_queue not yet implemented".to_string(),
         })
     }
 
@@ -457,8 +717,9 @@ impl WorkerTable for TursoWorkerTable {
         _queue_id: i64,
         _older_than: chrono::Duration,
     ) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso worker count_zombies_for_queue
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker count_zombies_for_queue not yet implemented".to_string(),
         })
     }
 
@@ -467,8 +728,9 @@ impl WorkerTable for TursoWorkerTable {
         _queue_id: i64,
         _state: WorkerStatus,
     ) -> Result<Vec<WorkerInfo>> {
+        // TODO: Phase 2.1 - implement Turso worker list_for_queue
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker list_for_queue not yet implemented".to_string(),
         })
     }
 
@@ -477,8 +739,9 @@ impl WorkerTable for TursoWorkerTable {
         _queue_id: i64,
         _older_than: chrono::Duration,
     ) -> Result<Vec<WorkerInfo>> {
+        // TODO: Phase 2.1 - implement Turso worker list_zombies_for_queue
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker list_zombies_for_queue not yet implemented".to_string(),
         })
     }
 
@@ -488,56 +751,178 @@ impl WorkerTable for TursoWorkerTable {
         _hostname: &str,
         _port: i32,
     ) -> Result<WorkerInfo> {
+        // TODO: Phase 2.1 - implement Turso worker register
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker register not yet implemented".to_string(),
         })
     }
 
     async fn register_ephemeral(&self, _queue_id: Option<i64>) -> Result<WorkerInfo> {
+        // TODO: Phase 2.1 - implement Turso worker register_ephemeral
         Err(Error::Internal {
-            message: "turso worker table not implemented".to_string(),
+            message: "turso worker register_ephemeral not yet implemented".to_string(),
         })
     }
 }
 
-#[derive(Clone, Default, Debug)]
-struct TursoArchiveTable;
+#[derive(Clone, Debug)]
+struct TursoArchiveTable {
+    _marker: std::marker::PhantomData<()>,
+}
+
+impl Default for TursoArchiveTable {
+    fn default() -> Self {
+        TursoArchiveTable {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl TursoArchiveTable {
+    fn map_row(row: &turso::Row) -> Result<ArchivedMessage> {
+        let id: i64 = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid id in archive row".to_string(),
+            })?;
+        let original_msg_id: i64 = row
+            .get_value(1)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid original_msg_id in archive row".to_string(),
+            })?;
+        let queue_id: i64 = row
+            .get_value(2)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid queue_id in archive row".to_string(),
+            })?;
+        let payload_str: String = row
+            .get_value(3)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid payload in archive row".to_string(),
+            })?;
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_str).unwrap_or(serde_json::json!({}));
+        let enqueued_at_str: String = row
+            .get_value(4)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid enqueued_at in archive row".to_string(),
+            })?;
+        let enqueued_at = chrono::DateTime::parse_from_rfc3339(&enqueued_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&enqueued_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let vt_str: String = row
+            .get_value(5)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid vt in archive row".to_string(),
+            })?;
+        let vt = chrono::DateTime::parse_from_rfc3339(&vt_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&vt_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let read_ct: i32 = row
+            .get_value(6)
+            .ok()
+            .and_then(|v| v.as_integer().copied().map(|i| i as i32))
+            .unwrap_or(0);
+        let archived_at_str: String = row
+            .get_value(7)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid archived_at in archive row".to_string(),
+            })?;
+        let archived_at = chrono::DateTime::parse_from_rfc3339(&archived_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&archived_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let dequeued_at_str: Option<String> = row
+            .get_value(8)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let dequeued_at = dequeued_at_str.and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .or_else(|| chrono::DateTime::parse_from_rfc2822(&s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+        let producer_worker_id: Option<i64> =
+            row.get_value(9).ok().and_then(|v| v.as_integer().copied());
+        let consumer_worker_id: Option<i64> =
+            row.get_value(10).ok().and_then(|v| v.as_integer().copied());
+
+        Ok(ArchivedMessage {
+            id,
+            original_msg_id,
+            queue_id,
+            producer_worker_id,
+            consumer_worker_id,
+            payload,
+            enqueued_at,
+            vt,
+            read_ct,
+            archived_at,
+            dequeued_at,
+        })
+    }
+}
 
 #[async_trait]
 impl ArchiveTable for TursoArchiveTable {
     async fn insert(&self, _data: NewArchivedMessage) -> Result<ArchivedMessage> {
+        // TODO: Phase 2.1 - implement Turso archive insert
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive insert not yet implemented".to_string(),
         })
     }
 
     async fn get(&self, _id: i64) -> Result<ArchivedMessage> {
+        // TODO: Phase 2.1 - implement Turso archive get
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive get not yet implemented".to_string(),
         })
     }
 
     async fn list(&self) -> Result<Vec<ArchivedMessage>> {
+        // TODO: Phase 2.1 - implement Turso archive list
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive list not yet implemented".to_string(),
         })
     }
 
     async fn count(&self) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso archive count
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive count not yet implemented".to_string(),
         })
     }
 
     async fn delete(&self, _id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso archive delete
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive delete not yet implemented".to_string(),
         })
     }
 
     async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<ArchivedMessage>> {
+        // TODO: Phase 2.1 - implement Turso archive filter_by_fk
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive filter_by_fk not yet implemented".to_string(),
         })
     }
 
@@ -547,14 +932,16 @@ impl ArchiveTable for TursoArchiveTable {
         _limit: i64,
         _offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
+        // TODO: Phase 2.1 - implement Turso archive list_dlq_messages
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive list_dlq_messages not yet implemented".to_string(),
         })
     }
 
     async fn dlq_count(&self, _max_attempts: i32) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso archive dlq_count
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive dlq_count not yet implemented".to_string(),
         })
     }
 
@@ -564,68 +951,170 @@ impl ArchiveTable for TursoArchiveTable {
         _limit: i64,
         _offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
+        // TODO: Phase 2.1 - implement Turso archive list_by_worker
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive list_by_worker not yet implemented".to_string(),
         })
     }
 
     async fn count_by_worker(&self, _worker_id: i64) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso archive count_by_worker
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive count_by_worker not yet implemented".to_string(),
         })
     }
 
     async fn delete_by_worker(&self, _worker_id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso archive delete_by_worker
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive delete_by_worker not yet implemented".to_string(),
         })
     }
 
     async fn replay_message(&self, _msg_id: i64) -> Result<Option<QueueMessage>> {
+        // TODO: Phase 2.1 - implement Turso archive replay_message
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive replay_message not yet implemented".to_string(),
         })
     }
 
     async fn count_for_queue(&self, _queue_id: i64) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso archive count_for_queue
         Err(Error::Internal {
-            message: "turso archive table not implemented".to_string(),
+            message: "turso archive count_for_queue not yet implemented".to_string(),
         })
     }
 }
 
-#[derive(Clone, Default, Debug)]
-struct TursoWorkflowTable;
+#[derive(Clone, Debug)]
+struct TursoWorkflowTable {
+    _marker: std::marker::PhantomData<()>,
+}
+
+impl Default for TursoWorkflowTable {
+    fn default() -> Self {
+        TursoWorkflowTable {
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl TursoWorkflowTable {
+    fn map_row(row: &turso::Row) -> Result<WorkflowRecord> {
+        let workflow_id: i64 = row
+            .get_value(0)
+            .ok()
+            .and_then(|v| v.as_integer().copied())
+            .ok_or_else(|| Error::Internal {
+                message: "invalid workflow_id in workflow row".to_string(),
+            })?;
+        let name: String = row
+            .get_value(1)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid name in workflow row".to_string(),
+            })?;
+        let status_str: String = row
+            .get_value(2)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .unwrap_or_else(|| "PENDING".to_string());
+        let status = status_str
+            .parse::<WorkflowStatus>()
+            .unwrap_or(WorkflowStatus::Pending);
+        let input_str: Option<String> = row
+            .get_value(3)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let input = input_str.and_then(|s| serde_json::from_str(&s).ok());
+        let output_str: Option<String> = row
+            .get_value(4)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let output = output_str.and_then(|s| serde_json::from_str(&s).ok());
+        let error_str: Option<String> = row
+            .get_value(5)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+        let error = error_str.and_then(|s| serde_json::from_str(&s).ok());
+        let created_at_str: String = row
+            .get_value(6)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid created_at in workflow row".to_string(),
+            })?;
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&created_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let updated_at_str: String = row
+            .get_value(7)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()))
+            .ok_or_else(|| Error::Internal {
+                message: "invalid updated_at in workflow row".to_string(),
+            })?;
+        let updated_at = chrono::DateTime::parse_from_rfc3339(&updated_at_str)
+            .ok()
+            .or_else(|| chrono::DateTime::parse_from_rfc2822(&updated_at_str).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+        let executor_id_str: Option<String> = row
+            .get_value(8)
+            .ok()
+            .and_then(|v| v.as_text().map(|s| s.to_string()));
+
+        Ok(WorkflowRecord {
+            workflow_id,
+            name,
+            status,
+            input,
+            output,
+            error,
+            created_at,
+            updated_at,
+            executor_id: executor_id_str,
+        })
+    }
+}
 
 #[async_trait]
 impl WorkflowTable for TursoWorkflowTable {
     async fn insert(&self, _data: NewWorkflow) -> Result<WorkflowRecord> {
+        // TODO: Phase 2.1 - implement Turso workflow insert
         Err(Error::Internal {
-            message: "turso workflow table not implemented".to_string(),
+            message: "turso workflow insert not yet implemented".to_string(),
         })
     }
 
     async fn get(&self, _id: i64) -> Result<WorkflowRecord> {
+        // TODO: Phase 2.1 - implement Turso workflow get
         Err(Error::Internal {
-            message: "turso workflow table not implemented".to_string(),
+            message: "turso workflow get not yet implemented".to_string(),
         })
     }
 
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
+        // TODO: Phase 2.1 - implement Turso workflow list
         Err(Error::Internal {
-            message: "turso workflow table not implemented".to_string(),
+            message: "turso workflow list not yet implemented".to_string(),
         })
     }
 
     async fn count(&self) -> Result<i64> {
+        // TODO: Phase 2.1 - implement Turso workflow count
         Err(Error::Internal {
-            message: "turso workflow table not implemented".to_string(),
+            message: "turso workflow count not yet implemented".to_string(),
         })
     }
 
     async fn delete(&self, _id: i64) -> Result<u64> {
+        // TODO: Phase 2.1 - implement Turso workflow delete
         Err(Error::Internal {
-            message: "turso workflow table not implemented".to_string(),
+            message: "turso workflow delete not yet implemented".to_string(),
         })
     }
 }
