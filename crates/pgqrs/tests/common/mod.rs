@@ -108,16 +108,34 @@ pub async fn create_store_for_backend(
                     uuid::Uuid::new_v4()
                 )
             }
-            TestBackend::Turso => panic!("PGQRS_TEST_TURSO_DSN must be set for Turso backend"),
+            TestBackend::Turso => {
+                // Default to a unique file-based Turso database if no env override is provided
+                format!(
+                    "file:{}",
+                    std::env::temp_dir()
+                        .join(format!("pgqrs_turso_test_{}.db", uuid::Uuid::new_v4()))
+                        .display()
+                )
+            }
         }
     };
 
     let config =
         pgqrs::config::Config::from_dsn_with_schema(&dsn, schema).expect("Failed to create config");
 
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store")
+        .expect("Failed to create store");
+
+    // Ensure schema is installed for Turso when using ephemeral test databases.
+    if backend == TestBackend::Turso {
+        pgqrs::admin(&store)
+            .install()
+            .await
+            .expect("Failed to install Turso schema for tests");
+    }
+
+    store
 }
 
 /// Get the current test backend (for skip logic).

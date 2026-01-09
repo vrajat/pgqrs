@@ -727,14 +727,15 @@ impl Worker for TursoAdmin {
 impl Admin for TursoAdmin {
     async fn install(&self) -> Result<()> {
         let conn = self.store.connect()?;
-        // Execute SQLite-compatible migrations for Turso
-        const Q1: &str = include_str!("../../../migrations/sqlite/01_create_queues.sql");
-        const Q2: &str = include_str!("../../../migrations/sqlite/02_create_workers.sql");
-        const Q3: &str = include_str!("../../../migrations/sqlite/03_create_messages.sql");
-        const Q4: &str = include_str!("../../../migrations/sqlite/04_create_archive.sql");
-        const Q5: &str = include_str!("../../../migrations/sqlite/05_create_workflows.sql");
+        // Execute Turso-specific migrations (CHECK constraints removed)
+        const Q1: &str = include_str!("../../../migrations/turso/01_create_queues.sql");
+        const Q2: &str = include_str!("../../../migrations/turso/02_create_workers.sql");
+        const Q3: &str = include_str!("../../../migrations/turso/03_create_messages.sql");
+        const Q4: &str = include_str!("../../../migrations/turso/04_create_archive.sql");
+        const Q5: &str = include_str!("../../../migrations/turso/05_create_workflows.sql");
+        const Q6: &str = include_str!("../../../migrations/turso/06_create_workflow_steps.sql");
 
-        for sql in [Q1, Q2, Q3, Q4, Q5] {
+        for sql in [Q1, Q2, Q3, Q4, Q5, Q6] {
             conn.execute(sql, ()).await.map_err(|e| Error::Internal {
                 message: format!("Turso migration failed: {e}"),
             })?;
