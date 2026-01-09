@@ -283,60 +283,182 @@ impl TursoQueueTable {
 
 #[async_trait]
 impl QueueTable for TursoQueueTable {
-    async fn insert(&self, _data: NewQueue) -> Result<QueueInfo> {
-        // TODO: Phase 2.1 - implement Turso queue insert
-        Err(Error::Internal {
-            message: "turso queue insert not yet implemented".to_string(),
-        })
+    async fn insert(&self, data: NewQueue) -> Result<QueueInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "INSERT INTO pgqrs_queues (queue_name) VALUES (?) RETURNING id, queue_name, created_at";
+        let mut rows = conn
+            .query(sql, [data.queue_name.clone()])
+            .await
+            .map_err(|e| {
+                let err_msg = e.to_string();
+                if err_msg.contains("UNIQUE constraint failed") || err_msg.contains("constraint") {
+                    return Error::QueueAlreadyExists {
+                        name: data.queue_name.clone(),
+                    };
+                }
+                Error::Internal {
+                    message: format!("Failed to insert queue: {e}"),
+                }
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: "No row returned from insert".to_string(),
+            })
+        }
     }
 
-    async fn get(&self, _id: i64) -> Result<QueueInfo> {
-        // TODO: Phase 2.1 - implement Turso queue get
-        Err(Error::Internal {
-            message: "turso queue get not yet implemented".to_string(),
-        })
+    async fn get(&self, id: i64) -> Result<QueueInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_name, created_at FROM pgqrs_queues WHERE id = ?";
+        let mut rows = conn.query(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query queue: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Queue {} not found", id),
+            })
+        }
     }
 
     async fn list(&self) -> Result<Vec<QueueInfo>> {
-        // TODO: Phase 2.1 - implement Turso queue list
-        Err(Error::Internal {
-            message: "turso queue list not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_name, created_at FROM pgqrs_queues ORDER BY created_at DESC";
+        let mut rows = conn
+            .query(sql, ())
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query queues: {e}"),
+            })?;
+
+        let mut queues = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            queues.push(Self::map_row(&row)?);
+        }
+        Ok(queues)
     }
 
     async fn count(&self) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso queue count
-        Err(Error::Internal {
-            message: "turso queue count not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_queues";
+        let mut rows = conn
+            .query(sql, ())
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count queues: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso queue delete
-        Err(Error::Internal {
-            message: "turso queue delete not yet implemented".to_string(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_queues WHERE id = ?";
+        conn.execute(sql, [id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete queue: {e}"),
+            })?;
+
+        Ok(1) // Turso doesn't directly return affected rows, so we assume 1
     }
 
-    async fn get_by_name(&self, _name: &str) -> Result<QueueInfo> {
-        // TODO: Phase 2.1 - implement Turso queue get_by_name
-        Err(Error::Internal {
-            message: "turso queue get_by_name not yet implemented".to_string(),
-        })
+    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_name, created_at FROM pgqrs_queues WHERE queue_name = ?";
+        let mut rows = conn.query(sql, [name]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query queue: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Queue '{}' not found", name),
+            })
+        }
     }
 
-    async fn exists(&self, _name: &str) -> Result<bool> {
-        // TODO: Phase 2.1 - implement Turso queue exists
-        Err(Error::Internal {
-            message: "turso queue exists not yet implemented".to_string(),
-        })
+    async fn exists(&self, name: &str) -> Result<bool> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = ?)";
+        let mut rows = conn.query(sql, [name]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query queue existence: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .map(|val| val != 0)
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract exists from row".to_string(),
+                })
+        } else {
+            Ok(false)
+        }
     }
 
-    async fn delete_by_name(&self, _name: &str) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso queue delete_by_name
-        Err(Error::Internal {
-            message: "turso queue delete_by_name not yet implemented".to_string(),
-        })
+    async fn delete_by_name(&self, name: &str) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_queues WHERE queue_name = ?";
+        conn.execute(sql, [name])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete queue: {e}"),
+            })?;
+
+        Ok(1) // Turso doesn't directly return affected rows
     }
 }
 
@@ -434,132 +556,401 @@ impl TursoMessageTable {
 
 #[async_trait]
 impl MessageTable for TursoMessageTable {
-    async fn insert(&self, _data: crate::types::NewMessage) -> Result<QueueMessage> {
-        // TODO: Phase 2.1 - implement Turso message insert
-        Err(Error::Internal {
-            message: "turso message insert not yet implemented".to_string(),
-        })
+    async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let payload_str = data.payload.to_string();
+        let enqueued_at_str = data.enqueued_at.to_rfc3339();
+        let vt_str = data.vt.to_rfc3339();
+
+        let sql = "INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id";
+        let mut rows = conn
+            .query(
+                sql,
+                (
+                    data.queue_id,
+                    payload_str,
+                    data.read_ct,
+                    enqueued_at_str,
+                    vt_str,
+                    data.producer_worker_id,
+                    data.consumer_worker_id,
+                ),
+            )
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert message: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 
-    async fn get(&self, _id: i64) -> Result<QueueMessage> {
-        // TODO: Phase 2.1 - implement Turso message get
-        Err(Error::Internal {
-            message: "turso message get not yet implemented".to_string(),
-        })
+    async fn get(&self, id: i64) -> Result<QueueMessage> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id = ?";
+        let mut rows = conn.query(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query message: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Message {} not found", id),
+            })
+        }
     }
 
     async fn list(&self) -> Result<Vec<QueueMessage>> {
-        // TODO: Phase 2.1 - implement Turso message list
-        Err(Error::Internal {
-            message: "turso message list not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages ORDER BY enqueued_at DESC";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query messages: {e}"),
+        })?;
+
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
     }
 
     async fn count(&self) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso message count
-        Err(Error::Internal {
-            message: "turso message count not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_messages";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count messages: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso message delete
-        Err(Error::Internal {
-            message: "turso message delete not yet implemented".to_string(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_messages WHERE id = ?";
+        conn.execute(sql, [id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete message: {e}"),
+            })?;
+
+        Ok(1)
     }
 
-    async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<QueueMessage>> {
-        // TODO: Phase 2.1 - implement Turso message filter_by_fk
-        Err(Error::Internal {
-            message: "turso message filter_by_fk not yet implemented".to_string(),
-        })
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE queue_id = ? ORDER BY enqueued_at DESC LIMIT 1000";
+        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query messages: {e}"),
+        })?;
+
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
     }
 
     async fn batch_insert(
         &self,
-        _queue_id: i64,
-        _payloads: &[serde_json::Value],
-        _params: crate::types::BatchInsertParams,
+        queue_id: i64,
+        payloads: &[serde_json::Value],
+        params: crate::types::BatchInsertParams,
     ) -> Result<Vec<i64>> {
-        // TODO: Phase 2.1 - implement Turso message batch_insert
-        Err(Error::Internal {
-            message: "turso message batch_insert not yet implemented".to_string(),
-        })
+        if payloads.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let mut ids = Vec::with_capacity(payloads.len());
+        let enqueued_at_str = params.enqueued_at.to_rfc3339();
+        let vt_str = params.vt.to_rfc3339();
+
+        for payload in payloads {
+            let payload_str = payload.to_string();
+            let sql = "INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id";
+            let mut rows = conn
+                .query(
+                    sql,
+                    (
+                        queue_id,
+                        payload_str,
+                        params.read_ct,
+                        enqueued_at_str.clone(),
+                        vt_str.clone(),
+                        params.producer_worker_id,
+                        params.consumer_worker_id,
+                    ),
+                )
+                .await
+                .map_err(|e| Error::Internal {
+                    message: format!("Failed to batch insert message: {e}"),
+                })?;
+
+            if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+                message: format!("Failed to fetch inserted row: {e}"),
+            })? {
+                let id = row
+                    .get_value(0)
+                    .ok()
+                    .and_then(|v| v.as_integer().copied())
+                    .ok_or_else(|| Error::Internal {
+                        message: "Failed to extract id from row".to_string(),
+                    })?;
+                ids.push(id);
+            }
+        }
+
+        Ok(ids)
     }
 
-    async fn get_by_ids(&self, _ids: &[i64]) -> Result<Vec<QueueMessage>> {
-        // TODO: Phase 2.1 - implement Turso message get_by_ids
-        Err(Error::Internal {
-            message: "turso message get_by_ids not yet implemented".to_string(),
-        })
+    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN ({}) ORDER BY id", placeholders);
+
+        let mut rows = conn
+            .query(sql.as_str(), ids.to_vec())
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query messages by ids: {e}"),
+            })?;
+
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
     }
 
     async fn update_visibility_timeout(
         &self,
-        _id: i64,
-        _vt: chrono::DateTime<chrono::Utc>,
+        id: i64,
+        vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso message update_visibility_timeout
-        Err(Error::Internal {
-            message: "turso message update_visibility_timeout not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let vt_str = vt.to_rfc3339();
+        let sql = "UPDATE pgqrs_messages SET vt = ? WHERE id = ?";
+        conn.execute(sql, (vt_str, id))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to update visibility timeout: {e}"),
+            })?;
+
+        Ok(1)
     }
 
     async fn extend_visibility(
         &self,
-        _id: i64,
-        _worker_id: i64,
-        _additional_seconds: u32,
+        id: i64,
+        worker_id: i64,
+        additional_seconds: u32,
     ) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso message extend_visibility
-        Err(Error::Internal {
-            message: "turso message extend_visibility not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "UPDATE pgqrs_messages SET vt = datetime(vt, '+' || ? || ' seconds') WHERE id = ? AND consumer_worker_id = ?";
+        conn.execute(sql, (additional_seconds as i32, id, worker_id))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to extend visibility: {e}"),
+            })?;
+
+        Ok(1)
     }
 
     async fn extend_visibility_batch(
         &self,
-        _message_ids: &[i64],
-        _worker_id: i64,
-        _additional_seconds: u32,
+        message_ids: &[i64],
+        worker_id: i64,
+        additional_seconds: u32,
     ) -> Result<Vec<bool>> {
-        // TODO: Phase 2.1 - implement Turso message extend_visibility_batch
-        Err(Error::Internal {
-            message: "turso message extend_visibility_batch not yet implemented".to_string(),
-        })
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("UPDATE pgqrs_messages SET vt = datetime(vt, '+' || ? || ' seconds') WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id", placeholders);
+
+        let mut params = vec![additional_seconds as i64];
+        params.extend(message_ids.iter().copied());
+        params.push(worker_id);
+
+        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
+            message: format!("Failed to batch extend visibility: {e}"),
+        })?;
+
+        let mut extended_ids = std::collections::HashSet::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            if let Some(id) = row.get_value(0).ok().and_then(|v| v.as_integer().copied()) {
+                extended_ids.insert(id);
+            }
+        }
+
+        Ok(message_ids
+            .iter()
+            .map(|id| extended_ids.contains(id))
+            .collect())
     }
 
     async fn release_messages_by_ids(
         &self,
-        _message_ids: &[i64],
-        _worker_id: i64,
+        message_ids: &[i64],
+        worker_id: i64,
     ) -> Result<Vec<bool>> {
-        // TODO: Phase 2.1 - implement Turso message release_messages_by_ids
-        Err(Error::Internal {
-            message: "turso message release_messages_by_ids not yet implemented".to_string(),
-        })
+        if message_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let placeholders = message_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("UPDATE pgqrs_messages SET vt = datetime('now'), consumer_worker_id = NULL WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id", placeholders);
+
+        let mut params = message_ids.to_vec();
+        params.push(worker_id);
+
+        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
+            message: format!("Failed to release messages: {e}"),
+        })?;
+
+        let mut released_ids = std::collections::HashSet::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            if let Some(id) = row.get_value(0).ok().and_then(|v| v.as_integer().copied()) {
+                released_ids.insert(id);
+            }
+        }
+
+        Ok(message_ids
+            .iter()
+            .map(|id| released_ids.contains(id))
+            .collect())
     }
 
-    async fn count_pending(&self, _queue_id: i64) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso message count_pending
-        Err(Error::Internal {
-            message: "turso message count_pending not yet implemented".to_string(),
-        })
+    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
+        self.count_pending_filtered(queue_id, None).await
     }
 
-    async fn count_pending_filtered(&self, _queue_id: i64, _worker_id: Option<i64>) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso message count_pending_filtered
-        Err(Error::Internal {
-            message: "turso message count_pending_filtered not yet implemented".to_string(),
-        })
+    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let (sql, params): (String, Vec<i64>) = match worker_id {
+            Some(wid) => (
+                "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = ? AND consumer_worker_id = ?".to_string(),
+                vec![queue_id, wid],
+            ),
+            None => (
+                "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL".to_string(),
+                vec![queue_id],
+            ),
+        };
+
+        let mut rows = conn.query(sql.as_str(), params).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count pending messages: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete_by_ids(&self, _ids: &[i64]) -> Result<Vec<bool>> {
-        // TODO: Phase 2.1 - implement Turso message delete_by_ids
-        Err(Error::Internal {
-            message: "turso message delete_by_ids not yet implemented".to_string(),
-        })
+    async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let mut results = Vec::with_capacity(ids.len());
+        let sql = "DELETE FROM pgqrs_messages WHERE id = ?";
+
+        for &id in ids {
+            let result = conn.execute(sql, [id]).await;
+            results.push(result.is_ok());
+        }
+
+        Ok(results)
     }
 }
 
@@ -652,105 +1043,367 @@ impl TursoWorkerTable {
 
 #[async_trait]
 impl WorkerTable for TursoWorkerTable {
-    async fn insert(&self, _data: crate::types::NewWorker) -> Result<WorkerInfo> {
-        // TODO: Phase 2.1 - implement Turso worker insert
-        Err(Error::Internal {
-            message: "turso worker insert not yet implemented".to_string(),
-        })
+    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let now = chrono::Utc::now();
+        let now_str = now.to_rfc3339();
+        let status_str = WorkerStatus::Ready.to_string();
+
+        let sql = "INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status) VALUES (?, ?, ?, ?, ?, ?) RETURNING id";
+        let mut rows = conn
+            .query(
+                sql,
+                (
+                    data.hostname.clone(),
+                    data.port,
+                    data.queue_id,
+                    now_str.clone(),
+                    now_str,
+                    status_str,
+                ),
+            )
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert worker: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            let id = row
+                .get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract id from row".to_string(),
+                })?;
+
+            Ok(WorkerInfo {
+                id,
+                hostname: data.hostname,
+                port: data.port,
+                queue_id: data.queue_id,
+                started_at: now,
+                heartbeat_at: now,
+                shutdown_at: None,
+                status: WorkerStatus::Ready,
+            })
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 
-    async fn get(&self, _id: i64) -> Result<WorkerInfo> {
-        // TODO: Phase 2.1 - implement Turso worker get
-        Err(Error::Internal {
-            message: "turso worker get not yet implemented".to_string(),
-        })
+    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE id = ?";
+        let mut rows = conn.query(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query worker: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Worker {} not found", id),
+            })
+        }
     }
 
     async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        // TODO: Phase 2.1 - implement Turso worker list
-        Err(Error::Internal {
-            message: "turso worker list not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers ORDER BY started_at DESC";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query workers: {e}"),
+        })?;
+
+        let mut workers = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            workers.push(Self::map_row(&row)?);
+        }
+        Ok(workers)
     }
 
     async fn count(&self) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso worker count
-        Err(Error::Internal {
-            message: "turso worker count not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_workers";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count workers: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso worker delete
-        Err(Error::Internal {
-            message: "turso worker delete not yet implemented".to_string(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_workers WHERE id = ?";
+        conn.execute(sql, [id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete worker: {e}"),
+            })?;
+
+        Ok(1)
     }
 
-    async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<WorkerInfo>> {
-        // TODO: Phase 2.1 - implement Turso worker filter_by_fk
-        Err(Error::Internal {
-            message: "turso worker filter_by_fk not yet implemented".to_string(),
-        })
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? ORDER BY started_at DESC";
+        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query workers: {e}"),
+        })?;
+
+        let mut workers = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            workers.push(Self::map_row(&row)?);
+        }
+        Ok(workers)
     }
 
-    async fn count_for_queue(&self, _queue_id: i64, _state: WorkerStatus) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso worker count_for_queue
-        Err(Error::Internal {
-            message: "turso worker count_for_queue not yet implemented".to_string(),
-        })
+    async fn count_for_queue(&self, queue_id: i64, state: WorkerStatus) -> Result<i64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let state_str = state.to_string();
+        let sql = "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ? AND status = ?";
+        let mut rows = conn
+            .query(sql, (queue_id, state_str))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count workers: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
     async fn count_zombies_for_queue(
         &self,
-        _queue_id: i64,
-        _older_than: chrono::Duration,
+        queue_id: i64,
+        older_than: chrono::Duration,
     ) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso worker count_zombies_for_queue
-        Err(Error::Internal {
-            message: "turso worker count_zombies_for_queue not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let threshold = chrono::Utc::now() - older_than;
+        let threshold_str = threshold.to_rfc3339();
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'suspended') AND heartbeat_at < ?";
+        let mut rows = conn
+            .query(sql, (queue_id, threshold_str))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to count zombie workers: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
     async fn list_for_queue(
         &self,
-        _queue_id: i64,
-        _state: WorkerStatus,
+        queue_id: i64,
+        state: WorkerStatus,
     ) -> Result<Vec<WorkerInfo>> {
-        // TODO: Phase 2.1 - implement Turso worker list_for_queue
-        Err(Error::Internal {
-            message: "turso worker list_for_queue not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let state_str = state.to_string();
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC";
+        let mut rows = conn
+            .query(sql, (queue_id, state_str))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query workers: {e}"),
+            })?;
+
+        let mut workers = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            workers.push(Self::map_row(&row)?);
+        }
+        Ok(workers)
     }
 
     async fn list_zombies_for_queue(
         &self,
-        _queue_id: i64,
-        _older_than: chrono::Duration,
+        queue_id: i64,
+        older_than: chrono::Duration,
     ) -> Result<Vec<WorkerInfo>> {
-        // TODO: Phase 2.1 - implement Turso worker list_zombies_for_queue
-        Err(Error::Internal {
-            message: "turso worker list_zombies_for_queue not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let threshold = chrono::Utc::now() - older_than;
+        let threshold_str = threshold.to_rfc3339();
+
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'suspended') AND heartbeat_at < ? ORDER BY heartbeat_at ASC";
+        let mut rows = conn
+            .query(sql, (queue_id, threshold_str))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query zombie workers: {e}"),
+            })?;
+
+        let mut workers = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            workers.push(Self::map_row(&row)?);
+        }
+        Ok(workers)
     }
 
     async fn register(
         &self,
-        _queue_id: Option<i64>,
-        _hostname: &str,
-        _port: i32,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
     ) -> Result<WorkerInfo> {
-        // TODO: Phase 2.1 - implement Turso worker register
-        Err(Error::Internal {
-            message: "turso worker register not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = ? AND port = ?";
+        let mut rows = conn
+            .query(sql, (hostname, port))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to find existing worker: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            let worker = Self::map_row(&row)?;
+            match worker.status {
+                WorkerStatus::Stopped => {
+                    let now = chrono::Utc::now();
+                    let now_str = now.to_rfc3339();
+                    let sql = "UPDATE pgqrs_workers SET status = 'ready', queue_id = ?, started_at = ?, heartbeat_at = ?, shutdown_at = NULL WHERE id = ? RETURNING id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status";
+                    let mut rows = conn
+                        .query(sql, (queue_id, now_str.clone(), now_str, worker.id))
+                        .await
+                        .map_err(|e| Error::Internal {
+                            message: format!("Failed to reset worker: {e}"),
+                        })?;
+
+                    if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+                        message: format!("Failed to fetch row: {e}"),
+                    })? {
+                        Self::map_row(&row)
+                    } else {
+                        Err(Error::Internal {
+                            message: "No row returned after update".to_string(),
+                        })
+                    }
+                }
+                WorkerStatus::Ready => Err(Error::ValidationFailed {
+                    reason: format!(
+                        "Worker {}:{} is already active. Cannot register duplicate.",
+                        hostname, port
+                    ),
+                }),
+                WorkerStatus::Suspended => Err(Error::ValidationFailed {
+                    reason: format!(
+                        "Worker {}:{} is suspended. Use resume() to reactivate.",
+                        hostname, port
+                    ),
+                }),
+            }
+        } else {
+            self.insert(crate::types::NewWorker {
+                hostname: hostname.to_string(),
+                port,
+                queue_id,
+            })
+            .await
+        }
     }
 
-    async fn register_ephemeral(&self, _queue_id: Option<i64>) -> Result<WorkerInfo> {
-        // TODO: Phase 2.1 - implement Turso worker register_ephemeral
-        Err(Error::Internal {
-            message: "turso worker register_ephemeral not yet implemented".to_string(),
-        })
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+        let sql = "INSERT INTO pgqrs_workers (hostname, port, queue_id, status) VALUES (?, -1, ?, 'ready') RETURNING id, queue_id, hostname, port, started_at, heartbeat_at, shutdown_at, status";
+        let mut rows = conn
+            .query(sql, (hostname, queue_id))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert ephemeral worker: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 }
 
@@ -869,105 +1522,445 @@ impl TursoArchiveTable {
 
 #[async_trait]
 impl ArchiveTable for TursoArchiveTable {
-    async fn insert(&self, _data: NewArchivedMessage) -> Result<ArchivedMessage> {
-        // TODO: Phase 2.1 - implement Turso archive insert
-        Err(Error::Internal {
-            message: "turso archive insert not yet implemented".to_string(),
-        })
+    async fn insert(&self, data: NewArchivedMessage) -> Result<ArchivedMessage> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let archived_at = chrono::Utc::now();
+        let archived_at_str = archived_at.to_rfc3339();
+        let dequeued_at_str = data.dequeued_at.map(|d| d.to_rfc3339());
+        let enqueued_at_str = data.enqueued_at.to_rfc3339();
+        let vt_str = data.vt.to_rfc3339();
+        let payload_str = data.payload.to_string();
+
+        let sql = "INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id";
+        let mut rows = conn
+            .query(
+                sql,
+                (
+                    data.original_msg_id,
+                    data.queue_id,
+                    data.producer_worker_id,
+                    data.consumer_worker_id,
+                    payload_str,
+                    enqueued_at_str,
+                    vt_str,
+                    data.read_ct,
+                    dequeued_at_str,
+                    archived_at_str,
+                ),
+            )
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert archive: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            let id = row
+                .get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract id from row".to_string(),
+                })?;
+
+            Ok(ArchivedMessage {
+                id,
+                original_msg_id: data.original_msg_id,
+                queue_id: data.queue_id,
+                producer_worker_id: data.producer_worker_id,
+                consumer_worker_id: data.consumer_worker_id,
+                payload: data.payload,
+                enqueued_at: data.enqueued_at,
+                vt: data.vt,
+                read_ct: data.read_ct,
+                archived_at,
+                dequeued_at: data.dequeued_at,
+            })
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 
-    async fn get(&self, _id: i64) -> Result<ArchivedMessage> {
-        // TODO: Phase 2.1 - implement Turso archive get
-        Err(Error::Internal {
-            message: "turso archive get not yet implemented".to_string(),
-        })
+    async fn get(&self, id: i64) -> Result<ArchivedMessage> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE id = ?";
+        let mut rows = conn.query(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query archive: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Archive {} not found", id),
+            })
+        }
     }
 
     async fn list(&self) -> Result<Vec<ArchivedMessage>> {
-        // TODO: Phase 2.1 - implement Turso archive list
-        Err(Error::Internal {
-            message: "turso archive list not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive ORDER BY archived_at DESC";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query archives: {e}"),
+        })?;
+
+        let mut archives = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            archives.push(Self::map_row(&row)?);
+        }
+        Ok(archives)
     }
 
     async fn count(&self) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso archive count
-        Err(Error::Internal {
-            message: "turso archive count not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_archive";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count archives: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso archive delete
-        Err(Error::Internal {
-            message: "turso archive delete not yet implemented".to_string(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_archive WHERE id = ?";
+        conn.execute(sql, [id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete archive: {e}"),
+            })?;
+
+        Ok(1)
     }
 
-    async fn filter_by_fk(&self, _queue_id: i64) -> Result<Vec<ArchivedMessage>> {
-        // TODO: Phase 2.1 - implement Turso archive filter_by_fk
-        Err(Error::Internal {
-            message: "turso archive filter_by_fk not yet implemented".to_string(),
-        })
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<ArchivedMessage>> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE queue_id = ? ORDER BY archived_at DESC";
+        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query archives: {e}"),
+        })?;
+
+        let mut archives = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            archives.push(Self::map_row(&row)?);
+        }
+        Ok(archives)
     }
 
     async fn list_dlq_messages(
         &self,
-        _max_attempts: i32,
-        _limit: i64,
-        _offset: i64,
+        max_attempts: i32,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
-        // TODO: Phase 2.1 - implement Turso archive list_dlq_messages
-        Err(Error::Internal {
-            message: "turso archive list_dlq_messages not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE read_ct >= ? AND consumer_worker_id IS NULL AND dequeued_at IS NULL ORDER BY archived_at DESC LIMIT ? OFFSET ?";
+        let mut rows = conn
+            .query(sql, (max_attempts, limit, offset))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query DLQ messages: {e}"),
+            })?;
+
+        let mut archives = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            archives.push(Self::map_row(&row)?);
+        }
+        Ok(archives)
     }
 
-    async fn dlq_count(&self, _max_attempts: i32) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso archive dlq_count
-        Err(Error::Internal {
-            message: "turso archive dlq_count not yet implemented".to_string(),
-        })
+    async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= ? AND consumer_worker_id IS NULL AND dequeued_at IS NULL";
+        let mut rows = conn.query(sql, [max_attempts]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count DLQ messages: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
     async fn list_by_worker(
         &self,
-        _worker_id: i64,
-        _limit: i64,
-        _offset: i64,
+        worker_id: i64,
+        limit: i64,
+        offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
-        // TODO: Phase 2.1 - implement Turso archive list_by_worker
-        Err(Error::Internal {
-            message: "turso archive list_by_worker not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE consumer_worker_id = ? ORDER BY archived_at DESC LIMIT ? OFFSET ?";
+        let mut rows = conn
+            .query(sql, (worker_id, limit, offset))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to query archives by worker: {e}"),
+            })?;
+
+        let mut archives = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            archives.push(Self::map_row(&row)?);
+        }
+        Ok(archives)
     }
 
-    async fn count_by_worker(&self, _worker_id: i64) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso archive count_by_worker
-        Err(Error::Internal {
-            message: "turso archive count_by_worker not yet implemented".to_string(),
-        })
+    async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = ?";
+        let mut rows = conn.query(sql, [worker_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count archives by worker: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete_by_worker(&self, _worker_id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso archive delete_by_worker
-        Err(Error::Internal {
-            message: "turso archive delete_by_worker not yet implemented".to_string(),
-        })
+    async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_archive WHERE consumer_worker_id = ?";
+        conn.execute(sql, [worker_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete archives by worker: {e}"),
+            })?;
+
+        Ok(1)
     }
 
-    async fn replay_message(&self, _msg_id: i64) -> Result<Option<QueueMessage>> {
-        // TODO: Phase 2.1 - implement Turso archive replay_message
-        Err(Error::Internal {
-            message: "turso archive replay_message not yet implemented".to_string(),
-        })
+    async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        // Get archive
+        let sql = "SELECT id, original_msg_id, queue_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_archive WHERE id = ?";
+        let mut rows = conn.query(sql, [msg_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query archive: {e}"),
+        })?;
+
+        let archive = if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)?
+        } else {
+            return Ok(None);
+        };
+
+        // Delete archive
+        let sql = "DELETE FROM pgqrs_archive WHERE id = ?";
+        conn.execute(sql, [msg_id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete archive: {e}"),
+            })?;
+
+        // Insert into messages
+        let now = chrono::Utc::now();
+        let now_str = now.to_rfc3339();
+        let payload_str = archive.payload.to_string();
+
+        let sql = "INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id) VALUES (?, ?, 0, ?, ?, ?) RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id";
+        let mut rows = conn
+            .query(
+                sql,
+                (
+                    archive.queue_id,
+                    payload_str,
+                    now_str.clone(),
+                    now_str,
+                    archive.producer_worker_id,
+                ),
+            )
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert replayed message: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            // Map row using TursoMessageTable logic (columns: id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id)
+            let id = row
+                .get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract id from row".to_string(),
+                })?;
+            let queue_id = row
+                .get_value(1)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract queue_id from row".to_string(),
+                })?;
+            let payload_str = row
+                .get_value(2)
+                .ok()
+                .and_then(|v| v.as_text().map(|s| s.to_string()))
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract payload from row".to_string(),
+                })?;
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload_str).unwrap_or(serde_json::json!({}));
+
+            let vt_str = row
+                .get_value(3)
+                .ok()
+                .and_then(|v| v.as_text().map(|s| s.to_string()))
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract vt from row".to_string(),
+                })?;
+            let vt = chrono::DateTime::parse_from_rfc3339(&vt_str)
+                .ok()
+                .or_else(|| chrono::DateTime::parse_from_rfc2822(&vt_str).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or(now);
+
+            let enqueued_at_str = row
+                .get_value(4)
+                .ok()
+                .and_then(|v| v.as_text().map(|s| s.to_string()))
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract enqueued_at from row".to_string(),
+                })?;
+            let enqueued_at = chrono::DateTime::parse_from_rfc3339(&enqueued_at_str)
+                .ok()
+                .or_else(|| chrono::DateTime::parse_from_rfc2822(&enqueued_at_str).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or(now);
+
+            let read_ct = row
+                .get_value(5)
+                .ok()
+                .and_then(|v| v.as_integer().copied().map(|i| i as i32))
+                .unwrap_or(0);
+            let dequeued_at_str: Option<String> =
+                row.get_value(6).ok().and_then(|v| v.as_text().map(|s| s.to_string()));
+            let dequeued_at = dequeued_at_str.and_then(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .or_else(|| chrono::DateTime::parse_from_rfc2822(&s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
+            let producer_worker_id = row.get_value(7).ok().and_then(|v| v.as_integer().copied());
+            let consumer_worker_id = row.get_value(8).ok().and_then(|v| v.as_integer().copied());
+
+            Ok(Some(QueueMessage {
+                id,
+                queue_id,
+                payload,
+                vt,
+                enqueued_at,
+                read_ct,
+                dequeued_at,
+                producer_worker_id,
+                consumer_worker_id,
+            }))
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 
-    async fn count_for_queue(&self, _queue_id: i64) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso archive count_for_queue
-        Err(Error::Internal {
-            message: "turso archive count_for_queue not yet implemented".to_string(),
-        })
+    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = ?";
+        let mut rows = conn.query(sql, [queue_id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count archives for queue: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 }
 
@@ -1064,39 +2057,111 @@ impl TursoWorkflowTable {
 
 #[async_trait]
 impl WorkflowTable for TursoWorkflowTable {
-    async fn insert(&self, _data: NewWorkflow) -> Result<WorkflowRecord> {
-        // TODO: Phase 2.1 - implement Turso workflow insert
-        Err(Error::Internal {
-            message: "turso workflow insert not yet implemented".to_string(),
-        })
+    async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let now = chrono::Utc::now();
+        let now_str = now.to_rfc3339();
+        let input_str = data.input.map(|v| v.to_string());
+
+        let sql = "INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at) VALUES (?, 'PENDING', ?, ?, ?) RETURNING workflow_id, name, status, input, output, error, created_at, updated_at, executor_id";
+        let mut rows = conn
+            .query(sql, (data.name.clone(), input_str, now_str.clone(), now_str))
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to insert workflow: {e}"),
+            })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch inserted row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: "No row returned after insert".to_string(),
+            })
+        }
     }
 
-    async fn get(&self, _id: i64) -> Result<WorkflowRecord> {
-        // TODO: Phase 2.1 - implement Turso workflow get
-        Err(Error::Internal {
-            message: "turso workflow get not yet implemented".to_string(),
-        })
+    async fn get(&self, id: i64) -> Result<WorkflowRecord> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT workflow_id, name, status, input, output, error, created_at, updated_at, executor_id FROM pgqrs_workflows WHERE workflow_id = ?";
+        let mut rows = conn.query(sql, [id]).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query workflow: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            Self::map_row(&row)
+        } else {
+            Err(Error::Internal {
+                message: format!("Workflow {} not found", id),
+            })
+        }
     }
 
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
-        // TODO: Phase 2.1 - implement Turso workflow list
-        Err(Error::Internal {
-            message: "turso workflow list not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT workflow_id, name, status, input, output, error, created_at, updated_at, executor_id FROM pgqrs_workflows ORDER BY created_at DESC";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to query workflows: {e}"),
+        })?;
+
+        let mut workflows = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            workflows.push(Self::map_row(&row)?);
+        }
+        Ok(workflows)
     }
 
     async fn count(&self) -> Result<i64> {
-        // TODO: Phase 2.1 - implement Turso workflow count
-        Err(Error::Internal {
-            message: "turso workflow count not yet implemented".to_string(),
-        })
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "SELECT COUNT(*) FROM pgqrs_workflows";
+        let mut rows = conn.query(sql, ()).await.map_err(|e| Error::Internal {
+            message: format!("Failed to count workflows: {e}"),
+        })?;
+
+        if let Some(row) = rows.next().await.map_err(|e| Error::Internal {
+            message: format!("Failed to fetch row: {e}"),
+        })? {
+            row.get_value(0)
+                .ok()
+                .and_then(|v| v.as_integer().copied())
+                .ok_or_else(|| Error::Internal {
+                    message: "Failed to extract count from row".to_string(),
+                })
+        } else {
+            Ok(0)
+        }
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        // TODO: Phase 2.1 - implement Turso workflow delete
-        Err(Error::Internal {
-            message: "turso workflow delete not yet implemented".to_string(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let conn = self.db.connect().map_err(|e| Error::Internal {
+            message: format!("Failed to open database connection: {e}"),
+        })?;
+
+        let sql = "DELETE FROM pgqrs_workflows WHERE workflow_id = ?";
+        conn.execute(sql, [id])
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to delete workflow: {e}"),
+            })?;
+
+        Ok(1)
     }
 }
 
