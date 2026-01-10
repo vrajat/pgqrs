@@ -18,7 +18,7 @@ pub struct TursoConsumer {
     worker_info: WorkerInfo,
     #[allow(dead_code)]
     queue_info: QueueInfo,
-    config: Config,
+    _config: Config,
 }
 
 impl TursoConsumer {
@@ -63,7 +63,7 @@ impl TursoConsumer {
             worker_id: worker_info.id,
             worker_info,
             queue_info,
-            config,
+            _config: config,
         })
     }
 
@@ -84,7 +84,7 @@ impl TursoConsumer {
             worker_id: worker_info.id,
             worker_info,
             queue_info: queue_info.clone(),
-            config: config.clone(),
+            _config: config.clone(),
         })
     }
 }
@@ -271,13 +271,13 @@ impl Consumer for TursoConsumer {
                 context: "Archive start".into(),
             })?;
 
-        let msg_row_opt = crate::store::turso::query("SELECT id, queue_id, payload, enqueued_at, vt, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id = ?")
+        let msg_row_res = crate::store::turso::query("SELECT id, queue_id, payload, enqueued_at, vt, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id = ?")
              .bind(msg_id)
-             .fetch_optional_on_connection(&conn)
+             .fetch_all_on_connection(&conn)
              .await;
 
-        let msg_row_opt = match msg_row_opt {
-            Ok(res) => res,
+        let msg_row_opt = match msg_row_res {
+            Ok(rows) => rows.into_iter().next(),
             Err(e) => {
                 let _ = conn.execute("ROLLBACK", ()).await;
                 return Err(e);
@@ -304,11 +304,19 @@ impl Consumer for TursoConsumer {
               .bind(row.get::<i32>(5)?)
               .bind(row.get::<Option<String>>(6)?)
               .bind(now_str)
-              .fetch_one_on_connection(&conn)
+              .fetch_all_on_connection(&conn)
               .await;
 
             let archive_row = match archive_row {
-                Ok(res) => res,
+                Ok(rows) => match rows.into_iter().next() {
+                    Some(r) => r,
+                    None => {
+                        let _ = conn.execute("ROLLBACK", ()).await;
+                        return Err(Error::Internal {
+                            message: "No row returned from archive insert".into(),
+                        });
+                    }
+                },
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
                     return Err(e);

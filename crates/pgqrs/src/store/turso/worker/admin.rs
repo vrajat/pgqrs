@@ -82,12 +82,12 @@ const RELEASE_WORKER_MESSAGES: &str = r#"
     WHERE consumer_worker_id = ?
 "#;
 
-const CHECK_WORKER_REFERENCES: &str = r#"
-    SELECT COUNT(*) as total_references FROM (
-        SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = ? OR consumer_worker_id = ?
-        UNION ALL
-        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = ? OR consumer_worker_id = ?
-    ) refs
+const CHECK_WORKER_REFS_MESSAGES: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_messages WHERE producer_worker_id = ? OR consumer_worker_id = ?
+"#;
+
+const CHECK_WORKER_REFS_ARCHIVE: &str = r#"
+    SELECT COUNT(*) FROM pgqrs_archive WHERE producer_worker_id = ? OR consumer_worker_id = ?
 "#;
 
 const PURGE_OLD_WORKERS: &str = r#"
@@ -175,7 +175,7 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
 
 #[derive(Debug, Clone)]
 pub struct TursoAdmin {
-    worker_id: i64,
+    _worker_id: i64,
     db: Arc<Database>,
     config: Config,
     queues: Arc<TursoQueueTable>,
@@ -188,7 +188,7 @@ pub struct TursoAdmin {
 impl TursoAdmin {
     pub fn new(db: Arc<Database>, worker_id: i64, config: Config) -> Self {
         Self {
-            worker_id,
+            _worker_id: worker_id,
             db: db.clone(),
             config,
             queues: Arc::new(TursoQueueTable::new(db.clone())),
@@ -727,13 +727,19 @@ impl Admin for TursoAdmin {
 
     async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
         // Check refs first
-        let refs: i64 = crate::store::turso::query_scalar(CHECK_WORKER_REFERENCES)
-            .bind(worker_id)
-            .bind(worker_id)
+        let msg_refs: i64 = crate::store::turso::query_scalar(CHECK_WORKER_REFS_MESSAGES)
             .bind(worker_id)
             .bind(worker_id)
             .fetch_one(&self.db)
             .await?;
+
+        let arch_refs: i64 = crate::store::turso::query_scalar(CHECK_WORKER_REFS_ARCHIVE)
+            .bind(worker_id)
+            .bind(worker_id)
+            .fetch_one(&self.db)
+            .await?;
+
+        let refs = msg_refs + arch_refs;
 
         if refs > 0 {
             return Err(crate::error::Error::ValidationFailed {
@@ -935,8 +941,10 @@ mod tests {
     #[tokio::test]
     async fn test_dlq_logic() -> Result<()> {
         let db = create_test_db().await;
-        let mut config = Config::default();
-        config.max_read_ct = 3;
+        let config = Config {
+            max_read_ct: 3,
+            ..Default::default()
+        };
 
         let admin = TursoAdmin::new(db.clone(), 0, config.clone());
 
@@ -991,7 +999,7 @@ mod tests {
         let q = admin.create_queue("stats_q").await?;
 
         // Register a few workers
-        let w1 = admin.register("host1".to_string(), 1234).await?;
+        let _w1 = admin.register("host1".to_string(), 1234).await?;
 
         // In a real scenario, workers have heartbeats.
         // Let's manually verify they exist in stats.
@@ -1000,7 +1008,7 @@ mod tests {
         // We should use WorkerTable directly or register properly.
 
         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
-        let w2 =
+        let _w2 =
             crate::store::WorkerTable::register(&worker_table, Some(q.id), "host2", 2222).await?;
 
         let stats = admin.worker_stats("stats_q").await?;
