@@ -1,5 +1,7 @@
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::turso::tables::messages::TursoMessageTable;
+use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::store::{ArchiveTable, Consumer, MessageTable, Worker};
 use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
@@ -16,13 +18,20 @@ pub struct TursoConsumer {
     worker_info: WorkerInfo,
     #[allow(dead_code)]
     queue_info: QueueInfo,
+    config: Config,
 }
 
 impl TursoConsumer {
-    pub async fn new(db: Arc<Database>, queue: &str, hostname: &str, port: i32) -> Result<Self> {
+    pub async fn new(
+        db: Arc<Database>,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: Config,
+    ) -> Result<Self> {
         // Load queue
         let queue_row = crate::store::turso::query(
-            "SELECT id, queue_name, created_at FROM pgqrs_queues WHERE queue_name = $1",
+            "SELECT id, queue_name, created_at FROM pgqrs_queues WHERE queue_name = ?",
         )
         .bind(queue)
         .fetch_one(&db)
@@ -54,13 +63,14 @@ impl TursoConsumer {
             worker_id: worker_info.id,
             worker_info,
             queue_info,
+            config,
         })
     }
 
     pub async fn new_ephemeral(
         db: Arc<Database>,
         queue_info: &QueueInfo,
-        _config: &crate::config::Config,
+        config: &crate::config::Config,
     ) -> Result<Self> {
         let worker_info = crate::store::WorkerTable::register_ephemeral(
             &crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone()),
@@ -74,6 +84,7 @@ impl TursoConsumer {
             worker_id: worker_info.id,
             worker_info,
             queue_info: queue_info.clone(),
+            config: config.clone(),
         })
     }
 }
@@ -85,39 +96,33 @@ impl Worker for TursoConsumer {
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.status().await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.get_status(self.worker_id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.suspend().await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.suspend(self.worker_id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.resume().await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.resume(self.worker_id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.shutdown().await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.shutdown(self.worker_id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.heartbeat().await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.heartbeat(self.worker_id).await
     }
 
     async fn is_healthy(&self, max_age: Duration) -> Result<bool> {
-        let admin =
-            crate::store::turso::worker::admin::TursoAdmin::new(self.db.clone(), self.worker_id);
-        admin.is_healthy(max_age).await
+        let workers = TursoWorkerTable::new(self.db.clone());
+        workers.is_healthy(self.worker_id, max_age).await
     }
 }
 
@@ -286,7 +291,7 @@ impl Consumer for TursoConsumer {
             // Insert Archive
             let archive_row = crate::store::turso::query(r#"
                   INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at;
               "#)
               .bind(msg_id)

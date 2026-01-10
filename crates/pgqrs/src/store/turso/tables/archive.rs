@@ -10,14 +10,14 @@ const INSERT_ARCHIVED_MESSAGE: &str = r#"
         original_msg_id, queue_id, producer_worker_id, consumer_worker_id,
         payload, enqueued_at, vt, read_ct, dequeued_at, archived_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at;
 "#;
 
 const GET_ARCHIVED_MESSAGE_BY_ID: &str = r#"
     SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at
     FROM pgqrs_archive
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const LIST_ALL_ARCHIVED_MESSAGES: &str = r#"
@@ -28,19 +28,19 @@ const LIST_ALL_ARCHIVED_MESSAGES: &str = r#"
 
 const DELETE_ARCHIVED_MESSAGE_BY_ID: &str = r#"
     DELETE FROM pgqrs_archive
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const LIST_ARCHIVED_MESSAGES_BY_QUEUE: &str = r#"
     SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at
     FROM pgqrs_archive
-    WHERE queue_id = $1
+    WHERE queue_id = ?
     ORDER BY archived_at DESC;
 "#;
 
 const REPLAY_MESSAGE_INSERT: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt)
-    VALUES ($1, $2, 0, $3, $3)
+    VALUES (?, ?, 0, ?, ?)
     RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
 "#;
 
@@ -191,7 +191,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
         offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
         let rows = crate::store::turso::query(
-            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at FROM pgqrs_archive WHERE read_ct >= $1 ORDER BY archived_at DESC LIMIT $2 OFFSET $3"
+            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at FROM pgqrs_archive WHERE read_ct >= ? ORDER BY archived_at DESC LIMIT ? OFFSET ?"
         )
         .bind(max_attempts)
         .bind(limit)
@@ -208,7 +208,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
 
     async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
         let count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= $1",
+            "SELECT COUNT(*) FROM pgqrs_archive WHERE read_ct >= ?",
         )
         .bind(max_attempts)
         .fetch_one(&self.db)
@@ -223,7 +223,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
         offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
         let rows = crate::store::turso::query(
-            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at FROM pgqrs_archive WHERE consumer_worker_id = $1 ORDER BY archived_at DESC LIMIT $2 OFFSET $3",
+            "SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at FROM pgqrs_archive WHERE consumer_worker_id = ? ORDER BY archived_at DESC LIMIT ? OFFSET ?",
         )
         .bind(worker_id)
         .bind(limit)
@@ -240,7 +240,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
 
     async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
         let count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = $1",
+            "SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = ?",
         )
         .bind(worker_id)
         .fetch_one(&self.db)
@@ -250,7 +250,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
 
     async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
         let count =
-            crate::store::turso::query("DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1")
+            crate::store::turso::query("DELETE FROM pgqrs_archive WHERE consumer_worker_id = ?")
                 .bind(worker_id)
                 .execute(&self.db)
                 .await?;
@@ -295,6 +295,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
             let msg_row = crate::store::turso::query(REPLAY_MESSAGE_INSERT)
                 .bind(archive_msg.queue_id)
                 .bind(payload_str)
+                .bind(now_str.clone())
                 .bind(now_str)
                 .fetch_one_on_connection(&conn)
                 .await;
@@ -342,7 +343,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
 
     async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
         let count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1",
+            "SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = ?",
         )
         .bind(queue_id)
         .fetch_one(&self.db)

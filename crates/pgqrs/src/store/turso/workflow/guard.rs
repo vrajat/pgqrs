@@ -12,21 +12,21 @@ pub struct TursoStepGuard {
 
 const SQL_ACQUIRE_STEP: &str = r#"
     INSERT INTO pgqrs_workflow_steps (workflow_id, step_key, status, started_at)
-    VALUES ($1, $2, 'RUNNING', datetime('now'))
+    VALUES (?, ?, 'RUNNING', datetime('now'))
     ON CONFLICT (workflow_id, step_key) DO UPDATE SET workflow_id=workflow_id
     RETURNING status, output, error
 "#;
 
 const SQL_STEP_SUCCESS: &str = r#"
     UPDATE pgqrs_workflow_steps
-    SET status = 'SUCCESS', output = $3, completed_at = datetime('now')
-    WHERE workflow_id = $1 AND step_key = $2
+    SET status = 'SUCCESS', output = ?, completed_at = datetime('now')
+    WHERE workflow_id = ? AND step_key = ?
 "#;
 
 const SQL_STEP_FAIL: &str = r#"
     UPDATE pgqrs_workflow_steps
-    SET status = 'ERROR', error = $3, completed_at = datetime('now')
-    WHERE workflow_id = $1 AND step_key = $2
+    SET status = 'ERROR', error = ?, completed_at = datetime('now')
+    WHERE workflow_id = ? AND step_key = ?
 "#;
 
 impl TursoStepGuard {
@@ -71,9 +71,9 @@ impl StepGuard for TursoStepGuard {
     async fn complete(&mut self, output: serde_json::Value) -> Result<()> {
         let output_str = output.to_string();
         crate::store::turso::query(SQL_STEP_SUCCESS)
+            .bind(output_str)
             .bind(self.workflow_id)
             .bind(self.step_id.as_str())
-            .bind(output_str)
             .execute(&self.db)
             .await?;
         Ok(())
@@ -82,9 +82,9 @@ impl StepGuard for TursoStepGuard {
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
         let error_str = error.to_string();
         crate::store::turso::query(SQL_STEP_FAIL)
+            .bind(error_str)
             .bind(self.workflow_id)
             .bind(self.step_id.as_str())
-            .bind(error_str)
             .execute(&self.db)
             .await?;
         Ok(())

@@ -10,14 +10,14 @@ use turso::Database;
 
 const SQL_CREATE_WORKFLOW: &str = r#"
 INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at)
-VALUES ($1, 'PENDING', $2, datetime('now'), datetime('now'))
+VALUES (?, 'PENDING', ?, datetime('now'), datetime('now'))
 RETURNING workflow_id
 "#;
 
 const SQL_START_WORKFLOW: &str = r#"
 UPDATE pgqrs_workflows
 SET status = 'RUNNING', updated_at = datetime('now')
-WHERE workflow_id = $1 AND status = 'PENDING'
+WHERE workflow_id = ? AND status = 'PENDING'
 RETURNING status, error
 "#;
 
@@ -81,7 +81,7 @@ impl crate::store::Workflow for TursoWorkflow {
         // If no row update, check current status
         if result.is_none() {
             let status_str: Option<String> = crate::store::turso::query_scalar(
-                "SELECT status FROM pgqrs_workflows WHERE workflow_id = $1",
+                "SELECT status FROM pgqrs_workflows WHERE workflow_id = ?",
             )
             .bind(self.id)
             .fetch_optional(&self.db)

@@ -355,9 +355,9 @@ impl Store for TursoStore {
         TursoStepGuard::acquire(&self.db, workflow_id, step_id).await
     }
 
-    async fn admin(&self, _config: &Config) -> Result<Box<dyn Admin>> {
+    async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
         use self::worker::admin::TursoAdmin;
-        let admin = TursoAdmin::new(self.db.clone(), 0);
+        let admin = TursoAdmin::new(self.db.clone(), 0, config.clone());
         Ok(Box::new(admin))
     }
 
@@ -380,12 +380,18 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        _config: &Config,
+        config: &Config,
     ) -> Result<Box<dyn Consumer>> {
         use self::worker::consumer::TursoConsumer;
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer =
-            TursoConsumer::new(self.db.clone(), &queue_info.queue_name, hostname, port).await?;
+        let consumer = TursoConsumer::new(
+            self.db.clone(),
+            &queue_info.queue_name,
+            hostname,
+            port,
+            config.clone(),
+        )
+        .await?;
         Ok(Box::new(consumer))
     }
 

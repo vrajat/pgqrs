@@ -17,7 +17,7 @@ const INSERT_MESSAGE: &str = r#"
 const GET_MESSAGE_BY_ID: &str = r#"
     SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
@@ -28,21 +28,21 @@ const LIST_ALL_MESSAGES: &str = r#"
 
 const DELETE_MESSAGE_BY_ID: &str = r#"
     DELETE FROM pgqrs_messages
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
     SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
     FROM pgqrs_messages
-    WHERE queue_id = $1
+    WHERE queue_id = ?
     ORDER BY enqueued_at DESC
     LIMIT 1000;
 "#;
 
 const UPDATE_MESSAGE_VT: &str = r#"
     UPDATE pgqrs_messages
-    SET vt = $2
-    WHERE id = $1;
+    SET vt = ?
+    WHERE id = ?;
 "#;
 
 #[derive(Debug, Clone)]
@@ -280,8 +280,8 @@ impl crate::store::MessageTable for TursoMessageTable {
     async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
         let vt_str = format_turso_timestamp(&vt);
         let rows = crate::store::turso::query(UPDATE_MESSAGE_VT)
-            .bind(id)
             .bind(vt_str)
+            .bind(id)
             .execute(&self.db)
             .await?;
         Ok(rows)
@@ -460,7 +460,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2
+                    WHERE queue_id = ? AND consumer_worker_id = ?
                     "#,
                 )
                 .bind(queue_id)
@@ -473,7 +473,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
+                    WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
                     "#,
                 )
                 .bind(queue_id)

@@ -70,13 +70,13 @@ impl TursoWorkflowTable {
         crate::store::turso::query(
             r#"
             UPDATE pgqrs_workflows
-            SET status = 'SUCCESS', output = $2, updated_at = $3
-            WHERE workflow_id = $1
+            SET status = 'SUCCESS', output = ?, updated_at = ?
+            WHERE workflow_id = ?
             "#,
         )
-        .bind(id)
         .bind(output_str)
         .bind(now_str)
+        .bind(id)
         .execute(&self.db)
         .await?;
 
@@ -91,13 +91,13 @@ impl TursoWorkflowTable {
         crate::store::turso::query(
             r#"
             UPDATE pgqrs_workflows
-            SET status = 'ERROR', error = $2, updated_at = $3
-            WHERE workflow_id = $1
+            SET status = 'ERROR', error = ?, updated_at = ?
+            WHERE workflow_id = ?
             "#,
         )
-        .bind(id)
         .bind(error_str)
         .bind(now_str)
+        .bind(id)
         .execute(&self.db)
         .await?;
 
@@ -115,7 +115,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
         let row = crate::store::turso::query(
             r#"
             INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at)
-            VALUES ($1, 'PENDING', $2, $3, $3)
+            VALUES (?, 'PENDING', ?, ?, ?)
             RETURNING workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
             "#,
         )
@@ -124,6 +124,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
                 Some(s) => turso::Value::Text(s),
                 None => turso::Value::Null,
             })
+        .bind(now_str.clone())
         .bind(now_str)
         .fetch_one(&self.db)
         .await?;
@@ -136,7 +137,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
             r#"
             SELECT workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
             FROM pgqrs_workflows
-            WHERE workflow_id = $1
+            WHERE workflow_id = ?
             "#,
         )
         .bind(id)
@@ -172,11 +173,10 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count =
-            crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
-                .bind(id)
-                .execute(&self.db)
-                .await?;
+        let count = crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = ?")
+            .bind(id)
+            .execute(&self.db)
+            .await?;
         Ok(count)
     }
 }

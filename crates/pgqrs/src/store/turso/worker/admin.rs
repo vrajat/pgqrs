@@ -463,12 +463,21 @@ impl Admin for TursoAdmin {
 
         // Execute deletes
         let res = async {
-            conn.execute("DELETE FROM pgqrs_messages WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
-                .await?;
-            conn.execute("DELETE FROM pgqrs_archive WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
-                .await?;
-            conn.execute("DELETE FROM pgqrs_workers WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
-                .await?;
+            conn.execute(
+                "DELETE FROM pgqrs_messages WHERE queue_id = ?",
+                vec![turso::Value::Integer(queue.id)],
+            )
+            .await?;
+            conn.execute(
+                "DELETE FROM pgqrs_archive WHERE queue_id = ?",
+                vec![turso::Value::Integer(queue.id)],
+            )
+            .await?;
+            conn.execute(
+                "DELETE FROM pgqrs_workers WHERE queue_id = ?",
+                vec![turso::Value::Integer(queue.id)],
+            )
+            .await?;
             Ok::<_, turso::Error>(())
         };
 
@@ -583,7 +592,10 @@ impl Admin for TursoAdmin {
 
             // 3. Delete
             let res = conn
-                .execute("DELETE FROM pgqrs_messages WHERE id = ?", vec![turso::Value::Integer(id)])
+                .execute(
+                    "DELETE FROM pgqrs_messages WHERE id = ?",
+                    vec![turso::Value::Integer(id)],
+                )
                 .await;
             if let Err(e) = res {
                 let _ = conn.execute("ROLLBACK", ()).await;
@@ -945,7 +957,9 @@ mod tests {
         ).await.unwrap();
 
         // Verify it is there
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages").fetch_one(&db).await?;
+        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
+            .fetch_one(&db)
+            .await?;
         assert_eq!(count, 1);
 
         // Run DLQ
@@ -953,10 +967,16 @@ mod tests {
         assert_eq!(moved.len(), 1);
 
         // Verify message moved to archive
-        let count_msg: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages").fetch_one(&db).await?;
+        let count_msg: i64 =
+            crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
+                .fetch_one(&db)
+                .await?;
         assert_eq!(count_msg, 0);
 
-        let count_arch: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive").fetch_one(&db).await?;
+        let count_arch: i64 =
+            crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive")
+                .fetch_one(&db)
+                .await?;
         assert_eq!(count_arch, 1);
 
         Ok(())
@@ -964,57 +984,58 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_stats_basic() -> Result<()> {
-         let db = create_test_db().await;
-         let config = Config::default();
-         let mut admin = TursoAdmin::new(db.clone(), 0, config);
+        let db = create_test_db().await;
+        let config = Config::default();
+        let mut admin = TursoAdmin::new(db.clone(), 0, config);
 
-         let q = admin.create_queue("stats_q").await?;
+        let q = admin.create_queue("stats_q").await?;
 
-         // Register a few workers
-         let w1 = admin.register("host1".to_string(), 1234).await?;
+        // Register a few workers
+        let w1 = admin.register("host1".to_string(), 1234).await?;
 
-         // In a real scenario, workers have heartbeats.
-         // Let's manually verify they exist in stats.
-         // note: worker_stats takes queue_name, but TursoAdmin::register creates a "global" worker (queue_id None) if we use admin register for *itself*
-         // But here we want to simulate queue workers.
-         // We should use WorkerTable directly or register properly.
+        // In a real scenario, workers have heartbeats.
+        // Let's manually verify they exist in stats.
+        // note: worker_stats takes queue_name, but TursoAdmin::register creates a "global" worker (queue_id None) if we use admin register for *itself*
+        // But here we want to simulate queue workers.
+        // We should use WorkerTable directly or register properly.
 
-         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
-         let w2 = crate::store::WorkerTable::register(&worker_table, Some(q.id), "host2", 2222).await?;
+        let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
+        let w2 =
+            crate::store::WorkerTable::register(&worker_table, Some(q.id), "host2", 2222).await?;
 
-         let stats = admin.worker_stats("stats_q").await?;
-         assert_eq!(stats.total_workers, 1); // Only w2 is bound to stats_q
+        let stats = admin.worker_stats("stats_q").await?;
+        assert_eq!(stats.total_workers, 1); // Only w2 is bound to stats_q
 
-         Ok(())
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_worker_registration_with_option_binding() -> Result<()> {
-         let db = create_test_db().await;
-         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
+        let db = create_test_db().await;
+        let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
 
-         // 1. None
-         let w1 = worker_table.register(None, "host_none", 1000).await?;
-         assert!(w1.queue_id.is_none());
+        // 1. None
+        let w1 = worker_table.register(None, "host_none", 1000).await?;
+        assert!(w1.queue_id.is_none());
 
-         // 2. Some
-         let w2 = worker_table.register(Some(123), "host_some", 1001).await?;
-         assert_eq!(w2.queue_id, Some(123));
+        // 2. Some
+        let w2 = worker_table.register(Some(123), "host_some", 1001).await?;
+        assert_eq!(w2.queue_id, Some(123));
 
-         // 3. Ephemeral (Some)
-         let w3 = worker_table.register_ephemeral(Some(456)).await?;
-         assert_eq!(w3.queue_id, Some(456));
+        // 3. Ephemeral (Some)
+        let w3 = worker_table.register_ephemeral(Some(456)).await?;
+        assert_eq!(w3.queue_id, Some(456));
 
-         // 4. Update existing (None -> Some)
-         // TursoWorkerTable register logic for existing is: if stopped, re-register. If ready, error.
-         // Let's stop w1 first.
-         worker_table.suspend(w1.id).await?;
-         worker_table.shutdown(w1.id).await?;
+        // 4. Update existing (None -> Some)
+        // TursoWorkerTable register logic for existing is: if stopped, re-register. If ready, error.
+        // Let's stop w1 first.
+        worker_table.suspend(w1.id).await?;
+        worker_table.shutdown(w1.id).await?;
 
-         let w1_updated = worker_table.register(Some(999), "host_none", 1000).await?;
-         assert_eq!(w1_updated.id, w1.id);
-         assert_eq!(w1_updated.queue_id, Some(999));
+        let w1_updated = worker_table.register(Some(999), "host_none", 1000).await?;
+        assert_eq!(w1_updated.id, w1.id);
+        assert_eq!(w1_updated.queue_id, Some(999));
 
-         Ok(())
+        Ok(())
     }
 }

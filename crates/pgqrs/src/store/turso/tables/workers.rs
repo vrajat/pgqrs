@@ -9,14 +9,14 @@ use turso::Database;
 
 const INSERT_WORKER: &str = r#"
     INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id;
 "#;
 
 const GET_WORKER_BY_ID: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const LIST_ALL_WORKERS: &str = r#"
@@ -28,13 +28,13 @@ const LIST_ALL_WORKERS: &str = r#"
 const LIST_WORKERS_BY_QUEUE: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
-    WHERE queue_id = $1
+    WHERE queue_id = ?
     ORDER BY started_at DESC;
 "#;
 
 const DELETE_WORKER_BY_ID: &str = r#"
     DELETE FROM pgqrs_workers
-    WHERE id = $1;
+    WHERE id = ?;
 "#;
 
 const INSERT_EPHEMERAL_WORKER: &str = r#"
@@ -92,7 +92,7 @@ impl TursoWorkerTable {
 
     pub async fn get_status(&self, worker_id: i64) -> Result<WorkerStatus> {
         let status_str: String =
-            crate::store::turso::query_scalar("SELECT status FROM pgqrs_workers WHERE id = $1")
+            crate::store::turso::query_scalar("SELECT status FROM pgqrs_workers WHERE id = ?")
                 .bind(worker_id)
                 .fetch_one(&self.db)
                 .await?;
@@ -105,7 +105,7 @@ impl TursoWorkerTable {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
-        crate::store::turso::query("UPDATE pgqrs_workers SET heartbeat_at = $1 WHERE id = $2")
+        crate::store::turso::query("UPDATE pgqrs_workers SET heartbeat_at = ? WHERE id = ?")
             .bind(now_str)
             .bind(worker_id)
             .execute(&self.db)
@@ -119,10 +119,10 @@ impl TursoWorkerTable {
         let threshold_str = format_turso_timestamp(&threshold);
 
         let is_healthy: bool = crate::store::turso::query_scalar(
-            "SELECT heartbeat_at > $2 FROM pgqrs_workers WHERE id = $1",
+            "SELECT heartbeat_at > ? FROM pgqrs_workers WHERE id = ?",
         )
-        .bind(worker_id)
         .bind(threshold_str)
+        .bind(worker_id)
         .fetch_one(&self.db)
         .await?;
 
@@ -131,7 +131,7 @@ impl TursoWorkerTable {
 
     pub async fn suspend(&self, worker_id: i64) -> Result<()> {
         let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status = 'ready'",
+            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = ? AND status = 'ready'",
         )
         .bind(worker_id)
         .execute(&self.db)
@@ -150,7 +150,7 @@ impl TursoWorkerTable {
 
     pub async fn resume(&self, worker_id: i64) -> Result<()> {
         let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'suspended'",
+            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = ? AND status = 'suspended'",
         )
         .bind(worker_id)
         .execute(&self.db)
@@ -171,9 +171,9 @@ impl TursoWorkerTable {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
-        let count = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'stopped', shutdown_at = $2 WHERE id = $1 AND status = 'suspended'")
-            .bind(worker_id)
+        let count = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'stopped', shutdown_at = ? WHERE id = ? AND status = 'suspended'")
             .bind(now_str)
+            .bind(worker_id)
             .execute(&self.db)
             .await?;
 
@@ -277,7 +277,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
     ) -> Result<i64> {
         let state_str = state.to_string();
         let count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status = $2",
+            "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ? AND status = ?",
         )
         .bind(queue_id)
         .bind(turso::Value::Text(state_str))
@@ -294,7 +294,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_turso_timestamp(&threshold);
 
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'suspended') AND heartbeat_at < $2")
+        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'suspended') AND heartbeat_at < ?")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_one(&self.db)
@@ -308,7 +308,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         state: crate::types::WorkerStatus,
     ) -> Result<Vec<WorkerInfo>> {
         let state_str = state.to_string();
-        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status = $2 ORDER BY started_at DESC")
+        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC")
             .bind(queue_id)
             .bind(state_str)
             .fetch_all(&self.db)
@@ -329,7 +329,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_turso_timestamp(&threshold);
 
-        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'suspended') AND heartbeat_at < $2 ORDER BY heartbeat_at ASC")
+        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'suspended') AND heartbeat_at < ? ORDER BY heartbeat_at ASC")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_all(&self.db)
@@ -348,7 +348,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         hostname: &str,
         port: i32,
     ) -> Result<WorkerInfo> {
-        let existing = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = $1 AND port = $2")
+        let existing = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = ? AND port = ?")
             .bind(hostname)
             .bind(port)
             .fetch_optional(&self.db)
@@ -361,13 +361,14 @@ impl crate::store::WorkerTable for TursoWorkerTable {
                     // Reset
                     let now = Utc::now();
                     let now_str = format_turso_timestamp(&now);
-                    let row = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
-                        .bind(worker.id)
+                    let row = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = ?, started_at = ?, heartbeat_at = ?, shutdown_at = NULL WHERE id = ? RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
                         .bind(match queue_id {
                             Some(id) => turso::Value::Integer(id),
                             None => turso::Value::Null,
                         })
+                        .bind(now_str.clone())
                         .bind(now_str)
+                        .bind(worker.id)
                         .fetch_one(&self.db)
                         .await?;
 
