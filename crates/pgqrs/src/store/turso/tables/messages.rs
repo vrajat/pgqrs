@@ -10,7 +10,7 @@ use turso::{Database, Value as TursoValue};
 
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
 "#;
 
@@ -207,7 +207,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                 crate::store::turso::query(
                     r#"
                     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     RETURNING id
                     "#,
                 )

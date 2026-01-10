@@ -120,7 +120,10 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
             "#,
         )
         .bind(data.name.as_str())
-        .bind(input_str)
+            .bind(match input_str {
+                Some(s) => turso::Value::Text(s),
+                None => turso::Value::Null,
+            })
         .bind(now_str)
         .fetch_one(&self.db)
         .await?;

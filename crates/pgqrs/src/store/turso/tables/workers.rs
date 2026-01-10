@@ -38,8 +38,8 @@ const DELETE_WORKER_BY_ID: &str = r#"
 "#;
 
 const INSERT_EPHEMERAL_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
-    VALUES ($1, -1, $2, 'ready')
+    INSERT INTO pgqrs_workers (hostname, port, queue_id, status, started_at, heartbeat_at)
+    VALUES (?, -1, ?, 'ready', ?, ?)
     RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status;
 "#;
 
@@ -56,6 +56,9 @@ impl TursoWorkerTable {
     fn map_row(row: &turso::Row) -> Result<WorkerInfo> {
         let id: i64 = row.get(0)?;
         let hostname: String = row.get(1)?;
+        // Port might be returned as i64 in some contexts, cast if needed?
+        // But row.get handles conversion often.
+        // However, "port" is integer.
         let port: i32 = row.get(2)?;
         let queue_id: Option<i64> = row.get(3)?;
 
@@ -196,7 +199,10 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let id: i64 = crate::store::turso::query_scalar(INSERT_WORKER)
             .bind(data.hostname.as_str())
             .bind(data.port as i64)
-            .bind(data.queue_id)
+            .bind(match data.queue_id {
+                Some(id) => turso::Value::Integer(id),
+                None => turso::Value::Null,
+            })
             .bind(now_str.as_str())
             .bind(now_str.as_str())
             .bind(status_str.as_str())
@@ -274,7 +280,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status = $2",
         )
         .bind(queue_id)
-        .bind(state_str)
+        .bind(turso::Value::Text(state_str))
         .fetch_one(&self.db)
         .await?;
         Ok(count)
@@ -357,7 +363,10 @@ impl crate::store::WorkerTable for TursoWorkerTable {
                     let now_str = format_turso_timestamp(&now);
                     let row = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
                         .bind(worker.id)
-                        .bind(queue_id)
+                        .bind(match queue_id {
+                            Some(id) => turso::Value::Integer(id),
+                            None => turso::Value::Null,
+                        })
                         .bind(now_str)
                         .fetch_one(&self.db)
                         .await?;
@@ -390,10 +399,17 @@ impl crate::store::WorkerTable for TursoWorkerTable {
 
     async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+        let now = Utc::now();
+        let now_str = format_turso_timestamp(&now);
 
         let row = crate::store::turso::query(INSERT_EPHEMERAL_WORKER)
             .bind(hostname.as_str())
-            .bind(queue_id)
+            .bind(match queue_id {
+                Some(id) => turso::Value::Integer(id),
+                None => turso::Value::Null,
+            })
+            .bind(now_str.clone())
+            .bind(now_str)
             .fetch_one(&self.db)
             .await?;
 

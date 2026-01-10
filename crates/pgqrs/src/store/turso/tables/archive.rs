@@ -112,13 +112,22 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
         let row = crate::store::turso::query(INSERT_ARCHIVED_MESSAGE)
             .bind(data.original_msg_id)
             .bind(data.queue_id)
-            .bind(data.producer_worker_id)
-            .bind(data.consumer_worker_id)
+            .bind(match data.producer_worker_id {
+                Some(id) => turso::Value::Integer(id),
+                None => turso::Value::Null,
+            })
+            .bind(match data.consumer_worker_id {
+                Some(id) => turso::Value::Integer(id),
+                None => turso::Value::Null,
+            })
             .bind(payload_str)
             .bind(enqueued_at_str)
             .bind(vt_str)
             .bind(data.read_ct)
-            .bind(dequeued_at_str)
+            .bind(match dequeued_at_str {
+                Some(s) => turso::Value::Text(s),
+                None => turso::Value::Null,
+            })
             .bind(now_str)
             .fetch_one(&self.db)
             .await?;

@@ -1,25 +1,268 @@
+use crate::config::Config;
 use crate::error::Result;
+use crate::store::turso::parse_turso_timestamp;
+use crate::store::turso::tables::archive::TursoArchiveTable;
+use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::queues::TursoQueueTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
-use crate::store::{Admin, QueueTable, Worker, WorkerTable};
+use crate::store::{Admin, ArchiveTable, MessageTable, QueueTable, Worker, WorkerTable};
 use crate::types::{
     QueueInfo, QueueMessage, QueueMetrics, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStats,
     WorkerStatus,
 };
 use async_trait::async_trait;
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use std::sync::Arc;
 use turso::Database;
 
-#[derive(Debug)]
+// SQL Constants (Adapted from SQLite implementation)
+const CHECK_TABLE_EXISTS: &str = r#"
+    SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+"#;
+
+const CHECK_ORPHANED_MESSAGES: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_messages m
+    LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+    WHERE q.id IS NULL
+"#;
+
+const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_messages m
+    LEFT OUTER JOIN pgqrs_workers pw ON m.producer_worker_id = pw.id
+    LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
+    WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+       OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
+"#;
+
+const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_archive a
+    LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
+    WHERE q.id IS NULL
+"#;
+
+const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_archive a
+    LEFT OUTER JOIN pgqrs_workers pw ON a.producer_worker_id = pw.id
+    LEFT OUTER JOIN pgqrs_workers cw ON a.consumer_worker_id = cw.id
+    WHERE (a.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+       OR (a.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
+"#;
+
+const RELEASE_ZOMBIE_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET consumer_worker_id = NULL,
+        vt = datetime('now'),
+        dequeued_at = NULL,
+        read_ct = read_ct + 1
+    WHERE consumer_worker_id = ?
+"#;
+
+const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
+    UPDATE pgqrs_workers
+    SET status = 'stopped',
+        shutdown_at = datetime('now')
+    WHERE id = ?
+"#;
+
+const GET_WORKER_MESSAGES: &str = r#"
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    FROM pgqrs_messages
+    WHERE consumer_worker_id = ?
+    ORDER BY id
+"#;
+
+const RELEASE_WORKER_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = NULL, consumer_worker_id = NULL
+    WHERE consumer_worker_id = ?
+"#;
+
+const CHECK_WORKER_REFERENCES: &str = r#"
+    SELECT COUNT(*) as total_references FROM (
+        SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = ? OR consumer_worker_id = ?
+        UNION ALL
+        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = ? OR consumer_worker_id = ?
+    ) refs
+"#;
+
+const PURGE_OLD_WORKERS: &str = r#"
+    DELETE FROM pgqrs_workers
+    WHERE status = 'stopped'
+      AND heartbeat_at < datetime('now', '-' || ? || ' seconds')
+      AND id NOT IN (
+          SELECT DISTINCT worker_id
+          FROM (
+              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+              UNION
+              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
+              UNION
+              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
+          ) refs
+      )
+"#;
+
+const GET_QUEUE_METRICS: &str = r#"
+    SELECT
+        q.queue_name,
+        COUNT(m.id),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0),
+        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
+        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END),
+        MAX(m.enqueued_at)
+    FROM pgqrs_queues q
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    WHERE q.id = ?
+    GROUP BY q.id, q.queue_name
+"#;
+
+const GET_ALL_QUEUES_METRICS: &str = r#"
+    SELECT
+        q.queue_name,
+        COUNT(m.id),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0),
+        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
+        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END),
+        MAX(m.enqueued_at)
+    FROM pgqrs_queues q
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    GROUP BY q.id, q.queue_name
+"#;
+
+const GET_SYSTEM_STATS: &str = r#"
+    SELECT
+        (SELECT COUNT(*) FROM pgqrs_queues),
+        (SELECT COUNT(*) FROM pgqrs_workers),
+        (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready'),
+        (SELECT COUNT(*) FROM pgqrs_messages),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL),
+        (SELECT COUNT(*) FROM pgqrs_archive),
+        '0.5.0'
+"#;
+
+const GET_WORKER_HEALTH_GLOBAL: &str = r#"
+    SELECT
+        'Global',
+        COUNT(*),
+        SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+    FROM pgqrs_workers
+"#;
+
+const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
+    SELECT
+        COALESCE(q.queue_name, 'Admin'),
+        COUNT(w.id),
+        SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+    FROM pgqrs_workers w
+    LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+    GROUP BY q.queue_name
+"#;
+
+#[derive(Debug, Clone)]
 pub struct TursoAdmin {
     worker_id: i64,
     db: Arc<Database>,
+    config: Config,
+    queues: Arc<TursoQueueTable>,
+    messages: Arc<TursoMessageTable>,
+    workers: Arc<TursoWorkerTable>,
+    archive: Arc<TursoArchiveTable>,
+    worker_info: Option<WorkerInfo>,
 }
 
 impl TursoAdmin {
-    pub fn new(db: Arc<Database>, worker_id: i64) -> Self {
-        Self { worker_id, db }
+    pub fn new(db: Arc<Database>, worker_id: i64, config: Config) -> Self {
+        Self {
+            worker_id,
+            db: db.clone(),
+            config,
+            queues: Arc::new(TursoQueueTable::new(db.clone())),
+            messages: Arc::new(TursoMessageTable::new(db.clone())),
+            workers: Arc::new(TursoWorkerTable::new(db.clone())),
+            archive: Arc::new(TursoArchiveTable::new(db.clone())),
+            worker_info: None,
+        }
+    }
+
+    fn try_worker_id(&self) -> Result<i64> {
+        self.worker_info.as_ref().map(|w| w.id).ok_or_else(|| {
+            crate::error::Error::WorkerNotRegistered {
+                message:
+                    "Admin must be registered before using Worker methods. Call register() first."
+                        .to_string(),
+            }
+        })
+    }
+
+    fn map_queue_metrics_row(row: &turso::Row) -> Result<QueueMetrics> {
+        let name: String = row.get(0)?;
+        let total_messages: i64 = row.get(1)?;
+        let pending_messages: i64 = row.get(2)?;
+        let locked_messages: i64 = row.get(3)?;
+        let archived_messages: i64 = row.get(4)?;
+
+        // Oldest and newest timestamps might be NULL
+        let oldest_pending_str: Option<String> = row.get(5)?;
+        let oldest_pending_message = match oldest_pending_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
+
+        let newest_message_str: Option<String> = row.get(6)?;
+        let newest_message = match newest_message_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
+
+        Ok(QueueMetrics {
+            name,
+            total_messages,
+            pending_messages,
+            locked_messages,
+            archived_messages,
+            oldest_pending_message,
+            newest_message,
+        })
+    }
+
+    fn map_system_stats_row(row: &turso::Row) -> Result<SystemStats> {
+        Ok(SystemStats {
+            total_queues: row.get(0)?,
+            total_workers: row.get(1)?,
+            active_workers: row.get(2)?,
+            total_messages: row.get(3)?,
+            pending_messages: row.get(4)?,
+            locked_messages: row.get(5)?,
+            archived_messages: row.get(6)?,
+            // schema version is typically string or text
+            schema_version: row.get(7)?,
+        })
+    }
+
+    fn map_worker_health_row(row: &turso::Row) -> Result<WorkerHealthStats> {
+        Ok(WorkerHealthStats {
+            queue_name: row.get(0)?,
+            total_workers: row.get(1)?,
+            ready_workers: row.get(2)?,
+            suspended_workers: row.get(3)?,
+            stopped_workers: row.get(4)?,
+            stale_workers: row.get(5)?,
+        })
     }
 }
 
@@ -27,37 +270,37 @@ impl TursoAdmin {
 #[async_trait]
 impl Worker for TursoAdmin {
     fn worker_id(&self) -> i64 {
-        self.worker_id
+        self.worker_info.as_ref().map(|w| w.id).unwrap_or(-1)
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.get_status(self.worker_id).await
+        let worker_id = self.try_worker_id()?;
+        self.workers.get_status(worker_id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.suspend(self.worker_id).await
+        let worker_id = self.try_worker_id()?;
+        self.workers.suspend(worker_id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.resume(self.worker_id).await
+        let worker_id = self.try_worker_id()?;
+        self.workers.resume(worker_id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.shutdown(self.worker_id).await
+        let worker_id = self.try_worker_id()?;
+        self.workers.shutdown(worker_id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.heartbeat(self.worker_id).await
+        let worker_id = self.try_worker_id()?;
+        self.workers.heartbeat(worker_id).await
     }
 
-    async fn is_healthy(&self, max_age: Duration) -> Result<bool> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.is_healthy(self.worker_id, max_age).await
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        let worker_id = self.try_worker_id()?;
+        self.workers.is_healthy(worker_id, max_age).await
     }
 }
 
@@ -87,45 +330,121 @@ impl Admin for TursoAdmin {
     }
 
     async fn verify(&self) -> Result<()> {
-        // Simplified check: try to select from queues
-        crate::store::turso::query("SELECT 1 FROM pgqrs_queues LIMIT 1")
-            .execute(&self.db)
+        // Table existence check
+        let required_tables = [
+            ("pgqrs_queues", "Queue repository table"),
+            ("pgqrs_workers", "Worker repository table"),
+            ("pgqrs_messages", "Unified messages table"),
+            ("pgqrs_archive", "Unified archive table"),
+        ];
+
+        for (table_name, description) in &required_tables {
+            let exists: Option<i64> = crate::store::turso::query_scalar(CHECK_TABLE_EXISTS)
+                .bind(table_name.to_string())
+                .fetch_optional(&self.db)
+                .await?;
+
+            if exists.is_none() {
+                return Err(crate::error::Error::SchemaValidation {
+                    message: format!("{} ('{}') does not exist", description, table_name),
+                });
+            }
+        }
+
+        // Integrity checks
+        let count: i64 = crate::store::turso::query_scalar(CHECK_ORPHANED_MESSAGES)
+            .fetch_one(&self.db)
             .await?;
+        if count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!("Found {} orphaned messages", count),
+            });
+        }
+
+        let count: i64 = crate::store::turso::query_scalar(CHECK_ORPHANED_MESSAGE_WORKERS)
+            .fetch_one(&self.db)
+            .await?;
+        if count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!("Found {} messages with invalid worker refs", count),
+            });
+        }
+
+        let count: i64 = crate::store::turso::query_scalar(CHECK_ORPHANED_ARCHIVE_QUEUES)
+            .fetch_one(&self.db)
+            .await?;
+        if count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!("Found {} orphaned archive entries", count),
+            });
+        }
+
+        let count: i64 = crate::store::turso::query_scalar(CHECK_ORPHANED_ARCHIVE_WORKERS)
+            .fetch_one(&self.db)
+            .await?;
+        if count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!("Found {} archive entries with invalid worker refs", count),
+            });
+        }
+
         Ok(())
     }
 
     async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        let worker = worker_table.register(None, &hostname, port).await?;
-        self.worker_id = worker.id;
-        Ok(worker)
+        if let Some(ref info) = self.worker_info {
+            return Ok(info.clone());
+        }
+        let info = self.workers.register(None, &hostname, port).await?;
+        self.worker_info = Some(info.clone());
+        Ok(info)
     }
 
     async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
-        let queue_table = TursoQueueTable::new(self.db.clone());
-        queue_table
-            .insert(crate::types::NewQueue {
+        use crate::types::NewQueue;
+        self.queues
+            .insert(NewQueue {
                 queue_name: name.to_string(),
             })
             .await
     }
 
     async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
-        let queue_table = TursoQueueTable::new(self.db.clone());
-        queue_table.get_by_name(name).await
+        self.queues.get_by_name(name).await
     }
 
     async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
-        let queue_table = TursoQueueTable::new(self.db.clone());
-        queue_table.delete(queue_info.id).await.map(|_| ())
+        // Check active workers
+        let ready = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Ready)
+            .await?;
+        let suspended = self
+            .workers
+            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
+            .await?;
+        if ready + suspended > 0 {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: "Cannot delete queue: active workers exist".to_string(),
+            });
+        }
+
+        // Check references
+        let msgs = self.messages.filter_by_fk(queue_info.id).await?.len();
+        let arch = self.archive.filter_by_fk(queue_info.id).await?.len();
+        if msgs > 0 || arch > 0 {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: "Cannot delete queue: data exists".to_string(),
+            });
+        }
+
+        self.queues.delete(queue_info.id).await.map(|_| ())
     }
 
     async fn purge_queue(&self, name: &str) -> Result<()> {
-        let queue_table = TursoQueueTable::new(self.db.clone());
-        let queue = queue_table.get_by_name(name).await?;
+        let queue = self.queues.get_by_name(name).await?;
 
-        // Delete messages, workers, archive logic would be here.
-        // For now simpler impl:
+        // Manual delete calls using a single connection for transaction if possible
         let conn = self
             .db
             .connect()
@@ -133,114 +452,569 @@ impl Admin for TursoAdmin {
                 message: e.to_string(),
             })?;
 
-        conn.execute("DELETE FROM pgqrs_messages WHERE queue_id = ?", (queue.id,))
+        // Begin transaction
+        conn.execute("BEGIN", ())
             .await
             .map_err(|e| crate::error::Error::TursoQueryFailed {
-                query: "DELETE messages".into(),
-                source: e,
-                context: "Purge queue".into(),
-            })?;
-        conn.execute("DELETE FROM pgqrs_workers WHERE queue_id = ?", (queue.id,))
-            .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
-                query: "DELETE workers".into(),
+                query: "BEGIN".into(),
                 source: e,
                 context: "Purge queue".into(),
             })?;
 
-        Ok(())
+        // Execute deletes
+        let res = async {
+            conn.execute("DELETE FROM pgqrs_messages WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
+                .await?;
+            conn.execute("DELETE FROM pgqrs_archive WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
+                .await?;
+            conn.execute("DELETE FROM pgqrs_workers WHERE queue_id = ?", vec![turso::Value::Integer(queue.id)])
+                .await?;
+            Ok::<_, turso::Error>(())
+        };
+
+        match res.await {
+            Ok(_) => {
+                conn.execute("COMMIT", ()).await.map_err(|e| {
+                    crate::error::Error::TursoQueryFailed {
+                        query: "COMMIT".into(),
+                        source: e,
+                        context: "Purge queue".into(),
+                    }
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(crate::error::Error::TursoQueryFailed {
+                    query: "PURGE".into(),
+                    source: e,
+                    context: "Purge queue logic".into(),
+                })
+            }
+        }
     }
 
     async fn dlq(&self) -> Result<Vec<i64>> {
-        // Not fully implemented in Turso backend logic yet (need max_attempts logic in query)
-        // Assuming this returns list of IDs that are "dead" or moved to DLQ (which is archive with high read_ct sometimes?)
-        // This is ambiguous in current spec without dlq table.
-        // Assuming using archive table with read_ct logic.
-        Ok(vec![])
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "DLQ".into(),
+            })?;
+
+        // 1. Select candidates
+        // NOTE: We list columns explicitly to ensure index based retrieval works
+        let rows = conn
+            .query(
+                "SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at FROM pgqrs_messages WHERE read_ct >= ?",
+                vec![turso::Value::Integer(self.config.max_read_ct as i64)],
+            )
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "DLQ_Select".into(),
+                source: e,
+                context: "DLQ".into(),
+            })?;
+
+        // Collect all potential DLQ items
+        let mut messages = Vec::new();
+        let mut cursor = rows;
+        while let Some(row) =
+            cursor
+                .next()
+                .await
+                .map_err(|e| crate::error::Error::TursoQueryFailed {
+                    query: "DLQ_Cursor".into(),
+                    source: e,
+                    context: "DLQ".into(),
+                })?
+        {
+            // Map row manually
+            let id: i64 = row.get(0).unwrap();
+            let q_id: i64 = row.get(1).unwrap();
+            let p_wid: Option<i64> = row.get(2).unwrap();
+            let c_wid: Option<i64> = row.get(3).unwrap();
+            let payload: String = row.get(4).unwrap();
+            let vt: Option<String> = row.get(5).unwrap();
+            let enq: String = row.get(6).unwrap();
+            let read_ct: i32 = row.get(7).unwrap();
+            let deq: Option<String> = row.get(8).unwrap();
+
+            messages.push((id, q_id, p_wid, c_wid, payload, vt, enq, read_ct, deq));
+        }
+
+        let mut moved_ids = Vec::new();
+
+        for (id, q_id, p_wid, c_wid, payload, vt, enq, read_ct, deq) in messages {
+            // 2. Insert into Archive
+            let now_str = crate::store::turso::format_turso_timestamp(&chrono::Utc::now());
+            let res = conn.execute(
+                 "INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 vec![
+                     turso::Value::Integer(id),
+                     turso::Value::Integer(q_id),
+                     match p_wid { Some(v) => turso::Value::Integer(v), None => turso::Value::Null },
+                     match c_wid { Some(v) => turso::Value::Integer(v), None => turso::Value::Null },
+                     turso::Value::Text(payload),
+                     turso::Value::Text(enq),
+                     match vt { Some(v) => turso::Value::Text(v), None => turso::Value::Null },
+                     turso::Value::Integer(read_ct as i64),
+                     match deq { Some(v) => turso::Value::Text(v), None => turso::Value::Null },
+                     turso::Value::Text(now_str)
+                 ]
+             ).await;
+
+            if let Err(e) = res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(crate::error::Error::TursoQueryFailed {
+                    query: "DLQ_Insert".into(),
+                    source: e,
+                    context: "DLQ insert".into(),
+                });
+            }
+
+            // 3. Delete
+            let res = conn
+                .execute("DELETE FROM pgqrs_messages WHERE id = ?", vec![turso::Value::Integer(id)])
+                .await;
+            if let Err(e) = res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(crate::error::Error::TursoQueryFailed {
+                    query: "DLQ_Delete".into(),
+                    source: e,
+                    context: "DLQ delete".into(),
+                });
+            }
+            moved_ids.push(id);
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "COMMIT".into(),
+                source: e,
+                context: "DLQ".into(),
+            })?;
+
+        Ok(moved_ids)
     }
 
     async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
-        // Implement proper metrics query
-        let queue_table = TursoQueueTable::new(self.db.clone());
-        let queue = queue_table.get_by_name(name).await?;
-
-        let pending: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now'))")
+        let queue = self.queues.get_by_name(name).await?;
+        let row = crate::store::turso::query(GET_QUEUE_METRICS)
             .bind(queue.id)
-            .fetch_one(&self.db).await?;
-
-        Ok(QueueMetrics {
-            name: name.to_string(),
-            total_messages: 0, // TODO
-            pending_messages: pending,
-            locked_messages: 0,
-            archived_messages: 0,
-            oldest_pending_message: None, // TODO
-            newest_message: None,         // TODO
-        })
+            .fetch_one(&self.db)
+            .await?;
+        Self::map_queue_metrics_row(&row)
     }
 
     async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
-        Ok(vec![]) // Todo
+        let rows = crate::store::turso::query(GET_ALL_QUEUES_METRICS)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut metrics = Vec::new();
+        for row in rows {
+            metrics.push(Self::map_queue_metrics_row(&row)?);
+        }
+        Ok(metrics)
     }
 
     async fn system_stats(&self) -> Result<SystemStats> {
-        Ok(SystemStats {
-            total_queues: 0,
-            total_workers: 0,
-            active_workers: 0,
-            total_messages: 0,
-            pending_messages: 0,
-            locked_messages: 0,
-            archived_messages: 0,
-            schema_version: "1".into(),
-        }) // Todo
+        let row = crate::store::turso::query(GET_SYSTEM_STATS)
+            .fetch_one(&self.db)
+            .await?;
+        Self::map_system_stats_row(&row)
     }
 
     async fn worker_health_stats(
         &self,
-        _heartbeat_timeout: Duration,
-        _group_by_queue: bool,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
     ) -> Result<Vec<WorkerHealthStats>> {
-        Ok(vec![]) // Todo
+        let seconds = heartbeat_timeout.num_seconds();
+        let query_str = if group_by_queue {
+            GET_WORKER_HEALTH_BY_QUEUE
+        } else {
+            GET_WORKER_HEALTH_GLOBAL
+        };
+
+        let rows = crate::store::turso::query(query_str)
+            .bind(seconds)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(Self::map_worker_health_row(&row)?);
+        }
+        Ok(stats)
     }
 
-    async fn worker_stats(&self, _queue_name: &str) -> Result<WorkerStats> {
+    async fn worker_stats(&self, queue_name: &str) -> Result<WorkerStats> {
+        // Reuse similar logic to SQLite but using Turso methods
+        let queue_id = self.queues.get_by_name(queue_name).await?.id;
+        let workers = self.workers.filter_by_fk(queue_id).await?;
+
+        let total_workers = workers.len() as u32;
+        let ready_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Ready)
+            .count() as u32;
+        let stopped_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Stopped)
+            .count() as u32;
+        let suspended_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Suspended)
+            .count() as u32;
+
+        let mut total_messages = 0u64;
+        for worker in &workers {
+            let matches = self.get_worker_messages(worker.id).await?;
+            total_messages += matches.len() as u64;
+        }
+
+        let average_messages_per_worker = if total_workers > 0 {
+            total_messages as f64 / total_workers as f64
+        } else {
+            0.0
+        };
+
+        let now = Utc::now();
+        let oldest_worker_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.started_at))
+            .max()
+            .unwrap_or(chrono::Duration::zero());
+        let newest_heartbeat_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.heartbeat_at))
+            .min()
+            .unwrap_or(chrono::Duration::zero());
+
         Ok(WorkerStats {
-            // queue_name was removed from struct? Or not present.
-            total_workers: 0,
-            ready_workers: 0,
-            suspended_workers: 0,
-            stopped_workers: 0,
-            average_messages_per_worker: 0.0,
-            oldest_worker_age: chrono::Duration::seconds(0),
-            newest_heartbeat_age: chrono::Duration::seconds(0),
+            total_workers,
+            ready_workers,
+            suspended_workers,
+            stopped_workers,
+            average_messages_per_worker,
+            oldest_worker_age,
+            newest_heartbeat_age,
         })
     }
 
     async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.delete(worker_id).await
+        // Check refs first
+        let refs: i64 = crate::store::turso::query_scalar(CHECK_WORKER_REFERENCES)
+            .bind(worker_id)
+            .bind(worker_id)
+            .bind(worker_id)
+            .bind(worker_id)
+            .fetch_one(&self.db)
+            .await?;
+
+        if refs > 0 {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!(
+                    "Worker has {} references (associated messages/archives)",
+                    refs
+                ),
+            });
+        }
+        self.workers.delete(worker_id).await
     }
 
     async fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
-        let worker_table = TursoWorkerTable::new(self.db.clone());
-        worker_table.list().await
+        self.workers.list().await
     }
 
-    async fn get_worker_messages(&self, _worker_id: i64) -> Result<Vec<QueueMessage>> {
-        // Implement using messages table
-        Ok(vec![])
+    async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        let worker = self.workers.get(worker_id).await?;
+        if worker.queue_id.is_none() {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: "Cannot get messages for admin worker".into(),
+            });
+        }
+
+        let rows = crate::store::turso::query(GET_WORKER_MESSAGES)
+            .bind(worker_id)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut msgs = Vec::new();
+        // Since we don't have public map_row for TursoMessageTable, we must map manually here
+        // or expose it. Copying consumer.rs mapping logic essentially.
+        // Columns: id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+        for row in rows {
+            let id: i64 = row.get(0)?;
+            let queue_id: i64 = row.get(1)?;
+            let producer_worker_id: Option<i64> = row.get(2)?;
+            let consumer_worker_id: Option<i64> = row.get(3)?;
+            let payload_str: String = row.get(4)?;
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+
+            let vt_str: Option<String> = row.get(5)?;
+            let vt = match vt_str {
+                Some(s) => Some(parse_turso_timestamp(&s)?),
+                None => None,
+            };
+
+            let enqueued_at_str: String = row.get(6)?;
+            let enqueued_at = parse_turso_timestamp(&enqueued_at_str)?;
+
+            let read_ct: i32 = row.get(7)?;
+
+            let dequeued_at_str: Option<String> = row.get(8)?;
+
+            let dequeued_at = match dequeued_at_str {
+                Some(s) => Some(parse_turso_timestamp(&s)?),
+                None => None,
+            };
+
+            msgs.push(QueueMessage {
+                id,
+                queue_id,
+                producer_worker_id,
+                consumer_worker_id,
+                payload,
+                vt: vt.expect("Worker message must have vt set"),
+                enqueued_at,
+                read_ct,
+                dequeued_at,
+            });
+        }
+        Ok(msgs)
     }
 
-    async fn reclaim_messages(&self, _queue_id: i64, _older_than: Option<Duration>) -> Result<u64> {
-        Ok(0)
+    async fn reclaim_messages(&self, queue_id: i64, older_than: Option<Duration>) -> Result<u64> {
+        let timeout = older_than
+            .unwrap_or_else(|| chrono::Duration::seconds(self.config.heartbeat_interval as i64));
+
+        // Find zombies using pool (outside tx for read, then tx for update)
+        // Actually we need to do this atomically or at least safely.
+        // Reading zombies then updating them is fine if status hasn't changed.
+        // TursoWorkerTable.list_zombies_for_queue exists.
+
+        let zombies = self
+            .workers
+            .list_zombies_for_queue(queue_id, timeout)
+            .await?;
+        if zombies.is_empty() {
+            return Ok(0);
+        }
+
+        // Now reclaim
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "Reclaim".into(),
+            })?;
+
+        let mut total = 0;
+        for zombie in zombies {
+            // UPDATE messages
+            let res = conn.execute(RELEASE_ZOMBIE_MESSAGES, (zombie.id,)).await;
+
+            match res {
+                Ok(count) => total += count,
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(crate::error::Error::TursoQueryFailed {
+                        query: "RELEASE_ZOMBIES".into(),
+                        source: e,
+                        context: "Reclaim".into(),
+                    });
+                }
+            }
+
+            // UPDATE worker status
+            let res = conn.execute(SHUTDOWN_ZOMBIE_WORKER, (zombie.id,)).await;
+
+            if let Err(e) = res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(crate::error::Error::TursoQueryFailed {
+                    query: "SHUTDOWN_ZOMBIE".into(),
+                    source: e,
+                    context: "Reclaim".into(),
+                });
+            }
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "COMMIT".into(),
+                source: e,
+                context: "Reclaim".into(),
+            })?;
+
+        Ok(total)
     }
 
-    async fn purge_old_workers(&self, _older_than: chrono::Duration) -> Result<u64> {
-        Ok(0)
+    async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
+        let seconds = older_than.num_seconds();
+        let count = crate::store::turso::query(PURGE_OLD_WORKERS)
+            .bind(seconds)
+            .execute(&self.db)
+            .await?;
+        Ok(count as u64)
     }
 
-    async fn release_worker_messages(&self, _worker_id: i64) -> Result<u64> {
-        Ok(0)
+    async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
+        let count = crate::store::turso::query(RELEASE_WORKER_MESSAGES)
+            .bind(worker_id)
+            .execute(&self.db)
+            .await?;
+        Ok(count as u64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::turso::test_utils::create_test_db;
+
+    #[tokio::test]
+    async fn test_admin_queue_ops() -> Result<()> {
+        let db = create_test_db().await;
+        // Need to create admin via Store usually to handle dependencies or just direct new
+        let config = Config::default();
+        let admin = TursoAdmin::new(db.clone(), 0, config);
+
+        // Create Queue
+        let q = admin.create_queue("test_q").await?;
+        assert_eq!(q.queue_name, "test_q");
+
+        // Get Queue
+        let q2 = admin.get_queue("test_q").await?;
+        assert_eq!(q.id, q2.id);
+
+        // Verify metrics empty
+        let metrics = admin.queue_metrics("test_q").await?;
+        assert_eq!(metrics.pending_messages, 0);
+
+        // Delete Queue
+        admin.delete_queue(&q).await?;
+        assert!(admin.get_queue("test_q").await.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dlq_logic() -> Result<()> {
+        let db = create_test_db().await;
+        let mut config = Config::default();
+        config.max_read_ct = 3;
+
+        let admin = TursoAdmin::new(db.clone(), 0, config.clone());
+
+        // Setup: Create Queue, Producer, Enqueue Message with high read_ct
+        let q = admin.create_queue("dlq_q").await?;
+
+        // Use raw query to insert a "bad" message directly to simulate failures
+        // We need a helper or just raw execute
+        let conn = db.connect().unwrap();
+
+        let now = chrono::Utc::now();
+        let enq_str = crate::store::turso::format_turso_timestamp(&now);
+
+        // Insert message with read_ct = 3 (should be DLQ'd)
+        conn.execute(
+            "INSERT INTO pgqrs_messages (queue_id, payload, enqueued_at, read_ct) VALUES (?, ?, ?, ?)",
+            (q.id, "{}", enq_str, 3) // 3 >= max_read_ct
+        ).await.unwrap();
+
+        // Verify it is there
+        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages").fetch_one(&db).await?;
+        assert_eq!(count, 1);
+
+        // Run DLQ
+        let moved = admin.dlq().await?;
+        assert_eq!(moved.len(), 1);
+
+        // Verify message moved to archive
+        let count_msg: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages").fetch_one(&db).await?;
+        assert_eq!(count_msg, 0);
+
+        let count_arch: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive").fetch_one(&db).await?;
+        assert_eq!(count_arch, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_worker_stats_basic() -> Result<()> {
+         let db = create_test_db().await;
+         let config = Config::default();
+         let mut admin = TursoAdmin::new(db.clone(), 0, config);
+
+         let q = admin.create_queue("stats_q").await?;
+
+         // Register a few workers
+         let w1 = admin.register("host1".to_string(), 1234).await?;
+
+         // In a real scenario, workers have heartbeats.
+         // Let's manually verify they exist in stats.
+         // note: worker_stats takes queue_name, but TursoAdmin::register creates a "global" worker (queue_id None) if we use admin register for *itself*
+         // But here we want to simulate queue workers.
+         // We should use WorkerTable directly or register properly.
+
+         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
+         let w2 = crate::store::WorkerTable::register(&worker_table, Some(q.id), "host2", 2222).await?;
+
+         let stats = admin.worker_stats("stats_q").await?;
+         assert_eq!(stats.total_workers, 1); // Only w2 is bound to stats_q
+
+         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_worker_registration_with_option_binding() -> Result<()> {
+         let db = create_test_db().await;
+         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
+
+         // 1. None
+         let w1 = worker_table.register(None, "host_none", 1000).await?;
+         assert!(w1.queue_id.is_none());
+
+         // 2. Some
+         let w2 = worker_table.register(Some(123), "host_some", 1001).await?;
+         assert_eq!(w2.queue_id, Some(123));
+
+         // 3. Ephemeral (Some)
+         let w3 = worker_table.register_ephemeral(Some(456)).await?;
+         assert_eq!(w3.queue_id, Some(456));
+
+         // 4. Update existing (None -> Some)
+         // TursoWorkerTable register logic for existing is: if stopped, re-register. If ready, error.
+         // Let's stop w1 first.
+         worker_table.suspend(w1.id).await?;
+         worker_table.shutdown(w1.id).await?;
+
+         let w1_updated = worker_table.register(Some(999), "host_none", 1000).await?;
+         assert_eq!(w1_updated.id, w1.id);
+         assert_eq!(w1_updated.queue_id, Some(999));
+
+         Ok(())
     }
 }
