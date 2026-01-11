@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::{
-    Admin, ArchiveTable, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable,
+    Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable,
     StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
 };
 use async_trait::async_trait;
@@ -34,13 +34,13 @@ pub struct TursoStore {
 
 impl TursoStore {
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
-        let path = if let Some(remaining) = dsn.strip_prefix("file://") {
-            remaining
-        } else if let Some(remaining) = dsn.strip_prefix("file:") {
-            remaining
-        } else {
-            dsn
-        };
+        let path = BackendType::TURSO_PREFIXES
+            .iter()
+            .find_map(|prefix| dsn.strip_prefix(prefix))
+            .ok_or_else(|| crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: format!("Unsupported DSN format: {}", dsn),
+            })?;
         let builder = turso::Builder::new_local(path);
         let db = builder.build().await.map_err(|e| Error::Internal {
             message: format!("Failed to connect to Turso: {}", e),
@@ -177,8 +177,18 @@ impl TursoQueryBuilder {
                 })?;
 
         let mut result = Vec::new();
-        while let Ok(Some(row)) = rows.next().await {
-            result.push(row);
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => result.push(row),
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(Error::TursoQueryFailed {
+                        query: self.sql.clone(),
+                        source: e,
+                        context: "Next row failed".into(),
+                    })
+                }
+            }
         }
         Ok(result)
     }
@@ -191,22 +201,14 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_one_on_connection(self, conn: &turso::Connection) -> Result<Row> {
-        let mut rows =
-            conn.query(&self.sql, self.params)
-                .await
-                .map_err(|e| Error::TursoQueryFailed {
-                    query: self.sql.clone(),
-                    source: e,
-                    context: "Query scalar on conn failed".into(),
-                })?;
-
-        if let Ok(Some(row)) = rows.next().await {
-            Ok(row)
-        } else {
+        let rows = self.fetch_all_on_connection(conn).await?;
+        if rows.is_empty() {
             Err(Error::NotFound {
                 entity: "Row".into(),
                 id: "None".into(),
             })
+        } else {
+            Ok(rows.into_iter().next().unwrap())
         }
     }
 
@@ -221,20 +223,8 @@ impl TursoQueryBuilder {
         self,
         conn: &turso::Connection,
     ) -> Result<Option<Row>> {
-        let mut rows =
-            conn.query(&self.sql, self.params)
-                .await
-                .map_err(|e| Error::TursoQueryFailed {
-                    query: self.sql.clone(),
-                    source: e,
-                    context: "Query optional on conn failed".into(),
-                })?;
-
-        if let Ok(Some(row)) = rows.next().await {
-            Ok(Some(row))
-        } else {
-            Ok(None)
-        }
+        let rows = self.fetch_all_on_connection(conn).await?;
+        Ok(rows.into_iter().next())
     }
 }
 
@@ -384,14 +374,9 @@ impl Store for TursoStore {
     ) -> Result<Box<dyn Consumer>> {
         use self::worker::consumer::TursoConsumer;
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer = TursoConsumer::new(
-            self.db.clone(),
-            &queue_info.queue_name,
-            hostname,
-            port,
-            config.clone(),
-        )
-        .await?;
+        let consumer =
+            TursoConsumer::new(self.db.clone(), &queue_info, hostname, port, config.clone())
+                .await?;
         Ok(Box::new(consumer))
     }
 

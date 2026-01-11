@@ -57,8 +57,7 @@ const RELEASE_ZOMBIE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET consumer_worker_id = NULL,
         vt = datetime('now'),
-        dequeued_at = NULL,
-        read_ct = read_ct + 1
+        dequeued_at = NULL
     WHERE consumer_worker_id = ?
 "#;
 
@@ -90,22 +89,15 @@ const CHECK_WORKER_REFS_ARCHIVE: &str = r#"
     SELECT COUNT(*) FROM pgqrs_archive WHERE producer_worker_id = ? OR consumer_worker_id = ?
 "#;
 
-const PURGE_OLD_WORKERS: &str = r#"
-    DELETE FROM pgqrs_workers
-    WHERE status = 'stopped'
-      AND heartbeat_at < datetime('now', '-' || ? || ' seconds')
-      AND id NOT IN (
-          SELECT DISTINCT worker_id
-          FROM (
-              SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
-              UNION
-              SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
-              UNION
-              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
-              UNION
-              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
-          ) refs
-      )
+const FIND_OLD_WORKERS_TO_PURGE: &str = r#"
+    SELECT w.id FROM pgqrs_workers w
+    LEFT JOIN pgqrs_messages m ON m.producer_worker_id = w.id OR m.consumer_worker_id = w.id
+    LEFT JOIN pgqrs_archive a ON a.producer_worker_id = w.id OR a.consumer_worker_id = w.id
+    WHERE w.status = 'stopped'
+      AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds')
+      AND m.id IS NULL
+      AND a.id IS NULL
+    GROUP BY w.id
 "#;
 
 const GET_QUEUE_METRICS: &str = r#"
@@ -357,7 +349,7 @@ impl Admin for TursoAdmin {
             .await?;
         if count > 0 {
             return Err(crate::error::Error::SchemaValidation {
-                message: format!("Found {} orphaned messages", count),
+                message: format!("Found {} messages with invalid queue_id references", count),
             });
         }
 
@@ -891,11 +883,64 @@ impl Admin for TursoAdmin {
 
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
         let seconds = older_than.num_seconds();
-        let count = crate::store::turso::query(PURGE_OLD_WORKERS)
+
+        // 1. Find candidates
+        let rows = crate::store::turso::query(FIND_OLD_WORKERS_TO_PURGE)
             .bind(seconds)
-            .execute(&self.db)
+            .fetch_all(&self.db)
             .await?;
-        Ok(count as u64)
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+        for row in rows {
+            ids.push(row.get(0)?);
+        }
+
+        // 2. Delete them
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "BEGIN".into(),
+                source: e,
+                context: "Purge Workers".into(),
+            })?;
+
+        for id in &ids {
+            let res = conn
+                .execute(
+                    "DELETE FROM pgqrs_workers WHERE id = ?",
+                    vec![turso::Value::Integer(*id)],
+                )
+                .await;
+            if let Err(e) = res {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(crate::error::Error::TursoQueryFailed {
+                    query: "DELETE_WORKER".into(),
+                    source: e,
+                    context: "Purge Workers Loop".into(),
+                });
+            }
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| crate::error::Error::TursoQueryFailed {
+                query: "COMMIT".into(),
+                source: e,
+                context: "Purge Workers".into(),
+            })?;
+
+        Ok(ids.len() as u64)
     }
 
     async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {

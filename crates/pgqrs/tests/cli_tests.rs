@@ -12,7 +12,15 @@ fn get_test_db_url() -> String {
                 std::fs::File::create(&path).expect("Failed to create test DB file");
                 format!("sqlite://{}", path.display())
             }
-            common::TestBackend::Turso => panic!("Turso not supported for CLI tests yet"),
+            common::TestBackend::Turso => {
+                let path = std::env::temp_dir()
+                    .join(format!("cli_test_turso_{}.db", uuid::Uuid::new_v4()));
+                // Turso local file support requires creating the file? Or does the builder handle it?
+                // For "libsql://" or "file://" we just need a path.
+                // using "libsql://" protocol for local file for consistency if CLI supports it, or just path.
+                std::fs::File::create(&path).expect("Failed to create test DB file");
+                format!("file://{}", path.display())
+            }
         }
     })
 }
@@ -21,8 +29,14 @@ fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "--quiet"]);
 
-    if common::current_backend() == common::TestBackend::Sqlite {
-        cmd.args(["--no-default-features", "--features", "sqlite"]);
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        common::TestBackend::Turso => {
+            cmd.args(["--no-default-features", "--features", "turso"]);
+        }
+        _ => {}
     }
 
     cmd.args(["--"])
@@ -352,8 +366,14 @@ fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "--quiet"]);
 
-    if common::current_backend() == common::TestBackend::Sqlite {
-        cmd.args(["--no-default-features", "--features", "sqlite"]);
+    match common::current_backend() {
+        common::TestBackend::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        common::TestBackend::Turso => {
+            cmd.args(["--no-default-features", "--features", "turso"]);
+        }
+        _ => {}
     }
 
     cmd.args(["--"])
@@ -408,7 +428,7 @@ fn test_cli_worker_health() {
         let sql = match common::current_backend() {
             common::TestBackend::Postgres => "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')",
             common::TestBackend::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
-            _ => panic!("Unsupported"),
+            common::TestBackend::Turso => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
         };
 
         store.execute_raw_with_i64(sql, queue_info.id).await.expect("Insert failed");
@@ -453,7 +473,7 @@ fn test_cli_worker_health() {
             common::TestBackend::Sqlite => {
                 "DELETE FROM pgqrs_workers WHERE hostname = 'stale_host'"
             }
-            _ => panic!("Unsupported"),
+            common::TestBackend::Turso => "DELETE FROM pgqrs_workers WHERE hostname = 'stale_host'",
         };
         store.execute_raw(sql).await.expect("Cleanup failed");
     });

@@ -321,29 +321,6 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     }
 
     async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
-        // Use CTE to delete from archive and insert into messages
-        // SQLite 3.35+ supports basic RETURNING.
-        // It does NOT support data-modifying CTEs in the way Postgres does (WHERE ... IN (DELETE ...)).
-        // SQLite support for DELETE ... RETURNING is top-level.
-        // Usage inside CTE is NOT supported for DELETE.
-        // So we must do this in two steps: Fetch, Delete, Insert. Or Transaction.
-        // Transaction is best.
-
-        /*
-        Postgres query:
-            WITH archived AS (
-                DELETE FROM pgqrs_archive WHERE id = $1 RETURNING *
-            )
-            INSERT ... SELECT ... FROM archived ...
-
-        SQLite approach (Transaction):
-            BEGIN;
-            SELECT * FROM pgqrs_archive WHERE id = $?;
-            DELETE FROM pgqrs_archive WHERE id = $?;
-            INSERT INTO pgqrs_messages ...;
-            COMMIT;
-        */
-
         let mut tx =
             self.pool
                 .begin()

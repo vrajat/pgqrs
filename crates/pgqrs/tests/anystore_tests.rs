@@ -98,12 +98,11 @@ async fn test_anystore_config_access() {
     assert_eq!(config.schema, "pgqrs_anystore_test");
 
     // Check DSN scheme matches backend
-    let scheme = match common::current_backend() {
-        TestBackend::Postgres => "postgres",
-        TestBackend::Sqlite => "sqlite",
-        TestBackend::Turso => "turso",
+    match common::current_backend() {
+        TestBackend::Postgres => assert!(config.dsn.contains("postgres")),
+        TestBackend::Sqlite => assert!(config.dsn.contains("sqlite")),
+        TestBackend::Turso => assert!(config.dsn.contains("turso")),
     };
-    assert!(config.dsn.contains(scheme));
 }
 
 #[tokio::test]

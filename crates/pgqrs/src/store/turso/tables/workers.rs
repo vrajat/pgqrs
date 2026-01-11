@@ -37,9 +37,9 @@ const DELETE_WORKER_BY_ID: &str = r#"
     WHERE id = ?;
 "#;
 
-const INSERT_EPHEMERAL_WORKER: &str = r#"
+const INSERT_EPHEMERAL_WORKER_RETURNING: &str = r#"
     INSERT INTO pgqrs_workers (hostname, port, queue_id, status, started_at, heartbeat_at)
-    VALUES (?, -1, ?, 'ready', ?, ?)
+    VALUES (?, 0, ?, 'ready', ?, ?)
     RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status;
 "#;
 
@@ -168,6 +168,20 @@ impl TursoWorkerTable {
     }
 
     pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
+        let held_count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ?",
+        )
+        .bind(worker_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        if held_count > 0 {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
+                reason: format!("Worker has {} pending messages", held_count),
+                count: held_count as u64,
+            });
+        }
+
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
@@ -403,14 +417,14 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
-        let row = crate::store::turso::query(INSERT_EPHEMERAL_WORKER)
+        let row = crate::store::turso::query(INSERT_EPHEMERAL_WORKER_RETURNING)
             .bind(hostname.as_str())
             .bind(match queue_id {
                 Some(id) => turso::Value::Integer(id),
                 None => turso::Value::Null,
             })
             .bind(now_str.clone())
-            .bind(now_str)
+            .bind(now_str.clone())
             .fetch_one(&self.db)
             .await?;
 

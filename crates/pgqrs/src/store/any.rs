@@ -12,7 +12,7 @@ use crate::store::sqlite::SqliteStore;
 #[cfg(feature = "turso")]
 use crate::store::turso::TursoStore;
 #[cfg(feature = "postgres")]
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgPoolOptions};
 
 /// Runtime-selectable database backend.
 ///
@@ -48,9 +48,11 @@ impl AnyStore {
     /// This method is primarily used internally by `pgqrs::connect()`.
     /// Users should prefer the high-level `pgqrs::connect()` function.
     pub(crate) async fn connect(config: &Config) -> crate::error::Result<Self> {
-        if config.dsn.starts_with("postgres://") || config.dsn.starts_with("postgresql://") {
+         let backend = BackendType::detect(&config.dsn)?;
+
+        match backend {
             #[cfg(feature = "postgres")]
-            {
+            BackendType::Postgres => {
                 // Create search_path SQL for schema
                 let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
 
@@ -72,45 +74,16 @@ impl AnyStore {
 
                 Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
             }
-            #[cfg(not(feature = "postgres"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Postgres backend is not enabled".to_string(),
-                })
-            }
-        } else if config.dsn.starts_with("sqlite://") || config.dsn.starts_with("sqlite:") {
             #[cfg(feature = "sqlite")]
-            {
+            BackendType::Sqlite => {
                 let store = SqliteStore::new(&config.dsn, config).await?;
                 Ok(AnyStore::Sqlite(store))
             }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "SQLite backend is not enabled".to_string(),
-                })
-            }
-        } else if config.dsn.starts_with("turso://") || config.dsn.starts_with("file:") {
             #[cfg(feature = "turso")]
-            {
+            BackendType::Turso => {
                 let store = TursoStore::new(&config.dsn, config).await?;
                 Ok(AnyStore::Turso(store))
             }
-            #[cfg(not(feature = "turso"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Turso backend is not enabled".to_string(),
-                })
-            }
-        } else {
-            Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Unsupported DSN format (must start with postgres://, postgresql://, sqlite://, turso://, or file:)"
-                    .to_string(),
-            })
         }
     }
 
@@ -122,7 +95,7 @@ impl AnyStore {
     /// The DSN format determines which backend is used:
     /// - `postgres://` or `postgresql://` → PostgreSQL
     /// - `sqlite://` → SQLite (requires "sqlite" feature)
-    /// - `libsql://` → Turso (requires "turso" feature)
+    /// - `turso://` → Turso (requires "turso" feature)
     ///
     /// # Arguments
     /// * `dsn` - Database connection string
@@ -136,62 +109,8 @@ impl AnyStore {
     /// # }
     /// ```
     pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
-        if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-            #[cfg(feature = "postgres")]
-            {
-                let pool = PgPool::connect(dsn).await.map_err(|e| {
-                    crate::error::Error::ConnectionFailed {
-                        source: e,
-                        context: "Failed to connect to postgres".into(),
-                    }
-                })?;
-                // Default config will be applied when new() creates the store
-                Ok(AnyStore::Postgres(PostgresStore::new(
-                    pool,
-                    &Config::from_dsn(dsn),
-                )))
-            }
-            #[cfg(not(feature = "postgres"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Postgres backend is not enabled".to_string(),
-                })
-            }
-        } else if dsn.starts_with("sqlite://") || dsn.starts_with("sqlite:") {
-            #[cfg(feature = "sqlite")]
-            {
-                let config = Config::from_dsn(dsn);
-                let store = SqliteStore::new(dsn, &config).await?;
-                Ok(AnyStore::Sqlite(store))
-            }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "SQLite backend is not enabled".to_string(),
-                })
-            }
-        } else if dsn.starts_with("turso://") || dsn.starts_with("file:") {
-            #[cfg(feature = "turso")]
-            {
-                let config = Config::from_dsn(dsn);
-                let store = TursoStore::new(dsn, &config).await?;
-                Ok(AnyStore::Turso(store))
-            }
-            #[cfg(not(feature = "turso"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Turso backend is not enabled".to_string(),
-                })
-            }
-        } else {
-            Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Unsupported DSN format: {}".to_string(),
-            })
-        }
+        let config = Config::from_dsn(dsn);
+        Self::connect(&config).await
     }
 }
 

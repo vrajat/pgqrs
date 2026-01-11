@@ -10,7 +10,14 @@ async fn create_store() -> pgqrs::store::AnyStore {
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         ),
-        common::TestBackend::Turso => panic!("Turso requires DSN"),
+        common::TestBackend::Turso => {
+            let path = std::env::temp_dir().join(format!(
+                "test_default_schema_turso_{}.db",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::File::create(&path).expect("Failed to create test DB file");
+            format!("file://{}", path.display())
+        }
     };
     let config = pgqrs::config::Config::from_dsn(&dsn);
     pgqrs::connect_with_config(&config)
@@ -37,7 +44,14 @@ async fn test_default_schema_backward_compatibility() {
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         ),
-        common::TestBackend::Turso => panic!("Turso requires DSN"),
+        common::TestBackend::Turso => {
+            let path = std::env::temp_dir().join(format!(
+                "test_default_schema_turso_{}.db",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::File::create(&path).expect("Failed to create test DB file");
+            format!("file://{}", path.display())
+        }
     };
 
     // Test Config::from_dsn creates config with default schema (public for Postgres)

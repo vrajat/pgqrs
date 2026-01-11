@@ -65,22 +65,6 @@ pub fn get_dsn_from_env(backend: TestBackend, _schema: Option<&str>) -> Option<S
 #[allow(dead_code)]
 pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
     let backend = TestBackend::from_env();
-    create_store_for_backend(backend, schema).await
-}
-
-/// Create a store for a specific backend.
-///
-/// # Arguments
-/// * `backend` - The specific backend to use
-/// * `schema` - Schema name for isolation
-///
-/// # Returns
-/// An `AnyStore` instance connected to the specified backend
-#[allow(dead_code)]
-pub async fn create_store_for_backend(
-    backend: TestBackend,
-    schema: &str,
-) -> pgqrs::store::AnyStore {
     let dsn = if let Some(env_dsn) = get_dsn_from_env(backend, Some(schema)) {
         #[cfg(feature = "postgres")]
         if backend == TestBackend::Postgres {
@@ -104,16 +88,17 @@ pub async fn create_store_for_backend(
                 // Use a unique in-memory database per store creation to ensure isolation
                 // The ?cache=shared allows pool connections to verify consistent state
                 format!(
-                    "sqlite:file:{}?mode=memory&cache=shared",
+                    "sqlite:file:{}_{}?mode=memory&cache=shared",
+                    schema,
                     uuid::Uuid::new_v4()
                 )
             }
             TestBackend::Turso => {
                 // Default to a unique file-based Turso database if no env override is provided
                 format!(
-                    "file:{}",
+                    "turso://{}",
                     std::env::temp_dir()
-                        .join(format!("pgqrs_turso_test_{}.db", uuid::Uuid::new_v4()))
+                        .join(format!("{}_{}.db", schema, uuid::Uuid::new_v4()))
                         .display()
                 )
             }
@@ -128,6 +113,45 @@ pub async fn create_store_for_backend(
         .expect("Failed to create store");
 
     store
+}
+
+/// Get DSN for the current test backend.
+pub async fn get_test_dsn(schema: &str) -> String {
+    let backend = current_backend();
+    if let Some(env_dsn) = get_dsn_from_env(backend, Some(schema)) {
+        #[cfg(feature = "postgres")]
+        if backend == TestBackend::Postgres {
+            crate::common::database_setup::setup_database_common(
+                env_dsn.clone(),
+                schema,
+                "External Env Postgres",
+            )
+            .await
+            .expect("Failed to setup env postgres");
+        }
+        env_dsn
+    } else {
+        match backend {
+            #[cfg(feature = "postgres")]
+            TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
+            #[cfg(not(feature = "postgres"))]
+            TestBackend::Postgres => panic!("Postgres feature is disabled"),
+            TestBackend::Sqlite => {
+                format!(
+                    "sqlite:file:{}?mode=memory&cache=shared",
+                    uuid::Uuid::new_v4()
+                )
+            }
+            TestBackend::Turso => {
+                format!(
+                    "file:{}",
+                    std::env::temp_dir()
+                        .join(format!("pgqrs_turso_test_{}.db", uuid::Uuid::new_v4()))
+                        .display()
+                )
+            }
+        }
+    }
 }
 
 /// Get the current test backend (for skip logic).

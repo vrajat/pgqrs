@@ -84,7 +84,12 @@ impl crate::store::QueueTable for TursoQueueTable {
                         name: data.queue_name.clone(),
                     });
                 }
-                Err(e) // Propagate original error (TursoQueryFailed)
+                if let crate::error::Error::NotFound { .. } = e {
+                    return Err(crate::error::Error::QueueAlreadyExists {
+                        name: data.queue_name.clone(),
+                    });
+                }
+                Err(e)
             }
         }
     }

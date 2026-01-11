@@ -56,7 +56,7 @@ impl TursoMessageTable {
     }
 
     pub fn map_row(row: &turso::Row) -> Result<QueueMessage> {
-        let id: i64 = row.get(0)?; // ? works if From<turso::Error> for Error exists, which we added
+        let id: i64 = row.get(0)?;
         let queue_id: i64 = row.get(1)?;
 
         let payload_str: String = row.get(2)?;
@@ -93,6 +93,49 @@ impl TursoMessageTable {
             producer_worker_id,
             consumer_worker_id,
         })
+    }
+
+    pub async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+        let rows = crate::store::turso::query(
+            "DELETE FROM pgqrs_messages WHERE id = ? AND consumer_worker_id = ?",
+        )
+        .bind(id)
+        .bind(worker_id)
+        .execute(&self.db)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "DELETE FROM pgqrs_messages WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id",
+            placeholders.join(", ")
+        );
+
+        let mut query = crate::store::turso::query(&sql);
+        for id in ids {
+            query = query.bind(*id);
+        }
+        query = query.bind(worker_id);
+
+        let rows = query.fetch_all(&self.db).await?;
+
+        let mut deleted_ids = HashSet::new();
+        for row in rows {
+            let id: i64 = row.get(0)?;
+            deleted_ids.insert(id);
+        }
+
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            results.push(deleted_ids.contains(id));
+        }
+        Ok(results)
     }
 }
 
@@ -267,7 +310,6 @@ impl crate::store::MessageTable for TursoMessageTable {
             query = query.bind(*id);
         }
 
-        // Simpler: just bubble up the error from fetch_all, it is already a proper Error (TursoQueryFailed)
         let rows = query.fetch_all(&self.db).await?;
 
         let mut messages = Vec::with_capacity(rows.len());

@@ -39,6 +39,7 @@ pub enum Error {
     Database(#[from] sqlx::Error),
 
     /// Turso database error
+    #[cfg(feature = "turso")]
     #[error("Turso error: {0}")]
     Turso(#[from] turso::Error),
 
@@ -180,6 +181,7 @@ pub enum Error {
     NotFound { entity: String, id: String },
 
     /// Turso query failed
+    #[cfg(feature = "turso")]
     #[error("Turso query failed: {query}. Context: {context}. Source: {source}")]
     TursoQueryFailed {
         #[source]

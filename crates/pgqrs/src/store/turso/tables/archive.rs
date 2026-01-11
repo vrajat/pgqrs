@@ -54,7 +54,7 @@ impl TursoArchiveTable {
         Self { db }
     }
 
-    fn map_row(row: &turso::Row) -> Result<ArchivedMessage> {
+    pub fn map_row(row: &turso::Row) -> Result<ArchivedMessage> {
         let id: i64 = row.get(0)?;
         let original_msg_id: i64 = row.get(1)?;
         let queue_id: i64 = row.get(2)?;
@@ -69,8 +69,8 @@ impl TursoArchiveTable {
 
         let vt_str: Option<String> = row.get(7)?;
         let vt = match vt_str {
-            Some(s) => parse_turso_timestamp(&s)?,
-            None => enqueued_at, // Default to enqueued_at if missing
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
         };
 
         let read_ct: i32 = row.get(8)?;
@@ -92,7 +92,7 @@ impl TursoArchiveTable {
             consumer_worker_id,
             payload,
             enqueued_at,
-            vt,
+            vt: vt.unwrap_or(enqueued_at),
             read_ct,
             dequeued_at,
             archived_at,

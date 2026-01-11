@@ -685,7 +685,7 @@ async fn test_referential_integrity_checks() {
     let sql = match common::current_backend() {
         common::TestBackend::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
         common::TestBackend::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        _ => panic!("Unsupported backend"),
+        common::TestBackend::Turso => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
     };
 
     let orphan_result = store.execute_raw(sql).await;
@@ -860,11 +860,10 @@ async fn test_queue_deletion_with_references() {
     assert!(found_queue.is_none(), "Queue should be deleted");
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_payload_size_limit() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -924,11 +923,10 @@ async fn test_validation_payload_size_limit() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_forbidden_keys() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -984,11 +982,10 @@ async fn test_validation_forbidden_keys() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_required_keys() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -1044,11 +1041,10 @@ async fn test_validation_required_keys() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_object_depth() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -1105,11 +1101,10 @@ async fn test_validation_object_depth() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_batch_validation_atomic_failure() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -1169,11 +1164,10 @@ async fn test_batch_validation_atomic_failure() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_string_length() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");
@@ -1230,11 +1224,10 @@ async fn test_validation_string_length() {
     pgqrs::admin(&store).delete_queue(&queue_info).await.ok();
 }
 
-#[cfg(feature = "postgres")]
 #[tokio::test]
 async fn test_validation_accessor_methods() {
     let mut config = pgqrs::config::Config::from_dsn_with_schema(
-        common::get_postgres_dsn(Some("pgqrs_lib_test")).await,
+        &common::get_test_dsn("pgqrs_lib_test").await,
         "pgqrs_lib_test",
     )
     .expect("Failed to create config");

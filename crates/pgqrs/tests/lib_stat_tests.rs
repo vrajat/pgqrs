@@ -191,7 +191,7 @@ async fn test_worker_health_stats() {
     let sql = match common::current_backend() {
         TestBackend::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
         TestBackend::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
-        _ => panic!("Unsupported backend"),
+        TestBackend::Turso => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
     };
 
     store
@@ -230,7 +230,7 @@ async fn test_worker_health_stats() {
             "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'"
         }
         TestBackend::Sqlite => "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'",
-        _ => panic!("Unsupported backend"),
+        TestBackend::Turso => "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'",
     };
     store.execute_raw(cleanup_sql).await.unwrap();
     pgqrs::admin(&store)

@@ -441,6 +441,65 @@ pub trait Store: Send + Sync + 'static {
     ) -> crate::error::Result<Box<dyn Consumer>>;
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BackendType {
+    #[cfg(feature = "postgres")]
+    Postgres,
+    #[cfg(feature = "sqlite")]
+    Sqlite,
+    #[cfg(feature = "turso")]
+    Turso,
+}
+
+impl BackendType {
+    const POSTGRES_PREFIXES: &'static [&'static str] = &["postgres://", "postgresql://"];
+    const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:"];
+    const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:"];
+
+    pub fn detect(dsn: &str) -> crate::error::Result<Self> {
+        // Check Postgres
+        if Self::POSTGRES_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "postgres")]
+            return Ok(Self::Postgres);
+
+            #[cfg(not(feature = "postgres"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Postgres backend is not enabled".to_string(),
+            });
+        }
+
+        // Check SQLite
+        if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "sqlite")]
+            return Ok(Self::Sqlite);
+
+            #[cfg(not(feature = "sqlite"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Sqlite backend is not enabled".to_string(),
+            });
+        }
+
+        // Check Turso
+        if Self::TURSO_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "turso")]
+            return Ok(Self::Turso);
+
+            #[cfg(not(feature = "turso"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Turso backend is not enabled".to_string(),
+            });
+        }
+
+        Err(crate::error::Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("Unsupported DSN format: {}", dsn),
+        })
+    }
+}
+
 /// Repository for managing queues.
 #[async_trait]
 pub trait QueueTable: Send + Sync {
