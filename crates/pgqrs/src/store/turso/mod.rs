@@ -86,8 +86,13 @@ impl TursoStore {
             })?;
 
         // Initialize schema version table
+        // Initialize schema version table with robust schema
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (version INTEGER NOT NULL);",
+            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                description TEXT
+            );",
             (),
         )
         .await
@@ -95,56 +100,62 @@ impl TursoStore {
             message: format!("Failed to create schema version table: {}", e),
         })?;
 
-        conn.execute(
-            "INSERT INTO pgqrs_schema_version (version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM pgqrs_schema_version);",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::Error::Internal {
-            message: format!("Failed to init schema version: {}", e),
-        })?;
-
-        // Get current version
-        let mut rows = conn
-            .query("SELECT version FROM pgqrs_schema_version", ())
-            .await
-            .map_err(|e| crate::error::Error::Internal {
-                message: format!("Failed to query schema version: {}", e),
-            })?;
-
-        let current_version: i64 = if let Some(row) = rows.next().await.map_err(|e| crate::error::Error::Internal {
-            message: format!("Failed to fetch schema version row: {}", e),
-        })? {
-            row.get(0).map_err(|e| crate::error::Error::Internal {
-                message: format!("Failed to get version column: {}", e),
-            })?
-        } else {
-            0
-        };
-
+        // Migration list: (version, description, sql)
         const Q1: &str = include_str!("../../../migrations/turso/01_create_queues.sql");
         const Q2: &str = include_str!("../../../migrations/turso/02_create_workers.sql");
         const Q3: &str = include_str!("../../../migrations/turso/03_create_messages.sql");
         const Q4: &str = include_str!("../../../migrations/turso/04_create_archive.sql");
         const Q5: &str = include_str!("../../../migrations/turso/05_create_workflows.sql");
         const Q6: &str = include_str!("../../../migrations/turso/06_create_workflow_steps.sql");
+        const Q7: &str = include_str!("../../../migrations/turso/07_create_indices.sql");
 
-        for (i, sql) in [Q1, Q2, Q3, Q4, Q5, Q6].iter().enumerate() {
-            let mig_idx = (i + 1) as i64;
-            if mig_idx > current_version {
-                conn.execute(sql, ())
-                    .await
-                    .map_err(|e| crate::error::Error::Internal {
-                        message: format!("Failed to run migration {}: {}", mig_idx, e),
-                    })?;
+        let migrations = vec![
+            (1, "01_create_queues.sql", Q1),
+            (2, "02_create_workers.sql", Q2),
+            (3, "03_create_messages.sql", Q3),
+            (4, "04_create_archive.sql", Q4),
+            (5, "05_create_workflows.sql", Q5),
+            (6, "06_create_workflow_steps.sql", Q6),
+            (7, "07_create_indices.sql", Q7),
+        ];
 
-                // Update version
-                conn.execute("UPDATE pgqrs_schema_version SET version = ?", vec![turso::Value::Integer(mig_idx)])
-                    .await
-                    .map_err(|e| crate::error::Error::Internal {
-                        message: format!("Failed to update version to {}: {}", mig_idx, e),
-                    })?;
+        for (version, description, sql) in migrations {
+            // Check if already applied
+            // We use query_row logic manually since turso crate might not have query_scalar/optional easily accessible here
+            let mut rows = conn
+                .query(
+                    "SELECT version FROM pgqrs_schema_version WHERE version = ?",
+                    (version,),
+                )
+                .await
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to query migration {}: {}", version, e),
+                })?;
+
+            if rows.next().await.map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to fetch migration row {}: {}", version, e),
+                })?.is_some()
+            {
+                continue;
             }
+
+            tracing::info!("Applying migration {}: {}", version, description);
+
+            conn.execute(sql, ())
+                .await
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to run migration {}: {}", version, e),
+                })?;
+
+            // Record success
+            conn.execute(
+                "INSERT INTO pgqrs_schema_version (version, applied_at, description) VALUES (?, datetime('now'), ?)",
+                (version, description),
+            )
+            .await
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to record migration {}: {}", version, e),
+            })?;
         }
 
         Ok(Self {
@@ -217,6 +228,12 @@ pub async fn connect_db(db: &Database) -> Result<turso::Connection> {
             message: format!("Failed to set busy timeout: {}", e),
         })?;
 
+    conn.execute("PRAGMA foreign_keys = ON;", ())
+        .await
+        .map_err(|e| crate::error::Error::Internal {
+            message: format!("Failed to set foreign_keys: {}", e),
+        })?;
+
     Ok(conn)
 }
 
@@ -265,7 +282,9 @@ impl TursoQueryBuilder {
                         let jitter = (std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
-                            .subsec_nanos() % 20) as i64 - 10;
+                            .subsec_nanos()
+                            % 20) as i64
+                            - 10;
                         let jittered_delay = (delay as i64 + jitter).max(1) as u64;
 
                         tracing::warn!(
@@ -275,7 +294,8 @@ impl TursoQueryBuilder {
                             jittered_delay,
                             self.sql
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay))
+                            .await;
                         delay = delay.saturating_mul(2).min(MAX_DELAY);
                         continue;
                     }
@@ -337,7 +357,9 @@ impl TursoQueryBuilder {
                             let jitter = (std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
-                                .subsec_nanos() % 20) as i64 - 10;
+                                .subsec_nanos()
+                                % 20) as i64
+                                - 10;
                             let jittered_delay = (delay as i64 + jitter).max(1) as u64;
 
                             tracing::warn!(
@@ -347,7 +369,8 @@ impl TursoQueryBuilder {
                                 jittered_delay,
                                 self.sql
                             );
-                            tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay))
+                                .await;
                             delay = delay.saturating_mul(2).min(MAX_DELAY);
                             continue;
                         }
@@ -374,7 +397,9 @@ impl TursoQueryBuilder {
                         let jitter = (std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
-                            .subsec_nanos() % 20) as i64 - 10;
+                            .subsec_nanos()
+                            % 20) as i64
+                            - 10;
                         let jittered_delay = (delay as i64 + jitter).max(1) as u64;
 
                         tracing::warn!(
@@ -384,7 +409,8 @@ impl TursoQueryBuilder {
                             jittered_delay,
                             self.sql
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay))
+                            .await;
                         delay = delay.saturating_mul(2).min(MAX_DELAY);
                         continue;
                     }

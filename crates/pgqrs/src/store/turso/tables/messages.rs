@@ -115,11 +115,7 @@ impl TursoMessageTable {
 
         if ids.len() > MAX_BATCH_SIZE {
             return Err(crate::error::Error::ValidationFailed {
-                reason: format!(
-                    "Batch size {} exceeds limit {}",
-                    ids.len(),
-                    MAX_BATCH_SIZE
-                ),
+                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
             });
         }
 
@@ -313,11 +309,7 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         if ids.len() > MAX_BATCH_SIZE {
             return Err(crate::error::Error::ValidationFailed {
-                reason: format!(
-                    "Batch size {} exceeds limit {}",
-                    ids.len(),
-                    MAX_BATCH_SIZE
-                ),
+                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
             });
         }
 
