@@ -33,7 +33,7 @@ impl Workflows {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "COMPLETE_WORKFLOW".into(),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to complete workflow {}", id),
         })?;
         Ok(())
@@ -57,7 +57,7 @@ impl Workflows {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "FAIL_WORKFLOW".into(),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to fail workflow {}", id),
         })?;
         Ok(())
@@ -80,7 +80,7 @@ impl crate::store::WorkflowTable for Workflows {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW".into(),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to insert workflow '{}'", data.name),
         })?;
 
@@ -100,7 +100,7 @@ impl crate::store::WorkflowTable for Workflows {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: format!("GET_WORKFLOW ({})", id),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to get workflow {}", id),
         })?;
 
@@ -119,7 +119,7 @@ impl crate::store::WorkflowTable for Workflows {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "LIST_WORKFLOWS".into(),
-            source: e,
+            source: Box::new(e),
             context: "Failed to list workflows".into(),
         })?;
 
@@ -132,7 +132,7 @@ impl crate::store::WorkflowTable for Workflows {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_WORKFLOWS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to count workflows".into(),
             })?;
         Ok(count)
@@ -145,7 +145,7 @@ impl crate::store::WorkflowTable for Workflows {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_WORKFLOW ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete workflow {}", id),
             })?
             .rows_affected();

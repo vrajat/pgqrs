@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        backend: [postgres, sqlite]
+        backend: [postgres, sqlite, turso]
 
     services:
       postgres:
@@ -86,3 +86,4 @@ jobs:
           PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
           PGBOUNCER_TEST_DSN: postgres://postgres@localhost:6432/postgres
           PGQRS_TEST_SQLITE_DSN: sqlite:///tmp/ci_test.db
+          PGQRS_TEST_TURSO_DSN: turso:///tmp/ci_test_turso.db

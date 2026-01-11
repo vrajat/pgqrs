@@ -275,7 +275,7 @@ impl Admin {
             .connect(&config.dsn)
             .await
             .map_err(|e| crate::error::Error::ConnectionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to connect to postgres".into(),
             })?;
 
@@ -328,7 +328,7 @@ impl Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_WORKER_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get messages for worker {}", worker_id),
             })?;
 
@@ -349,7 +349,7 @@ impl Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_WORKER_REFERENCES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to check worker references for worker {}", worker_id),
             })?;
 
@@ -464,7 +464,7 @@ impl crate::store::Admin for Admin {
                 .begin()
                 .await
                 .map_err(|e| crate::error::Error::TransactionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to begin transaction for verification".into(),
                 })?;
 
@@ -483,7 +483,7 @@ impl crate::store::Admin for Admin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: format!("CHECK_TABLE_EXISTS ({})", table_name),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to check if table {} exists", table_name),
                 })?;
 
@@ -502,7 +502,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to check message referential integrity".into(),
             })?;
 
@@ -521,7 +521,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_MESSAGE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to check message worker referential integrity".into(),
             })?;
 
@@ -540,7 +540,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_ARCHIVE_QUEUES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to check archive queue referential integrity".into(),
             })?;
 
@@ -559,7 +559,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_ARCHIVE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to check archive worker referential integrity".into(),
             })?;
 
@@ -576,7 +576,7 @@ impl crate::store::Admin for Admin {
         tx.commit()
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to commit verification transaction".into(),
             })?;
 
@@ -597,7 +597,7 @@ impl crate::store::Admin for Admin {
                 .begin()
                 .await
                 .map_err(|e| crate::error::Error::TransactionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to begin transaction for message reclamation".into(),
                 })?;
 
@@ -611,7 +611,7 @@ impl crate::store::Admin for Admin {
             tx.commit()
                 .await
                 .map_err(|e| crate::error::Error::TransactionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to commit empty transaction during message reclamation".into(),
                 })?;
             return Ok(0);
@@ -634,7 +634,7 @@ impl crate::store::Admin for Admin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "RELEASE_ZOMBIE_MESSAGES".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to release messages for zombie worker {}", zombie.id),
                 })?;
 
@@ -648,7 +648,7 @@ impl crate::store::Admin for Admin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "SHUTDOWN_ZOMBIE_WORKER".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to stop zombie worker {}", zombie.id),
                 })?;
 
@@ -664,7 +664,7 @@ impl crate::store::Admin for Admin {
         tx.commit()
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to commit zombie cleanup".into(),
             })?;
 
@@ -736,7 +736,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "PURGE_OLD_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to purge old workers".into(),
             })?;
 
@@ -763,7 +763,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "RELEASE_WORKER_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to release messages for worker {}", worker_id),
             })?;
         Ok(result.rows_affected())
@@ -815,7 +815,7 @@ impl crate::store::Admin for Admin {
                 .begin()
                 .await
                 .map_err(|e| crate::error::Error::ConnectionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to begin transaction".into(),
                 })?;
 
@@ -826,7 +826,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LOCK_QUEUE_FOR_DELETE".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to lock queue '{}'", queue_info.queue_name),
             })?;
 
@@ -874,7 +874,7 @@ impl crate::store::Admin for Admin {
         tx.commit()
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to commit queue deletion transaction".into(),
             })?;
 
@@ -890,7 +890,7 @@ impl crate::store::Admin for Admin {
                 .begin()
                 .await
                 .map_err(|e| crate::error::Error::TransactionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to begin transaction for queue purge".into(),
                 })?;
 
@@ -901,7 +901,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LOCK_QUEUE_FOR_UPDATE".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to lock queue '{}'", name),
             })?;
 
@@ -916,7 +916,7 @@ impl crate::store::Admin for Admin {
         tx.commit()
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to commit queue purge transaction".into(),
             })?;
 
@@ -931,7 +931,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DLQ_BATCH".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to move messages to DLQ".into(),
             })?;
 
@@ -949,7 +949,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_QUEUE_METRICS".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get metrics for queue {}", name),
             })?;
 
@@ -963,7 +963,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_ALL_QUEUES_METRICS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to get all queues metrics".into(),
             })?;
 
@@ -977,7 +977,7 @@ impl crate::store::Admin for Admin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_SYSTEM_STATS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to get system stats".into(),
             })?;
 
@@ -1006,7 +1006,7 @@ impl crate::store::Admin for Admin {
 
         stats.map_err(|e| crate::error::Error::QueryFailed {
             query: "GET_WORKER_HEALTH".into(),
-            source: e,
+            source: Box::new(e),
             context: "Failed to get worker health stats".into(),
         })
     }
@@ -1053,7 +1053,7 @@ impl crate::store::Admin for Admin {
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "GET_WORKER_MESSAGES_RAW".into(),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to get messages for worker {}", worker_id),
         })?;
 

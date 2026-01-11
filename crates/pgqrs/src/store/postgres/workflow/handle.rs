@@ -34,7 +34,7 @@ impl Workflow {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SQL_CREATE_WORKFLOW".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to create workflow '{}'", name),
             })?;
 
@@ -79,7 +79,7 @@ impl crate::store::Workflow for Workflow {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SQL_START_WORKFLOW".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to start workflow {}", self.id),
             })?;
 
@@ -92,7 +92,7 @@ impl crate::store::Workflow for Workflow {
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "CHECK_WORKFLOW_STATUS".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: format!("Failed to check status for workflow {}", self.id),
                     })?;
 
@@ -113,7 +113,7 @@ impl crate::store::Workflow for Workflow {
                 .acquire()
                 .await
                 .map_err(|e| crate::error::Error::PoolExhausted {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to acquire connection for complete_workflow".into(),
                 })?;
 
@@ -129,7 +129,7 @@ impl crate::store::Workflow for Workflow {
                 .acquire()
                 .await
                 .map_err(|e| crate::error::Error::PoolExhausted {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to acquire connection for fail_with_json".into(),
                 })?;
 

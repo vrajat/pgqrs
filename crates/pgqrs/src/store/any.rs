@@ -68,7 +68,7 @@ impl AnyStore {
                     .connect(&config.dsn)
                     .await
                     .map_err(|e| crate::error::Error::ConnectionFailed {
-                        source: e,
+                        source: Box::new(e),
                         context: "Failed to connect to postgres".into(),
                     })?;
 

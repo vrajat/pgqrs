@@ -110,7 +110,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_MESSAGE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to insert message".into(),
             })?;
 
@@ -124,7 +124,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("GET_MESSAGE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get message {}", id),
             })?;
 
@@ -137,7 +137,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ALL_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to list all messages".into(),
             })?;
 
@@ -154,7 +154,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to count messages".into(),
             })?;
         Ok(count)
@@ -167,7 +167,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_MESSAGE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete message {}", id),
             })?;
         Ok(result.rows_affected())
@@ -180,7 +180,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("LIST_MESSAGES_BY_QUEUE ({})", queue_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to list messages for queue {}", queue_id),
             })?;
 
@@ -223,7 +223,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BATCH_INSERT_MESSAGES_DYNAMIC".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to batch insert {} messages", payloads.len()),
             })?;
 
@@ -249,7 +249,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_MESSAGES_BY_IDS_DYNAMIC".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get {} messages by IDs", ids.len()),
             })?;
 
@@ -269,7 +269,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("UPDATE_MESSAGE_VT ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to update visibility timeout for message {}", id),
             })?;
         Ok(result.rows_affected())
@@ -295,7 +295,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("EXTEND_MESSAGE_VT ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to extend visibility for message {}", id),
             })?;
 
@@ -331,7 +331,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "EXTEND_BATCH_VT_DYNAMIC".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to batch extend visibility for {} messages",
                     message_ids.len()
@@ -372,7 +372,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "RELEASE_SPECIFIC_MESSAGES_DYNAMIC".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to release {} messages", message_ids.len()),
             })?;
 
@@ -418,7 +418,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             }
         }.map_err(|e| crate::error::Error::QueryFailed {
             query: format!("COUNT_PENDING (queue_id={})", queue_id),
-            source: e,
+            source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;
 
@@ -445,7 +445,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: format!("DELETE_MESSAGE_BY_ID ({})", id),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to delete message {}", id),
                 })?
                 .rows_affected();

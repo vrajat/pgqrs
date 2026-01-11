@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::store::turso::format_turso_timestamp;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
@@ -146,9 +146,9 @@ impl Consumer for TursoConsumer {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Dequeue start".into(),
             })?;
 
@@ -186,9 +186,9 @@ impl Consumer for TursoConsumer {
         if grabbed_ids.is_empty() {
             conn.execute("ROLLBACK", ())
                 .await
-                .map_err(|e| Error::TursoQueryFailed {
+                .map_err(|e| crate::error::Error::QueryFailed {
                     query: "ROLLBACK".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Dequeue empty".into(),
                 })?;
             return Ok(vec![]);
@@ -215,9 +215,9 @@ impl Consumer for TursoConsumer {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Dequeue commit".into(),
             })?;
 
@@ -253,9 +253,9 @@ impl Consumer for TursoConsumer {
         // 1. Begin Transaction
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin archive transaction".into(),
             })?;
 
@@ -346,9 +346,9 @@ impl Consumer for TursoConsumer {
         // 5. Commit
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Commit archive transaction".into(),
             })?;
 

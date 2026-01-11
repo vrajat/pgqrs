@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::store::{
     Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
     QueueTable, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
@@ -42,13 +42,16 @@ impl TursoStore {
                 message: format!("Unsupported DSN format: {}", dsn),
             })?;
         let builder = turso::Builder::new_local(path);
-        let db = builder.build().await.map_err(|e| Error::Internal {
-            message: format!("Failed to connect to Turso: {}", e),
-        })?;
+        let db = builder
+            .build()
+            .await
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to connect to Turso: {}", e),
+            })?;
 
         let db = Arc::new(db);
 
-        let conn = db.connect().map_err(|e| Error::Internal {
+        let conn = db.connect().map_err(|e| crate::error::Error::Internal {
             message: format!("Failed to get connection: {}", e),
         })?;
 
@@ -57,13 +60,13 @@ impl TursoStore {
         let mut rows = conn
             .query("PRAGMA journal_mode=WAL;", ())
             .await
-            .map_err(|e| Error::Internal {
+            .map_err(|e| crate::error::Error::Internal {
                 message: format!("Failed to set WAL mode: {}", e),
             })?;
         while rows
             .next()
             .await
-            .map_err(|e| Error::Internal {
+            .map_err(|e| crate::error::Error::Internal {
                 message: format!("Failed to consume WAL pragma result: {}", e),
             })?
             .is_some()
@@ -71,7 +74,7 @@ impl TursoStore {
 
         conn.execute("PRAGMA busy_timeout = 5000;", ())
             .await
-            .map_err(|e| Error::Internal {
+            .map_err(|e| crate::error::Error::Internal {
                 message: format!("Failed to set busy timeout: {}", e),
             })?;
 
@@ -83,9 +86,11 @@ impl TursoStore {
         const Q6: &str = include_str!("../../../migrations/turso/06_create_workflow_steps.sql");
 
         for (i, sql) in [Q1, Q2, Q3, Q4, Q5, Q6].iter().enumerate() {
-            conn.execute(sql, ()).await.map_err(|e| Error::Internal {
-                message: format!("Failed to run migration {}: {}", i + 1, e),
-            })?;
+            conn.execute(sql, ())
+                .await
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to run migration {}: {}", i + 1, e),
+                })?;
         }
 
         Ok(Self {
@@ -103,7 +108,7 @@ impl TursoStore {
 pub fn parse_turso_timestamp(s: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::Internal {
+        .map_err(|e| crate::error::Error::Internal {
             message: format!("Invalid timestamp: {}", e),
         })
 }
@@ -118,7 +123,7 @@ pub trait FromTursoRow: Sized {
 
 impl FromTursoRow for i64 {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        row.get(idx).map_err(|e| Error::Internal {
+        row.get(idx).map_err(|e| crate::error::Error::Internal {
             message: e.to_string(),
         })
     }
@@ -126,7 +131,7 @@ impl FromTursoRow for i64 {
 
 impl FromTursoRow for String {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        row.get(idx).map_err(|e| Error::Internal {
+        row.get(idx).map_err(|e| crate::error::Error::Internal {
             message: e.to_string(),
         })
     }
@@ -134,7 +139,7 @@ impl FromTursoRow for String {
 
 impl FromTursoRow for bool {
     fn from_row(row: &Row, idx: usize) -> Result<Self> {
-        let val: i64 = row.get(idx).map_err(|e| Error::Internal {
+        let val: i64 = row.get(idx).map_err(|e| crate::error::Error::Internal {
             message: e.to_string(),
         })?;
         Ok(val != 0)
@@ -147,14 +152,14 @@ pub struct TursoQueryBuilder {
 }
 
 pub async fn connect_db(db: &Database) -> Result<turso::Connection> {
-    let conn = db.connect().map_err(|e| Error::Internal {
+    let conn = db.connect().map_err(|e| crate::error::Error::Internal {
         message: format!("Connect failed: {}", e),
     })?;
 
     // precise busy_timeout for every connection to handle concurrency
     conn.execute("PRAGMA busy_timeout = 5000;", ())
         .await
-        .map_err(|e| Error::Internal {
+        .map_err(|e| crate::error::Error::Internal {
             message: format!("Failed to set busy timeout: {}", e),
         })?;
 
@@ -183,15 +188,46 @@ impl TursoQueryBuilder {
     }
 
     pub async fn execute_on_connection(self, conn: &turso::Connection) -> Result<u64> {
-        let res =
-            conn.execute(&self.sql, self.params)
-                .await
-                .map_err(|e| Error::TursoQueryFailed {
-                    query: self.sql,
-                    source: e,
-                    context: "Execute on conn failed".into(),
-                })?;
-        Ok(res as u64)
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        let mut delay = 50; // ms
+
+        loop {
+            let res = conn.execute(&self.sql, self.params.clone()).await;
+
+            match res {
+                Ok(count) => return Ok(count),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let is_locked =
+                        msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+
+                    if is_locked && retries < MAX_RETRIES {
+                        retries += 1;
+                        tracing::warn!(
+                            "Database locked, retrying {}/{} in {}ms: {}",
+                            retries,
+                            MAX_RETRIES,
+                            delay,
+                            self.sql
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                        delay *= 2; // exponential backoff
+                        continue;
+                    }
+
+                    return Err(crate::error::Error::QueryFailed {
+                        query: self.sql,
+                        source: Box::new(e),
+                        context: if is_locked {
+                            "Execute on conn failed (locked)".into()
+                        } else {
+                            "Execute on conn failed".into()
+                        },
+                    });
+                }
+            }
+        }
     }
 
     pub async fn fetch_all(self, db: &Database) -> Result<Vec<Row>> {
@@ -200,30 +236,84 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_all_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
-        let mut rows =
-            conn.query(&self.sql, self.params)
-                .await
-                .map_err(|e| Error::TursoQueryFailed {
-                    query: self.sql.clone(),
-                    source: e,
-                    context: "Query on conn failed".into(),
-                })?;
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
+        let mut delay = 50; // ms
 
-        let mut result = Vec::new();
         loop {
-            match rows.next().await {
-                Ok(Some(row)) => result.push(row),
-                Ok(None) => break,
+            let res = conn.query(&self.sql, self.params.clone()).await;
+
+            match res {
+                Ok(mut rows) => {
+                    let mut result = Vec::new();
+                    let mut loop_err = None;
+
+                    loop {
+                        match rows.next().await {
+                            Ok(Some(row)) => result.push(row),
+                            Ok(None) => break,
+                            Err(e) => {
+                                loop_err = Some(e);
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some(e) = loop_err {
+                        let msg = e.to_string();
+                        let is_locked =
+                            msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+
+                        if is_locked && retries < MAX_RETRIES {
+                            retries += 1;
+                            tracing::warn!(
+                                "Database locked during fetch, retrying {}/{} in {}ms: {}",
+                                retries,
+                                MAX_RETRIES,
+                                delay,
+                                self.sql
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                            delay *= 2;
+                            continue;
+                        }
+
+                        return Err(crate::error::Error::QueryFailed {
+                            query: self.sql.clone(),
+                            source: Box::new(e),
+                            context: "Next row failed".into(),
+                        });
+                    }
+
+                    return Ok(result);
+                }
                 Err(e) => {
-                    return Err(Error::TursoQueryFailed {
+                    let msg = e.to_string();
+                    let is_locked =
+                        msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+
+                    if is_locked && retries < MAX_RETRIES {
+                        retries += 1;
+                        tracing::warn!(
+                            "Database locked query start, retrying {}/{} in {}ms: {}",
+                            retries,
+                            MAX_RETRIES,
+                            delay,
+                            self.sql
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                        delay *= 2;
+                        continue;
+                    }
+
+                    return Err(crate::error::Error::QueryFailed {
                         query: self.sql.clone(),
-                        source: e,
-                        context: "Next row failed".into(),
-                    })
+                        source: Box::new(e),
+                        context: "Query on conn failed".into(),
+                    });
                 }
             }
         }
-        Ok(result)
     }
 
     pub async fn fetch_one(self, db: &Database) -> Result<Row> {
@@ -234,7 +324,7 @@ impl TursoQueryBuilder {
     pub async fn fetch_one_on_connection(self, conn: &turso::Connection) -> Result<Row> {
         let rows = self.fetch_all_on_connection(conn).await?;
         if rows.is_empty() {
-            Err(Error::NotFound {
+            Err(crate::error::Error::NotFound {
                 entity: "Row".into(),
                 id: "None".into(),
             })

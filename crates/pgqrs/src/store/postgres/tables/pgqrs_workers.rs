@@ -111,7 +111,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_WORKERS_BY_QUEUE_TX".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to count workers for queue {}", foreign_key_value),
             })?;
         Ok(count)
@@ -128,7 +128,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DELETE_WORKERS_BY_QUEUE".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete workers for queue {}", foreign_key_value),
             })?;
         Ok(result.rows_affected())
@@ -147,7 +147,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ZOMBIE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to list zombie workers for queue {}", queue_id),
             })?;
         Ok(workers)
@@ -162,7 +162,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_WORKER_STATUS".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get worker {} status", worker_id),
             })?;
 
@@ -184,7 +184,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "UPDATE_HEARTBEAT".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to update heartbeat for worker {}", worker_id),
             })?;
 
@@ -204,7 +204,7 @@ impl Workers {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "CHECK_WORKER_HEALTH".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to check health for worker {}", worker_id),
                 })?;
 
@@ -225,7 +225,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "TRANSITION_READY_TO_SUSPENDED".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to suspend worker {}", worker_id),
             })?;
 
@@ -256,7 +256,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("TRANSITION_SUSPENDED_TO_READY ({})", worker_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to resume worker {}", worker_id),
             })?;
 
@@ -289,7 +289,7 @@ impl Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("TRANSITION_SUSPENDED_TO_STOPPED ({})", worker_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to shutdown worker {}", worker_id),
             })?;
 
@@ -324,7 +324,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_WORKER".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
             })?;
 
@@ -347,7 +347,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("GET_WORKER_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get worker {}", id),
             })?;
 
@@ -360,7 +360,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ALL_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to list all workers".into(),
             })?;
 
@@ -374,7 +374,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SELECT COUNT(*) FROM pgqrs_workers".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to count workers".into(),
             })?;
         Ok(row)
@@ -387,7 +387,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_WORKER_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete worker {}", id),
             })?;
 
@@ -401,7 +401,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("LIST_WORKERS_BY_QUEUE (queue_id={})", queue_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to filter workers by queue ID {}", queue_id),
             })?;
         Ok(workers)
@@ -428,7 +428,7 @@ impl crate::store::WorkerTable for Workers {
                     "COUNT_WORKERS_BY_STATE (queue_id={}, state={:?})",
                     queue_id, state
                 ),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to count workers for queue {} with state {:?}",
                     queue_id, state
@@ -458,7 +458,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("COUNT_ZOMBIE_WORKERS (queue_id={})", queue_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to count zombie workers for queue {}", queue_id),
             })?;
 
@@ -480,7 +480,7 @@ impl crate::store::WorkerTable for Workers {
                     "LIST_WORKERS_BY_QUEUE_AND_STATE (queue_id={}, state={:?})",
                     queue_id, state
                 ),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to list workers for queue {} with state {:?}",
                     queue_id, state
@@ -502,7 +502,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("LIST_ZOMBIE_WORKERS (queue_id={})", queue_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to list zombie workers for queue {}", queue_id),
             })?;
         Ok(workers)
@@ -522,7 +522,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("FIND_WORKER_BY_HOST_PORT ({}:{})", hostname, port),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to find worker {}:{}", hostname, port),
             })?;
 
@@ -538,7 +538,7 @@ impl crate::store::WorkerTable for Workers {
                             .await
                             .map_err(|e| crate::error::Error::QueryFailed {
                                 query: format!("RESET_WORKER_TO_READY ({})", worker.id),
-                                source: e,
+                                source: Box::new(e),
                                 context: format!("Failed to reset worker {}:{}", hostname, port),
                             })?
                     }
@@ -575,7 +575,7 @@ impl crate::store::WorkerTable for Workers {
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "INSERT_WORKER".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: format!("Failed to insert new worker {}:{}", hostname, port),
                     })?;
 
@@ -606,7 +606,7 @@ impl crate::store::WorkerTable for Workers {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_EPHEMERAL_WORKER".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to create ephemeral worker".into(),
             })?;
 

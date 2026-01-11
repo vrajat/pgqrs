@@ -268,9 +268,9 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin replay".into(),
             })?;
 
@@ -319,24 +319,24 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
                 return Err(e);
             }
 
-            conn.execute("COMMIT", ()).await.map_err(|e| {
-                crate::error::Error::TursoQueryFailed {
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
                     query: "COMMIT".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Commit replay".into(),
-                }
-            })?;
+                })?;
 
             let msg = crate::store::turso::tables::messages::TursoMessageTable::map_row(&msg_row)?;
             Ok(Some(msg))
         } else {
-            conn.execute("ROLLBACK", ()).await.map_err(|e| {
-                crate::error::Error::TursoQueryFailed {
+            conn.execute("ROLLBACK", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
                     query: "ROLLBACK".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Rollback replay (not found)".into(),
-                }
-            })?;
+                })?;
             Ok(None)
         }
     }

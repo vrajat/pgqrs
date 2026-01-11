@@ -311,10 +311,10 @@ impl Admin for TursoAdmin {
         for stmt in schema {
             conn.execute(stmt, ())
                 .await
-                .map_err(|e| crate::error::Error::TursoQueryFailed {
+                .map_err(|e| crate::error::Error::QueryFailed {
                     query: "Schema Init".into(),
                     context: "Installing schema".into(),
-                    source: e,
+                    source: Box::new(e),
                 })?;
         }
 
@@ -447,9 +447,9 @@ impl Admin for TursoAdmin {
         // Begin transaction
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge queue".into(),
             })?;
 
@@ -475,20 +475,20 @@ impl Admin for TursoAdmin {
 
         match res.await {
             Ok(_) => {
-                conn.execute("COMMIT", ()).await.map_err(|e| {
-                    crate::error::Error::TursoQueryFailed {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| crate::error::Error::QueryFailed {
                         query: "COMMIT".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: "Purge queue".into(),
-                    }
-                })?;
+                    })?;
                 Ok(())
             }
             Err(e) => {
                 let _ = conn.execute("ROLLBACK", ()).await;
-                Err(crate::error::Error::TursoQueryFailed {
+                Err(crate::error::Error::QueryFailed {
                     query: "PURGE".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Purge queue logic".into(),
                 })
             }
@@ -505,9 +505,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "DLQ".into(),
             })?;
 
@@ -519,24 +519,23 @@ impl Admin for TursoAdmin {
                 vec![turso::Value::Integer(self.config.max_read_ct as i64)],
             )
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DLQ_Select".into(),
-                source: e,
+                source: Box::new(e),
                 context: "DLQ".into(),
             })?;
 
         // Collect all potential DLQ items
         let mut messages = Vec::new();
         let mut cursor = rows;
-        while let Some(row) =
-            cursor
-                .next()
-                .await
-                .map_err(|e| crate::error::Error::TursoQueryFailed {
-                    query: "DLQ_Cursor".into(),
-                    source: e,
-                    context: "DLQ".into(),
-                })?
+        while let Some(row) = cursor
+            .next()
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DLQ_Cursor".into(),
+                source: Box::new(e),
+                context: "DLQ".into(),
+            })?
         {
             // Map row manually
             let id: i64 = row.get(0).unwrap();
@@ -575,9 +574,9 @@ impl Admin for TursoAdmin {
 
             if let Err(e) = res {
                 let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::TursoQueryFailed {
+                return Err(crate::error::Error::QueryFailed {
                     query: "DLQ_Insert".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "DLQ insert".into(),
                 });
             }
@@ -591,9 +590,9 @@ impl Admin for TursoAdmin {
                 .await;
             if let Err(e) = res {
                 let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::TursoQueryFailed {
+                return Err(crate::error::Error::QueryFailed {
                     query: "DLQ_Delete".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "DLQ delete".into(),
                 });
             }
@@ -602,9 +601,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "DLQ".into(),
             })?;
 
@@ -834,9 +833,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Reclaim".into(),
             })?;
 
@@ -849,9 +848,9 @@ impl Admin for TursoAdmin {
                 Ok(count) => total += count,
                 Err(e) => {
                     let _ = conn.execute("ROLLBACK", ()).await;
-                    return Err(crate::error::Error::TursoQueryFailed {
+                    return Err(crate::error::Error::QueryFailed {
                         query: "RELEASE_ZOMBIES".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: "Reclaim".into(),
                     });
                 }
@@ -862,9 +861,9 @@ impl Admin for TursoAdmin {
 
             if let Err(e) = res {
                 let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::TursoQueryFailed {
+                return Err(crate::error::Error::QueryFailed {
                     query: "SHUTDOWN_ZOMBIE".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Reclaim".into(),
                 });
             }
@@ -872,9 +871,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Reclaim".into(),
             })?;
 
@@ -909,9 +908,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge Workers".into(),
             })?;
 
@@ -924,9 +923,9 @@ impl Admin for TursoAdmin {
                 .await;
             if let Err(e) = res {
                 let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::TursoQueryFailed {
+                return Err(crate::error::Error::QueryFailed {
                     query: "DELETE_WORKER".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Purge Workers Loop".into(),
                 });
             }
@@ -934,9 +933,9 @@ impl Admin for TursoAdmin {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge Workers".into(),
             })?;
 

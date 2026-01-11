@@ -343,7 +343,7 @@ impl crate::store::Producer for Producer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "REPLAY_FROM_DLQ".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to replay message {}", archived_msg_id),
             })?;
         Ok(rec)

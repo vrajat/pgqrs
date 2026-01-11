@@ -79,7 +79,7 @@ impl Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_QUEUE_BY_NAME ({})", name),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete queue '{}' in transaction", name),
             })?
             .rows_affected();
@@ -114,7 +114,7 @@ impl crate::store::QueueTable for Queues {
                 }
                 crate::error::Error::QueryFailed {
                     query: format!("INSERT_QUEUE ({})", data.queue_name),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to create queue '{}'", data.queue_name),
                 }
             })?;
@@ -136,7 +136,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("GET_QUEUE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get queue {}", id),
             })?;
 
@@ -153,7 +153,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ALL_QUEUES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to list all queues".into(),
             })?;
 
@@ -171,7 +171,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_QUEUES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to count queues".into(),
             })?;
         Ok(count)
@@ -191,7 +191,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_QUEUE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete queue {}", id),
             })?
             .rows_affected();
@@ -217,7 +217,7 @@ impl crate::store::QueueTable for Queues {
                 },
                 _ => crate::error::Error::QueryFailed {
                     query: format!("GET_QUEUE_BY_NAME ({})", name),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to get queue '{}'", name),
                 },
             })?;
@@ -239,7 +239,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("CHECK_QUEUE_EXISTS ({})", name),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to check if queue '{}' exists", name),
             })?;
 
@@ -260,7 +260,7 @@ impl crate::store::QueueTable for Queues {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_QUEUE_BY_NAME ({})", name),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete queue '{}'", name),
             })?
             .rows_affected();

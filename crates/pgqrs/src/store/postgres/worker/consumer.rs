@@ -275,7 +275,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DEQUEUE_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to dequeue messages for worker {}",
                     self.worker_info.id
@@ -302,7 +302,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DEQUEUE_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to dequeue messages".into(),
             })?;
 
@@ -325,7 +325,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DELETE_MESSAGE_OWNED".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete message {}", message_id),
             })?
             .rows_affected();
@@ -341,7 +341,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DELETE_MESSAGE_BATCH".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to delete message batch".into(),
             })?;
 
@@ -362,7 +362,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("ARCHIVE_MESSAGE ({})", msg_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to archive message {}", msg_id),
             })?;
 
@@ -381,7 +381,7 @@ impl crate::store::Consumer for Consumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "ARCHIVE_BATCH".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to archive message batch".into(),
             })?;
 

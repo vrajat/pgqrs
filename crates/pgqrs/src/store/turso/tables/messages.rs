@@ -234,9 +234,9 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin batch".into(),
             })?;
 
@@ -285,9 +285,9 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Commit batch".into(),
             })?;
 
@@ -369,9 +369,9 @@ impl crate::store::MessageTable for TursoMessageTable {
             })?;
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin extend batch".into(),
             })?;
 
@@ -408,9 +408,9 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Commit extend batch".into(),
             })?;
 
@@ -439,9 +439,9 @@ impl crate::store::MessageTable for TursoMessageTable {
             })?;
         conn.execute("BEGIN", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin release batch".into(),
             })?;
 
@@ -477,9 +477,9 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         conn.execute("COMMIT", ())
             .await
-            .map_err(|e| crate::error::Error::TursoQueryFailed {
+            .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COMMIT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Commit release batch".into(),
             })?;
 
