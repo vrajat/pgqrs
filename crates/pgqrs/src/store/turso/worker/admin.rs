@@ -1066,17 +1066,37 @@ mod tests {
         let db = create_test_db().await;
         let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
 
-        // 1. None
+        // Create queues for FKs
+        let queue_table = crate::store::turso::tables::queues::TursoQueueTable::new(db.clone());
+        let q1 = queue_table
+            .insert(crate::types::NewQueue {
+                queue_name: "q1".into(),
+            })
+            .await?;
+        let q2 = queue_table
+            .insert(crate::types::NewQueue {
+                queue_name: "q2".into(),
+            })
+            .await?;
+        let q3 = queue_table
+            .insert(crate::types::NewQueue {
+                queue_name: "q3".into(),
+            })
+            .await?;
+
+        // 1. None (Admin worker)
         let w1 = worker_table.register(None, "host_none", 1000).await?;
         assert!(w1.queue_id.is_none());
 
         // 2. Some
-        let w2 = worker_table.register(Some(123), "host_some", 1001).await?;
-        assert_eq!(w2.queue_id, Some(123));
+        let w2 = worker_table
+            .register(Some(q1.id), "host_some", 1001)
+            .await?;
+        assert_eq!(w2.queue_id, Some(q1.id));
 
         // 3. Ephemeral (Some)
-        let w3 = worker_table.register_ephemeral(Some(456)).await?;
-        assert_eq!(w3.queue_id, Some(456));
+        let w3 = worker_table.register_ephemeral(Some(q2.id)).await?;
+        assert_eq!(w3.queue_id, Some(q2.id));
 
         // 4. Update existing (None -> Some)
         // TursoWorkerTable register logic for existing is: if stopped, re-register. If ready, error.
@@ -1084,9 +1104,12 @@ mod tests {
         worker_table.suspend(w1.id).await?;
         worker_table.shutdown(w1.id).await?;
 
-        let w1_updated = worker_table.register(Some(999), "host_none", 1000).await?;
+        // Re-register converting to a consumer for q3
+        let w1_updated = worker_table
+            .register(Some(q3.id), "host_none", 1000)
+            .await?;
         assert_eq!(w1_updated.id, w1.id);
-        assert_eq!(w1_updated.queue_id, Some(999));
+        assert_eq!(w1_updated.queue_id, Some(q3.id));
 
         Ok(())
     }

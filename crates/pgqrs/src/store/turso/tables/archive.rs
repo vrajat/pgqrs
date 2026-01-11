@@ -367,10 +367,20 @@ mod tests {
         let now = chrono::Utc::now();
         let payload = serde_json::json!({"test": "data"});
 
+        // Create dependent messages/queues first due to FKs
+        let queue_table = crate::store::turso::tables::queues::TursoQueueTable::new(db.clone());
+        use crate::store::QueueTable;
+        let queue = queue_table
+            .insert(crate::types::NewQueue {
+                queue_name: "archive_test_queue".to_string(),
+            })
+            .await
+            .expect("Failed to create queue");
+
         let archived = table
             .insert(NewArchivedMessage {
                 original_msg_id: 1,
-                queue_id: 1,
+                queue_id: queue.id,
                 producer_worker_id: None,
                 consumer_worker_id: None,
                 payload: payload.clone(),

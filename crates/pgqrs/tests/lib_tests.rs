@@ -22,11 +22,9 @@ async fn verify() {
 }
 
 #[tokio::test]
+#[cfg(feature = "postgres")]
 async fn test_custom_schema_search_path() {
-    #[cfg(feature = "postgres")]
     skip_unless_backend!(pgqrs::store::BackendType::Postgres);
-    #[cfg(not(feature = "postgres"))]
-    return;
 
     // This test verifies that the search_path is correctly set to use the custom schema
     let store = create_store().await;

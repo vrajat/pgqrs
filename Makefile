@@ -47,14 +47,8 @@ test-all-backends:  ## Run tests on all available backends
 	@echo ""
 	@echo "=== Testing on SQLite ==="
 	$(MAKE) test-sqlite
-	@if [ -n "$$PGQRS_TEST_TURSO_DSN" ]; then \
-		echo ""; \
-		echo "=== Testing on Turso ==="; \
-		$(MAKE) test-turso; \
-	else \
-		echo ""; \
-		echo "=== Skipping Turso (PGQRS_TEST_TURSO_DSN not set) ==="; \
-	fi
+	echo "=== Testing on Turso ==="; \
+	$(MAKE) test-turso; \
 
 # Run on a subset (comma-separated)
 # Usage: make test-backends BACKENDS=postgres,sqlite

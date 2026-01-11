@@ -132,9 +132,13 @@ impl TursoStore {
                     message: format!("Failed to query migration {}: {}", version, e),
                 })?;
 
-            if rows.next().await.map_err(|e| crate::error::Error::Internal {
+            if rows
+                .next()
+                .await
+                .map_err(|e| crate::error::Error::Internal {
                     message: format!("Failed to fetch migration row {}: {}", version, e),
-                })?.is_some()
+                })?
+                .is_some()
             {
                 continue;
             }

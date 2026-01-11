@@ -48,8 +48,22 @@ def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
     elif test_backend == TestBackend.SQLITE:
         dsn = os.environ.get("PGQRS_TEST_SQLITE_DSN")
         if not dsn:
-            pytest.skip("PGQRS_TEST_SQLITE_DSN not set")
-        yield dsn
+            # Fallback to unique temp file
+            import tempfile
+            fd, path = tempfile.mkstemp(suffix=".db", prefix="sqlite_test_")
+            os.close(fd)
+            # Remove it so sqlite can create it properly or use it
+            # But wait, we need to return a string.
+            # And postgres_dsn fixture will handle per-test isolation if we yield a base value?
+            # Actually, `database_dsn` yields the BASE dsn. `postgres_dsn` fixture creates isolation.
+            # If we yield a base file path here, `postgres_dsn` fixture (lines 90+) creates NEW tmp files anyway.
+            # So we can just yield a dummy value or explicit None signal, but `postgres_dsn` handles isolation.
+            # Let's check `postgres_dsn` fixture logic at line 90.
+            # It blindly yields a new temp file if backend is SQLITE. It ignores `database_dsn` fixture value for SQLite!
+            # So here we just need to yield ANYTHING to prevent skip.
+            yield "sqlite:///tmp/dummy_base.db"
+        else:
+            yield dsn
 
     elif test_backend == TestBackend.TURSO:
         dsn = os.environ.get("PGQRS_TEST_TURSO_DSN")

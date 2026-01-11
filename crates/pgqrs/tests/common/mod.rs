@@ -161,8 +161,14 @@ pub async fn get_test_dsn(schema: &str) -> String {
             BackendType::Postgres => container::get_postgres_dsn(Some(schema)).await,
             #[cfg(feature = "sqlite")]
             BackendType::Sqlite => {
+                let dir = std::env::current_dir()
+                    .expect("Failed to get CWD")
+                    .join("target")
+                    .join("test_dbs");
+                std::fs::create_dir_all(&dir).expect("Failed to create test db dir");
                 format!(
-                    "sqlite:file:{}_{}?mode=memory&cache=shared",
+                    "sqlite://{}/sqlite_{}_{}.db?mode=rwc",
+                    dir.to_string_lossy(),
                     schema,
                     uuid::Uuid::new_v4()
                 )
