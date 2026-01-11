@@ -39,7 +39,7 @@ impl TursoStore {
             .find_map(|prefix| dsn.strip_prefix(prefix))
             .ok_or_else(|| crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
-                message: format!("Unsupported DSN format: {}", dsn),
+                message: "Unsupported DSN format: <redacted>".to_string(),
             })?;
         let builder = turso::Builder::new_local(path);
         let db = builder
@@ -78,6 +78,50 @@ impl TursoStore {
                 message: format!("Failed to set busy timeout: {}", e),
             })?;
 
+        // Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON;", ())
+            .await
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to set foreign_keys: {}", e),
+            })?;
+
+        // Initialize schema version table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (version INTEGER NOT NULL);",
+            (),
+        )
+        .await
+        .map_err(|e| crate::error::Error::Internal {
+            message: format!("Failed to create schema version table: {}", e),
+        })?;
+
+        conn.execute(
+            "INSERT INTO pgqrs_schema_version (version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM pgqrs_schema_version);",
+            (),
+        )
+        .await
+        .map_err(|e| crate::error::Error::Internal {
+            message: format!("Failed to init schema version: {}", e),
+        })?;
+
+        // Get current version
+        let mut rows = conn
+            .query("SELECT version FROM pgqrs_schema_version", ())
+            .await
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to query schema version: {}", e),
+            })?;
+
+        let current_version: i64 = if let Some(row) = rows.next().await.map_err(|e| crate::error::Error::Internal {
+            message: format!("Failed to fetch schema version row: {}", e),
+        })? {
+            row.get(0).map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to get version column: {}", e),
+            })?
+        } else {
+            0
+        };
+
         const Q1: &str = include_str!("../../../migrations/turso/01_create_queues.sql");
         const Q2: &str = include_str!("../../../migrations/turso/02_create_workers.sql");
         const Q3: &str = include_str!("../../../migrations/turso/03_create_messages.sql");
@@ -86,11 +130,21 @@ impl TursoStore {
         const Q6: &str = include_str!("../../../migrations/turso/06_create_workflow_steps.sql");
 
         for (i, sql) in [Q1, Q2, Q3, Q4, Q5, Q6].iter().enumerate() {
-            conn.execute(sql, ())
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to run migration {}: {}", i + 1, e),
-                })?;
+            let mig_idx = (i + 1) as i64;
+            if mig_idx > current_version {
+                conn.execute(sql, ())
+                    .await
+                    .map_err(|e| crate::error::Error::Internal {
+                        message: format!("Failed to run migration {}: {}", mig_idx, e),
+                    })?;
+
+                // Update version
+                conn.execute("UPDATE pgqrs_schema_version SET version = ?", vec![turso::Value::Integer(mig_idx)])
+                    .await
+                    .map_err(|e| crate::error::Error::Internal {
+                        message: format!("Failed to update version to {}: {}", mig_idx, e),
+                    })?;
+            }
         }
 
         Ok(Self {
@@ -190,7 +244,8 @@ impl TursoQueryBuilder {
     pub async fn execute_on_connection(self, conn: &turso::Connection) -> Result<u64> {
         let mut retries = 0;
         const MAX_RETRIES: u32 = 5;
-        let mut delay = 50; // ms
+        let mut delay = 50u64; // ms
+        const MAX_DELAY: u64 = 5000;
 
         loop {
             let res = conn.execute(&self.sql, self.params.clone()).await;
@@ -199,20 +254,29 @@ impl TursoQueryBuilder {
                 Ok(count) => return Ok(count),
                 Err(e) => {
                     let msg = e.to_string();
-                    let is_locked =
-                        msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+                    let is_locked = msg.contains("database is locked")
+                        || msg.contains("SQLITE_BUSY")
+                        || msg.contains("snapshot is stale");
 
                     if is_locked && retries < MAX_RETRIES {
                         retries += 1;
+
+                        // Add jitter: +/- 10%
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos() % 20) as i64 - 10;
+                        let jittered_delay = (delay as i64 + jitter).max(1) as u64;
+
                         tracing::warn!(
                             "Database locked, retrying {}/{} in {}ms: {}",
                             retries,
                             MAX_RETRIES,
-                            delay,
+                            jittered_delay,
                             self.sql
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                        delay *= 2; // exponential backoff
+                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                        delay = delay.saturating_mul(2).min(MAX_DELAY);
                         continue;
                     }
 
@@ -238,7 +302,8 @@ impl TursoQueryBuilder {
     pub async fn fetch_all_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
         let mut retries = 0;
         const MAX_RETRIES: u32 = 5;
-        let mut delay = 50; // ms
+        let mut delay = 50u64; // ms
+        const MAX_DELAY: u64 = 5000;
 
         loop {
             let res = conn.query(&self.sql, self.params.clone()).await;
@@ -261,20 +326,29 @@ impl TursoQueryBuilder {
 
                     if let Some(e) = loop_err {
                         let msg = e.to_string();
-                        let is_locked =
-                            msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+                        let is_locked = msg.contains("database is locked")
+                            || msg.contains("SQLITE_BUSY")
+                            || msg.contains("snapshot is stale");
 
                         if is_locked && retries < MAX_RETRIES {
                             retries += 1;
+
+                            // Add jitter: +/- 10%
+                            let jitter = (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_nanos() % 20) as i64 - 10;
+                            let jittered_delay = (delay as i64 + jitter).max(1) as u64;
+
                             tracing::warn!(
                                 "Database locked during fetch, retrying {}/{} in {}ms: {}",
                                 retries,
                                 MAX_RETRIES,
-                                delay,
+                                jittered_delay,
                                 self.sql
                             );
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                            delay *= 2;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                            delay = delay.saturating_mul(2).min(MAX_DELAY);
                             continue;
                         }
 
@@ -289,20 +363,29 @@ impl TursoQueryBuilder {
                 }
                 Err(e) => {
                     let msg = e.to_string();
-                    let is_locked =
-                        msg.contains("database is locked") || msg.contains("SQLITE_BUSY");
+                    let is_locked = msg.contains("database is locked")
+                        || msg.contains("SQLITE_BUSY")
+                        || msg.contains("snapshot is stale");
 
                     if is_locked && retries < MAX_RETRIES {
                         retries += 1;
+
+                        // Add jitter: +/- 10%
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos() % 20) as i64 - 10;
+                        let jittered_delay = (delay as i64 + jitter).max(1) as u64;
+
                         tracing::warn!(
                             "Database locked query start, retrying {}/{} in {}ms: {}",
                             retries,
                             MAX_RETRIES,
-                            delay,
+                            jittered_delay,
                             self.sql
                         );
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                        delay *= 2;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(jittered_delay)).await;
+                        delay = delay.saturating_mul(2).min(MAX_DELAY);
                         continue;
                     }
 
