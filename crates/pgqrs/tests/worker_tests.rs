@@ -266,9 +266,11 @@ async fn test_worker_health_check() {
 #[tokio::test]
 #[serial]
 async fn test_custom_schema_search_path() {
-    use common::TestBackend;
-    skip_on_backend!(TestBackend::Sqlite);
-    skip_on_backend!(TestBackend::Turso);
+    // use common::TestBackend;
+    #[cfg(feature = "sqlite")]
+    skip_on_backend!(pgqrs::store::BackendType::Sqlite);
+    #[cfg(feature = "turso")]
+    skip_on_backend!(pgqrs::store::BackendType::Turso);
 
     let store = create_store().await;
 

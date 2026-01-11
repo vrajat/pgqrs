@@ -3,20 +3,20 @@ mod common;
 async fn create_store() -> pgqrs::store::AnyStore {
     let dsn = match common::current_backend() {
         #[cfg(feature = "postgres")]
-        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
-        #[cfg(not(feature = "postgres"))]
-        common::TestBackend::Postgres => panic!("Postgres disabled"),
-        common::TestBackend::Sqlite => format!(
+        pgqrs::store::BackendType::Postgres => common::get_postgres_dsn(None).await,
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => format!(
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         ),
-        common::TestBackend::Turso => {
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => {
             let path = std::env::temp_dir().join(format!(
                 "test_default_schema_turso_{}.db",
                 uuid::Uuid::new_v4()
             ));
             std::fs::File::create(&path).expect("Failed to create test DB file");
-            format!("file://{}", path.display())
+            format!("turso://{}", path.display())
         }
     };
     let config = pgqrs::config::Config::from_dsn(&dsn);
@@ -37,27 +37,28 @@ async fn test_default_schema_backward_compatibility() {
     // This test ensures that the default behavior works without any explicit schema configuration
     let database_url = match common::current_backend() {
         #[cfg(feature = "postgres")]
-        common::TestBackend::Postgres => common::get_postgres_dsn(None).await,
-        #[cfg(not(feature = "postgres"))]
-        common::TestBackend::Postgres => panic!("Postgres disabled"),
-        common::TestBackend::Sqlite => format!(
+        pgqrs::store::BackendType::Postgres => common::get_postgres_dsn(None).await,
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => format!(
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         ),
-        common::TestBackend::Turso => {
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => {
             let path = std::env::temp_dir().join(format!(
                 "test_default_schema_turso_{}.db",
                 uuid::Uuid::new_v4()
             ));
             std::fs::File::create(&path).expect("Failed to create test DB file");
-            format!("file://{}", path.display())
+            format!("turso://{}", path.display())
         }
     };
 
     // Test Config::from_dsn creates config with default schema (public for Postgres)
     let config = pgqrs::config::Config::from_dsn(&database_url);
 
-    if common::current_backend() == common::TestBackend::Postgres {
+    #[cfg(feature = "postgres")]
+    if common::current_backend() == pgqrs::store::BackendType::Postgres {
         assert_eq!(config.schema, "public");
     }
 

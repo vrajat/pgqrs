@@ -54,8 +54,10 @@ def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
     elif test_backend == TestBackend.TURSO:
         dsn = os.environ.get("PGQRS_TEST_TURSO_DSN")
         if not dsn:
-            pytest.skip("PGQRS_TEST_TURSO_DSN not set")
-        yield dsn
+            # Default to auto-generated local file
+            yield "file:auto"
+        else:
+            yield dsn
 
 
 # Convenience decorators for backend-specific tests
@@ -102,8 +104,23 @@ def postgres_dsn(test_backend: TestBackend, database_dsn: str) -> Generator[str,
         except OSError:
             pass
     elif test_backend == TestBackend.TURSO:
-        # For Turso, we might need a similar isolation strategy or dedicated test database
-        yield database_dsn
+        if database_dsn == "file:auto" or database_dsn.startswith("file:"):
+            # Create a unique temporary file
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            dsn = f"turso://{tmp_path}"
+            yield dsn
+
+            # Cleanup
+            try:
+                os.remove(tmp_path)
+                if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
+                if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+            except OSError:
+                pass
+        else:
+            yield database_dsn
 
 @pytest.fixture(scope="function")
 def schema(test_backend: TestBackend, postgres_dsn: str, request) -> Generator[str, None, None]:

@@ -23,8 +23,10 @@ async fn verify() {
 
 #[tokio::test]
 async fn test_custom_schema_search_path() {
-    use common::TestBackend;
-    skip_unless_backend!(TestBackend::Postgres);
+    #[cfg(feature = "postgres")]
+    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
+    #[cfg(not(feature = "postgres"))]
+    return;
 
     // This test verifies that the search_path is correctly set to use the custom schema
     let store = create_store().await;
@@ -683,9 +685,12 @@ async fn test_referential_integrity_checks() {
     // Create an orphaned message by inserting directly with invalid queue_id
     // This simulates what would happen if referential integrity was broken
     let sql = match common::current_backend() {
-        common::TestBackend::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
-        common::TestBackend::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        common::TestBackend::Turso => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
+        #[cfg(feature = "postgres")]
+        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
     };
 
     let orphan_result = store.execute_raw(sql).await;

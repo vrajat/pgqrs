@@ -20,9 +20,8 @@ async fn create_test_setup() -> AnyStore {
 
 #[tokio::test]
 async fn test_pgbouncer_happy_path() {
-    if common::current_backend() != common::TestBackend::Postgres {
-        return;
-    }
+    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
+
     let store = create_test_setup().await;
 
     // Verify the installation works through PgBouncer
@@ -138,9 +137,8 @@ async fn test_pgbouncer_happy_path() {
 
 #[tokio::test]
 async fn test_pgbouncer_queue_list() {
-    if common::current_backend() != common::TestBackend::Postgres {
-        return;
-    }
+    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
+
     let store = create_test_setup().await;
 
     // Create a test queue

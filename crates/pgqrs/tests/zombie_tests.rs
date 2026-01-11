@@ -9,18 +9,18 @@ mod common;
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let dsn = match common::current_backend() {
         #[cfg(feature = "postgres")]
-        common::TestBackend::Postgres => {
+        pgqrs::store::BackendType::Postgres => {
             let db_name = "test_zombie_reclamation";
             common::get_postgres_dsn(Some(db_name)).await
         }
-        #[cfg(not(feature = "postgres"))]
-        common::TestBackend::Postgres => panic!("Postgres disabled"),
-        common::TestBackend::Sqlite => {
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => {
             let path = std::env::temp_dir().join(format!("zombie_{}.db", uuid::Uuid::new_v4()));
             std::fs::File::create(&path).expect("Failed to create test DB file");
             format!("sqlite://{}", path.display())
         }
-        common::TestBackend::Turso => {
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => {
             let path =
                 std::env::temp_dir().join(format!("zombie_turso_{}.db", uuid::Uuid::new_v4()));
             format!("turso://{}", path.display())
@@ -75,8 +75,12 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         let consumer_worker_id = consumer.worker_id();
 
         let update_sql = match common::current_backend() {
-            common::TestBackend::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            common::TestBackend::Sqlite | common::TestBackend::Turso => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
+            #[cfg(feature = "postgres")]
+            pgqrs::store::BackendType::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            #[cfg(feature = "sqlite")]
+            pgqrs::store::BackendType::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
+            #[cfg(feature = "turso")]
+            pgqrs::store::BackendType::Turso => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
         };
 
         store
@@ -112,10 +116,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             stored_msg.consumer_worker_id, None,
             "Message should have no consumer"
         );
-        assert_eq!(
-            stored_msg.read_ct, 1,
-            "Read count should be preserved at 1"
-        );
+        assert_eq!(stored_msg.read_ct, 1, "Read count should be preserved at 1");
         // Verify worker is stopped
         let updated_worker = pgqrs::tables(&store)
             .workers()
@@ -149,12 +150,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             .execute_raw_with_two_i64(update_sql, 3600, c2_id)
             .await?;
 
-        (
-            queue.id,
-            consumer_worker_id,
-            producer.worker_id(),
-            c2_id,
-        )
+        (queue.id, consumer_worker_id, producer.worker_id(), c2_id)
     }; // All connections closed here
 
     // 9. Run CLI command
@@ -162,9 +158,13 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
-    if common::current_backend() == common::TestBackend::Sqlite {
+    #[cfg(feature = "sqlite")]
+    if common::current_backend() == pgqrs::store::BackendType::Sqlite {
         cmd.args(["--no-default-features", "--features", "sqlite"]);
-    } else if common::current_backend() == common::TestBackend::Turso {
+    }
+
+    #[cfg(feature = "turso")]
+    if common::current_backend() == pgqrs::store::BackendType::Turso {
         cmd.args(["--no-default-features", "--features", "turso"]);
     }
 
@@ -207,9 +207,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
         // Cleanup
         pgqrs::admin(&store).purge_queue(queue_name).await?;
-        pgqrs::admin(&store)
-            .delete_worker(producer_id)
-            .await?;
+        pgqrs::admin(&store).delete_worker(producer_id).await?;
         pgqrs::admin(&store)
             .delete_worker(consumer_worker_id)
             .await?; // consumer 1

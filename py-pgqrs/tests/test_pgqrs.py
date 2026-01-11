@@ -11,6 +11,7 @@ async def setup_test(dsn, schema):
     store = await pgqrs.connect_with(config)
     admin = pgqrs.admin(store)
     await admin.install()
+    await admin.verify()
     return store, admin
 
 @pytest.mark.asyncio
@@ -263,6 +264,7 @@ async def test_api_redesign_high_level(postgres_dsn, schema):
 
     admin = pgqrs.admin(store)
     await admin.install()
+    await admin.verify()
     queue = "high_level_q"
     await admin.create_queue(queue)
 

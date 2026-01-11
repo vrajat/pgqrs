@@ -441,7 +441,7 @@ pub trait Store: Send + Sync + 'static {
     ) -> crate::error::Result<Box<dyn Consumer>>;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType {
     #[cfg(feature = "postgres")]
     Postgres,
@@ -452,9 +452,10 @@ pub enum BackendType {
 }
 
 impl BackendType {
-    const POSTGRES_PREFIXES: &'static [&'static str] = &["postgres://", "postgresql://"];
-    const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:"];
-    const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:"];
+    const POSTGRES_PREFIXES: &'static [&'static str] =
+        &["postgres://", "postgresql://", "postgres", "pg"];
+    const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
+    const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
 
     pub fn detect(dsn: &str) -> crate::error::Result<Self> {
         // Check Postgres

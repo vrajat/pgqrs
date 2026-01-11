@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::{
-    Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable,
-    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
+    Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
+    QueueTable, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -51,6 +51,29 @@ impl TursoStore {
         let conn = db.connect().map_err(|e| Error::Internal {
             message: format!("Failed to get connection: {}", e),
         })?;
+
+        // Enable WAL mode and busy timeout for better concurrency in local mode
+        // PRAGMA journal_mode returns a row, so we use query() to avoid "unexpected row" error
+        let mut rows = conn
+            .query("PRAGMA journal_mode=WAL;", ())
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to set WAL mode: {}", e),
+            })?;
+        while rows
+            .next()
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to consume WAL pragma result: {}", e),
+            })?
+            .is_some()
+        {}
+
+        conn.execute("PRAGMA busy_timeout = 5000;", ())
+            .await
+            .map_err(|e| Error::Internal {
+                message: format!("Failed to set busy timeout: {}", e),
+            })?;
 
         const Q1: &str = include_str!("../../../migrations/turso/01_create_queues.sql");
         const Q2: &str = include_str!("../../../migrations/turso/02_create_workers.sql");
@@ -123,6 +146,21 @@ pub struct TursoQueryBuilder {
     params: Vec<turso::Value>,
 }
 
+pub async fn connect_db(db: &Database) -> Result<turso::Connection> {
+    let conn = db.connect().map_err(|e| Error::Internal {
+        message: format!("Connect failed: {}", e),
+    })?;
+
+    // precise busy_timeout for every connection to handle concurrency
+    conn.execute("PRAGMA busy_timeout = 5000;", ())
+        .await
+        .map_err(|e| Error::Internal {
+            message: format!("Failed to set busy timeout: {}", e),
+        })?;
+
+    Ok(conn)
+}
+
 impl TursoQueryBuilder {
     pub fn new(sql: &str) -> Self {
         Self {
@@ -140,10 +178,7 @@ impl TursoQueryBuilder {
     }
 
     pub async fn execute(self, db: &Database) -> Result<u64> {
-        let conn = db.connect().map_err(|e| Error::Internal {
-            message: format!("Connect failed: {}", e),
-        })?;
-
+        let conn = connect_db(db).await?;
         self.execute_on_connection(&conn).await
     }
 
@@ -160,9 +195,7 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_all(self, db: &Database) -> Result<Vec<Row>> {
-        let conn = db.connect().map_err(|e| Error::Internal {
-            message: e.to_string(),
-        })?;
+        let conn = connect_db(db).await?;
         self.fetch_all_on_connection(&conn).await
     }
 
@@ -194,9 +227,7 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_one(self, db: &Database) -> Result<Row> {
-        let conn = db.connect().map_err(|e| Error::Internal {
-            message: e.to_string(),
-        })?;
+        let conn = connect_db(db).await?;
         self.fetch_one_on_connection(&conn).await
     }
 
@@ -213,9 +244,7 @@ impl TursoQueryBuilder {
     }
 
     pub async fn fetch_optional(self, db: &Database) -> Result<Option<Row>> {
-        let conn = db.connect().map_err(|e| Error::Internal {
-            message: e.to_string(),
-        })?;
+        let conn = connect_db(db).await?;
         self.fetch_optional_on_connection(&conn).await
     }
 

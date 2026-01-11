@@ -142,9 +142,7 @@ impl Consumer for TursoConsumer {
     ) -> Result<Vec<QueueMessage>> {
         // Implement Manual Transaction Dequeue
         let now_str = format_turso_timestamp(&now);
-        let conn = self.db.connect().map_err(|e| Error::Internal {
-            message: e.to_string(),
-        })?;
+        let conn = crate::store::turso::connect_db(&self.db).await?;
 
         conn.execute("BEGIN", ())
             .await
@@ -250,12 +248,7 @@ impl Consumer for TursoConsumer {
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
+        let conn = crate::store::turso::connect_db(&self.db).await?;
 
         // 1. Begin Transaction
         conn.execute("BEGIN", ())

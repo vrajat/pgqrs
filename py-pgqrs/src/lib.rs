@@ -50,6 +50,7 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         | rust_pgqrs::Error::PayloadTooLarge { .. }
         | rust_pgqrs::Error::SchemaValidation { .. } => ValidationError::new_err(err.to_string()),
         rust_pgqrs::Error::Timeout { .. } => TimeoutError::new_err(err.to_string()),
+        #[cfg(any(feature = "postgres", feature = "sqlite"))]
         rust_pgqrs::Error::ConnectionFailed { .. }
         | rust_pgqrs::Error::PoolExhausted { .. }
         | rust_pgqrs::Error::Database(_)
@@ -57,13 +58,17 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         | rust_pgqrs::Error::TransactionFailed { .. } => {
             PgqrsConnectionError::new_err(err.to_string())
         }
+        #[cfg(feature = "turso")]
+        rust_pgqrs::Error::Turso(_) | rust_pgqrs::Error::TursoQueryFailed { .. } => {
+            PgqrsConnectionError::new_err(err.to_string())
+        }
         rust_pgqrs::Error::InvalidStateTransition { .. }
         | rust_pgqrs::Error::WorkerHasPendingMessages { .. } => {
             StateTransitionError::new_err(err.to_string())
         }
-        rust_pgqrs::Error::Internal { .. } | rust_pgqrs::Error::MigrationFailed(_) => {
-            InternalError::new_err(err.to_string())
-        }
+        #[cfg(any(feature = "postgres", feature = "sqlite"))]
+        rust_pgqrs::Error::MigrationFailed(_) => InternalError::new_err(err.to_string()),
+        rust_pgqrs::Error::Internal { .. } => InternalError::new_err(err.to_string()),
         _ => PgqrsError::new_err(err.to_string()),
     }
 }

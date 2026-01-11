@@ -12,7 +12,7 @@ use crate::store::sqlite::SqliteStore;
 #[cfg(feature = "turso")]
 use crate::store::turso::TursoStore;
 #[cfg(feature = "postgres")]
-use sqlx::postgres::{PgPoolOptions};
+use sqlx::postgres::PgPoolOptions;
 
 /// Runtime-selectable database backend.
 ///
@@ -48,7 +48,7 @@ impl AnyStore {
     /// This method is primarily used internally by `pgqrs::connect()`.
     /// Users should prefer the high-level `pgqrs::connect()` function.
     pub(crate) async fn connect(config: &Config) -> crate::error::Result<Self> {
-         let backend = BackendType::detect(&config.dsn)?;
+        let backend = BackendType::detect(&config.dsn)?;
 
         match backend {
             #[cfg(feature = "postgres")]
