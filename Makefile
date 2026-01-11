@@ -32,7 +32,7 @@ test-py: build  ## Run Python tests only
 
 # Convenience targets for each backend
 test-postgres:  ## Run tests on Postgres backend
-	$(MAKE) test PGQRS_TEST_BACKEND=postgres
+	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
 
 test-sqlite:  ## Run tests on SQLite backend
 	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite"
