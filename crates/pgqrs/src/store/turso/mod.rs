@@ -264,7 +264,7 @@ impl TursoQueryBuilder {
 
     pub async fn execute_on_connection(self, conn: &turso::Connection) -> Result<u64> {
         let mut retries = 0;
-        const MAX_RETRIES: u32 = 5;
+        const MAX_RETRIES: u32 = 10;
         let mut delay = 50u64; // ms
         const MAX_DELAY: u64 = 5000;
 
@@ -325,7 +325,7 @@ impl TursoQueryBuilder {
 
     pub async fn fetch_all_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
         let mut retries = 0;
-        const MAX_RETRIES: u32 = 5;
+        const MAX_RETRIES: u32 = 10;
         let mut delay = 50u64; // ms
         const MAX_DELAY: u64 = 5000;
 
