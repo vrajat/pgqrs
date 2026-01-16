@@ -77,6 +77,8 @@ impl TestResource for FileResource {
         let dir = Self::get_temp_dir();
         // Ensure dir exists (init might have happened once, but good to be safe)
         let _ = std::fs::create_dir_all(&dir);
+        // Canonicalize to ensure absolute path for libs/drivers
+        let dir = dir.canonicalize().unwrap_or(dir);
 
         let schema_part = schema.unwrap_or("default");
         let filename = format!(
@@ -90,13 +92,14 @@ impl TestResource for FileResource {
         // Track for cleanup
         self.track_file(path.clone());
 
-        // Explicitly create the file to ensure it exists and we have write permissions.
-        // This avoids "unable to open database file" errors (code 14) in some CI environments,
-        // specifically when relying on the library to create the file implicitly.
+        // Explicitly create the file
         if !path.exists() {
-            if let Err(e) = std::fs::File::create(&path) {
-                eprintln!("Failed to pre-create DB file {:?}: {}", path, e);
+            match std::fs::File::create(&path) {
+                Ok(_) => eprintln!("Created SQLite DB file: {:?}", path),
+                Err(e) => eprintln!("Failed to pre-create DB file {:?}: {}", path, e),
             }
+        } else {
+            eprintln!("Using existing SQLite DB file: {:?}", path);
         }
 
         if self.backend_prefix.starts_with("sqlite") {
