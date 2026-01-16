@@ -271,44 +271,10 @@ async fn test_anystore_worker_creation() {
 #[tokio::test]
 async fn test_anystore_connect_with_dsn() {
     // This test specifically tests connect_with_dsn for Postgres
-    // We should skip if not on Postgres, or adapt it to test current backend's DSN
-    // But get_postgres_dsn is generic? No, it's specific.
-    // Let's use get_dsn_from_env or similar.
-
-    let backend = common::current_backend();
-
-    // We need a helper to get DSN for current backend
-    // Since get_postgres_dsn is public but specific, let's use create_store logic basically
-    // but we want just the DSN string.
-
-    // Hack: create a store just to get its DSN from config, then connect again?
-    // Or assume we can get it via env vars using common logic (but common logic for DSN is internal/private?)
-    // Ah common::get_dsn_from_env is pub.
-
-    let dsn = if let Some(d) = common::get_dsn_from_env(backend) {
-        d
-    } else {
-        match backend {
-            #[cfg(feature = "postgres")]
-            BackendType::Postgres => {
-                let schema = "pgqrs_anystore_dsn_test";
-                common::get_postgres_dsn(Some(schema)).await
-            }
-            #[cfg(feature = "sqlite")]
-            BackendType::Sqlite => "sqlite::memory:".to_string(),
-            #[cfg(feature = "turso")]
-            BackendType::Turso => {
-                format!(
-                    "turso://{}",
-                    std::env::temp_dir()
-                        .join(format!("pgqrs_turso_test_dsn_{}.db", uuid::Uuid::new_v4()))
-                        .display()
-                )
-            }
-        }
-    };
+    let dsn = common::get_test_dsn("pgqrs_anystore_dsn_test").await;
 
     // Test connect_with_dsn method
+    let backend = common::current_backend();
     let store = pgqrs::store::AnyStore::connect_with_dsn(&dsn)
         .await
         .expect("Failed to connect with DSN");

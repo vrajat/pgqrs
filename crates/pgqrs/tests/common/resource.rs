@@ -54,12 +54,8 @@ impl FileResource {
     fn get_temp_dir() -> PathBuf {
         std::env::var("CARGO_TARGET_TMPDIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::current_dir()
-                    .expect("Failed to get CWD")
-                    .join("target")
-                    .join("tmp")
-            })
+            .or_else(|_| std::env::current_dir().map(|cwd| cwd.join("target").join("tmp")))
+            .unwrap_or_else(|_| std::env::temp_dir())
     }
 
     fn track_file(&self, path: PathBuf) {

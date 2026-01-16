@@ -1,26 +1,12 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        match common::current_backend() {
-            #[cfg(feature = "postgres")]
-            pgqrs::store::BackendType::Postgres => {
-                common::get_postgres_dsn(Some("pgqrs_cli_test")).await
-            }
-            #[cfg(feature = "sqlite")]
-            pgqrs::store::BackendType::Sqlite => {
-                let path =
-                    std::env::temp_dir().join(format!("cli_test_{}.db", uuid::Uuid::new_v4()));
-                std::fs::File::create(&path).expect("Failed to create test DB file");
-                format!("sqlite://{}", path.display())
-            }
-            #[cfg(feature = "turso")]
-            pgqrs::store::BackendType::Turso => {
-                let path = std::env::temp_dir()
-                    .join(format!("cli_test_turso_{}.db", uuid::Uuid::new_v4()));
-                std::fs::File::create(&path).expect("Failed to create test DB file");
-                format!("turso://{}", path.display())
-            }
-        }
+        // Use singular 'pgqrs_cli_test' to match hardcoded schema names in tests below
+        common::create_store("pgqrs_cli_test")
+            .await
+            .config()
+            .dsn
+            .clone()
     })
 }
 

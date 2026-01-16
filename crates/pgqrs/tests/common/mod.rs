@@ -1,3 +1,4 @@
+#![allow(clippy::await_holding_lock)]
 pub mod constants;
 
 #[cfg(feature = "postgres")]
@@ -12,21 +13,29 @@ use ctor::dtor;
 use pgqrs::store::BackendType;
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
 
-/// Get a PostgreSQL DSN for testing.
-#[allow(dead_code)]
-#[cfg(feature = "postgres")]
-pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
-    initialize_global_resource(BackendType::Postgres, false).await;
-    let guard = RESOURCE_MANAGER.read().unwrap();
-    guard.as_ref().unwrap().resource.get_dsn(schema).await
-}
-
 #[allow(dead_code)]
 #[cfg(feature = "postgres")]
 pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
-    initialize_global_resource(BackendType::Postgres, true).await;
-    let guard = RESOURCE_MANAGER.read().unwrap();
-    guard.as_ref().unwrap().resource.get_dsn(schema).await
+    {
+        let guard = RESOURCE_MANAGER.read().unwrap();
+        if guard.is_some() {
+            return guard.as_ref().unwrap().resource.get_dsn(schema).await;
+        }
+    }
+
+    let mut guard = RESOURCE_MANAGER.write().unwrap();
+    if guard.is_some() {
+        return guard.as_ref().unwrap().resource.get_dsn(schema).await;
+    }
+
+    let resource: Box<dyn TestResource> = {
+        let r = pgbouncer::PgBouncerResource::new();
+        r.initialize().await.expect("Failed to init pgbouncer");
+        Box::new(r)
+    };
+    let dsn = resource.get_dsn(schema).await;
+    *guard = Some(ResourceManager::new(resource));
+    dsn
 }
 
 /// Get the current test backend.
@@ -55,7 +64,7 @@ pub fn current_backend() -> BackendType {
 }
 
 #[allow(dead_code)]
-pub fn get_dsn_from_env(backend: BackendType) -> Option<String> {
+pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
     match backend {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => {
@@ -67,87 +76,29 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<String> {
             std::env::var("PGQRS_TEST_POSTGRES_DSN")
                 .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
                 .ok()
+                .map(|dsn| {
+                    Box::new(postgres::ExternalPostgresResource::new(dsn)) as Box<dyn TestResource>
+                })
         }
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => {
             if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
                 panic!("Ambiguous configuration: DSN mismatch for Sqlite");
             }
-            std::env::var("PGQRS_TEST_SQLITE_DSN").ok()
+            std::env::var("PGQRS_TEST_SQLITE_DSN").ok().map(|dsn| {
+                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
+            })
         }
         #[cfg(feature = "turso")]
         BackendType::Turso => {
             if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
                 panic!("Ambiguous configuration: DSN mismatch for Turso");
             }
-            std::env::var("PGQRS_TEST_TURSO_DSN").ok()
+            std::env::var("PGQRS_TEST_TURSO_DSN").ok().map(|dsn| {
+                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
+            })
         }
     }
-}
-
-// Global initialization logic
-async fn initialize_global_resource(
-    backend: BackendType,
-    #[allow(unused_variables)] use_pgbouncer: bool,
-) {
-    {
-        let guard = RESOURCE_MANAGER.read().unwrap();
-        if guard.is_some() {
-            return;
-        }
-    }
-
-    let mut guard = RESOURCE_MANAGER.write().unwrap();
-    if guard.is_some() {
-        return;
-    }
-
-    let external_dsn = get_dsn_from_env(backend);
-
-    let resource: Box<dyn TestResource> = match backend {
-        #[cfg(feature = "postgres")]
-        BackendType::Postgres => {
-            if let Some(dsn) = external_dsn {
-                if use_pgbouncer {
-                    Box::new(pgbouncer::ExternalPgBouncerResource::new(dsn))
-                } else {
-                    Box::new(postgres::ExternalPostgresResource::new(dsn))
-                }
-            } else if use_pgbouncer {
-                let r = pgbouncer::PgBouncerResource::new();
-                r.initialize().await.expect("Failed to init pgbouncer");
-                Box::new(r)
-            } else {
-                let r = postgres::PostgresResource::new();
-                r.initialize().await.expect("Failed to init postgres");
-                Box::new(r)
-            }
-        }
-        #[cfg(feature = "sqlite")]
-        BackendType::Sqlite => {
-            if let Some(dsn) = external_dsn {
-                Box::new(resource::ExternalFileResource::new(dsn))
-            } else {
-                let r = resource::FileResource::new("sqlite://".to_string());
-                r.initialize()
-                    .await
-                    .expect("Failed to init sqlite resource");
-                Box::new(r)
-            }
-        }
-        #[cfg(feature = "turso")]
-        BackendType::Turso => {
-            if let Some(dsn) = external_dsn {
-                Box::new(resource::ExternalFileResource::new(dsn))
-            } else {
-                let r = resource::FileResource::new("turso://".to_string());
-                r.initialize().await.expect("Failed to init turso resource");
-                Box::new(r)
-            }
-        }
-    };
-
-    *guard = Some(ResourceManager::new(resource));
 }
 
 /// Create a store for the currently selected test backend.
@@ -175,23 +126,47 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
 pub async fn get_test_dsn(schema: &str) -> String {
     let backend = current_backend();
 
-    // 2. Use Managed Resource
-    match backend {
-        #[cfg(feature = "postgres")]
-        BackendType::Postgres => get_postgres_dsn(Some(schema)).await,
-        #[cfg(feature = "sqlite")]
-        BackendType::Sqlite => {
-            initialize_global_resource(BackendType::Sqlite, false).await;
-            let guard = RESOURCE_MANAGER.read().unwrap();
-            guard.as_ref().unwrap().resource.get_dsn(Some(schema)).await
-        }
-        #[cfg(feature = "turso")]
-        BackendType::Turso => {
-            initialize_global_resource(BackendType::Turso, false).await;
-            let guard = RESOURCE_MANAGER.read().unwrap();
-            guard.as_ref().unwrap().resource.get_dsn(Some(schema)).await
+    {
+        let guard = RESOURCE_MANAGER.read().unwrap();
+        if let Some(manager) = guard.as_ref() {
+            return manager.resource.get_dsn(Some(schema)).await;
         }
     }
+
+    let mut guard = RESOURCE_MANAGER.write().unwrap();
+    if let Some(manager) = guard.as_ref() {
+        return manager.resource.get_dsn(Some(schema)).await;
+    }
+
+    let resource: Box<dyn TestResource> = if let Some(r) = get_dsn_from_env(backend) {
+        r
+    } else {
+        match backend {
+            #[cfg(feature = "postgres")]
+            BackendType::Postgres => {
+                let r = postgres::PostgresResource::new();
+                r.initialize().await.expect("Failed to init postgres");
+                Box::new(r)
+            }
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => {
+                let r = resource::FileResource::new("sqlite://".to_string());
+                r.initialize()
+                    .await
+                    .expect("Failed to init sqlite resource");
+                Box::new(r)
+            }
+            #[cfg(feature = "turso")]
+            BackendType::Turso => {
+                let r = resource::FileResource::new("turso://".to_string());
+                r.initialize().await.expect("Failed to init turso resource");
+                Box::new(r)
+            }
+        }
+    };
+
+    *guard = Some(ResourceManager::new(resource));
+    guard.as_ref().unwrap().resource.get_dsn(Some(schema)).await
 }
 
 /// Skip test if not running on specified backend.

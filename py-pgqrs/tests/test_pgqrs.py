@@ -482,7 +482,7 @@ async def test_ephemeral_consume_batch_failure(postgres_dsn, schema):
     """
     store, admin = await setup_test(postgres_dsn, schema)
     queue = "ephemeral_batch_fail_q"
-    await admin.create_queue(queue)
+    q_info = await admin.create_queue(queue)
 
     for i in range(3):
         await pgqrs.produce(store, queue, {"i": i})

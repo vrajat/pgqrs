@@ -1,4 +1,4 @@
-use pgqrs::{config::Config, store::Store, types::WorkerStatus};
+use pgqrs::{store::Store, types::WorkerStatus};
 use serial_test::serial;
 use std::process::Command;
 
@@ -7,32 +7,13 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
-    let dsn = match common::current_backend() {
-        #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => {
-            let db_name = "test_zombie_reclamation";
-            common::get_postgres_dsn(Some(db_name)).await
-        }
-        #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => {
-            let path = std::env::temp_dir().join(format!("zombie_{}.db", uuid::Uuid::new_v4()));
-            std::fs::File::create(&path).expect("Failed to create test DB file");
-            format!("sqlite://{}", path.display())
-        }
-        #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => {
-            let path =
-                std::env::temp_dir().join(format!("zombie_turso_{}.db", uuid::Uuid::new_v4()));
-            format!("turso://{}", path.display())
-        }
-    };
-
     let queue_name = "zombie-queue";
-
+    let schema = "pgqrs_zombie_tests";
     // 1-8. Phase 1: Library-based Zombie Reclamation
-    let (queue_id, consumer_worker_id, producer_id, c2_id) = {
-        let config = Config::from_dsn(&dsn);
-        let store = pgqrs::connect_with_config(&config).await?;
+    let (queue_id, consumer_worker_id, producer_id, c2_id, dsn_str) = {
+        let store = common::create_store(schema).await;
+        // Capture DSN to return it
+        let dsn = store.config().dsn.clone();
 
         // Create admin via builder
         pgqrs::admin(&store).install().await?;
@@ -150,12 +131,39 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             .execute_raw_with_two_i64(update_sql, 3600, c2_id)
             .await?;
 
-        (queue.id, consumer_worker_id, producer.worker_id(), c2_id)
+        #[cfg(any(feature = "sqlite", feature = "turso"))]
+        {
+            let mut needs_checkpoint = false;
+            let backend = common::current_backend();
+
+            #[cfg(feature = "sqlite")]
+            if backend == pgqrs::store::BackendType::Sqlite {
+                needs_checkpoint = true;
+            }
+
+            #[cfg(feature = "turso")]
+            if backend == pgqrs::store::BackendType::Turso {
+                needs_checkpoint = true;
+            }
+
+            if needs_checkpoint {
+                let _ = store.execute_raw("PRAGMA wal_checkpoint(TRUNCATE)").await;
+            }
+        }
+
+        (
+            queue.id,
+            consumer_worker_id,
+            producer.worker_id(),
+            c2_id,
+            dsn,
+        )
     }; // All connections closed here
 
     // 9. Run CLI command
-    // cargo run -- -d <dsn> admin reclaim --queue <queue_name> --older-than 1m
-    let mut cmd = Command::new("cargo");
+    // cargo run -- -d <dsn> ...
+    let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let mut cmd = Command::new(cargo_bin);
     cmd.arg("run");
 
     #[cfg(feature = "sqlite")]
@@ -168,11 +176,15 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         cmd.args(["--no-default-features", "--features", "turso"]);
     }
 
+    assert!(!dsn_str.is_empty());
+
     let output = cmd
         .args([
             "--",
             "-d",
-            &dsn,
+            &dsn_str,
+            "--schema",
+            "pgqrs_zombie_tests",
             "admin",
             "reclaim",
             "--queue",
@@ -185,8 +197,6 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
     // 10. Reconnect and Verify results
     {
-        let store = pgqrs::connect(&dsn).await?;
-
         assert!(
             output.status.success(),
             "CLI command failed: {:?}",
@@ -198,6 +208,17 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             "CLI output mismatch: {}",
             stdout
         );
+
+        // Use existing DSN to ensure we connect to the same DB file
+        #[cfg(any(feature = "sqlite", feature = "turso"))]
+        let store = {
+            let config = pgqrs::config::Config::from_dsn(&dsn_str);
+            pgqrs::connect_with_config(&config)
+                .await
+                .expect("Failed to connect")
+        };
+        #[cfg(not(any(feature = "sqlite", feature = "turso")))]
+        let store = common::create_store(schema).await;
 
         let c2_worker = pgqrs::tables(&store).workers().get(c2_id).await?;
         assert!(
