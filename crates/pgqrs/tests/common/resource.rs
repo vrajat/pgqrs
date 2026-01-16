@@ -90,7 +90,17 @@ impl TestResource for FileResource {
         // Track for cleanup
         self.track_file(path.clone());
 
+        // Explicitly create the file to ensure it exists and we have write permissions.
+        // This avoids "unable to open database file" errors (code 14) in some CI environments,
+        // specifically when relying on the library to create the file implicitly.
+        if !path.exists() {
+            if let Err(e) = std::fs::File::create(&path) {
+                eprintln!("Failed to pre-create DB file {:?}: {}", path, e);
+            }
+        }
+
         if self.backend_prefix.starts_with("sqlite") {
+            // For sqlx specifically
             format!("sqlite://{}?mode=rwc", path.to_string_lossy())
         } else {
             format!("{}{}", self.backend_prefix, path.to_string_lossy())
