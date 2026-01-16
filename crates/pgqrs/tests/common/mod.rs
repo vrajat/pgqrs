@@ -86,7 +86,10 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<String> {
 }
 
 // Global initialization logic
-async fn initialize_global_resource(backend: BackendType, use_pgbouncer: bool) {
+async fn initialize_global_resource(
+    backend: BackendType,
+    #[allow(unused_variables)] use_pgbouncer: bool,
+) {
     {
         let guard = RESOURCE_MANAGER.read().unwrap();
         if guard.is_some() {
@@ -110,31 +113,37 @@ async fn initialize_global_resource(backend: BackendType, use_pgbouncer: bool) {
                 } else {
                     Box::new(postgres::ExternalPostgresResource::new(dsn))
                 }
+            } else if use_pgbouncer {
+                let r = pgbouncer::PgBouncerResource::new();
+                r.initialize().await.expect("Failed to init pgbouncer");
+                Box::new(r)
             } else {
-                if use_pgbouncer {
-                    let r = pgbouncer::PgBouncerResource::new();
-                    r.initialize().await.expect("Failed to init pgbouncer");
-                    Box::new(r)
-                } else {
-                    let r = postgres::PostgresResource::new();
-                    r.initialize().await.expect("Failed to init postgres");
-                    Box::new(r)
-                }
+                let r = postgres::PostgresResource::new();
+                r.initialize().await.expect("Failed to init postgres");
+                Box::new(r)
             }
         }
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => {
-            let r = resource::FileResource::new("sqlite://".to_string());
-            r.initialize()
-                .await
-                .expect("Failed to init sqlite resource");
-            Box::new(r)
+            if let Some(dsn) = external_dsn {
+                Box::new(resource::ExternalFileResource::new(dsn))
+            } else {
+                let r = resource::FileResource::new("sqlite://".to_string());
+                r.initialize()
+                    .await
+                    .expect("Failed to init sqlite resource");
+                Box::new(r)
+            }
         }
         #[cfg(feature = "turso")]
         BackendType::Turso => {
-            let r = resource::FileResource::new("turso://".to_string());
-            r.initialize().await.expect("Failed to init turso resource");
-            Box::new(r)
+            if let Some(dsn) = external_dsn {
+                Box::new(resource::ExternalFileResource::new(dsn))
+            } else {
+                let r = resource::FileResource::new("turso://".to_string());
+                r.initialize().await.expect("Failed to init turso resource");
+                Box::new(r)
+            }
         }
     };
 
@@ -158,18 +167,6 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
 #[allow(dead_code)]
 pub async fn get_test_dsn(schema: &str) -> String {
     let backend = current_backend();
-
-    // 1. Check Env Overrides (External) for non-Postgres (which uses Manager)
-    #[cfg(feature = "postgres")]
-    let is_postgres_backend = backend == BackendType::Postgres;
-    #[cfg(not(feature = "postgres"))]
-    let is_postgres_backend = false;
-
-    if !is_postgres_backend {
-        if let Some(env_dsn) = get_dsn_from_env(backend) {
-            return env_dsn;
-        }
-    }
 
     // 2. Use Managed Resource
     match backend {

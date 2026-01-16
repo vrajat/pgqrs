@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
 
@@ -9,12 +9,14 @@ use super::resource::TestResource;
 /// PostgreSQL testcontainer implementation wrapper
 pub struct PostgresResource {
     container: RwLock<Option<PostgresContainer>>,
+    schema: Mutex<Option<String>>,
 }
 
 impl PostgresResource {
     pub fn new() -> Self {
         Self {
             container: RwLock::new(None),
+            schema: Mutex::new(None),
         }
     }
 }
@@ -74,6 +76,11 @@ impl TestResource for PostgresResource {
             super::database_setup::setup_database_common(dsn.clone(), s, "PostgreSQL")
                 .await
                 .expect("Failed to setup database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
         }
         dsn
     }
@@ -85,6 +92,21 @@ impl TestResource for PostgresResource {
         };
 
         if let Some(c) = container_opt {
+            // Cleanup schema
+            let schema_opt = {
+                let mut guard = self.schema.lock().unwrap();
+                guard.take()
+            };
+
+            if let Some(schema) = schema_opt {
+                let _ = super::database_setup::cleanup_database_common(
+                    c.dsn.clone(),
+                    &schema,
+                    "PostgreSQL",
+                )
+                .await;
+            }
+
             println!("Stopping PostgreSQL container...");
             let _ = c.container.stop().await;
             println!("Stopped.");
@@ -96,12 +118,16 @@ impl TestResource for PostgresResource {
 /// External PostgreSQL database implementation
 pub struct ExternalPostgresResource {
     dsn: String,
+    schema: Mutex<Option<String>>,
 }
 
 impl ExternalPostgresResource {
     pub fn new(dsn: String) -> Self {
         println!("Using external PostgreSQL database: {}", dsn);
-        Self { dsn }
+        Self {
+            dsn,
+            schema: Mutex::new(None),
+        }
     }
 }
 
@@ -121,11 +147,30 @@ impl TestResource for ExternalPostgresResource {
             )
             .await
             .expect("Failed to setup external database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
         }
         self.dsn.clone()
     }
 
     async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let schema_opt = {
+            let mut guard = self.schema.lock().unwrap();
+            guard.take()
+        };
+
+        if let Some(schema) = schema_opt {
+            let _ = super::database_setup::cleanup_database_common(
+                self.dsn.clone(),
+                &schema,
+                "External PostgreSQL",
+            )
+            .await;
+        }
+
         println!("External PostgreSQL database, not stopping container");
         Ok(())
     }

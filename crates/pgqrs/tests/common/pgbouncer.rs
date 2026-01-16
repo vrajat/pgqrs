@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use sqlx;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
@@ -10,12 +10,14 @@ use super::resource::TestResource;
 /// PgBouncer + PostgreSQL resource wrapper
 pub struct PgBouncerResource {
     container: RwLock<Option<PgBouncerContainer>>,
+    schema: Mutex<Option<String>>,
 }
 
 impl PgBouncerResource {
     pub fn new() -> Self {
         Self {
             container: RwLock::new(None),
+            schema: Mutex::new(None),
         }
     }
 }
@@ -191,6 +193,11 @@ impl TestResource for PgBouncerResource {
             super::database_setup::setup_database_common(dsn.clone(), s, "PgBouncer")
                 .await
                 .expect("Failed to setup database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
         }
         dsn
     }
@@ -202,6 +209,21 @@ impl TestResource for PgBouncerResource {
         };
 
         if let Some(c) = container_opt {
+            // Cleanup schema
+            let schema_opt = {
+                let mut guard = self.schema.lock().unwrap();
+                guard.take()
+            };
+
+            if let Some(schema) = schema_opt {
+                let _ = super::database_setup::cleanup_database_common(
+                    c.dsn.clone(),
+                    &schema,
+                    "PgBouncer",
+                )
+                .await;
+            }
+
             println!("Stopping PgBouncer container...");
             let _ = c.pgbouncer_container.stop().await;
             println!("Stopping PostgreSQL container...");
@@ -214,12 +236,16 @@ impl TestResource for PgBouncerResource {
 
 pub struct ExternalPgBouncerResource {
     dsn: String,
+    schema: Mutex<Option<String>>,
 }
 
 impl ExternalPgBouncerResource {
     pub fn new(dsn: String) -> Self {
         println!("Using external PgBouncer database: {}", dsn);
-        Self { dsn }
+        Self {
+            dsn,
+            schema: Mutex::new(None),
+        }
     }
 }
 
@@ -239,12 +265,29 @@ impl TestResource for ExternalPgBouncerResource {
             )
             .await
             .expect("Failed to setup external database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
         }
         self.dsn.clone()
     }
 
     async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // No-op
+        let schema_opt = {
+            let mut guard = self.schema.lock().unwrap();
+            guard.take()
+        };
+
+        if let Some(schema) = schema_opt {
+            let _ = super::database_setup::cleanup_database_common(
+                self.dsn.clone(),
+                &schema,
+                "External PgBouncer",
+            )
+            .await;
+        }
         Ok(())
     }
 }

@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 use std::path::PathBuf;
-use std::sync::{Mutex, RwLock};
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+use std::sync::Mutex;
+use std::sync::RwLock;
 
 /// Trait for managing test backend resources (Tests Containers or Files)
 #[async_trait]
@@ -33,11 +36,13 @@ pub static RESOURCE_MANAGER: Lazy<RwLock<Option<ResourceManager>>> =
 
 // --- File Resource Implementation (SQLite/Turso) ---
 
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub struct FileResource {
     created_files: Mutex<Vec<PathBuf>>,
     backend_prefix: String,
 }
 
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 impl FileResource {
     pub fn new(backend_prefix: String) -> Self {
         Self {
@@ -64,6 +69,7 @@ impl FileResource {
 }
 
 #[async_trait]
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 impl TestResource for FileResource {
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
         let dir = Self::get_temp_dir();
@@ -115,6 +121,36 @@ impl TestResource for FileResource {
             }
         }
         files.clear();
+        Ok(())
+    }
+}
+
+// --- External File Resource Implementation ---
+
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+pub struct ExternalFileResource {
+    dsn: String,
+}
+
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+impl ExternalFileResource {
+    pub fn new(dsn: String) -> Self {
+        Self { dsn }
+    }
+}
+
+#[async_trait]
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+impl TestResource for ExternalFileResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    async fn get_dsn(&self, _schema: Option<&str>) -> String {
+        self.dsn.clone()
+    }
+
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     }
 }
