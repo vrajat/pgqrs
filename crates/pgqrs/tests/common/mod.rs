@@ -111,7 +111,7 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
 
     let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store");
+        .expect(&format!("Failed to create store with DSN: {}", dsn));
 
     pgqrs::admin(&store)
         .install()

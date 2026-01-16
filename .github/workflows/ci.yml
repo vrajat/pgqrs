@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        backend: [postgres, sqlite]
+        backend: [postgres, sqlite, turso]
 
     services:
       postgres:
