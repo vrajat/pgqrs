@@ -130,6 +130,7 @@ use tokio::runtime::Runtime;
 fn test_cli_create_list_delete_queue() {
     // Bring up test DB and get DSN
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_queue_cli";
 
     // Create queue - this doesn't return JSON, just success/failure
@@ -164,6 +165,7 @@ fn test_cli_create_list_delete_queue() {
 #[test]
 fn test_cli_create_send_dequeue_delete_queue() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_queue_msg_cli";
     let payload = r#"{"hello":"world"}"#;
 
@@ -265,6 +267,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
 fn test_cli_archive_functionality() {
     // Bring up test DB and get DSN
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_archive_cli";
 
     // Create queue
@@ -354,6 +357,7 @@ fn test_cli_archive_functionality() {
 #[test]
 fn test_cli_metrics_output() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_metrics_cli_output";
 
     // Create queue
@@ -377,6 +381,7 @@ fn test_cli_metrics_output() {
 #[test]
 fn test_cli_admin_stats() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_admin_stats_cli";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
@@ -398,6 +403,7 @@ fn test_cli_admin_stats() {
 #[test]
 fn test_cli_metrics_output_table() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_metrics_cli_table";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
@@ -419,6 +425,7 @@ fn test_cli_metrics_output_table() {
 #[test]
 fn test_cli_worker_health() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_worker_health_cli";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);

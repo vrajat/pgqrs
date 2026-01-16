@@ -875,6 +875,10 @@ async fn test_validation_payload_size_limit() {
     config.validation_config.max_payload_size_bytes = 50; // Very small limit
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_size")
         .await
@@ -938,6 +942,10 @@ async fn test_validation_forbidden_keys() {
     config.validation_config.forbidden_keys = vec!["secret".to_string(), "__proto__".to_string()];
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_forbidden")
         .await
@@ -997,6 +1005,10 @@ async fn test_validation_required_keys() {
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_required")
         .await
@@ -1056,6 +1068,10 @@ async fn test_validation_object_depth() {
     config.validation_config.max_object_depth = 2;
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_depth")
         .await
@@ -1116,6 +1132,10 @@ async fn test_batch_validation_atomic_failure() {
     config.validation_config.required_keys = vec!["user_id".to_string()];
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_batch")
         .await
@@ -1179,6 +1199,10 @@ async fn test_validation_string_length() {
     config.validation_config.max_string_length = 20;
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_strings")
         .await
@@ -1241,6 +1265,10 @@ async fn test_validation_accessor_methods() {
     config.validation_config.max_enqueue_burst = Some(20);
 
     let store = pgqrs::connect_with_config(&config).await.unwrap();
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
     let queue_info = pgqrs::admin(&store)
         .create_queue("test_validation_accessors")
         .await

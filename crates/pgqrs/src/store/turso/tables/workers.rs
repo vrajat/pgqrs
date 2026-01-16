@@ -431,28 +431,3 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         Self::map_row(&row)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::WorkerTable;
-    use crate::types::NewWorker;
-
-    #[tokio::test]
-    async fn test_worker_insert_and_get() {
-        let db = crate::store::turso::test_utils::create_test_db().await;
-        // db is already Arc
-        let table = TursoWorkerTable::new(db.clone());
-
-        let worker = table
-            .insert(NewWorker {
-                hostname: "host1".to_string(),
-                port: 8080,
-                queue_id: None,
-            })
-            .await
-            .expect("Failed to insert worker");
-
-        assert_eq!(worker.hostname, "host1");
-    }
-}

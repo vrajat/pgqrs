@@ -103,7 +103,6 @@ async fn test_valid_schema_names() {
 #[tokio::test]
 #[serial]
 async fn test_nonexistent_schema_operations() {
-    // use common::TestBackend; // Removed usage
     skip_unless_backend!(pgqrs::store::BackendType::Postgres);
 
     let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
@@ -147,7 +146,6 @@ async fn test_nonexistent_schema_operations() {
 #[tokio::test]
 #[serial]
 async fn test_verify_requires_existing_schema() {
-    // use common::TestBackend; // Removed usage
     skip_unless_backend!(pgqrs::store::BackendType::Postgres);
 
     let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;

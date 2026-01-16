@@ -18,9 +18,11 @@ async fn test_sqlite_connect() {
     assert_eq!(store.backend_name(), "sqlite");
     assert_eq!(store.concurrency_model(), ConcurrencyModel::SingleProcess);
 
-    // 1. Install schema (Admin trait not fully ready but explicit migration run is what Install does anyway)
-    // Actually, create_store installs schema via migration automatically on connect for testing.
-    // In our test_sqlite_connect, we used AnyStore::connect, which runs migrations.
+    // Install schema
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
 
     // 2. Queue Operations
     let queue_name = "test_queue_sqlite";

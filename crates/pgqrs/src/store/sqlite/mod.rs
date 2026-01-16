@@ -59,12 +59,6 @@ impl SqliteStore {
             .await
             .map_err(Error::Database)?;
 
-        // Run migrations
-        sqlx::migrate!("migrations/sqlite")
-            .run(&pool)
-            .await
-            .map_err(|e| Error::Database(e.into()))?;
-
         Ok(Self {
             pool: pool.clone(),
             config: config.clone(),

@@ -20,9 +20,17 @@ async fn create_store() -> pgqrs::store::AnyStore {
         }
     };
     let config = pgqrs::config::Config::from_dsn(&dsn);
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create Store")
+        .expect("Failed to create Store");
+
+    // Install schema
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
+
+    store
 }
 
 #[tokio::test]
@@ -66,6 +74,12 @@ async fn test_default_schema_backward_compatibility() {
     let store = pgqrs::connect_with_config(&config)
         .await
         .expect("Failed to create store");
+
+    // Install schema
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
 
     // Verify installation in default schema
     assert!(pgqrs::admin(&store).verify().await.is_ok());

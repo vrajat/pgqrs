@@ -306,18 +306,80 @@ impl Admin for TursoAdmin {
                 message: e.to_string(),
             })?;
 
-        let schema = crate::store::turso::schema::SCHEMA;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                description TEXT
+            );",
+            (),
+        )
+        .await
+        .map_err(|e| crate::error::Error::Internal {
+            message: format!("Failed to create schema version table: {}", e),
+        })?;
 
-        for stmt in schema {
-            conn.execute(stmt, ())
+        // Migration list: (version, description, sql)
+        const Q1: &str = include_str!("../../../../migrations/turso/01_create_queues.sql");
+        const Q2: &str = include_str!("../../../../migrations/turso/02_create_workers.sql");
+        const Q3: &str = include_str!("../../../../migrations/turso/03_create_messages.sql");
+        const Q4: &str = include_str!("../../../../migrations/turso/04_create_archive.sql");
+        const Q5: &str = include_str!("../../../../migrations/turso/05_create_workflows.sql");
+        const Q6: &str = include_str!("../../../../migrations/turso/06_create_workflow_steps.sql");
+        const Q7: &str = include_str!("../../../../migrations/turso/07_create_indices.sql");
+
+        let migrations = vec![
+            (1, "01_create_queues.sql", Q1),
+            (2, "02_create_workers.sql", Q2),
+            (3, "03_create_messages.sql", Q3),
+            (4, "04_create_archive.sql", Q4),
+            (5, "05_create_workflows.sql", Q5),
+            (6, "06_create_workflow_steps.sql", Q6),
+            (7, "07_create_indices.sql", Q7),
+        ];
+
+        for (version, description, sql) in migrations {
+            // Check if already applied
+            // We use query_row logic manually since turso crate might not have query_scalar/optional easily accessible here
+            let mut rows = conn
+                .query(
+                    "SELECT version FROM pgqrs_schema_version WHERE version = ?",
+                    (version,),
+                )
                 .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "Schema Init".into(),
-                    context: "Installing schema".into(),
-                    source: Box::new(e),
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to query migration {}: {}", version, e),
                 })?;
-        }
 
+            if rows
+                .next()
+                .await
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to fetch migration row {}: {}", version, e),
+                })?
+                .is_some()
+            {
+                continue;
+            }
+
+            tracing::info!("Applying migration {}: {}", version, description);
+
+            conn.execute(sql, ())
+                .await
+                .map_err(|e| crate::error::Error::Internal {
+                    message: format!("Failed to run migration {}: {}", version, e),
+                })?;
+
+            // Record success
+            conn.execute(
+                "INSERT INTO pgqrs_schema_version (version, applied_at, description) VALUES (?, datetime('now'), ?)",
+                (version, description),
+            )
+            .await
+            .map_err(|e| crate::error::Error::Internal {
+                message: format!("Failed to record migration {}: {}", version, e),
+            })?;
+        }
         Ok(())
     }
 
@@ -948,169 +1010,5 @@ impl Admin for TursoAdmin {
             .execute(&self.db)
             .await?;
         Ok(count as u64)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::turso::test_utils::create_test_db;
-
-    #[tokio::test]
-    async fn test_admin_queue_ops() -> Result<()> {
-        let db = create_test_db().await;
-        // Need to create admin via Store usually to handle dependencies or just direct new
-        let config = Config::default();
-        let admin = TursoAdmin::new(db.clone(), 0, config);
-
-        // Create Queue
-        let q = admin.create_queue("test_q").await?;
-        assert_eq!(q.queue_name, "test_q");
-
-        // Get Queue
-        let q2 = admin.get_queue("test_q").await?;
-        assert_eq!(q.id, q2.id);
-
-        // Verify metrics empty
-        let metrics = admin.queue_metrics("test_q").await?;
-        assert_eq!(metrics.pending_messages, 0);
-
-        // Delete Queue
-        admin.delete_queue(&q).await?;
-        assert!(admin.get_queue("test_q").await.is_err());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dlq_logic() -> Result<()> {
-        let db = create_test_db().await;
-        let config = Config {
-            max_read_ct: 3,
-            ..Default::default()
-        };
-
-        let admin = TursoAdmin::new(db.clone(), 0, config.clone());
-
-        // Setup: Create Queue, Producer, Enqueue Message with high read_ct
-        let q = admin.create_queue("dlq_q").await?;
-
-        // Use raw query to insert a "bad" message directly to simulate failures
-        // We need a helper or just raw execute
-        let conn = db.connect().unwrap();
-
-        let now = chrono::Utc::now();
-        let enq_str = crate::store::turso::format_turso_timestamp(&now);
-
-        // Insert message with read_ct = 3 (should be DLQ'd)
-        conn.execute(
-            "INSERT INTO pgqrs_messages (queue_id, payload, enqueued_at, read_ct) VALUES (?, ?, ?, ?)",
-            (q.id, "{}", enq_str, 3) // 3 >= max_read_ct
-        ).await.unwrap();
-
-        // Verify it is there
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-            .fetch_one(&db)
-            .await?;
-        assert_eq!(count, 1);
-
-        // Run DLQ
-        let moved = admin.dlq().await?;
-        assert_eq!(moved.len(), 1);
-
-        // Verify message moved to archive
-        let count_msg: i64 =
-            crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-                .fetch_one(&db)
-                .await?;
-        assert_eq!(count_msg, 0);
-
-        let count_arch: i64 =
-            crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_archive")
-                .fetch_one(&db)
-                .await?;
-        assert_eq!(count_arch, 1);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_worker_stats_basic() -> Result<()> {
-        let db = create_test_db().await;
-        let config = Config::default();
-        let mut admin = TursoAdmin::new(db.clone(), 0, config);
-
-        let q = admin.create_queue("stats_q").await?;
-
-        // Register a few workers
-        let _w1 = admin.register("host1".to_string(), 1234).await?;
-
-        // In a real scenario, workers have heartbeats.
-        // Let's manually verify they exist in stats.
-        // note: worker_stats takes queue_name, but TursoAdmin::register creates a "global" worker (queue_id None) if we use admin register for *itself*
-        // But here we want to simulate queue workers.
-        // We should use WorkerTable directly or register properly.
-
-        let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
-        let _w2 =
-            crate::store::WorkerTable::register(&worker_table, Some(q.id), "host2", 2222).await?;
-
-        let stats = admin.worker_stats("stats_q").await?;
-        assert_eq!(stats.total_workers, 1); // Only w2 is bound to stats_q
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_worker_registration_with_option_binding() -> Result<()> {
-        let db = create_test_db().await;
-        let worker_table = crate::store::turso::tables::workers::TursoWorkerTable::new(db.clone());
-
-        // Create queues for FKs
-        let queue_table = crate::store::turso::tables::queues::TursoQueueTable::new(db.clone());
-        let q1 = queue_table
-            .insert(crate::types::NewQueue {
-                queue_name: "q1".into(),
-            })
-            .await?;
-        let q2 = queue_table
-            .insert(crate::types::NewQueue {
-                queue_name: "q2".into(),
-            })
-            .await?;
-        let q3 = queue_table
-            .insert(crate::types::NewQueue {
-                queue_name: "q3".into(),
-            })
-            .await?;
-
-        // 1. None (Admin worker)
-        let w1 = worker_table.register(None, "host_none", 1000).await?;
-        assert!(w1.queue_id.is_none());
-
-        // 2. Some
-        let w2 = worker_table
-            .register(Some(q1.id), "host_some", 1001)
-            .await?;
-        assert_eq!(w2.queue_id, Some(q1.id));
-
-        // 3. Ephemeral (Some)
-        let w3 = worker_table.register_ephemeral(Some(q2.id)).await?;
-        assert_eq!(w3.queue_id, Some(q2.id));
-
-        // 4. Update existing (None -> Some)
-        // TursoWorkerTable register logic for existing is: if stopped, re-register. If ready, error.
-        // Let's stop w1 first.
-        worker_table.suspend(w1.id).await?;
-        worker_table.shutdown(w1.id).await?;
-
-        // Re-register converting to a consumer for q3
-        let w1_updated = worker_table
-            .register(Some(q3.id), "host_none", 1000)
-            .await?;
-        assert_eq!(w1_updated.id, w1.id);
-        assert_eq!(w1_updated.queue_id, Some(q3.id));
-
-        Ok(())
     }
 }

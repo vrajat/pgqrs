@@ -16,6 +16,11 @@ async fn create_test_store() -> (TursoStore, String) {
         .await
         .expect("Failed to create TursoStore");
 
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
+
     (store, path_str.to_string())
 }
 
@@ -71,4 +76,9 @@ async fn test_migration_versioning() {
     let _store2 = TursoStore::new(&dsn, &config)
         .await
         .expect("Should succeed reopening");
+
+    pgqrs::admin(&_store2)
+        .install()
+        .await
+        .expect("Should be idempotent");
 }

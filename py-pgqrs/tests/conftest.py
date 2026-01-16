@@ -48,8 +48,6 @@ def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
     elif test_backend == TestBackend.SQLITE:
         dsn = os.environ.get("PGQRS_TEST_SQLITE_DSN")
         if not dsn:
-            # Fallback to unique temp file
-            import tempfile
             fd, path = tempfile.mkstemp(suffix=".db", prefix="sqlite_test_")
             os.close(fd)
             # Remove it so sqlite can create it properly or use it

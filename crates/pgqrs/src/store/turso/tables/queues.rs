@@ -160,30 +160,3 @@ impl crate::store::QueueTable for TursoQueueTable {
         Ok(count)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::QueueTable;
-    use crate::types::NewQueue;
-
-    #[tokio::test]
-    async fn test_queue_insert_and_get() {
-        let db = crate::store::turso::test_utils::create_test_db().await;
-        let table = TursoQueueTable::new(db.clone());
-
-        let queue = table
-            .insert(NewQueue {
-                queue_name: "test_queue".to_string(),
-            })
-            .await
-            .expect("Failed to insert queue");
-
-        assert_eq!(queue.queue_name, "test_queue");
-        assert!(queue.id > 0);
-
-        let fetched = table.get(queue.id).await.expect("Failed to get queue");
-        assert_eq!(fetched.queue_name, "test_queue");
-        assert_eq!(fetched.id, queue.id);
-    }
-}

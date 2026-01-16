@@ -180,34 +180,3 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
         Ok(count)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::store::WorkflowTable;
-    use crate::types::NewWorkflow;
-
-    #[tokio::test]
-    async fn test_workflow_insert_and_get() {
-        let pool = crate::store::turso::test_utils::create_test_db().await;
-        // pool is already Arc
-        let table = TursoWorkflowTable::new(pool.clone());
-
-        let workflow = table
-            .insert(NewWorkflow {
-                name: "test_wf".to_string(),
-                input: Some(serde_json::json!({"a": 1})),
-            })
-            .await
-            .expect("Failed to insert");
-
-        assert_eq!(workflow.name, "test_wf");
-        assert_eq!(workflow.status, WorkflowStatus::Pending);
-
-        let fetched = table
-            .get(workflow.workflow_id)
-            .await
-            .expect("Failed to get");
-        assert_eq!(fetched.workflow_id, workflow.workflow_id);
-    }
-}

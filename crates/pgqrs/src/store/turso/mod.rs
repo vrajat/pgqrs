@@ -9,9 +9,7 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use turso::{Database, Row};
 
-pub mod schema;
 pub mod tables;
-pub mod test_utils;
 pub mod worker;
 pub mod workflow;
 
@@ -84,83 +82,6 @@ impl TursoStore {
             .map_err(|e| crate::error::Error::Internal {
                 message: format!("Failed to set foreign_keys: {}", e),
             })?;
-
-        // Initialize schema version table
-        // Initialize schema version table with robust schema
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL,
-                description TEXT
-            );",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::Error::Internal {
-            message: format!("Failed to create schema version table: {}", e),
-        })?;
-
-        // Migration list: (version, description, sql)
-        const Q1: &str = include_str!("../../../migrations/turso/01_create_queues.sql");
-        const Q2: &str = include_str!("../../../migrations/turso/02_create_workers.sql");
-        const Q3: &str = include_str!("../../../migrations/turso/03_create_messages.sql");
-        const Q4: &str = include_str!("../../../migrations/turso/04_create_archive.sql");
-        const Q5: &str = include_str!("../../../migrations/turso/05_create_workflows.sql");
-        const Q6: &str = include_str!("../../../migrations/turso/06_create_workflow_steps.sql");
-        const Q7: &str = include_str!("../../../migrations/turso/07_create_indices.sql");
-
-        let migrations = vec![
-            (1, "01_create_queues.sql", Q1),
-            (2, "02_create_workers.sql", Q2),
-            (3, "03_create_messages.sql", Q3),
-            (4, "04_create_archive.sql", Q4),
-            (5, "05_create_workflows.sql", Q5),
-            (6, "06_create_workflow_steps.sql", Q6),
-            (7, "07_create_indices.sql", Q7),
-        ];
-
-        for (version, description, sql) in migrations {
-            // Check if already applied
-            // We use query_row logic manually since turso crate might not have query_scalar/optional easily accessible here
-            let mut rows = conn
-                .query(
-                    "SELECT version FROM pgqrs_schema_version WHERE version = ?",
-                    (version,),
-                )
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to query migration {}: {}", version, e),
-                })?;
-
-            if rows
-                .next()
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to fetch migration row {}: {}", version, e),
-                })?
-                .is_some()
-            {
-                continue;
-            }
-
-            tracing::info!("Applying migration {}: {}", version, description);
-
-            conn.execute(sql, ())
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to run migration {}: {}", version, e),
-                })?;
-
-            // Record success
-            conn.execute(
-                "INSERT INTO pgqrs_schema_version (version, applied_at, description) VALUES (?, datetime('now'), ?)",
-                (version, description),
-            )
-            .await
-            .map_err(|e| crate::error::Error::Internal {
-                message: format!("Failed to record migration {}: {}", version, e),
-            })?;
-        }
 
         Ok(Self {
             db: Arc::clone(&db),

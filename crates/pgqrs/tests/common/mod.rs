@@ -158,9 +158,16 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
     let config =
         pgqrs::config::Config::from_dsn_with_schema(&dsn, schema).expect("Failed to create config");
 
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store")
+        .expect("Failed to create store");
+
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
+
+    store
 }
 
 /// Get DSN for the current test backend.
