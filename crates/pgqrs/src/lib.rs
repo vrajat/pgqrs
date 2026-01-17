@@ -1,14 +1,15 @@
 //! # pgqrs
 //!
-//! **pgqrs** is a durable workflow engine and job queue that works with **both PostgreSQL and SQLite**.
+//! **pgqrs** is a durable workflow engine and job queue that works with **PostgreSQL, SQLite, and Turso**.
 //! Written in Rust with Python bindings.
 //!
-//! Use PostgreSQL for production scale. Use SQLite for CLI tools, testing, and embedded apps.
+//! Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing, and embedded apps.
 //!
 //! ## Supported Backends
 //!
 //! - **PostgreSQL** (default): Production-ready with unlimited concurrent workers
 //! - **SQLite**: Zero-config embedded option for single-process applications
+//! - **Turso**: SQLite-compatible (libSQL) with enhanced features for local storage
 //!
 //! ```rust,no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +18,9 @@
 //!
 //! // SQLite (requires `sqlite` feature)
 //! let sqlite_store = pgqrs::connect("sqlite:///path/to/db.sqlite").await?;
+//!
+//! // Turso (requires `turso` feature)
+//! let turso_store = pgqrs::connect("turso:///path/to/db.db").await?;
 //! # Ok(())
 //! # }
 //! ```

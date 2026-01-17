@@ -1,6 +1,6 @@
 # py-pgqrs
 
-Python bindings for `pgqrs`, a high-performance Postgres-backed queue.
+Python bindings for `pgqrs`, a high-performance multi-backend queue (PostgreSQL, SQLite, Turso).
 
 ## Installation
 
@@ -13,6 +13,21 @@ pip install .
 Or for development:
 ```bash
 maturin develop
+```
+
+## Backend Support
+
+py-pgqrs supports all three backends. Choose the right one for your use case:
+
+```python
+# PostgreSQL (production)
+store = await pgqrs.connect("postgresql://user:pass@localhost:5432/db")
+
+# SQLite (embedded, testing)
+store = await pgqrs.connect("sqlite:///path/to/database.db")
+
+# Turso (libSQL-based, embedded)
+store = await pgqrs.connect("turso:///path/to/database.db")
 ```
 
 ## Usage

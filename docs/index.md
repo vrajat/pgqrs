@@ -1,14 +1,15 @@
 # pgqrs
 
-`pgqrs` is a durable workflow engine and job queue that works with **both PostgreSQL and SQLite**. Written in Rust with Python bindings.
+`pgqrs` is a durable workflow engine and job queue that works with **PostgreSQL, SQLite, and Turso**. Written in Rust with Python bindings.
 
-Use PostgreSQL for production scale. Use SQLite for CLI tools, testing, and embedded apps.
+Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing, and embedded apps.
 
 ## Key Features
 
 ### Multi-Backend Support
 - **PostgreSQL**: Production-ready with unlimited concurrent workers
 - **SQLite**: Zero-config embedded option for single-process applications
+- **Turso**: SQLite-compatible (libSQL) with enhanced features for local storage
 - **Unified API**: Switch backends by changing your connection string
 
 ### Core
@@ -30,13 +31,13 @@ Use PostgreSQL for production scale. Use SQLite for CLI tools, testing, and embe
 | Scenario | Recommended Backend | Why |
 |----------|---------------------|-----|
 | Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| CLI tools & scripts | **SQLite** | Zero-config, embedded, portable |
-| Testing & prototyping | **SQLite** | Fast setup, no external dependencies |
-| Embedded applications | **SQLite** | Single-file database, no server |
-| High write throughput | **PostgreSQL** | SQLite allows only 1 writer at a time |
+| CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
+| Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
+| Embedded applications | **SQLite / Turso** | Single-file database, no server |
+| High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
 
-!!! warning "SQLite Concurrency Limit"
-    SQLite uses database-level locks. With many concurrent writers, you may hit lock contention.
+!!! warning "SQLite/Turso Concurrency Limit"
+    SQLite and Turso use database-level locks. With many concurrent writers, you may hit lock contention.
     See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/).
     pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
 
