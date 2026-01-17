@@ -144,13 +144,13 @@ impl Consumer for TursoConsumer {
         let now_str = format_turso_timestamp(&now);
         let conn = crate::store::turso::connect_db(&self.db).await?;
 
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "BEGIN".into(),
+        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
+            crate::error::Error::QueryFailed {
+                query: "BEGIN IMMEDIATE".into(),
                 source: Box::new(e),
                 context: "Dequeue start".into(),
-            })?;
+            }
+        })?;
 
         // 1. Select candidates
         let sql_select = r#"
@@ -251,13 +251,13 @@ impl Consumer for TursoConsumer {
         let conn = crate::store::turso::connect_db(&self.db).await?;
 
         // 1. Begin Transaction
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "BEGIN".into(),
+        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
+            crate::error::Error::QueryFailed {
+                query: "BEGIN IMMEDIATE".into(),
                 source: Box::new(e),
                 context: "Begin archive transaction".into(),
-            })?;
+            }
+        })?;
 
         // 2. Fetch message (ensure ownership)
         let row_opt_res = crate::store::turso::query(SELECT_MESSAGE_FOR_ARCHIVE)

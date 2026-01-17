@@ -15,11 +15,11 @@ async def setup_test(dsn, schema):
     return store, admin
 
 @pytest.mark.asyncio
-async def test_basic_workflow(postgres_dsn, schema):
+async def test_basic_workflow(test_dsn, schema):
     """
     Test basic workflow: Install -> Create Queue -> Produce -> Consume -> Archive
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     await admin.verify()
 
     queue_name = "test_queue_1"
@@ -56,11 +56,11 @@ async def test_basic_workflow(postgres_dsn, schema):
     assert await messages.count() == 0
 
 @pytest.mark.asyncio
-async def test_consumer_archive(postgres_dsn, schema):
+async def test_consumer_archive(test_dsn, schema):
     """
     Test consumer delete (archive) functionality.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delete_queue"
     await admin.create_queue(queue_name)
 
@@ -79,11 +79,11 @@ async def test_consumer_archive(postgres_dsn, schema):
     assert await (await admin.get_messages()).count() == 0
 
 @pytest.mark.asyncio
-async def test_batch_operations(postgres_dsn, schema):
+async def test_batch_operations(test_dsn, schema):
     """
     Test batch operations (enqueue_batch, dequeue, archive_batch).
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "batch_ops_test"
     await admin.create_queue(queue_name)
 
@@ -109,8 +109,8 @@ async def test_batch_operations(postgres_dsn, schema):
     assert arch_count == 3
 
 @pytest.mark.asyncio
-async def test_config_properties(postgres_dsn):
-    c = pgqrs.Config(postgres_dsn)
+async def test_config_properties(test_dsn):
+    c = pgqrs.Config(test_dsn)
 
     c.max_connections = 42
     assert c.max_connections == 42
@@ -131,20 +131,20 @@ async def test_config_properties(postgres_dsn):
     assert c.heartbeat_interval_seconds == 15
 
 @pytest.mark.asyncio
-async def test_connect_string(postgres_dsn):
+async def test_connect_string(test_dsn):
     """Test connecting with a plain string DSN."""
-    store = await pgqrs.connect(postgres_dsn)
+    store = await pgqrs.connect(test_dsn)
     assert store is not None
     admin = pgqrs.admin(store)
     await admin.install()
     await admin.verify()
 
 @pytest.mark.asyncio
-async def test_enqueue_delayed(postgres_dsn, schema):
+async def test_enqueue_delayed(test_dsn, schema):
     """
     Test delayed message enqueueing.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delayed_queue"
     await admin.create_queue(queue_name)
 
@@ -166,8 +166,8 @@ async def test_enqueue_delayed(postgres_dsn, schema):
     assert len(msgs) == 1
 
 @pytest.mark.asyncio
-async def test_worker_list_status(postgres_dsn, schema):
-    store, admin = await setup_test(postgres_dsn, schema)
+async def test_worker_list_status(test_dsn, schema):
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "worker_test_queue"
     await admin.create_queue(queue_name)
 
@@ -181,11 +181,11 @@ async def test_worker_list_status(postgres_dsn, schema):
     assert worker_list[0].status == "ready"
 
 @pytest.mark.asyncio
-async def test_consumer_delete(postgres_dsn, schema):
+async def test_consumer_delete(test_dsn, schema):
     """
     Test consumer delete (without archiving) functionality.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delete_logic_queue"
     await admin.create_queue(queue_name)
 
@@ -218,8 +218,8 @@ async def test_consumer_delete(postgres_dsn, schema):
     assert deleted is False, "Delete should return False for message not owned/locked by consumer"
 
 @pytest.mark.asyncio
-async def test_archive_advanced_methods(postgres_dsn, schema):
-    store, admin = await setup_test(postgres_dsn, schema)
+async def test_archive_advanced_methods(test_dsn, schema):
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "archive_api_queue"
     await admin.create_queue(queue_name)
 
@@ -255,11 +255,11 @@ async def test_archive_advanced_methods(postgres_dsn, schema):
     assert await archive.count() == 0
 
 @pytest.mark.asyncio
-async def test_api_redesign_high_level(postgres_dsn, schema):
+async def test_api_redesign_high_level(test_dsn, schema):
     """
     Test the high-level redesigned API: connect -> produce -> consume.
     """
-    config = pgqrs.Config(postgres_dsn, schema=schema)
+    config = pgqrs.Config(test_dsn, schema=schema)
     store = await pgqrs.connect_with(config)
 
     admin = pgqrs.admin(store)
@@ -282,11 +282,11 @@ async def test_api_redesign_high_level(postgres_dsn, schema):
     assert consumed.is_set()
 
 @pytest.mark.asyncio
-async def test_api_redesign_low_level(postgres_dsn, schema):
+async def test_api_redesign_low_level(test_dsn, schema):
     """
     Test the low-level redesigned API: connect -> produce -> enqueue/dequeue/archive.
     """
-    config = pgqrs.Config(postgres_dsn, schema=schema)
+    config = pgqrs.Config(test_dsn, schema=schema)
     store = await pgqrs.connect_with(config)
     admin = pgqrs.admin(store)
     await admin.install()
@@ -327,8 +327,8 @@ async def simple_wf(ctx: PyWorkflow, arg: str):
     return res2
 
 @pytest.mark.asyncio
-async def test_workflow_execution(postgres_dsn, schema):
-    store, admin = await setup_test(postgres_dsn, schema)
+async def test_workflow_execution(test_dsn, schema):
+    store, admin = await setup_test(test_dsn, schema)
     wf_name = "simple_wf"
     wf_arg = "test_data"
     wf_ctx = await admin.create_workflow(wf_name, wf_arg)
@@ -337,11 +337,11 @@ async def test_workflow_execution(postgres_dsn, schema):
     assert result == "step2_processed_test_data"
 
 @pytest.mark.asyncio
-async def test_extend_visibility(postgres_dsn, schema):
+async def test_extend_visibility(test_dsn, schema):
     """
     Test extending visibility timeout.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_extend_vt_queue"
     await admin.create_queue(queue_name)
 
@@ -359,11 +359,11 @@ async def test_extend_visibility(postgres_dsn, schema):
     await pgqrs.extend_vt(consumer, msg, 10)
 
 @pytest.mark.asyncio
-async def test_workflow_crash_recovery(postgres_dsn, schema):
+async def test_workflow_crash_recovery(test_dsn, schema):
     """
     Test workflow recovery.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     wf_name = "recovery_wf"
     wf_arg = "crash_test"
 
@@ -402,11 +402,11 @@ async def test_workflow_crash_recovery(postgres_dsn, schema):
     assert step2_called == 1
 
 @pytest.mark.asyncio
-async def test_ephemeral_consume_success(postgres_dsn, schema):
+async def test_ephemeral_consume_success(test_dsn, schema):
     """
     Test that successful consumption archives the message.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_success_q"
     await admin.create_queue(queue)
 
@@ -428,11 +428,11 @@ async def test_ephemeral_consume_success(postgres_dsn, schema):
     assert await (await admin.get_archive()).count() == 1
 
 @pytest.mark.asyncio
-async def test_ephemeral_consume_failure(postgres_dsn, schema):
+async def test_ephemeral_consume_failure(test_dsn, schema):
     """
     Test that failed consumption (exception) does NOT archive the message.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_fail_q"
     await admin.create_queue(queue)
 
@@ -450,11 +450,11 @@ async def test_ephemeral_consume_failure(postgres_dsn, schema):
     assert await (await admin.get_archive()).count() == 0
 
 @pytest.mark.asyncio
-async def test_ephemeral_consume_batch_success(postgres_dsn, schema):
+async def test_ephemeral_consume_batch_success(test_dsn, schema):
     """
     Test that successful batch consumption archives all messages.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_success_q"
     await admin.create_queue(queue)
 
@@ -476,11 +476,11 @@ async def test_ephemeral_consume_batch_success(postgres_dsn, schema):
     assert await (await admin.get_archive()).count() == 3
 
 @pytest.mark.asyncio
-async def test_ephemeral_consume_batch_failure(postgres_dsn, schema):
+async def test_ephemeral_consume_batch_failure(test_dsn, schema):
     """
     Test that failed batch consumption does NOT archive any messages.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_fail_q"
     q_info = await admin.create_queue(queue)
 
@@ -498,11 +498,11 @@ async def test_ephemeral_consume_batch_failure(postgres_dsn, schema):
     assert await (await admin.get_archive()).count() == 0
 
 @pytest.mark.asyncio
-async def test_consume_stream_iterator(postgres_dsn, schema):
+async def test_consume_stream_iterator(test_dsn, schema):
     """
     Test the consume_stream iterator and verification of ephemeral consumer cleanup.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
     queue_name = "stream_test_q"
     await admin.create_queue(queue_name)
 
@@ -548,11 +548,11 @@ async def test_consume_stream_iterator(postgres_dsn, schema):
         assert w.status == "stopped", f"Ephemeral worker {w.id} should be stopped, but is {w.status}"
 
 @pytest.mark.asyncio
-async def test_exceptions(postgres_dsn, schema):
+async def test_exceptions(test_dsn, schema):
     """
     Test that custom exceptions are raised and catchable.
     """
-    store, admin = await setup_test(postgres_dsn, schema)
+    store, admin = await setup_test(test_dsn, schema)
 
     # Test QueueNotFoundError
     qname = "non_existent_queue_abc"
