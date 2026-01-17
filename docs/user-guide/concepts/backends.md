@@ -150,16 +150,16 @@ turso:///var/lib/myapp/queue.db
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.12.0"
+pgqrs = "0.13.0"
 
 # SQLite only
-pgqrs = { version = "0.12.0", default-features = false, features = ["sqlite"] }
+pgqrs = { version = "0.13.0", default-features = false, features = ["sqlite"] }
 
 # Turso only
-pgqrs = { version = "0.12.0", default-features = false, features = ["turso"] }
+pgqrs = { version = "0.13.0", default-features = false, features = ["turso"] }
 
 # All backends
-pgqrs = { version = "0.12.0", features = ["full"] }
+pgqrs = { version = "0.13.0", features = ["full"] }
 ```
 
 ### Python
