@@ -1,11 +1,12 @@
 
 # pgqrs
 
-A PostgreSQL-backed job queue for Rust applications.
+A PostgreSQL, SQLite, and Turso-backed job queue for Rust applications.
 
 ## Features
 - **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust applications.
-- **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections.
+- **Multi-Backend Support**: Choose between PostgreSQL for production, or SQLite/Turso for embedded use cases.
+- **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections (PostgreSQL).
 - **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
 - **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit.
 - **Message Archiving**: Built-in archiving system for audit trails and historical data retention.

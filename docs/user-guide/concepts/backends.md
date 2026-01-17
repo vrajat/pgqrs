@@ -8,16 +8,17 @@ pgqrs supports multiple storage backends, giving you flexibility to choose the r
 |---------|------------|---------------|
 | PostgreSQL | `postgresql://host/db` | `postgres` (default) |
 | SQLite | `sqlite:///path/to/file.db` | `sqlite` |
+| Turso | `turso:///path/to/file.db` | `turso` |
 
 ## Decision Matrix
 
 | Scenario | Recommended Backend | Why |
 |----------|---------------------|-----|
 | Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| CLI tools & scripts | **SQLite** | Zero-config, embedded, portable |
-| Testing & prototyping | **SQLite** | Fast setup, no external dependencies |
-| Embedded applications | **SQLite** | Single-file database, no server required |
-| High write throughput | **PostgreSQL** | SQLite allows only 1 writer at a time |
+| CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
+| Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
+| Embedded applications | **SQLite / Turso** | Single-file database, no server required |
+| High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
 | Distributed systems | **PostgreSQL** | Multiple processes can connect simultaneously |
 
 ## PostgreSQL
@@ -94,6 +95,54 @@ sqlite:///var/lib/myapp/queue.db
 sqlite::memory:  # In-memory database (testing only)
 ```
 
+## Turso
+
+Turso provides SQLite-compatible local storage with enhanced features.
+
+### Advantages
+
+- **SQLite-compatible**: Drop-in replacement for SQLite with enhancements
+- **No server required**: Database is a single file, just like SQLite
+- **Zero configuration**: No setup, no maintenance
+- **Portable**: Database file can be copied/moved easily
+- **Fast for reads**: Excellent read performance
+
+### Limitations
+
+!!! warning "Concurrency Constraints"
+    Turso uses database-level locks (same as SQLite). **Only one writer can operate at a time.**
+
+    With many concurrent writing processes, you may experience:
+
+    - Lock contention errors (`SQLITE_BUSY`)
+    - Starvation where some processes wait indefinitely
+    - Reduced throughput as writers queue up
+
+    See [SkyPilot's detailed analysis](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/) of SQLite concurrency issues.
+
+### pgqrs Mitigations
+
+pgqrs automatically configures Turso for the best possible concurrency:
+
+- **WAL mode**: Enables concurrent reads during writes
+- **5000ms busy timeout**: Retries locks instead of failing immediately
+- **Foreign key enforcement**: Data integrity maintained
+
+### When to Use
+
+- CLI tools and single-process scripts
+- Testing and prototyping
+- Embedded applications
+- Development environments
+- Desktop applications
+
+### DSN Examples
+
+```
+turso:///path/to/database.db
+turso:///var/lib/myapp/queue.db
+```
+
 ## Cargo Feature Configuration
 
 ### Rust
@@ -106,7 +155,10 @@ pgqrs = "0.12.0"
 # SQLite only
 pgqrs = { version = "0.12.0", default-features = false, features = ["sqlite"] }
 
-# Both backends
+# Turso only
+pgqrs = { version = "0.12.0", default-features = false, features = ["turso"] }
+
+# All backends
 pgqrs = { version = "0.12.0", features = ["full"] }
 ```
 
@@ -116,10 +168,10 @@ The Python package includes both backends by default.
 
 ## API Compatibility
 
-Both backends implement the same `Store` trait, so your application code remains unchanged:
+All backends implement the same `Store` trait, so your application code remains unchanged:
 
 ```rust
-// Works with both PostgreSQL and SQLite!
+// Works with all backends!
 async fn process_jobs(store: &impl pgqrs::Store) -> Result<(), pgqrs::Error> {
     pgqrs::dequeue()
         .from("tasks")
@@ -141,6 +193,9 @@ let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 // SQLite
 let store = pgqrs::connect("sqlite:///path/to/db.sqlite").await?;
 
-// Same code works with either!
+// Turso
+let store = pgqrs::connect("turso:///path/to/db.db").await?;
+
+// Same code works with any backend!
 process_jobs(&store).await?;
 ```
