@@ -145,7 +145,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         // This proves that the next call reads from DB instead of running function logic
         let tampered_json = serde_json::json!({ "msg": "tampered_value" });
         let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
-        let step_col = if store.backend_name() == "sqlite" {
+        let step_col = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
             "step_key"
         } else {
             "step_id"

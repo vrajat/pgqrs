@@ -172,7 +172,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DEQUEUE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Dequeue".into(),
             })?;
 
@@ -205,7 +205,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DEQUEUE_AT".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Dequeue At".into(),
             })?;
 
@@ -233,7 +233,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DEL_OWNED".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Del owned".into(),
             })?
             .rows_affected();
@@ -241,17 +241,40 @@ impl crate::store::Consumer for SqliteConsumer {
     }
 
     async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
-        // Manual batch delete
         if message_ids.is_empty() {
             return Ok(vec![]);
         }
 
-        // Transaction might be better, or QueryBuilder
-        let mut res = Vec::new();
-        for id in message_ids {
-            res.push(self.delete(id).await?);
+        // Use QueryBuilder to construct "DELETE ... WHERE id IN (...) RETURNING id"
+        let mut query_builder =
+            sqlx::QueryBuilder::new("DELETE FROM pgqrs_messages WHERE consumer_worker_id = ");
+        query_builder.push_bind(self.worker_info.id);
+        query_builder.push(" AND id IN (");
+        let mut separated = query_builder.separated(", ");
+        for id in &message_ids {
+            separated.push_bind(id);
         }
-        Ok(res)
+        separated.push_unseparated(") RETURNING id");
+
+        let deleted_ids: Vec<i64> = query_builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MANY".into(),
+                source: Box::new(e),
+                context: "Batch delete".into(),
+            })?
+            .iter()
+            .map(|row| row.try_get(0).unwrap_or(0))
+            .collect();
+
+        // Construct result vec preserving order
+        let mut results = Vec::with_capacity(message_ids.len());
+        for id in message_ids {
+            results.push(deleted_ids.contains(&id));
+        }
+        Ok(results)
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
@@ -269,7 +292,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "BEGIN IMMEDIATE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Begin transaction".into(),
             })?;
 
@@ -288,7 +311,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SelArchive".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Select for archive".into(),
             })?;
 
@@ -314,7 +337,7 @@ impl crate::store::Consumer for SqliteConsumer {
                      .bind(deq.clone())
                      .fetch_one(&mut *conn)
                      .await
-                     .map_err(|e| crate::error::Error::QueryFailed { query: "InsArchive".into(), source: e, context: "Insert archive".into() })?;
+                     .map_err(|e| crate::error::Error::QueryFailed { query: "InsArchive".into(), source: Box::new(e), context: "Insert archive".into() })?;
 
                 sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
                     .bind(msg_id)
@@ -322,7 +345,7 @@ impl crate::store::Consumer for SqliteConsumer {
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "DelArchive".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: "Delete archived".into(),
                     })?;
 
@@ -350,14 +373,14 @@ impl crate::store::Consumer for SqliteConsumer {
             }
         }
 
-        match perform_archive(&mut *conn, msg_id, self.worker_info.id).await {
+        match perform_archive(&mut conn, msg_id, self.worker_info.id).await {
             Ok(res) => {
                 sqlx::query("COMMIT")
                     .execute(&mut *conn)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "COMMIT".into(),
-                        source: e,
+                        source: Box::new(e),
                         context: "Commit archive".into(),
                     })?;
                 Ok(res)

@@ -1,19 +1,12 @@
 fn get_test_db_url() -> String {
     let rt = Runtime::new().unwrap();
     rt.block_on(async {
-        match common::current_backend() {
-            #[cfg(feature = "postgres")]
-            common::TestBackend::Postgres => common::get_postgres_dsn(Some("pgqrs_cli_test")).await,
-            #[cfg(not(feature = "postgres"))]
-            common::TestBackend::Postgres => panic!("Postgres disabled"),
-            common::TestBackend::Sqlite => {
-                let path =
-                    std::env::temp_dir().join(format!("cli_test_{}.db", uuid::Uuid::new_v4()));
-                std::fs::File::create(&path).expect("Failed to create test DB file");
-                format!("sqlite://{}", path.display())
-            }
-            common::TestBackend::Turso => panic!("Turso not supported for CLI tests yet"),
-        }
+        // Use singular 'pgqrs_cli_test' to match hardcoded schema names in tests below
+        common::create_store("pgqrs_cli_test")
+            .await
+            .config()
+            .dsn
+            .clone()
     })
 }
 
@@ -21,8 +14,17 @@ fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "--quiet"]);
 
-    if common::current_backend() == common::TestBackend::Sqlite {
-        cmd.args(["--no-default-features", "--features", "sqlite"]);
+    match common::current_backend() {
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => {
+            cmd.args(["--no-default-features", "--features", "turso"]);
+        }
+        #[cfg(feature = "postgres")]
+        pgqrs::store::BackendType::Postgres => {}
     }
 
     cmd.args(["--"])
@@ -33,6 +35,37 @@ fn run_cli_command(db_url: &str, args: &[&str]) -> std::process::Output {
             "pgqrs_cli_test",
             "--format",
             "json",
+        ])
+        .args(args)
+        .output()
+        .expect("Failed to run CLI command")
+}
+
+fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--quiet"]);
+
+    match common::current_backend() {
+        #[cfg(feature = "sqlite")]
+        pgqrs::store::BackendType::Sqlite => {
+            cmd.args(["--no-default-features", "--features", "sqlite"]);
+        }
+        #[cfg(feature = "turso")]
+        pgqrs::store::BackendType::Turso => {
+            cmd.args(["--no-default-features", "--features", "turso"]);
+        }
+        #[cfg(feature = "postgres")]
+        pgqrs::store::BackendType::Postgres => {}
+    }
+
+    cmd.args(["--"])
+        .args([
+            "--dsn",
+            db_url,
+            "--schema",
+            "pgqrs_cli_test",
+            "--format",
+            "table",
         ])
         .args(args)
         .output()
@@ -83,6 +116,7 @@ use tokio::runtime::Runtime;
 fn test_cli_create_list_delete_queue() {
     // Bring up test DB and get DSN
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_queue_cli";
 
     // Create queue - this doesn't return JSON, just success/failure
@@ -117,6 +151,7 @@ fn test_cli_create_list_delete_queue() {
 #[test]
 fn test_cli_create_send_dequeue_delete_queue() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_queue_msg_cli";
     let payload = r#"{"hello":"world"}"#;
 
@@ -218,6 +253,7 @@ fn test_cli_create_send_dequeue_delete_queue() {
 fn test_cli_archive_functionality() {
     // Bring up test DB and get DSN
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_archive_cli";
 
     // Create queue
@@ -307,6 +343,7 @@ fn test_cli_archive_functionality() {
 #[test]
 fn test_cli_metrics_output() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_metrics_cli_output";
 
     // Create queue
@@ -330,6 +367,7 @@ fn test_cli_metrics_output() {
 #[test]
 fn test_cli_admin_stats() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_admin_stats_cli";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
@@ -348,31 +386,10 @@ fn test_cli_admin_stats() {
     run_cli_command_expect_success(&db_url, &["queue", "delete", queue_name]);
 }
 
-fn run_cli_table_command(db_url: &str, args: &[&str]) -> std::process::Output {
-    let mut cmd = Command::new("cargo");
-    cmd.args(["run", "--quiet"]);
-
-    if common::current_backend() == common::TestBackend::Sqlite {
-        cmd.args(["--no-default-features", "--features", "sqlite"]);
-    }
-
-    cmd.args(["--"])
-        .args([
-            "--dsn",
-            db_url,
-            "--schema",
-            "pgqrs_cli_test",
-            "--format",
-            "table",
-        ])
-        .args(args)
-        .output()
-        .expect("Failed to run CLI command")
-}
-
 #[test]
 fn test_cli_metrics_output_table() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_metrics_cli_table";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
@@ -394,6 +411,7 @@ fn test_cli_metrics_output_table() {
 #[test]
 fn test_cli_worker_health() {
     let db_url = get_test_db_url();
+    run_cli_command_expect_success(&db_url, &["admin", "install"]);
     let queue_name = "test_worker_health_cli";
 
     run_cli_command_expect_success(&db_url, &["queue", "create", queue_name]);
@@ -406,9 +424,12 @@ fn test_cli_worker_health() {
         let store = pgqrs::connect_with_config(&config).await.expect("Store");
 
         let sql = match common::current_backend() {
-            common::TestBackend::Postgres => "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')",
-            common::TestBackend::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
-            _ => panic!("Unsupported"),
+            #[cfg(feature = "postgres")]
+            pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_cli_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', NOW() - INTERVAL '1 hour')",
+            #[cfg(feature = "sqlite")]
+            pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
+            #[cfg(feature = "turso")]
+            pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_host', 1234, 'ready', datetime('now', '-1 hour'))",
         };
 
         store.execute_raw_with_i64(sql, queue_info.id).await.expect("Insert failed");
@@ -447,13 +468,18 @@ fn test_cli_worker_health() {
         let store = pgqrs::connect_with_config(&config).await.expect("Store");
 
         let sql = match common::current_backend() {
-            common::TestBackend::Postgres => {
+            #[cfg(feature = "postgres")]
+            pgqrs::store::BackendType::Postgres => {
                 "DELETE FROM pgqrs_cli_test.pgqrs_workers WHERE hostname = 'stale_host'"
             }
-            common::TestBackend::Sqlite => {
+            #[cfg(feature = "sqlite")]
+            pgqrs::store::BackendType::Sqlite => {
                 "DELETE FROM pgqrs_workers WHERE hostname = 'stale_host'"
             }
-            _ => panic!("Unsupported"),
+            #[cfg(feature = "turso")]
+            pgqrs::store::BackendType::Turso => {
+                "DELETE FROM pgqrs_workers WHERE hostname = 'stale_host'"
+            }
         };
         store.execute_raw(sql).await.expect("Cleanup failed");
     });

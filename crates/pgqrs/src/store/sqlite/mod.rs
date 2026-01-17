@@ -7,7 +7,6 @@ use crate::store::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use sqlx::Sqlite;
 
 use std::sync::Arc;
 
@@ -60,12 +59,6 @@ impl SqliteStore {
             .await
             .map_err(Error::Database)?;
 
-        // Run migrations
-        sqlx::migrate!("migrations/sqlite")
-            .run(&pool)
-            .await
-            .map_err(|e| Error::Database(e.into()))?;
-
         Ok(Self {
             pool: pool.clone(),
             config: config.clone(),
@@ -96,15 +89,13 @@ pub fn format_sqlite_timestamp(dt: &DateTime<Utc>) -> String {
 
 #[async_trait]
 impl Store for SqliteStore {
-    type Db = Sqlite;
-
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
             .execute(&self.pool)
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to execute raw SQL".into(),
             })?;
         Ok(())
@@ -117,7 +108,7 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to execute raw SQL with param {}", param),
             })?;
         Ok(())
@@ -131,7 +122,7 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to execute raw SQL with params {}, {}",
                     param1, param2
@@ -146,7 +137,7 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to query int".into(),
             })
     }
@@ -157,7 +148,7 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to query string".into(),
             })
     }
@@ -168,7 +159,7 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| Error::QueryFailed {
                 query: sql.to_string(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to query bool".into(),
             })?;
         Ok(val != 0)

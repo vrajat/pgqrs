@@ -26,6 +26,9 @@ use thiserror::Error;
 /// Result type for pgqrs operations
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Boxed error type for heterogeneous error sources
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
 /// Error types for pgqrs operations.
 ///
 /// This enum covers all error cases that can occur when using pgqrs,
@@ -34,8 +37,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
     /// Database operation failed (SQLx errors)
+    #[cfg(feature = "sqlx")]
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    /// Turso database error
+    #[cfg(feature = "turso")]
+    #[error("Turso error: {0}")]
+    Turso(#[from] turso::Error),
 
     /// JSON serialization/deserialization failed
     #[error("Serialization error: {0}")]
@@ -79,38 +88,26 @@ pub enum Error {
 
     /// Database connection failed or was lost
     #[error("Database connection failed: {source}. Context: {context}")]
-    ConnectionFailed {
-        #[source]
-        source: sqlx::Error,
-        context: String,
-    },
+    ConnectionFailed { source: BoxError, context: String },
 
     /// SQL query failed
     #[error("Database query failed: {query}. Context: {context}. Source: {source}")]
     QueryFailed {
-        #[source]
-        source: sqlx::Error,
+        source: BoxError,
         query: String,
         context: String,
     },
 
     /// Database transaction operation failed
     #[error("Database transaction failed: {source}. Context: {context}")]
-    TransactionFailed {
-        #[source]
-        source: sqlx::Error,
-        context: String,
-    },
+    TransactionFailed { source: BoxError, context: String },
 
     /// Database connection pool is exhausted
     #[error("Database connection pool exhausted: {source}. Context: {context}")]
-    PoolExhausted {
-        #[source]
-        source: sqlx::Error,
-        context: String,
-    },
+    PoolExhausted { source: BoxError, context: String },
 
     /// Database migration failed
+    #[cfg(feature = "sqlx")]
     #[error("Database migration failed: {0}")]
     MigrationFailed(#[from] sqlx::migrate::MigrateError),
 
@@ -164,4 +161,8 @@ pub enum Error {
     )]
     #[error("Connection error: {message}")]
     Connection { message: String },
+
+    /// Entity not found
+    #[error("{entity} with id '{id}' not found")]
+    NotFound { entity: String, id: String },
 }

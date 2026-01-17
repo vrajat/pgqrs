@@ -153,6 +153,22 @@ pub struct Config {
     pub validation_config: crate::validation::ValidationConfig,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dsn: String::new(),
+            schema: DEFAULT_SCHEMA.to_string(),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
+            default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
+            default_max_batch_size: DEFAULT_BATCH_SIZE,
+            max_read_ct: DEFAULT_MAX_READ_CT,
+            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            validation_config: Default::default(),
+        }
+    }
+}
+
 // Default functions for serde
 fn default_max_connections() -> u32 {
     DEFAULT_MAX_CONNECTIONS

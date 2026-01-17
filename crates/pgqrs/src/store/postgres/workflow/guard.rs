@@ -67,7 +67,7 @@ impl StepGuard {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SQL_ACQUIRE_STEP".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to acquire step {} for workflow {}",
                     step_id_string, workflow_id
@@ -145,7 +145,7 @@ impl crate::store::StepGuard for StepGuard {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("SQL_STEP_SUCCESS ({})", self.step_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to complete step {}", self.step_id),
             })?;
 
@@ -162,7 +162,7 @@ impl crate::store::StepGuard for StepGuard {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("SQL_STEP_FAIL ({})", self.step_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to fail step {}", self.step_id),
             })?;
 

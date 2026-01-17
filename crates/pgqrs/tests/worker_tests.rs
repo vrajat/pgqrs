@@ -14,7 +14,7 @@ async fn create_store() -> AnyStore {
 
     // Clean up any existing workers to ensure test isolation
     // SQLite doesn't support TRUNCATE, use DELETE
-    let sql = if store.backend_name() == "sqlite" {
+    let sql = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
         "DELETE FROM pgqrs_workers"
     } else {
         "TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE"
@@ -266,8 +266,11 @@ async fn test_worker_health_check() {
 #[tokio::test]
 #[serial]
 async fn test_custom_schema_search_path() {
-    use common::TestBackend;
-    skip_on_backend!(TestBackend::Sqlite);
+    // use common::TestBackend;
+    #[cfg(feature = "sqlite")]
+    skip_on_backend!(pgqrs::store::BackendType::Sqlite);
+    #[cfg(feature = "turso")]
+    skip_on_backend!(pgqrs::store::BackendType::Turso);
 
     let store = create_store().await;
 
@@ -525,8 +528,8 @@ async fn test_purge_old_workers() {
     // Set old heartbeat ONLY for producer1 and producer2
     let old_seconds = Duration::days(30).num_seconds();
 
-    let sql = if store.backend_name() == "sqlite" {
-        "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || $1 || ' seconds') WHERE id = $2"
+    let sql = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
+        "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?"
     } else {
         "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2"
     };

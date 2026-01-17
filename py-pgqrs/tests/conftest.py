@@ -33,9 +33,11 @@ def test_backend() -> TestBackend:
 
 
 @pytest.fixture(scope="session")
-def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
+def base_dsn(test_backend: TestBackend) -> Generator[str | None, None, None]:
     """
-    Provides a database DSN appropriate for the selected backend.
+    Provides a base database DSN for the session.
+    - Postgres: Returns env DSN or starts a container.
+    - SQLite/Turso: Returns env DSN if set, else None (to trigger per-test isolation).
     """
     if test_backend == TestBackend.POSTGRES:
         dsn = os.environ.get("PGQRS_TEST_POSTGRES_DSN") or os.environ.get("PGQRS_TEST_DSN")
@@ -47,14 +49,10 @@ def database_dsn(test_backend: TestBackend) -> Generator[str, None, None]:
 
     elif test_backend == TestBackend.SQLITE:
         dsn = os.environ.get("PGQRS_TEST_SQLITE_DSN")
-        if not dsn:
-            pytest.skip("PGQRS_TEST_SQLITE_DSN not set")
         yield dsn
 
     elif test_backend == TestBackend.TURSO:
         dsn = os.environ.get("PGQRS_TEST_TURSO_DSN")
-        if not dsn:
-            pytest.skip("PGQRS_TEST_TURSO_DSN not set")
         yield dsn
 
 
@@ -75,38 +73,57 @@ def skip_on_backend(backend: TestBackend):
     )
 
 
-# Legacy alias for postgres_dsn compatibility, but now function-scoped to support SQLite isolation
 @pytest.fixture(scope="function")
-def postgres_dsn(test_backend: TestBackend, database_dsn: str) -> Generator[str, None, None]:
+def test_dsn(test_backend: TestBackend, base_dsn: str | None) -> Generator[str, None, None]:
     """
     Provides a per-test DSN.
-    - Postgres: Returns the session-shared DSN.
-    - SQLite: Creates a new unique database file for isolation.
+    - Postgres: Returns the shared base DSN.
+    - SQLite/Turso: Creates a new unique database file if base_dsn is None (isolation).
     """
     if test_backend == TestBackend.POSTGRES:
-        yield database_dsn
+        if not base_dsn:
+            raise ValueError("Postgres backend requires a base_dsn")
+        yield base_dsn
+
     elif test_backend == TestBackend.SQLITE:
-        # Create a unique temporary file
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-            tmp_path = tmp.name
+        if base_dsn:
+             yield base_dsn
+        else:
+            # Create a unique temporary file
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
 
-        dsn = f"sqlite://{tmp_path}"
-        yield dsn
+            dsn = f"sqlite://{tmp_path}"
+            yield dsn
 
-        # Cleanup
-        try:
-            os.remove(tmp_path)
-            # Also remove limit/wal files if they exist
-            if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
-            if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
-        except OSError:
-            pass
+            # Cleanup
+            try:
+                os.remove(tmp_path)
+                if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
+                if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+            except OSError:
+                pass
     elif test_backend == TestBackend.TURSO:
-        # For Turso, we might need a similar isolation strategy or dedicated test database
-        yield database_dsn
+        if base_dsn:
+             yield base_dsn
+        else:
+            # Create a unique temporary file
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            dsn = f"turso://{tmp_path}"
+            yield dsn
+
+            # Cleanup
+            try:
+                os.remove(tmp_path)
+                if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
+                if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+            except OSError:
+                pass
 
 @pytest.fixture(scope="function")
-def schema(test_backend: TestBackend, postgres_dsn: str, request) -> Generator[str, None, None]:
+def schema(test_backend: TestBackend, test_dsn: str, request) -> Generator[str | None, None, None]:
     """
     Creates a unique schema for the test module (Postgres) or returns None (SQLite).
     """
@@ -116,7 +133,7 @@ def schema(test_backend: TestBackend, postgres_dsn: str, request) -> Generator[s
         unique_suffix = str(uuid.uuid4())[:8]
         schema_name = f"test_{module_name}_{unique_suffix}"
 
-        with psycopg.connect(postgres_dsn, autocommit=True) as conn:
+        with psycopg.connect(test_dsn, autocommit=True) as conn:
             conn.execute(f"CREATE SCHEMA {schema_name}")
             try:
                 yield schema_name

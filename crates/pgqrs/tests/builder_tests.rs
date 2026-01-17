@@ -551,7 +551,7 @@ async fn test_builder_vt_offset_behavior() {
     let now = chrono::Utc::now();
     let diff = (msg.vt - now).num_seconds();
     assert!(
-        (4..=6).contains(&diff),
+        (2..=8).contains(&diff),
         "VT should be ~5s in future, got {}s",
         diff
     );

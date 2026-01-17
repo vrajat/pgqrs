@@ -1,129 +1,172 @@
-pub mod backend;
+#![allow(clippy::await_holding_lock)]
 pub mod constants;
+
 #[cfg(feature = "postgres")]
-pub mod container;
-#[cfg(feature = "postgres")]
-pub mod database_setup; // database_setup also seems to use postgres logic? checked? assume yes or check.
+pub mod database_setup;
 #[cfg(feature = "postgres")]
 pub mod pgbouncer;
 #[cfg(feature = "postgres")]
 pub mod postgres;
-
-pub use backend::TestBackend;
+pub mod resource;
 
 use ctor::dtor;
+use pgqrs::store::BackendType;
+use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
 
-/// Get a PostgreSQL DSN for testing.
-///
-/// This function handles external databases (via PGQRS_TEST_DSN env var),
-/// PgBouncer setup (via PGQRS_TEST_USE_PGBOUNCER env var), and regular
-/// PostgreSQL testcontainers. The database schema is automatically
-/// installed and cleaned up when tests complete.
-///
-/// # Returns
-/// The database DSN string that can be used for tests
-#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
-#[cfg(feature = "postgres")]
-pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
-    container::get_postgres_dsn(schema).await
-}
-
-#[allow(dead_code)] // Used by multiple test modules, but Rust doesn't detect cross-module usage
+#[allow(dead_code)]
 #[cfg(feature = "postgres")]
 pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
-    container::get_pgbouncer_dsn(schema).await
+    {
+        let guard = RESOURCE_MANAGER.read().unwrap();
+        if guard.is_some() {
+            return guard.as_ref().unwrap().resource.get_dsn(schema).await;
+        }
+    }
+
+    let mut guard = RESOURCE_MANAGER.write().unwrap();
+    if guard.is_some() {
+        return guard.as_ref().unwrap().resource.get_dsn(schema).await;
+    }
+
+    let resource: Box<dyn TestResource> = {
+        let r = pgbouncer::PgBouncerResource::new();
+        r.initialize().await.expect("Failed to init pgbouncer");
+        Box::new(r)
+    };
+    let dsn = resource.get_dsn(schema).await;
+    *guard = Some(ResourceManager::new(resource));
+    dsn
 }
 
-/// Get DSN for the selected test backend from environment variables.
-///
-/// This function handles environment variable resolution for backend-specific DSNs.
-/// For Postgres, if no env var is set, returns None (caller should use testcontainers).
+/// Get the current test backend.
 #[allow(dead_code)]
-pub fn get_dsn_from_env(backend: TestBackend, _schema: Option<&str>) -> Option<String> {
+pub fn current_backend() -> BackendType {
+    if let Ok(backend_str) = std::env::var("PGQRS_TEST_BACKEND") {
+        return BackendType::detect(&backend_str.to_lowercase())
+            .unwrap_or_else(|e| panic!("{}", e));
+    }
+
+    if let Ok(dsn) = std::env::var("PGQRS_TEST_DSN") {
+        if let Ok(backend) = BackendType::detect(&dsn) {
+            return backend;
+        }
+    }
+
+    // Default
+    #[cfg(feature = "postgres")]
+    {
+        BackendType::Postgres
+    }
+    #[cfg(not(feature = "postgres"))]
+    {
+        panic!("No backend specified and postgres feature is disabled. Set PGQRS_TEST_BACKEND.");
+    }
+}
+
+#[allow(dead_code)]
+pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
     match backend {
-        TestBackend::Postgres => {
-            // Try backend-specific env var first, then fall back to generic
+        #[cfg(feature = "postgres")]
+        BackendType::Postgres => {
+            if std::env::var("PGQRS_TEST_SQLITE_DSN").is_ok()
+                || std::env::var("PGQRS_TEST_TURSO_DSN").is_ok()
+            {
+                panic!("Ambiguous configuration: DSN mismatch for Postgres");
+            }
             std::env::var("PGQRS_TEST_POSTGRES_DSN")
                 .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
                 .ok()
+                .map(|dsn| {
+                    Box::new(postgres::ExternalPostgresResource::new(dsn)) as Box<dyn TestResource>
+                })
         }
-        TestBackend::Sqlite => std::env::var("PGQRS_TEST_SQLITE_DSN").ok(),
-        TestBackend::Turso => std::env::var("PGQRS_TEST_TURSO_DSN").ok(),
+        #[cfg(feature = "sqlite")]
+        BackendType::Sqlite => {
+            if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
+                panic!("Ambiguous configuration: DSN mismatch for Sqlite");
+            }
+            std::env::var("PGQRS_TEST_SQLITE_DSN").ok().map(|dsn| {
+                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
+            })
+        }
+        #[cfg(feature = "turso")]
+        BackendType::Turso => {
+            if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
+                panic!("Ambiguous configuration: DSN mismatch for Turso");
+            }
+            std::env::var("PGQRS_TEST_TURSO_DSN").ok().map(|dsn| {
+                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
+            })
+        }
     }
 }
 
 /// Create a store for the currently selected test backend.
-///
-/// This function respects the `PGQRS_TEST_BACKEND` environment variable
-/// and creates the appropriate backend (Postgres, SQLite, or Turso).
-///
-/// # Arguments
-/// * `schema` - Schema name for isolation (used differently per backend)
-///
-/// # Returns
-/// An `AnyStore` instance connected to the selected backend
 #[allow(dead_code)]
 pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
-    let backend = TestBackend::from_env();
-    create_store_for_backend(backend, schema).await
-}
-
-/// Create a store for a specific backend.
-///
-/// # Arguments
-/// * `backend` - The specific backend to use
-/// * `schema` - Schema name for isolation
-///
-/// # Returns
-/// An `AnyStore` instance connected to the specified backend
-#[allow(dead_code)]
-pub async fn create_store_for_backend(
-    backend: TestBackend,
-    schema: &str,
-) -> pgqrs::store::AnyStore {
-    let dsn = if let Some(env_dsn) = get_dsn_from_env(backend, Some(schema)) {
-        #[cfg(feature = "postgres")]
-        if backend == TestBackend::Postgres {
-            crate::common::database_setup::setup_database_common(
-                env_dsn.clone(),
-                schema,
-                "External Env Postgres",
-            )
-            .await
-            .expect("Failed to setup env postgres");
-        }
-        env_dsn
-    } else {
-        // Fall back to container-based setup (currently only Postgres supported)
-        match backend {
-            #[cfg(feature = "postgres")]
-            TestBackend::Postgres => container::get_postgres_dsn(Some(schema)).await,
-            #[cfg(not(feature = "postgres"))]
-            TestBackend::Postgres => panic!("Postgres feature is disabled"),
-            TestBackend::Sqlite => {
-                // Use a unique in-memory database per store creation to ensure isolation
-                // The ?cache=shared allows pool connections to verify consistent state
-                format!(
-                    "sqlite:file:{}?mode=memory&cache=shared",
-                    uuid::Uuid::new_v4()
-                )
-            }
-            TestBackend::Turso => panic!("PGQRS_TEST_TURSO_DSN must be set for Turso backend"),
-        }
-    };
+    let dsn = get_test_dsn(schema).await;
 
     let config =
         pgqrs::config::Config::from_dsn_with_schema(&dsn, schema).expect("Failed to create config");
 
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create store")
+        .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
+
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema");
+
+    store
 }
 
-/// Get the current test backend (for skip logic).
+/// Get DSN for the current test backend.
 #[allow(dead_code)]
-pub fn current_backend() -> TestBackend {
-    TestBackend::from_env()
+pub async fn get_test_dsn(schema: &str) -> String {
+    let backend = current_backend();
+
+    {
+        let guard = RESOURCE_MANAGER.read().unwrap();
+        if let Some(manager) = guard.as_ref() {
+            return manager.resource.get_dsn(Some(schema)).await;
+        }
+    }
+
+    let mut guard = RESOURCE_MANAGER.write().unwrap();
+    if let Some(manager) = guard.as_ref() {
+        return manager.resource.get_dsn(Some(schema)).await;
+    }
+
+    let resource: Box<dyn TestResource> = if let Some(r) = get_dsn_from_env(backend) {
+        r
+    } else {
+        match backend {
+            #[cfg(feature = "postgres")]
+            BackendType::Postgres => {
+                let r = postgres::PostgresResource::new();
+                r.initialize().await.expect("Failed to init postgres");
+                Box::new(r)
+            }
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => {
+                let r = resource::FileResource::new("sqlite://".to_string());
+                r.initialize()
+                    .await
+                    .expect("Failed to init sqlite resource");
+                Box::new(r)
+            }
+            #[cfg(feature = "turso")]
+            BackendType::Turso => {
+                let r = resource::FileResource::new("turso://".to_string());
+                r.initialize().await.expect("Failed to init turso resource");
+                Box::new(r)
+            }
+        }
+    };
+
+    *guard = Some(ResourceManager::new(resource));
+    guard.as_ref().unwrap().resource.get_dsn(Some(schema)).await
 }
 
 /// Skip test if not running on specified backend.
@@ -150,12 +193,18 @@ macro_rules! skip_on_backend {
 
 #[dtor]
 fn drop_database() {
-    // Create a simple runtime for cleanup
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    rt.block_on(async {
-        #[cfg(feature = "postgres")]
-        if let Err(e) = container::cleanup_database().await {
-            eprintln!("Error during database cleanup: {}", e);
-        }
-    });
+    // Cleanup global resource
+    let mut guard = match RESOURCE_MANAGER.write() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+
+    if let Some(manager) = guard.take() {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create cleanup runtime");
+        rt.block_on(async {
+            if let Err(e) = manager.resource.cleanup().await {
+                eprintln!("Error during resource cleanup: {}", e);
+            }
+        });
+    }
 }

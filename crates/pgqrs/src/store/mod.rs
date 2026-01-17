@@ -28,6 +28,8 @@ pub mod any;
 pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "turso")]
+pub mod turso;
 
 pub use any::AnyStore;
 
@@ -323,9 +325,6 @@ pub enum StepResult<T> {
 /// and transaction management.
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
-    /// Database backend type for implementations.
-    type Db: sqlx::Database;
-
     /// Execute raw SQL without parameters.
     ///
     /// This method is intended for test setup/cleanup and administrative operations.
@@ -440,6 +439,66 @@ pub trait Store: Send + Sync + 'static {
         queue: &str,
         config: &Config,
     ) -> crate::error::Result<Box<dyn Consumer>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendType {
+    #[cfg(feature = "postgres")]
+    Postgres,
+    #[cfg(feature = "sqlite")]
+    Sqlite,
+    #[cfg(feature = "turso")]
+    Turso,
+}
+
+impl BackendType {
+    const POSTGRES_PREFIXES: &'static [&'static str] =
+        &["postgres://", "postgresql://", "postgres", "pg"];
+    const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
+    const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
+
+    pub fn detect(dsn: &str) -> crate::error::Result<Self> {
+        // Check Postgres
+        if Self::POSTGRES_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "postgres")]
+            return Ok(Self::Postgres);
+
+            #[cfg(not(feature = "postgres"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Postgres backend is not enabled".to_string(),
+            });
+        }
+
+        // Check SQLite
+        if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "sqlite")]
+            return Ok(Self::Sqlite);
+
+            #[cfg(not(feature = "sqlite"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Sqlite backend is not enabled".to_string(),
+            });
+        }
+
+        // Check Turso
+        if Self::TURSO_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "turso")]
+            return Ok(Self::Turso);
+
+            #[cfg(not(feature = "turso"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "Turso backend is not enabled".to_string(),
+            });
+        }
+
+        Err(crate::error::Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("Unsupported DSN format: {}", dsn),
+        })
+    }
 }
 
 /// Repository for managing queues.

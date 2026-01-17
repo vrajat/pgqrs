@@ -59,8 +59,6 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
-    type Db = sqlx::Postgres;
-
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         sqlx::raw_sql(sql).execute(&self.pool).await?;
         Ok(())

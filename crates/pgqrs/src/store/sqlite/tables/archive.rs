@@ -104,7 +104,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_ARCHIVE".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to archive message {}", data.original_msg_id),
             })?;
 
@@ -130,7 +130,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("GET_ARCHIVE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get archived message {}", id),
             })?;
         Self::map_row(row)
@@ -142,7 +142,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_ALL_ARCHIVE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to list all archived messages".into(),
             })?;
 
@@ -159,7 +159,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_ARCHIVE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to count archived messages".into(),
             })?;
         Ok(count)
@@ -172,7 +172,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("DELETE_ARCHIVE_BY_ID ({})", id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete archive {}", id),
             })?;
         Ok(result.rows_affected())
@@ -185,7 +185,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("LIST_ARCHIVE_BY_QUEUE ({})", queue_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to list archives for queue {}", queue_id),
             })?;
 
@@ -221,7 +221,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "LIST_DLQ_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to list DLQ messages (max_attempts={})",
                     max_attempts
@@ -250,7 +250,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "COUNT_DLQ_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!(
                     "Failed to count DLQ messages (max_attempts={})",
                     max_attempts
@@ -281,7 +281,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("ARCHIVE_LIST_WITH_WORKER ({})", worker_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to list archives for worker {}", worker_id),
             })?;
 
@@ -300,7 +300,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: format!("ARCHIVE_COUNT_WITH_WORKER ({})", worker_id),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to count archives for worker {}", worker_id),
             })?;
         Ok(count)
@@ -314,42 +314,19 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "ARCHIVE_DELETE_WITH_WORKER".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete archives for worker {}", worker_id),
             })?;
         Ok(result.rows_affected())
     }
 
     async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
-        // Use CTE to delete from archive and insert into messages
-        // SQLite 3.35+ supports basic RETURNING.
-        // It does NOT support data-modifying CTEs in the way Postgres does (WHERE ... IN (DELETE ...)).
-        // SQLite support for DELETE ... RETURNING is top-level.
-        // Usage inside CTE is NOT supported for DELETE.
-        // So we must do this in two steps: Fetch, Delete, Insert. Or Transaction.
-        // Transaction is best.
-
-        /*
-        Postgres query:
-            WITH archived AS (
-                DELETE FROM pgqrs_archive WHERE id = $1 RETURNING *
-            )
-            INSERT ... SELECT ... FROM archived ...
-
-        SQLite approach (Transaction):
-            BEGIN;
-            SELECT * FROM pgqrs_archive WHERE id = $?;
-            DELETE FROM pgqrs_archive WHERE id = $?;
-            INSERT INTO pgqrs_messages ...;
-            COMMIT;
-        */
-
         let mut tx =
             self.pool
                 .begin()
                 .await
                 .map_err(|e| crate::error::Error::TransactionFailed {
-                    source: e,
+                    source: Box::new(e),
                     context: "Failed to begin transaction for replay".into(),
                 })?;
 
@@ -360,7 +337,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_ARCHIVE_BY_ID_TX".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to get archived message {}", msg_id),
             })?;
 
@@ -376,7 +353,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DELETE_ARCHIVE_BY_ID_TX".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to delete archived message {}", msg_id),
             })?;
 
@@ -402,14 +379,14 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_REPLAY_MESSAGE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to insert replayed message".into(),
             })?;
 
         tx.commit()
             .await
             .map_err(|e| crate::error::Error::TransactionFailed {
-                source: e,
+                source: Box::new(e),
                 context: "Failed to commit replay transaction".into(),
             })?;
 
@@ -452,7 +429,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to count archives for queue {}", queue_id),
                 })?;
         Ok(count)

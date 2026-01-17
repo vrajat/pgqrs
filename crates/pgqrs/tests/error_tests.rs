@@ -103,10 +103,9 @@ async fn test_valid_schema_names() {
 #[tokio::test]
 #[serial]
 async fn test_nonexistent_schema_operations() {
-    use common::TestBackend;
-    skip_unless_backend!(TestBackend::Postgres);
+    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
 
-    let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
+    let database_url = common::get_test_dsn("pgqrs_error_test").await;
 
     // Create config with a schema that doesn't exist
     let config = Config::from_dsn_with_schema(database_url, "nonexistent_schema_test")
@@ -147,10 +146,9 @@ async fn test_nonexistent_schema_operations() {
 #[tokio::test]
 #[serial]
 async fn test_verify_requires_existing_schema() {
-    use common::TestBackend;
-    skip_unless_backend!(TestBackend::Postgres);
+    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
 
-    let database_url = common::get_postgres_dsn(Some("pgqrs_error_test")).await;
+    let database_url = common::get_test_dsn("pgqrs_error_test").await;
 
     // Create store with existing schema
     let config =

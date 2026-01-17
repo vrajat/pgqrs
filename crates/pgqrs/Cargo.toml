@@ -35,12 +35,15 @@ serial_test = "3.2"
 
 [features]
 default = ["postgres"]
-full = ["postgres", "sqlite"]
-postgres = ["sqlx/postgres"]
-sqlite = ["sqlx/sqlite"]
+sqlx = ["dep:sqlx"]
+full = ["postgres", "sqlite", "turso"]
+postgres = ["sqlx", "sqlx/postgres"]
+sqlite = ["sqlx", "sqlx/sqlite"]
+# Turso backend (Rust-native logic)
+turso = ["dep:turso"]
 
 [dependencies]
-sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"] }
+sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"], optional = true }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -58,6 +61,7 @@ serde_yaml = "0.9"
 tabled = "0.20.0"
 humantime = "2.1"
 async-trait = "0.1"
+turso = { version = "0.4.2", optional = true }
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)

@@ -9,8 +9,10 @@ use crate::config::Config;
 use crate::store::postgres::PostgresStore;
 #[cfg(feature = "sqlite")]
 use crate::store::sqlite::SqliteStore;
+#[cfg(feature = "turso")]
+use crate::store::turso::TursoStore;
 #[cfg(feature = "postgres")]
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::PgPoolOptions;
 
 /// Runtime-selectable database backend.
 ///
@@ -25,6 +27,9 @@ pub enum AnyStore {
     /// SQLite backend
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteStore),
+    /// Turso backend (Rust-native SQLite rewrite)
+    #[cfg(feature = "turso")]
+    Turso(TursoStore),
 }
 
 impl AnyStore {
@@ -43,9 +48,11 @@ impl AnyStore {
     /// This method is primarily used internally by `pgqrs::connect()`.
     /// Users should prefer the high-level `pgqrs::connect()` function.
     pub(crate) async fn connect(config: &Config) -> crate::error::Result<Self> {
-        if config.dsn.starts_with("postgres://") || config.dsn.starts_with("postgresql://") {
+        let backend = BackendType::detect(&config.dsn)?;
+
+        match backend {
             #[cfg(feature = "postgres")]
-            {
+            BackendType::Postgres => {
                 // Create search_path SQL for schema
                 let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
 
@@ -61,38 +68,22 @@ impl AnyStore {
                     .connect(&config.dsn)
                     .await
                     .map_err(|e| crate::error::Error::ConnectionFailed {
-                        source: e,
+                        source: Box::new(e),
                         context: "Failed to connect to postgres".into(),
                     })?;
 
                 Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
             }
-            #[cfg(not(feature = "postgres"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Postgres backend is not enabled".to_string(),
-                })
-            }
-        } else if config.dsn.starts_with("sqlite://") || config.dsn.starts_with("sqlite:") {
             #[cfg(feature = "sqlite")]
-            {
+            BackendType::Sqlite => {
                 let store = SqliteStore::new(&config.dsn, config).await?;
                 Ok(AnyStore::Sqlite(store))
             }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "SQLite backend is not enabled".to_string(),
-                })
+            #[cfg(feature = "turso")]
+            BackendType::Turso => {
+                let store = TursoStore::new(&config.dsn, config).await?;
+                Ok(AnyStore::Turso(store))
             }
-        } else {
-            Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Unsupported DSN format (must start with postgres://, postgresql://, or sqlite://)"
-                    .to_string(),
-            })
         }
     }
 
@@ -104,7 +95,7 @@ impl AnyStore {
     /// The DSN format determines which backend is used:
     /// - `postgres://` or `postgresql://` → PostgreSQL
     /// - `sqlite://` → SQLite (requires "sqlite" feature)
-    /// - `libsql://` → Turso (requires "turso" feature)
+    /// - `turso://` → Turso (requires "turso" feature)
     ///
     /// # Arguments
     /// * `dsn` - Database connection string
@@ -118,65 +109,21 @@ impl AnyStore {
     /// # }
     /// ```
     pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
-        if dsn.starts_with("postgres://") || dsn.starts_with("postgresql://") {
-            #[cfg(feature = "postgres")]
-            {
-                let pool = PgPool::connect(dsn).await.map_err(|e| {
-                    crate::error::Error::ConnectionFailed {
-                        source: e,
-                        context: "Failed to connect to postgres".into(),
-                    }
-                })?;
-                // Default config will be applied when new() creates the store
-                Ok(AnyStore::Postgres(PostgresStore::new(
-                    pool,
-                    &Config::from_dsn(dsn),
-                )))
-            }
-            #[cfg(not(feature = "postgres"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "Postgres backend is not enabled".to_string(),
-                })
-            }
-        } else if dsn.starts_with("sqlite://") || dsn.starts_with("sqlite:") {
-            #[cfg(feature = "sqlite")]
-            {
-                let config = Config::from_dsn(dsn);
-                let store = SqliteStore::new(dsn, &config).await?;
-                Ok(AnyStore::Sqlite(store))
-            }
-            #[cfg(not(feature = "sqlite"))]
-            {
-                Err(crate::error::Error::InvalidConfig {
-                    field: "dsn".to_string(),
-                    message: "SQLite backend is not enabled".to_string(),
-                })
-            }
-        } else {
-            Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Unsupported DSN format: {}".to_string(),
-            })
-        }
+        let config = Config::from_dsn(dsn);
+        Self::connect(&config).await
     }
 }
 
 #[async_trait]
 impl Store for AnyStore {
-    #[cfg(feature = "postgres")]
-    type Db = sqlx::Postgres;
-
-    #[cfg(all(feature = "sqlite", not(feature = "postgres")))]
-    type Db = sqlx::Sqlite;
-
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.execute_raw(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw(sql).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.execute_raw(sql).await,
         }
     }
 
@@ -186,6 +133,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_i64(sql, param).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.execute_raw_with_i64(sql, param).await,
         }
     }
 
@@ -200,6 +149,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
         }
     }
 
@@ -209,6 +160,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_int(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_int(sql).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.query_int(sql).await,
         }
     }
 
@@ -218,6 +171,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_string(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_string(sql).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.query_string(sql).await,
         }
     }
 
@@ -227,6 +182,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_bool(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_bool(sql).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.query_bool(sql).await,
         }
     }
 
@@ -236,6 +193,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.config(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.config(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.config(),
         }
     }
 
@@ -245,6 +204,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.queues(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.queues(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.queues(),
         }
     }
 
@@ -254,6 +215,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.messages(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.messages(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.messages(),
         }
     }
 
@@ -263,6 +226,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workers(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workers(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.workers(),
         }
     }
 
@@ -272,6 +237,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.archive(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.archive(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.archive(),
         }
     }
 
@@ -281,6 +248,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflows(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflows(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.workflows(),
         }
     }
 
@@ -290,6 +259,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.admin(config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.admin(config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.admin(config).await,
         }
     }
 
@@ -305,6 +276,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
         }
     }
 
@@ -320,6 +293,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
         }
     }
 
@@ -329,6 +304,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflow(id),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow(id),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.workflow(id),
         }
     }
 
@@ -338,6 +315,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.worker(id),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.worker(id),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.worker(id),
         }
     }
 
@@ -351,6 +330,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.acquire_step(workflow_id, step_id).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.acquire_step(workflow_id, step_id).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.acquire_step(workflow_id, step_id).await,
         }
     }
 
@@ -364,6 +345,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.create_workflow(name, input).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.create_workflow(name, input).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.create_workflow(name, input).await,
         }
     }
 
@@ -373,6 +356,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.concurrency_model(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.concurrency_model(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.concurrency_model(),
         }
     }
 
@@ -382,6 +367,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.backend_name(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.backend_name(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.backend_name(),
         }
     }
 
@@ -395,6 +382,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer_ephemeral(queue, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.producer_ephemeral(queue, config).await,
         }
     }
 
@@ -408,6 +397,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.consumer_ephemeral(queue, config).await,
         }
     }
 }

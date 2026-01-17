@@ -206,7 +206,7 @@ impl SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_WORKER_REFERENCES".into(),
-                source: e,
+                source: Box::new(e),
                 context: format!("Failed to check worker references for worker {}", worker_id),
             })?;
         Ok(count)
@@ -339,7 +339,7 @@ impl crate::store::Admin for SqliteAdmin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: format!("CHECK_TABLE_EXISTS ({})", table_name),
-                    source: e,
+                    source: Box::new(e),
                     context: format!("Failed to check if table {} exists", table_name),
                 })?;
 
@@ -356,7 +356,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Check orphaned messages".into(),
             })?;
         if count > 0 {
@@ -370,7 +370,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_MESSAGE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Check orphaned message workers".into(),
             })?;
         if count > 0 {
@@ -384,7 +384,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_ARCHIVE_QUEUES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Check orphaned archive queues".into(),
             })?;
         if count > 0 {
@@ -398,7 +398,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "CHECK_ORPHANED_ARCHIVE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Check orphaned archive workers".into(),
             })?;
         if count > 0 {
@@ -471,7 +471,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "DELETE_QUEUE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Failed to delete queue".into(),
             })?;
 
@@ -498,7 +498,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "PURGE_MSGS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge messages".into(),
             })?;
         sqlx::query("DELETE FROM pgqrs_archive WHERE queue_id = ?")
@@ -507,7 +507,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "PURGE_ARCHIVE".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge archive".into(),
             })?;
         sqlx::query("DELETE FROM pgqrs_workers WHERE queue_id = ?")
@@ -516,7 +516,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "PURGE_WORKERS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge workers".into(),
             })?;
 
@@ -540,7 +540,7 @@ impl crate::store::Admin for SqliteAdmin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "DLQ_Select".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Select DLQ candidates".into(),
                 })?;
 
@@ -562,7 +562,7 @@ impl crate::store::Admin for SqliteAdmin {
                  .bind(id).bind(q_id).bind(p_wid).bind(c_wid).bind(payload).bind(enq).bind(vt).bind(read_ct).bind(deq)
                  .execute(&mut *tx)
                  .await
-                 .map_err(|e| crate::error::Error::QueryFailed { query: "DLQ_Insert".into(), source: e, context: "Insert DLQ archive".into() })?;
+                 .map_err(|e| crate::error::Error::QueryFailed { query: "DLQ_Insert".into(), source: Box::new(e), context: "Insert DLQ archive".into() })?;
 
             // 3. Delete
             sqlx::query("DELETE FROM pgqrs_messages WHERE id = ?")
@@ -571,7 +571,7 @@ impl crate::store::Admin for SqliteAdmin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "DLQ_Delete".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Delete DLQ message".into(),
                 })?;
 
@@ -590,7 +590,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_QUEUE_METRICS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Queue metrics".into(),
             })?;
         Self::map_queue_metrics_row(row)
@@ -602,7 +602,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_ALL_QUEUES_METRICS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "All queues metrics".into(),
             })?;
 
@@ -619,7 +619,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_SYSTEM_STATS".into(),
-                source: e,
+                source: Box::new(e),
                 context: "System stats".into(),
             })?;
         Self::map_system_stats_row(row)
@@ -645,7 +645,7 @@ impl crate::store::Admin for SqliteAdmin {
 
         let rows = rows.map_err(|e| crate::error::Error::QueryFailed {
             query: "WORKER_HEALTH".into(),
-            source: e,
+            source: Box::new(e),
             context: "Worker health".into(),
         })?;
 
@@ -741,7 +741,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "GET_WORKER_MESSAGES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Get worker msgs".into(),
             })?;
 
@@ -794,7 +794,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "ZOMBIES".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Find zombies".into(),
             })?;
 
@@ -808,7 +808,7 @@ impl crate::store::Admin for SqliteAdmin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "RELEASE_ZOMBIES".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Release".into(),
                 })?;
 
@@ -820,7 +820,7 @@ impl crate::store::Admin for SqliteAdmin {
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "SHUTDOWN_ZOMBIE".into(),
-                    source: e,
+                    source: Box::new(e),
                     context: "Shutdown".into(),
                 })?;
         }
@@ -837,7 +837,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "PURGE_OLD".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Purge old".into(),
             })?;
         Ok(res.rows_affected())
@@ -850,7 +850,7 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "RELEASE_WORKER_MSG".into(),
-                source: e,
+                source: Box::new(e),
                 context: "Release msg".into(),
             })?;
         Ok(res.rows_affected())

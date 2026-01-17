@@ -1,22 +1,35 @@
 use async_trait::async_trait;
 use sqlx;
+use std::sync::{Mutex, RwLock};
 use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
 use super::constants::*;
-use super::container::DatabaseContainer;
+use super::resource::TestResource;
 
-/// PgBouncer + PostgreSQL container setup
+/// PgBouncer + PostgreSQL resource wrapper
+pub struct PgBouncerResource {
+    container: RwLock<Option<PgBouncerContainer>>,
+    schema: Mutex<Option<String>>,
+}
+
+impl PgBouncerResource {
+    pub fn new() -> Self {
+        Self {
+            container: RwLock::new(None),
+            schema: Mutex::new(None),
+        }
+    }
+}
+
 pub struct PgBouncerContainer {
     postgres_container: ContainerAsync<Postgres>,
     pgbouncer_container: ContainerAsync<GenericImage>,
     dsn: String,
-    schema: String,
 }
 
 impl PgBouncerContainer {
-    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
-        let schema_name = schema.unwrap_or("public").to_string();
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // First start PostgreSQL
         println!("Starting PostgreSQL container for PgBouncer...");
         let postgres_image = Postgres::default()
@@ -84,8 +97,8 @@ impl PgBouncerContainer {
 
         let pgbouncer_image = GenericImage::new(PGBOUNCER_IMAGE, PGBOUNCER_VERSION)
             .with_env_var("DATABASE_URL", &database_url)
-            .with_env_var("POOL_MODE", PGBOUNCER_POOL_MODE) // Use session mode for better compatibility
-            .with_env_var("AUTH_TYPE", PGBOUNCER_AUTH_TYPE) // Use md5 auth like PostgreSQL
+            .with_env_var("POOL_MODE", PGBOUNCER_POOL_MODE)
+            .with_env_var("AUTH_TYPE", PGBOUNCER_AUTH_TYPE)
             .with_env_var("MAX_CLIENT_CONN", PGBOUNCER_MAX_CLIENT_CONN)
             .with_env_var("DEFAULT_POOL_SIZE", PGBOUNCER_DEFAULT_POOL_SIZE)
             .with_env_var("ADMIN_USERS", TEST_DB_USER)
@@ -153,100 +166,70 @@ impl PgBouncerContainer {
             postgres_container,
             pgbouncer_container,
             dsn,
-            schema: schema_name,
         })
     }
 }
 
 #[async_trait]
-impl DatabaseContainer for PgBouncerContainer {
-    async fn get_dsn(&self) -> String {
-        self.dsn.clone()
-    }
-
-    fn get_container_id(&self) -> Option<String> {
-        // Return the PgBouncer container ID since that's the main connection point
-        Some(self.pgbouncer_container.id().to_string())
-    }
-
-    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::setup_database_common(dsn, &self.schema, "PgBouncer").await
-    }
-
-    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer").await
-    }
-
-    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Stopping PgBouncer container...");
-
-        // Stop PgBouncer container first
-        if let Err(e) = self.pgbouncer_container.stop().await {
-            eprintln!(
-                "Error stopping PgBouncer container via testcontainers: {}",
-                e
-            );
-        }
-
-        println!("Stopping PostgreSQL container (PgBouncer backend)...");
-
-        // Stop PostgreSQL container
-        if let Err(e) = self.postgres_container.stop().await {
-            eprintln!(
-                "Error stopping PostgreSQL container via testcontainers: {}",
-                e
-            );
-        }
-
-        println!("PgBouncer and PostgreSQL containers stopped");
+impl TestResource for PgBouncerResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let container = PgBouncerContainer::new().await?;
+        let mut guard = self.container.write().unwrap();
+        *guard = Some(container);
         Ok(())
     }
-}
 
-pub struct ExternalPgBouncerContainer {
-    dsn: String,
-    schema: String,
-}
+    async fn get_dsn(&self, schema: Option<&str>) -> String {
+        let dsn = {
+            let guard = self.container.read().unwrap();
+            guard
+                .as_ref()
+                .expect("PgBouncerResource not initialized")
+                .dsn
+                .clone()
+        };
 
-impl ExternalPgBouncerContainer {
-    pub fn new(dsn: String, schema: Option<&str>) -> Self {
-        let schema_name = schema.unwrap_or("public").to_string();
-        println!(
-            "Using external PgBouncer database: {} with schema: {}",
-            dsn, schema_name
-        );
-        Self {
-            dsn,
-            schema: schema_name,
+        if let Some(s) = schema {
+            super::database_setup::setup_database_common(dsn.clone(), s, "PgBouncer")
+                .await
+                .expect("Failed to setup database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
         }
-    }
-}
-
-#[async_trait]
-impl DatabaseContainer for ExternalPgBouncerContainer {
-    async fn get_dsn(&self) -> String {
-        self.dsn.clone()
+        dsn
     }
 
-    fn get_container_id(&self) -> Option<String> {
-        None // External database, no container to manage
-    }
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let container_opt = {
+            let mut guard = self.container.write().unwrap();
+            guard.take()
+        };
 
-    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        crate::common::database_setup::setup_database_common(
-            dsn,
-            &self.schema,
-            "External PgBouncer",
-        )
-        .await
-    }
+        if let Some(c) = container_opt {
+            // Cleanup schema
+            let schema_opt = {
+                let mut guard = self.schema.lock().unwrap();
+                guard.take()
+            };
 
-    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        crate::common::database_setup::cleanup_database_common(dsn, &self.schema, "PgBouncer").await
-    }
+            if let Some(schema) = schema_opt {
+                let _ = super::database_setup::cleanup_database_common(
+                    c.dsn.clone(),
+                    &schema,
+                    "PgBouncer",
+                )
+                .await;
+            }
 
-    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("External PgBouncer database, not stopping container");
+            println!("Stopping PgBouncer container...");
+            let _ = c.pgbouncer_container.stop().await;
+            println!("Stopping PostgreSQL container...");
+            let _ = c.postgres_container.stop().await;
+            println!("Stopped.");
+        }
         Ok(())
     }
 }

@@ -1,19 +1,33 @@
 use async_trait::async_trait;
+use std::sync::{Mutex, RwLock};
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
 
 use super::constants::*;
-use super::container::DatabaseContainer;
+use super::resource::TestResource;
 
-/// PostgreSQL testcontainer implementation
+/// PostgreSQL testcontainer implementation wrapper
+pub struct PostgresResource {
+    container: RwLock<Option<PostgresContainer>>,
+    schema: Mutex<Option<String>>,
+}
+
+impl PostgresResource {
+    pub fn new() -> Self {
+        Self {
+            container: RwLock::new(None),
+            schema: Mutex::new(None),
+        }
+    }
+}
+
 pub struct PostgresContainer {
     container: ContainerAsync<Postgres>,
     dsn: String,
-    schema: String,
 }
 
 impl PostgresContainer {
-    pub async fn new(schema: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         println!("Starting PostgreSQL testcontainer...");
 
         let postgres_image = Postgres::default()
@@ -32,97 +46,131 @@ impl PostgresContainer {
             TEST_DB_NAME
         );
 
-        let schema_name = schema.unwrap_or("public").to_string();
-
         println!("PostgreSQL container started");
         println!("Database URL: {}", dsn);
-        println!("Schema: {}", schema_name);
 
-        Ok(Self {
-            container,
-            dsn,
-            schema: schema_name,
-        })
+        Ok(Self { container, dsn })
     }
 }
 
 #[async_trait]
-impl DatabaseContainer for PostgresContainer {
-    async fn get_dsn(&self) -> String {
-        self.dsn.clone()
+impl TestResource for PostgresResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let container = PostgresContainer::new().await?;
+        let mut guard = self.container.write().unwrap();
+        *guard = Some(container);
+        Ok(())
     }
 
-    fn get_container_id(&self) -> Option<String> {
-        Some(self.container.id().to_string())
-    }
+    async fn get_dsn(&self, schema: Option<&str>) -> String {
+        let dsn = {
+            let guard = self.container.read().unwrap();
+            guard
+                .as_ref()
+                .expect("PostgresResource not initialized")
+                .dsn
+                .clone()
+        };
 
-    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::setup_database_common(dsn, &self.schema, "PostgreSQL").await
-    }
+        if let Some(s) = schema {
+            super::database_setup::setup_database_common(dsn.clone(), s, "PostgreSQL")
+                .await
+                .expect("Failed to setup database schema");
 
-    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::cleanup_database_common(dsn, &self.schema, "PostgreSQL").await
-    }
-
-    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let id = self.container.id();
-        println!("Stopping PostgreSQL container with ID: {}", id);
-
-        // Try graceful stop first
-        match self.container.stop().await {
-            Ok(_) => {
-                println!("PostgreSQL container stopped gracefully");
-                Ok(())
-            }
-            Err(e) => {
-                println!("Failed to stop container: {}", e);
-                // Container will be stopped automatically on drop
-                Ok(())
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
             }
         }
+        dsn
+    }
+
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let container_opt = {
+            let mut guard = self.container.write().unwrap();
+            guard.take()
+        };
+
+        if let Some(c) = container_opt {
+            // Cleanup schema
+            let schema_opt = {
+                let mut guard = self.schema.lock().unwrap();
+                guard.take()
+            };
+
+            if let Some(schema) = schema_opt {
+                let _ = super::database_setup::cleanup_database_common(
+                    c.dsn.clone(),
+                    &schema,
+                    "PostgreSQL",
+                )
+                .await;
+            }
+
+            println!("Stopping PostgreSQL container...");
+            let _ = c.container.stop().await;
+            println!("Stopped.");
+        }
+        Ok(())
     }
 }
 
 /// External PostgreSQL database implementation
-pub struct ExternalPostgresContainer {
+pub struct ExternalPostgresResource {
     dsn: String,
-    schema: String,
+    schema: Mutex<Option<String>>,
 }
 
-impl ExternalPostgresContainer {
-    pub fn new(dsn: String, schema: Option<&str>) -> Self {
-        let schema_name = schema.unwrap_or("public").to_string();
-        println!(
-            "Using external PostgreSQL database: {} with schema: {}",
-            dsn, schema_name
-        );
+impl ExternalPostgresResource {
+    pub fn new(dsn: String) -> Self {
+        println!("Using external PostgreSQL database: {}", dsn);
         Self {
             dsn,
-            schema: schema_name,
+            schema: Mutex::new(None),
         }
     }
 }
 
 #[async_trait]
-impl DatabaseContainer for ExternalPostgresContainer {
-    async fn get_dsn(&self) -> String {
+impl TestResource for ExternalPostgresResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // No-op for external DB
+        Ok(())
+    }
+
+    async fn get_dsn(&self, schema: Option<&str>) -> String {
+        if let Some(s) = schema {
+            super::database_setup::setup_database_common(
+                self.dsn.clone(),
+                s,
+                "External PostgreSQL",
+            )
+            .await
+            .expect("Failed to setup external database schema");
+
+            if s != "public" {
+                let mut guard = self.schema.lock().unwrap();
+                *guard = Some(s.to_string());
+            }
+        }
         self.dsn.clone()
     }
 
-    fn get_container_id(&self) -> Option<String> {
-        None // External database, no container to manage
-    }
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let schema_opt = {
+            let mut guard = self.schema.lock().unwrap();
+            guard.take()
+        };
 
-    async fn setup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::setup_database_common(dsn, &self.schema, "External PostgreSQL").await
-    }
+        if let Some(schema) = schema_opt {
+            let _ = super::database_setup::cleanup_database_common(
+                self.dsn.clone(),
+                &schema,
+                "External PostgreSQL",
+            )
+            .await;
+        }
 
-    async fn cleanup_database(&self, dsn: String) -> Result<(), Box<dyn std::error::Error>> {
-        super::database_setup::cleanup_database_common(dsn, &self.schema, "External PostgreSQL")
-            .await
-    }
-
-    async fn stop_container(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("External PostgreSQL database, not stopping container");
         Ok(())
     }
