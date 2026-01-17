@@ -12,7 +12,7 @@ Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing,
 ### Multi-Backend Support
 * **PostgreSQL**: Production-ready with unlimited concurrent workers
 * **SQLite**: Zero-config embedded option for single-process applications
-* **Turso**: SQLite-compatible (libSQL) with enhanced features for local storage
+* **Turso**: SQLite-compatible with enhanced features for local storage
 * **Unified API**: Switch backends by changing your connection string
 
 ### Core

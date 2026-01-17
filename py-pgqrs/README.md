@@ -26,7 +26,7 @@ store = await pgqrs.connect("postgresql://user:pass@localhost:5432/db")
 # SQLite (embedded, testing)
 store = await pgqrs.connect("sqlite:///path/to/database.db")
 
-# Turso (libSQL-based, embedded)
+# Turso (SQLite-compatible, embedded)
 store = await pgqrs.connect("turso:///path/to/database.db")
 ```
 

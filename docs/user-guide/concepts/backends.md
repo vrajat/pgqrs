@@ -97,11 +97,11 @@ sqlite::memory:  # In-memory database (testing only)
 
 ## Turso
 
-Turso is built on libSQL (a SQLite fork) and provides SQLite-compatible local storage with enhanced features.
+Turso provides SQLite-compatible local storage with enhanced features.
 
 ### Advantages
 
-- **SQLite-compatible**: Drop-in replacement for SQLite with libSQL enhancements
+- **SQLite-compatible**: Drop-in replacement for SQLite with enhancements
 - **No server required**: Database is a single file, just like SQLite
 - **Zero configuration**: No setup, no maintenance
 - **Portable**: Database file can be copied/moved easily

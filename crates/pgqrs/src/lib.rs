@@ -9,7 +9,7 @@
 //!
 //! - **PostgreSQL** (default): Production-ready with unlimited concurrent workers
 //! - **SQLite**: Zero-config embedded option for single-process applications
-//! - **Turso**: SQLite-compatible (libSQL) with enhanced features for local storage
+//! - **Turso**: SQLite-compatible with enhanced features for local storage
 //!
 //! ```rust,no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
