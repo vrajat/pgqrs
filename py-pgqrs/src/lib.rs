@@ -1094,6 +1094,15 @@ struct PyWorkflow {
 
 #[pymethods]
 impl PyWorkflow {
+    fn id(&self) -> PyResult<String> {
+        let rt = get_runtime();
+        let inner = self.inner.clone();
+        rt.block_on(async move {
+            let wf = inner.lock().await;
+            Ok(wf.id().to_string())
+        })
+    }
+
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {

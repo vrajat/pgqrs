@@ -60,11 +60,12 @@ Always include:
 
 ### Pre-commit Process
 
-1. Run `make test` to ensure all tests pass
-2. Run `make fmt` to format code
-3. Update documentation for API changes
-4. Add tests for new functionality
-5. Ensure CI passes before requesting review
+1. Run `make fmt` to format code (required before commit)
+2. Run `make clippy` to run linter checks
+3. Run `make test` to ensure all tests pass
+4. Update documentation for API changes
+5. Add tests for new functionality
+6. Ensure CI passes before requesting review
 
 ### Git and GitHub Operations
 **IMPORTANT: Use command line tools only - no MCP git tools**
