@@ -157,7 +157,13 @@ async def test_workflow_crash_recovery(test_dsn, schema):
     3. Resumption with the same workflow context (tasks 1-2 skipped, tasks 3-4 execute)
 
     Note: This test does NOT use @workflow decorator on the orchestrator function
-    to simulate a real crash where the process dies without graceful error handling.
+    due to a product bug (see issue #152). When a workflow decorated with @workflow
+    fails, it enters ERROR state and cannot be restarted. This defeats the purpose
+    of durable workflows. As a workaround, we call steps directly without the
+    @workflow decorator to demonstrate step-level idempotency.
+
+    TODO: Once issue #152 is fixed, update this test to use @workflow decorator
+    and test proper workflow-level restart after error/crash.
     """
     # Setup
     config = pgqrs.Config(test_dsn, schema=schema)
