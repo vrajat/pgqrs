@@ -534,12 +534,12 @@ pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
 #[async_trait]
 impl Store for TursoStore {
     async fn execute_raw(&self, sql: &str) -> Result<()> {
-        query(sql).execute(&self.db).await?;
+        query(sql).execute_once(&self.db).await?;
         Ok(())
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
-        query(sql).bind(param).execute(&self.db).await?;
+        query(sql).bind(param).execute_once(&self.db).await?;
         Ok(())
     }
 
@@ -547,7 +547,7 @@ impl Store for TursoStore {
         query(sql)
             .bind(param1)
             .bind(param2)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(())
     }

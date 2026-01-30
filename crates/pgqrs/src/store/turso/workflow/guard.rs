@@ -121,7 +121,7 @@ impl Drop for TursoStepGuard {
                     .bind("Step dropped without completion")
                     .bind(workflow_id)
                     .bind(step_id)
-                    .execute(&db)
+                    .execute_once(&db)
                     .await;
             });
         }

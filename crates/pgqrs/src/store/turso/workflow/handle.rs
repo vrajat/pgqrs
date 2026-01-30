@@ -75,7 +75,7 @@ impl crate::store::Workflow for TursoWorkflow {
         // Try to transition to RUNNING
         let result = crate::store::turso::query(SQL_START_WORKFLOW)
             .bind(self.id)
-            .fetch_optional(&self.db)
+            .fetch_optional_once(&self.db)
             .await?;
 
         // If no row update, check current status
