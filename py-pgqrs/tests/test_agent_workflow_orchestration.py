@@ -12,13 +12,12 @@ Key concepts demonstrated:
 """
 
 import pytest
-import asyncio
 from dataclasses import dataclass
 from typing import Optional
 
 import pgqrs
 from pgqrs import PyWorkflow
-from pgqrs.decorators import workflow, step
+from pgqrs.decorators import step, workflow
 
 
 # ============================================================================
@@ -31,18 +30,9 @@ class TaskConfig:
     """Configuration for a single task in the workflow"""
 
     name: str
-    step_id: str
+    label: str  # Display label, not the actual durable step id (which is the function name)
     description: str
     required: bool = True
-
-
-@dataclass
-class ExecutionResult:
-    """Result of a single task execution"""
-
-    success: bool
-    output: Optional[str] = None
-    error: Optional[str] = None
 
 
 # ============================================================================
@@ -253,8 +243,8 @@ async def test_workflow_crash_recovery(test_dsn, schema):
 
     @workflow
     async def partial_workflow(ctx: PyWorkflow, cfg: dict) -> dict:
-        cfg = await bootstrap_logged(ctx, cfg)
-        cfg = await boundaries_logged(ctx, cfg)
+        await bootstrap_logged(ctx, cfg)
+        await boundaries_logged(ctx, cfg)
         # Simulate crash here
         raise RuntimeError("Simulated crash after task 2")
 
@@ -276,7 +266,7 @@ async def test_workflow_crash_recovery(test_dsn, schema):
     await bootstrap_logged(wf_ctx_resume, initial_config)
     cfg = await boundaries_logged(wf_ctx_resume, initial_config)
     cfg = await interface_logged(wf_ctx_resume, cfg)
-    result = await connectivity_logged(wf_ctx_resume, cfg)
+    await connectivity_logged(wf_ctx_resume, cfg)
 
     # The execution log now includes all 4 tasks from the resume run
     print(f"📋 Final execution log: {execution_log}")
@@ -354,9 +344,7 @@ async def test_workflow_error_handling(test_dsn, schema):
     Test error handling in workflows.
 
     Demonstrates:
-    1. Task failure propagates to workflow
-    2. Workflow transitions to ERROR state
-    3. Error details are persisted
+    1. Task failure propagates to the caller as an exception.
     """
     config = pgqrs.Config(test_dsn, schema=schema)
     store = await pgqrs.connect_with(config)
@@ -400,7 +388,7 @@ def print_task_header(task_num: int, total_tasks: int, task_config: TaskConfig):
     """Print a header for each task"""
     print(f"\n🚀 Task {task_num}/{total_tasks}: {task_config.name}")
     print(f"   📄 Description: {task_config.description}")
-    print(f"   🔧 Task ID: {task_config.step_id}")
+    print(f"   🏷️  Label: {task_config.label}")
     print("-" * 60)
 
 
@@ -421,19 +409,19 @@ async def test_workflow_with_formatted_output(test_dsn, schema):
     task_list = [
         TaskConfig(
             name="Bootstrap",
-            step_id="bootstrap",
+            label="bootstrap",
             description="Setup environment configuration",
             required=True,
         ),
         TaskConfig(
             name="Define Boundaries",
-            step_id="boundaries",
+            label="boundaries",
             description="Establish system boundaries",
             required=True,
         ),
         TaskConfig(
             name="Analyze Interface",
-            step_id="interface",
+            label="interface",
             description="Examine interface structure",
             required=True,
         ),
@@ -450,11 +438,11 @@ async def test_workflow_with_formatted_output(test_dsn, schema):
             print_task_header(i, len(task_list), task_config)
 
             # Execute the appropriate task
-            if task_config.step_id == "bootstrap":
+            if task_config.label == "bootstrap":
                 current_config = await bootstrap_environment(ctx, current_config)
-            elif task_config.step_id == "boundaries":
+            elif task_config.label == "boundaries":
                 current_config = await define_boundaries(ctx, current_config)
-            elif task_config.step_id == "interface":
+            elif task_config.label == "interface":
                 current_config = await analyze_interface(ctx, current_config)
 
             print(f"   ✅ {task_config.name} completed successfully!")

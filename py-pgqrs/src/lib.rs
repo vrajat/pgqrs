@@ -526,9 +526,13 @@ impl Admin {
                 .await
                 .map_err(to_py_err)?;
 
+            // Cache the workflow id to avoid blocking reads later
+            let workflow_id = workflow.id();
+
             Ok(PyWorkflow {
                 inner: Arc::new(tokio::sync::Mutex::new(workflow)),
                 store,
+                workflow_id,
             })
         })
     }
@@ -1090,17 +1094,13 @@ struct PyWorkflow {
     #[allow(dead_code)]
     inner: Arc<tokio::sync::Mutex<Box<dyn Workflow>>>,
     store: AnyStore,
+    workflow_id: i64,
 }
 
 #[pymethods]
 impl PyWorkflow {
     fn id(&self) -> PyResult<String> {
-        let rt = get_runtime();
-        let inner = self.inner.clone();
-        rt.block_on(async move {
-            let wf = inner.lock().await;
-            Ok(wf.id().to_string())
-        })
+        Ok(self.workflow_id.to_string())
     }
 
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
