@@ -5,6 +5,7 @@ import asyncio
 from pgqrs import PyWorkflow
 from pgqrs.decorators import workflow, step
 
+
 # Helper to setup a store and admin
 async def setup_test(dsn, schema):
     config = pgqrs.Config(dsn, schema=schema)
@@ -13,6 +14,7 @@ async def setup_test(dsn, schema):
     await admin.install()
     await admin.verify()
     return store, admin
+
 
 @pytest.mark.asyncio
 async def test_basic_workflow(test_dsn, schema):
@@ -55,6 +57,7 @@ async def test_basic_workflow(test_dsn, schema):
     assert await archive_msgs.count() == 1
     assert await messages.count() == 0
 
+
 @pytest.mark.asyncio
 async def test_consumer_archive(test_dsn, schema):
     """
@@ -77,6 +80,7 @@ async def test_consumer_archive(test_dsn, schema):
 
     await pgqrs.archive(consumer, msg)
     assert await (await admin.get_messages()).count() == 0
+
 
 @pytest.mark.asyncio
 async def test_batch_operations(test_dsn, schema):
@@ -108,6 +112,7 @@ async def test_batch_operations(test_dsn, schema):
     arch_count = await (await admin.get_archive()).count()
     assert arch_count == 3
 
+
 @pytest.mark.asyncio
 async def test_config_properties(test_dsn):
     c = pgqrs.Config(test_dsn)
@@ -130,6 +135,7 @@ async def test_config_properties(test_dsn):
     c.heartbeat_interval_seconds = 15
     assert c.heartbeat_interval_seconds == 15
 
+
 @pytest.mark.asyncio
 async def test_connect_string(test_dsn):
     """Test connecting with a plain string DSN."""
@@ -138,6 +144,7 @@ async def test_connect_string(test_dsn):
     admin = pgqrs.admin(store)
     await admin.install()
     await admin.verify()
+
 
 @pytest.mark.asyncio
 async def test_enqueue_delayed(test_dsn, schema):
@@ -165,6 +172,7 @@ async def test_enqueue_delayed(test_dsn, schema):
     msgs = await pgqrs.dequeue(consumer, 1)
     assert len(msgs) == 1
 
+
 @pytest.mark.asyncio
 async def test_worker_list_status(test_dsn, schema):
     store, admin = await setup_test(test_dsn, schema)
@@ -179,6 +187,7 @@ async def test_worker_list_status(test_dsn, schema):
     assert len(worker_list) >= 2
     # Check status of first worker (should be ready or similar)
     assert worker_list[0].status == "ready"
+
 
 @pytest.mark.asyncio
 async def test_consumer_delete(test_dsn, schema):
@@ -215,7 +224,10 @@ async def test_consumer_delete(test_dsn, schema):
     msg_id2 = await pgqrs.enqueue(producer, {"foo": "bar2"})
     # Do NOT dequeue it. Consumer does not own it.
     deleted = await consumer.delete(msg_id2)
-    assert deleted is False, "Delete should return False for message not owned/locked by consumer"
+    assert deleted is False, (
+        "Delete should return False for message not owned/locked by consumer"
+    )
+
 
 @pytest.mark.asyncio
 async def test_archive_advanced_methods(test_dsn, schema):
@@ -254,6 +266,7 @@ async def test_archive_advanced_methods(test_dsn, schema):
     await archive.delete(arch_msg.id)
     assert await archive.count() == 0
 
+
 @pytest.mark.asyncio
 async def test_api_redesign_high_level(test_dsn, schema):
     """
@@ -273,6 +286,7 @@ async def test_api_redesign_high_level(test_dsn, schema):
     assert msg_id > 0
 
     consumed = asyncio.Event()
+
     async def handler(msg):
         assert msg.payload == payload
         consumed.set()
@@ -280,6 +294,7 @@ async def test_api_redesign_high_level(test_dsn, schema):
 
     await pgqrs.consume(store, queue, handler)
     assert consumed.is_set()
+
 
 @pytest.mark.asyncio
 async def test_api_redesign_low_level(test_dsn, schema):
@@ -310,21 +325,26 @@ async def test_api_redesign_low_level(test_dsn, schema):
     assert await (await admin.get_messages()).count() == 0
     assert await (await admin.get_archive()).count() == 1
 
+
 # --- Durable Workflow Tests ---
+
 
 @step
 async def step1(ctx: PyWorkflow, msg: str):
     return f"processed_{msg}"
 
+
 @step
 async def step2(ctx: PyWorkflow, val: str):
     return f"step2_{val}"
+
 
 @workflow
 async def simple_wf(ctx: PyWorkflow, arg: str):
     res1 = await step1(ctx, arg)
     res2 = await step2(ctx, res1)
     return res2
+
 
 @pytest.mark.asyncio
 async def test_workflow_execution(test_dsn, schema):
@@ -335,6 +355,7 @@ async def test_workflow_execution(test_dsn, schema):
 
     result = await simple_wf(wf_ctx, wf_arg)
     assert result == "step2_processed_test_data"
+
 
 @pytest.mark.asyncio
 async def test_extend_visibility(test_dsn, schema):
@@ -357,6 +378,7 @@ async def test_extend_visibility(test_dsn, schema):
 
     # Extend VT by 10 seconds
     await pgqrs.extend_vt(consumer, msg, 10)
+
 
 @pytest.mark.asyncio
 async def test_workflow_crash_recovery(test_dsn, schema):
@@ -392,14 +414,15 @@ async def test_workflow_crash_recovery(test_dsn, schema):
     assert step1_called == 1
 
     async def run_wf_complete(ctx):
-        res1 = await step_a(ctx, wf_arg) # Skipped
-        res2 = await step_b(ctx, res1)   # Executed
+        res1 = await step_a(ctx, wf_arg)  # Skipped
+        res2 = await step_b(ctx, res1)  # Executed
         return res2
 
     result = await run_wf_complete(wf_ctx)
     assert result == "b_a_crash_test"
     assert step1_called == 1
     assert step2_called == 1
+
 
 @pytest.mark.asyncio
 async def test_ephemeral_consume_success(test_dsn, schema):
@@ -423,9 +446,13 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     await pgqrs.consume(store, queue, handler)
     assert consumed_event.is_set()
 
-    # Verify message is archived and not in queue
-    assert await (await admin.get_messages()).count() == 0
-    assert await (await admin.get_archive()).count() == 1
+    # Verify message is no longer in THIS queue (by trying to dequeue)
+    consumer = await store.consumer(queue)
+    remaining_msgs = await consumer.dequeue(batch_size=10)
+    assert len(remaining_msgs) == 0, (
+        f"Expected no messages in queue, but found {len(remaining_msgs)}"
+    )
+
 
 @pytest.mark.asyncio
 async def test_ephemeral_consume_failure(test_dsn, schema):
@@ -439,15 +466,26 @@ async def test_ephemeral_consume_failure(test_dsn, schema):
     payload = {"data": "test_fail"}
     await pgqrs.produce(store, queue, payload)
 
+    # Capture counts before consume attempt
+    msgs_before = await (await admin.get_messages()).count()
+    archive_before = await (await admin.get_archive()).count()
+
     async def handler(msg):
         raise ValueError("Simulated failure")
 
     with pytest.raises(ValueError, match="Simulated failure"):
         await pgqrs.consume(store, queue, handler)
 
-    # Verify message is STILL in queue and NOT archived
-    assert await (await admin.get_messages()).count() == 1
-    assert await (await admin.get_archive()).count() == 0
+    # Verify message count unchanged (not archived)
+    msgs_after = await (await admin.get_messages()).count()
+    archive_after = await (await admin.get_archive()).count()
+    assert msgs_after == msgs_before, (
+        "Message count should be unchanged after failed consume"
+    )
+    assert archive_after == archive_before, (
+        "Archive count should be unchanged after failed consume"
+    )
+
 
 @pytest.mark.asyncio
 async def test_ephemeral_consume_batch_success(test_dsn, schema):
@@ -471,9 +509,13 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     await pgqrs.consume_batch(store, queue, 10, batch_handler)
     assert consumed_event.is_set()
 
-    # Verify all messages are archived
-    assert await (await admin.get_messages()).count() == 0
-    assert await (await admin.get_archive()).count() == 3
+    # Verify all messages from THIS queue are processed (none remaining)
+    consumer = await store.consumer(queue)
+    remaining_msgs = await consumer.dequeue(batch_size=10)
+    assert len(remaining_msgs) == 0, (
+        f"Expected no messages in queue, but found {len(remaining_msgs)}"
+    )
+
 
 @pytest.mark.asyncio
 async def test_ephemeral_consume_batch_failure(test_dsn, schema):
@@ -487,15 +529,26 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
     for i in range(3):
         await pgqrs.produce(store, queue, {"i": i})
 
+    # Capture counts before consume attempt
+    msgs_before = await (await admin.get_messages()).count()
+    archive_before = await (await admin.get_archive()).count()
+
     async def batch_handler(msgs):
         raise ValueError("Simulated batch failure")
 
     with pytest.raises(ValueError, match="Simulated batch failure"):
         await pgqrs.consume_batch(store, queue, 10, batch_handler)
 
-    # Verify all messages are STILL in queue
-    assert await (await admin.get_messages()).count() == 3
-    assert await (await admin.get_archive()).count() == 0
+    # Verify message count unchanged (not archived)
+    msgs_after = await (await admin.get_messages()).count()
+    archive_after = await (await admin.get_archive()).count()
+    assert msgs_after == msgs_before, (
+        "Message count should be unchanged after failed batch consume"
+    )
+    assert archive_after == archive_before, (
+        "Archive count should be unchanged after failed batch consume"
+    )
+
 
 @pytest.mark.asyncio
 async def test_consume_stream_iterator(test_dsn, schema):
@@ -545,7 +598,10 @@ async def test_consume_stream_iterator(test_dsn, schema):
 
     # Verify that any ephemeral worker found is in 'stopped' status
     for w in ephemeral_workers:
-        assert w.status == "stopped", f"Ephemeral worker {w.id} should be stopped, but is {w.status}"
+        assert w.status == "stopped", (
+            f"Ephemeral worker {w.id} should be stopped, but is {w.status}"
+        )
+
 
 @pytest.mark.asyncio
 async def test_exceptions(test_dsn, schema):
@@ -559,9 +615,9 @@ async def test_exceptions(test_dsn, schema):
     try:
         await admin.delete_queue(qname)
     except pgqrs.QueueNotFoundError:
-        pass # Expected if it failed
+        pass  # Expected if it failed
     except Exception:
-        pass # admin.delete_queue might return boolean false instead of error in some impls, but checking exception types here.
+        pass  # admin.delete_queue might return boolean false instead of error in some impls, but checking exception types here.
 
     # Tests connect with invalid DSN
     # This test assumes Postgres is enabled. If we are on SQLite-only build,
