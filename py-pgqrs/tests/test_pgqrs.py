@@ -427,7 +427,7 @@ async def test_workflow_crash_recovery(test_dsn, schema):
 @pytest.mark.asyncio
 async def test_ephemeral_consume_success(test_dsn, schema):
     """
-    Test that successful consumption archives the message.
+    Test that successful ephemeral consumption archives the message.
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_success_q"
@@ -435,6 +435,10 @@ async def test_ephemeral_consume_success(test_dsn, schema):
 
     payload = {"data": "test_success"}
     await pgqrs.produce(store, queue, payload)
+
+    # Capture counts before consume
+    msgs_before = await (await admin.get_messages()).count()
+    archive_before = await (await admin.get_archive()).count()
 
     consumed_event = asyncio.Event()
 
@@ -451,6 +455,16 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     remaining_msgs = await consumer.dequeue(batch_size=10)
     assert len(remaining_msgs) == 0, (
         f"Expected no messages in queue, but found {len(remaining_msgs)}"
+    )
+
+    # Verify message was archived
+    msgs_after = await (await admin.get_messages()).count()
+    archive_after = await (await admin.get_archive()).count()
+    assert msgs_after == msgs_before - 1, (
+        "Message should be removed from active messages after successful consume"
+    )
+    assert archive_after == archive_before + 1, (
+        "Message should be archived after successful consume"
     )
 
 
@@ -494,37 +508,18 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_success_q"
-    q_info = await admin.create_queue(queue)
+    await admin.create_queue(queue)
 
-    # Check initial state - list all queues and messages to detect contamination
-    all_queues_count = await (await admin.get_queues()).count()
-    msgs_before = await (await admin.get_messages()).count()
-    print(f"\n[DEBUG] Test DSN: {test_dsn}")
-    print(f"[DEBUG] Total queues in DB: {all_queues_count}")
-    print(f"[DEBUG] Total messages in DB before producing: {msgs_before}")
-    print(f"[DEBUG] Queue ID: {q_info.id}, Queue name: {q_info.queue_name}")
+    # Capture initial counts
+    archive_before = await (await admin.get_archive()).count()
 
     # Produce 3 messages using produce_batch to avoid multiple ephemeral workers
     payloads = [{"i": i} for i in range(3)]
-    produced_ids = await pgqrs.produce_batch(store, queue, payloads)
-    print(f"[DEBUG] Produced {len(produced_ids)} messages with IDs: {produced_ids}")
-
-    # Check state after producing
-    msgs_after_produce = await (await admin.get_messages()).count()
-    print(f"[DEBUG] Total messages in DB after producing: {msgs_after_produce}")
-    print(
-        f"[DEBUG] Expected increase: 3, Actual increase: {msgs_after_produce - msgs_before}"
-    )
+    await pgqrs.produce_batch(store, queue, payloads)
 
     consumed_event = asyncio.Event()
-    received_msgs = []
 
     async def batch_handler(msgs):
-        nonlocal received_msgs
-        received_msgs = msgs
-        print(f"\n[DEBUG] Handler received {len(msgs)} messages:")
-        for idx, msg in enumerate(msgs):
-            print(f"  [{idx}] ID={msg.id}, Queue={msg.queue_id}, Payload={msg.payload}")
         assert len(msgs) == 3, f"Expected 3 messages but got {len(msgs)}"
         consumed_event.set()
         return True
@@ -537,6 +532,12 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     remaining_msgs = await consumer.dequeue(batch_size=10)
     assert len(remaining_msgs) == 0, (
         f"Expected no messages in queue, but found {len(remaining_msgs)}"
+    )
+
+    # Verify messages were archived
+    archive_after = await (await admin.get_archive()).count()
+    assert archive_after == archive_before + 3, (
+        f"Expected 3 messages archived, but archive count increased by {archive_after - archive_before}"
     )
 
 

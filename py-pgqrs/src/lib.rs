@@ -1099,8 +1099,8 @@ struct PyWorkflow {
 
 #[pymethods]
 impl PyWorkflow {
-    fn id(&self) -> PyResult<String> {
-        Ok(self.workflow_id.to_string())
+    fn id(&self) -> PyResult<i64> {
+        Ok(self.workflow_id)
     }
 
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
