@@ -494,15 +494,38 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_success_q"
-    await admin.create_queue(queue)
+    q_info = await admin.create_queue(queue)
 
-    for i in range(3):
-        await pgqrs.produce(store, queue, {"i": i})
+    # Check initial state - list all queues and messages to detect contamination
+    all_queues_count = await (await admin.get_queues()).count()
+    msgs_before = await (await admin.get_messages()).count()
+    print(f"\n[DEBUG] Test DSN: {test_dsn}")
+    print(f"[DEBUG] Total queues in DB: {all_queues_count}")
+    print(f"[DEBUG] Total messages in DB before producing: {msgs_before}")
+    print(f"[DEBUG] Queue ID: {q_info.id}, Queue name: {q_info.queue_name}")
+
+    # Produce 3 messages using produce_batch to avoid multiple ephemeral workers
+    payloads = [{"i": i} for i in range(3)]
+    produced_ids = await pgqrs.produce_batch(store, queue, payloads)
+    print(f"[DEBUG] Produced {len(produced_ids)} messages with IDs: {produced_ids}")
+
+    # Check state after producing
+    msgs_after_produce = await (await admin.get_messages()).count()
+    print(f"[DEBUG] Total messages in DB after producing: {msgs_after_produce}")
+    print(
+        f"[DEBUG] Expected increase: 3, Actual increase: {msgs_after_produce - msgs_before}"
+    )
 
     consumed_event = asyncio.Event()
+    received_msgs = []
 
     async def batch_handler(msgs):
-        assert len(msgs) == 3
+        nonlocal received_msgs
+        received_msgs = msgs
+        print(f"\n[DEBUG] Handler received {len(msgs)} messages:")
+        for idx, msg in enumerate(msgs):
+            print(f"  [{idx}] ID={msg.id}, Queue={msg.queue_id}, Payload={msg.payload}")
+        assert len(msgs) == 3, f"Expected 3 messages but got {len(msgs)}"
         consumed_event.set()
         return True
 
