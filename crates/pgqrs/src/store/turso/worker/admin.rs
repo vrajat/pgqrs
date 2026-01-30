@@ -1007,7 +1007,7 @@ impl Admin for TursoAdmin {
     async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
         let count = crate::store::turso::query(RELEASE_WORKER_MESSAGES)
             .bind(worker_id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count as u64)
     }

@@ -103,7 +103,7 @@ impl TursoMessageTable {
         )
         .bind(id)
         .bind(worker_id)
-        .execute(&self.db)
+        .execute_once(&self.db)
         .await?;
         Ok(rows)
     }
@@ -131,7 +131,7 @@ impl TursoMessageTable {
         }
         query = query.bind(worker_id);
 
-        let rows = query.fetch_all(&self.db).await?;
+        let rows = query.fetch_all_once(&self.db).await?;
 
         let mut deleted_ids = HashSet::new();
         for row in rows {
@@ -168,7 +168,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                 Some(id) => TursoValue::Integer(id),
                 None => TursoValue::Null,
             })
-            .fetch_one(&self.db)
+            .fetch_one_once(&self.db)
             .await?;
 
         Self::map_row(&row)
@@ -205,7 +205,7 @@ impl crate::store::MessageTable for TursoMessageTable {
     async fn delete(&self, id: i64) -> Result<u64> {
         let rows = crate::store::turso::query(DELETE_MESSAGE_BY_ID)
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(rows)
     }
@@ -275,7 +275,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     Some(id) => TursoValue::Integer(id),
                     None => TursoValue::Null,
                 })
-                .fetch_one_on_connection(&conn)
+                .fetch_one_once_on_connection(&conn)
                 .await
              }.await;
 
@@ -338,7 +338,7 @@ impl crate::store::MessageTable for TursoMessageTable {
         let rows = crate::store::turso::query(UPDATE_MESSAGE_VT)
             .bind(vt_str)
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(rows)
     }
@@ -359,7 +359,7 @@ impl crate::store::MessageTable for TursoMessageTable {
             .bind(additional_seconds as i32)
             .bind(id)
             .bind(worker_id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
 
         Ok(rows)
@@ -402,7 +402,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     .bind(additional_seconds as i32)
                     .bind(*id)
                     .bind(worker_id)
-                    .execute_on_connection(&conn)
+                    .execute_once_on_connection(&conn)
                     .await
             }
             .await;
@@ -471,7 +471,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                 crate::store::turso::query(sql)
                     .bind(*id)
                     .bind(worker_id)
-                    .execute_on_connection(&conn)
+                    .execute_once_on_connection(&conn)
                     .await
             }
             .await;
@@ -551,7 +551,7 @@ impl crate::store::MessageTable for TursoMessageTable {
         for &id in ids {
             let rows = crate::store::turso::query(DELETE_MESSAGE_BY_ID)
                 .bind(id)
-                .execute(&self.db)
+                .execute_once(&self.db)
                 .await?;
             results.push(rows > 0);
         }

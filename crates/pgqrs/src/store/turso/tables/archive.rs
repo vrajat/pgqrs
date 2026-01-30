@@ -129,7 +129,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
                 None => turso::Value::Null,
             })
             .bind(now_str)
-            .fetch_one(&self.db)
+            .fetch_one_once(&self.db)
             .await?;
 
         Self::map_row(&row)
@@ -166,7 +166,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
     async fn delete(&self, id: i64) -> Result<u64> {
         let count = crate::store::turso::query(DELETE_ARCHIVED_MESSAGE_BY_ID)
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count)
     }
@@ -252,7 +252,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
         let count =
             crate::store::turso::query("DELETE FROM pgqrs_archive WHERE consumer_worker_id = ?")
                 .bind(worker_id)
-                .execute(&self.db)
+                .execute_once(&self.db)
                 .await?;
         Ok(count)
     }
@@ -297,7 +297,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
                 .bind(payload_str)
                 .bind(now_str.clone())
                 .bind(now_str)
-                .fetch_one_on_connection(&conn)
+                .fetch_one_once_on_connection(&conn)
                 .await;
 
             let msg_row = match msg_row {
@@ -311,7 +311,7 @@ impl crate::store::ArchiveTable for TursoArchiveTable {
             // Delete from archive
             let delete_res = crate::store::turso::query(DELETE_ARCHIVED_MESSAGE_BY_ID)
                 .bind(msg_id)
-                .execute_on_connection(&conn)
+                .execute_once_on_connection(&conn)
                 .await;
 
             if let Err(e) = delete_res {

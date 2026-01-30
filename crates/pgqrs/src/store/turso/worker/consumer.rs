@@ -204,7 +204,7 @@ impl Consumer for TursoConsumer {
                 .bind(new_vt_str.clone())
                 .bind(now_str.clone())
                 .bind(*id)
-                .execute_on_connection(&conn)
+                .execute_once_on_connection(&conn)
                 .await;
 
             if let Err(e) = update_res {
@@ -320,7 +320,7 @@ impl Consumer for TursoConsumer {
                 None => turso::Value::Null,
             })
             .bind(turso::Value::Text(now_str))
-            .fetch_one_on_connection(&conn)
+            .fetch_one_once_on_connection(&conn)
             .await;
 
         let archive_row = match archive_row_res {
@@ -335,7 +335,7 @@ impl Consumer for TursoConsumer {
         let delete_res = crate::store::turso::query(DELETE_MESSAGE_AFTER_ARCHIVE)
             .bind(msg_id)
             .bind(self.worker_info.id)
-            .execute_on_connection(&conn)
+            .execute_once_on_connection(&conn)
             .await;
 
         if let Err(e) = delete_res {

@@ -37,7 +37,7 @@ impl TursoWorkflow {
         let row = crate::store::turso::query(SQL_CREATE_WORKFLOW)
             .bind(name)
             .bind(input_json)
-            .fetch_one(&db)
+            .fetch_one_once(&db)
             .await
             .map_err(|e| crate::error::Error::Internal {
                 message: format!("Failed to create workflow: {}", e),
@@ -75,7 +75,7 @@ impl crate::store::Workflow for TursoWorkflow {
         // Try to transition to RUNNING
         let result = crate::store::turso::query(SQL_START_WORKFLOW)
             .bind(self.id)
-            .fetch_optional(&self.db)
+            .fetch_optional_once(&self.db)
             .await?;
 
         // If no row update, check current status
