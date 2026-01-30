@@ -12,26 +12,10 @@ Key concepts demonstrated:
 """
 
 import pytest
-from dataclasses import dataclass
 
 from pgqrs import PyWorkflow
 from pgqrs.decorators import step, workflow
 import pgqrs
-
-
-# ============================================================================
-# Task Step Definitions
-# ============================================================================
-
-
-@dataclass
-class TaskConfig:
-    """Configuration for a single task in the workflow"""
-
-    name: str
-    label: str  # Display label (note: actual durable step ID is the function name)
-    description: str
-    required: bool = True
 
 
 # ============================================================================
@@ -169,8 +153,11 @@ async def test_workflow_crash_recovery(test_dsn, schema):
 
     This demonstrates:
     1. Partial execution (tasks 1-2 complete)
-    2. Simulated crash
+    2. Simulated crash (process dies before completing all steps)
     3. Resumption with the same workflow context (tasks 1-2 skipped, tasks 3-4 execute)
+
+    Note: This test does NOT use @workflow decorator on the orchestrator function
+    to simulate a real crash where the process dies without graceful error handling.
     """
     # Setup
     config = pgqrs.Config(test_dsn, schema=schema)
@@ -205,18 +192,20 @@ async def test_workflow_crash_recovery(test_dsn, schema):
         execution_log.append("verify_connectivity")
         return await verify_connectivity(ctx, cfg)
 
-    # First run: Execute first two tasks, then "crash"
+    # First run: Execute first two tasks, then simulate process crash
+    # (no @workflow decorator - simulates process dying)
     cfg = await bootstrap_logged(wf_ctx, initial_config)
     cfg = await boundaries_logged(wf_ctx, cfg)
+    # Process "crashes" here before completing all steps
 
     assert execution_log == ["bootstrap", "define_boundaries"]
 
     # Second run: Resume from crash using the same workflow context
-    # Re-run all steps with the original workflow context; completed steps should be skipped
+    # Previously completed steps should be skipped due to idempotency
     cfg = await bootstrap_logged(wf_ctx, initial_config)
     cfg = await boundaries_logged(wf_ctx, cfg)
     cfg = await interface_logged(wf_ctx, cfg)
-    await connectivity_logged(wf_ctx, cfg)
+    result = await connectivity_logged(wf_ctx, cfg)
 
     # The execution log should now contain only the new steps (1-2 were skipped due to idempotency)
     assert execution_log == [
@@ -225,6 +214,7 @@ async def test_workflow_crash_recovery(test_dsn, schema):
         "analyze_interface",
         "verify_connectivity",
     ]
+    assert result["connectivity"]["connection_ok"] is True
 
 
 @pytest.mark.asyncio
@@ -316,76 +306,3 @@ async def test_workflow_error_handling(test_dsn, schema):
     # Workflow should raise the error
     with pytest.raises(ValueError, match="Intentional failure: test error"):
         await error_workflow(wf_ctx, {"error_msg": "test error"})
-
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-
-def print_workflow_banner(title: str, width: int = 80):
-    """Print a formatted banner"""
-    print("=" * width)
-    print(f" {title}".ljust(width - 1))
-    print("=" * width)
-
-
-def print_task_header(task_num: int, total_tasks: int, task_config: TaskConfig):
-    """Print a header for each task"""
-    pass
-
-
-@pytest.mark.asyncio
-async def test_workflow_with_formatted_output(test_dsn, schema):
-    """
-    Test workflow execution with formatted output.
-
-    This test demonstrates how to create a user-friendly execution flow
-    with progress indicators and status messages.
-    """
-    config = pgqrs.Config(test_dsn, schema=schema)
-    store = await pgqrs.connect_with(config)
-    admin = pgqrs.admin(store)
-    await admin.install()
-
-    # Define workflow tasks
-    task_list = [
-        TaskConfig(
-            name="Bootstrap",
-            label="bootstrap",
-            description="Setup environment configuration",
-            required=True,
-        ),
-        TaskConfig(
-            name="Define Boundaries",
-            label="boundaries",
-            description="Establish system boundaries",
-            required=True,
-        ),
-        TaskConfig(
-            name="Analyze Interface",
-            label="interface",
-            description="Examine interface structure",
-            required=True,
-        ),
-    ]
-
-    @workflow
-    async def formatted_workflow(ctx: PyWorkflow, cfg: dict) -> dict:
-        current_config = cfg
-
-        for i, task_config in enumerate(task_list, 1):
-            # Execute the appropriate task
-            if task_config.label == "bootstrap":
-                current_config = await bootstrap_environment(ctx, current_config)
-            elif task_config.label == "boundaries":
-                current_config = await define_boundaries(ctx, current_config)
-            elif task_config.label == "interface":
-                current_config = await analyze_interface(ctx, current_config)
-
-        return current_config
-
-    wf_ctx = await admin.create_workflow("formatted_test", {"project": "test"})
-    result = await formatted_workflow(wf_ctx, {"project": "test"})
-
-    assert "interface" in result
