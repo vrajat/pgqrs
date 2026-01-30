@@ -12,3 +12,6 @@ __pycache__/
 .vscode
 *_worktree/
 site/
+# Bug report files (should be filed as issues, not committed)
+BUG_REPORT_*.md
+WORKFLOW_RESTART_BUG.md

@@ -213,7 +213,8 @@ async def test_workflow_crash_recovery(test_dsn, schema):
     cfg = await interface_logged(wf_ctx, cfg)
     result = await connectivity_logged(wf_ctx, cfg)
 
-    # The execution log should now contain only the new steps (1-2 were skipped due to idempotency)
+    # The execution log contains all 4 steps, but steps 1-2 were only executed once
+    # (skipped on the second run due to idempotency)
     assert execution_log == [
         "bootstrap",
         "define_boundaries",
