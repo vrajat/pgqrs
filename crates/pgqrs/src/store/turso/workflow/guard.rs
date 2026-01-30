@@ -39,7 +39,7 @@ impl TursoStepGuard {
         let row = crate::store::turso::query(SQL_ACQUIRE_STEP)
             .bind(workflow_id)
             .bind(step_id) // step_id is &str, implements Into<Value>
-            .fetch_one(db)
+            .fetch_one_once(db)
             .await?;
 
         let status: String = row.get(0).map_err(|e| crate::error::Error::Internal {
@@ -91,7 +91,7 @@ impl StepGuard for TursoStepGuard {
             .bind(output_str)
             .bind(self.workflow_id)
             .bind(self.step_id.as_str())
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(())
     }
@@ -103,7 +103,7 @@ impl StepGuard for TursoStepGuard {
             .bind(error_str)
             .bind(self.workflow_id)
             .bind(self.step_id.as_str())
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(())
     }

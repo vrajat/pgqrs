@@ -72,7 +72,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     async fn insert(&self, data: crate::types::NewQueue) -> Result<QueueInfo> {
         let row_res = crate::store::turso::query(INSERT_QUEUE)
             .bind(data.queue_name.as_str())
-            .fetch_one(&self.db)
+            .fetch_one_once(&self.db)
             .await;
 
         match row_res {
@@ -125,7 +125,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     async fn delete(&self, id: i64) -> Result<u64> {
         let count = crate::store::turso::query(DELETE_QUEUE_BY_ID)
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count)
     }
@@ -155,7 +155,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
         let count = crate::store::turso::query(DELETE_QUEUE_BY_NAME)
             .bind(name)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count)
     }

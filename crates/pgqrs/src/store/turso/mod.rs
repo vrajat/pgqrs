@@ -183,6 +183,12 @@ impl TursoQueryBuilder {
         self.execute_on_connection(&conn).await
     }
 
+    /// Execute once without retry - for DML operations (INSERT/UPDATE/DELETE)
+    pub async fn execute_once(self, db: &Database) -> Result<u64> {
+        let conn = connect_db(db).await?;
+        self.execute_once_on_connection(&conn).await
+    }
+
     pub async fn execute_on_connection(self, conn: &turso::Connection) -> Result<u64> {
         let mut retries = 0;
         const MAX_RETRIES: u32 = 10;
@@ -239,9 +245,27 @@ impl TursoQueryBuilder {
         }
     }
 
+    /// Execute once without retry - for DML operations (INSERT/UPDATE/DELETE)
+    /// that should not be retried to prevent data integrity issues.
+    pub async fn execute_once_on_connection(self, conn: &turso::Connection) -> Result<u64> {
+        conn.execute(&self.sql, self.params.clone())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: self.sql,
+                source: Box::new(e),
+                context: "Execute once failed (DML - no retry)".into(),
+            })
+    }
+
     pub async fn fetch_all(self, db: &Database) -> Result<Vec<Row>> {
         let conn = connect_db(db).await?;
         self.fetch_all_on_connection(&conn).await
+    }
+
+    /// Fetch all rows once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_all_once(self, db: &Database) -> Result<Vec<Row>> {
+        let conn = connect_db(db).await?;
+        self.fetch_all_once_on_connection(&conn).await
     }
 
     pub async fn fetch_all_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
@@ -350,13 +374,61 @@ impl TursoQueryBuilder {
         }
     }
 
+    /// Fetch all rows once without retry - for DML operations with RETURNING clause
+    /// that should not be retried to prevent data integrity issues.
+    pub async fn fetch_all_once_on_connection(self, conn: &turso::Connection) -> Result<Vec<Row>> {
+        let mut rows = conn
+            .query(&self.sql, self.params.clone())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: self.sql.clone(),
+                source: Box::new(e),
+                context: "Query once failed (DML - no retry)".into(),
+            })?;
+
+        let mut result = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => result.push(row),
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(crate::error::Error::QueryFailed {
+                        query: self.sql.clone(),
+                        source: Box::new(e),
+                        context: "Fetch row once failed (DML - no retry)".into(),
+                    })
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub async fn fetch_one(self, db: &Database) -> Result<Row> {
         let conn = connect_db(db).await?;
         self.fetch_one_on_connection(&conn).await
     }
 
+    /// Fetch one row once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_one_once(self, db: &Database) -> Result<Row> {
+        let conn = connect_db(db).await?;
+        self.fetch_one_once_on_connection(&conn).await
+    }
+
     pub async fn fetch_one_on_connection(self, conn: &turso::Connection) -> Result<Row> {
         let rows = self.fetch_all_on_connection(conn).await?;
+        if rows.is_empty() {
+            Err(crate::error::Error::NotFound {
+                entity: "Row".into(),
+                id: "None".into(),
+            })
+        } else {
+            Ok(rows.into_iter().next().unwrap())
+        }
+    }
+
+    /// Fetch one row once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_one_once_on_connection(self, conn: &turso::Connection) -> Result<Row> {
+        let rows = self.fetch_all_once_on_connection(conn).await?;
         if rows.is_empty() {
             Err(crate::error::Error::NotFound {
                 entity: "Row".into(),
@@ -372,11 +444,26 @@ impl TursoQueryBuilder {
         self.fetch_optional_on_connection(&conn).await
     }
 
+    /// Fetch optional row once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_optional_once(self, db: &Database) -> Result<Option<Row>> {
+        let conn = connect_db(db).await?;
+        self.fetch_optional_once_on_connection(&conn).await
+    }
+
     pub async fn fetch_optional_on_connection(
         self,
         conn: &turso::Connection,
     ) -> Result<Option<Row>> {
         let rows = self.fetch_all_on_connection(conn).await?;
+        Ok(rows.into_iter().next())
+    }
+
+    /// Fetch optional row once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_optional_once_on_connection(
+        self,
+        conn: &turso::Connection,
+    ) -> Result<Option<Row>> {
+        let rows = self.fetch_all_once_on_connection(conn).await?;
         Ok(rows.into_iter().next())
     }
 }
@@ -403,11 +490,33 @@ impl GenericScalarBuilder {
         T::from_row(&row, 0)
     }
 
+    /// Fetch one scalar value once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_one_once<T>(self, db: &Database) -> Result<T>
+    where
+        T: FromTursoRow,
+    {
+        let row = self.builder.fetch_one_once(db).await?;
+        T::from_row(&row, 0)
+    }
+
     pub async fn fetch_optional<T>(self, db: &Database) -> Result<Option<T>>
     where
         T: FromTursoRow,
     {
         let row = self.builder.fetch_optional(db).await?;
+        if let Some(r) = row {
+            Ok(Some(T::from_row(&r, 0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Fetch optional scalar value once without retry - for DML operations with RETURNING clause
+    pub async fn fetch_optional_once<T>(self, db: &Database) -> Result<Option<T>>
+    where
+        T: FromTursoRow,
+    {
+        let row = self.builder.fetch_optional_once(db).await?;
         if let Some(r) = row {
             Ok(Some(T::from_row(&r, 0)?))
         } else {

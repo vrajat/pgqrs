@@ -77,7 +77,7 @@ impl TursoWorkflowTable {
         .bind(output_str)
         .bind(now_str)
         .bind(id)
-        .execute(&self.db)
+        .execute_once(&self.db)
         .await?;
 
         Ok(())
@@ -98,7 +98,7 @@ impl TursoWorkflowTable {
         .bind(error_str)
         .bind(now_str)
         .bind(id)
-        .execute(&self.db)
+        .execute_once(&self.db)
         .await?;
 
         Ok(())
@@ -126,7 +126,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
             })
         .bind(now_str.clone())
         .bind(now_str)
-        .fetch_one(&self.db)
+        .fetch_one_once(&self.db)
         .await?;
 
         Self::map_row(&row)
@@ -175,7 +175,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     async fn delete(&self, id: i64) -> Result<u64> {
         let count = crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = ?")
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count)
     }

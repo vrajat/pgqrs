@@ -108,7 +108,7 @@ impl TursoWorkerTable {
         crate::store::turso::query("UPDATE pgqrs_workers SET heartbeat_at = ? WHERE id = ?")
             .bind(now_str)
             .bind(worker_id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
 
         Ok(())
@@ -134,7 +134,7 @@ impl TursoWorkerTable {
             "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = ? AND status = 'ready'",
         )
         .bind(worker_id)
-        .execute(&self.db)
+        .execute_once(&self.db)
         .await?;
 
         if count == 0 {
@@ -153,7 +153,7 @@ impl TursoWorkerTable {
             "UPDATE pgqrs_workers SET status = 'ready' WHERE id = ? AND status = 'suspended'",
         )
         .bind(worker_id)
-        .execute(&self.db)
+        .execute_once(&self.db)
         .await?;
 
         if count == 0 {
@@ -188,7 +188,7 @@ impl TursoWorkerTable {
         let count = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'stopped', shutdown_at = ? WHERE id = ? AND status = 'suspended'")
             .bind(now_str)
             .bind(worker_id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
 
         if count == 0 {
@@ -220,7 +220,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             .bind(now_str.as_str())
             .bind(now_str.as_str())
             .bind(status_str.as_str())
-            .fetch_one(&self.db)
+            .fetch_one_once(&self.db)
             .await?;
 
         Ok(WorkerInfo {
@@ -266,7 +266,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
     async fn delete(&self, id: i64) -> Result<u64> {
         let count = crate::store::turso::query(DELETE_WORKER_BY_ID)
             .bind(id)
-            .execute(&self.db)
+            .execute_once(&self.db)
             .await?;
         Ok(count)
     }
@@ -383,7 +383,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
                         .bind(now_str.clone())
                         .bind(now_str)
                         .bind(worker.id)
-                        .fetch_one(&self.db)
+                        .fetch_one_once(&self.db)
                         .await?;
 
                     Self::map_row(&row)
@@ -425,7 +425,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             })
             .bind(now_str.clone())
             .bind(now_str.clone())
-            .fetch_one(&self.db)
+            .fetch_one_once(&self.db)
             .await?;
 
         Self::map_row(&row)
