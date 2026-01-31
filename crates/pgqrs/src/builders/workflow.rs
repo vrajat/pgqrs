@@ -65,7 +65,10 @@ impl StepBuilder {
 
     /// Acquire the step using the provided store.
     pub async fn acquire<T: DeserializeOwned, S: Store>(self, store: &S) -> Result<StepResult<T>> {
-        let res = store.acquire_step(self.workflow_id, &self.step_id).await?;
+        let current_time = chrono::Utc::now();
+        let res = store
+            .acquire_step(self.workflow_id, &self.step_id, current_time)
+            .await?;
         match res {
             StepResult::Execute(guard) => Ok(StepResult::Execute(guard)),
             StepResult::Skipped(val) => {

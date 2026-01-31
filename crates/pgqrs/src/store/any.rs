@@ -324,14 +324,15 @@ impl Store for AnyStore {
         &self,
         workflow_id: i64,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.acquire_step(workflow_id, step_id).await,
+            AnyStore::Postgres(s) => s.acquire_step(workflow_id, step_id, current_time).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.acquire_step(workflow_id, step_id).await,
+            AnyStore::Sqlite(s) => s.acquire_step(workflow_id, step_id, current_time).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.acquire_step(workflow_id, step_id).await,
+            AnyStore::Turso(s) => s.acquire_step(workflow_id, step_id, current_time).await,
         }
     }
 

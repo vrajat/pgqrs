@@ -602,9 +602,10 @@ impl Store for TursoStore {
         &self,
         workflow_id: i64,
         step_id: &str,
+        current_time: DateTime<Utc>,
     ) -> Result<StepResult<serde_json::Value>> {
         use self::workflow::guard::TursoStepGuard;
-        TursoStepGuard::acquire(&self.db, workflow_id, step_id).await
+        TursoStepGuard::acquire(&self.db, workflow_id, step_id, current_time).await
     }
 
     async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {

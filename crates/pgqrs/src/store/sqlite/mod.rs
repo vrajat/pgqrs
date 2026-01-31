@@ -203,9 +203,10 @@ impl Store for SqliteStore {
         &self,
         workflow_id: i64,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<StepResult<serde_json::Value>> {
         use self::workflow::guard::SqliteStepGuard;
-        SqliteStepGuard::acquire(&self.pool, workflow_id, step_id).await
+        SqliteStepGuard::acquire(&self.pool, workflow_id, step_id, current_time).await
     }
 
     async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {

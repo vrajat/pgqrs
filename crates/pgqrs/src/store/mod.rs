@@ -253,6 +253,7 @@ pub trait Workflow: Send + Sync {
     async fn acquire_step(
         &self,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>>;
 }
 
@@ -389,6 +390,7 @@ pub trait Store: Send + Sync + 'static {
         &self,
         workflow_id: i64,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<StepResult<serde_json::Value>>;
 
     /// Get an admin worker interface.

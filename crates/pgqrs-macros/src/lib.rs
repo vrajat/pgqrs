@@ -193,7 +193,8 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
             let step_id = #step_id;
 
             // Attempt to initialize the step via workflow context
-            let guard_res = #first_arg_name.acquire_step(step_id).await?;
+            let current_time = chrono::Utc::now();
+            let guard_res = #first_arg_name.acquire_step(step_id, current_time).await?;
 
             match guard_res {
                 pgqrs::store::StepResult::Skipped(val) => Ok(serde_json::from_value(val)?),
