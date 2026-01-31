@@ -29,6 +29,79 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Boxed error type for heterogeneous error sources
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Represents a transient error that should trigger automatic step retry.
+///
+/// Use this type to indicate that a workflow step failed due to a temporary issue
+/// (network timeout, rate limit, temporary resource unavailability) and should be
+/// retried automatically according to the configured retry policy.
+///
+/// ## What
+///
+/// `TransientStepError` wraps transient failures with metadata to support automatic retry:
+/// - `code`: Error classification (e.g., "TIMEOUT", "RATE_LIMITED")
+/// - `message`: Human-readable error description
+/// - `source`: Optional original error for debugging
+/// - `retry_after`: Optional custom delay before retry
+///
+/// ## How
+///
+/// Create using the builder pattern:
+///
+/// ```rust
+/// use pgqrs::error::TransientStepError;
+/// use std::time::Duration;
+///
+/// // Basic transient error
+/// let err = TransientStepError::new("TIMEOUT", "Connection timeout");
+///
+/// // With custom retry delay (e.g., from Retry-After header)
+/// let err = TransientStepError::new("RATE_LIMITED", "Too many requests")
+///     .with_delay(Duration::from_secs(60));
+/// ```
+#[derive(Debug, Clone)]
+pub struct TransientStepError {
+    /// Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED", "CONNECTION_FAILED")
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Original error source (preserved for debugging)
+    pub source: Option<String>,
+    /// Custom delay before retry (e.g., from Retry-After header)
+    pub retry_after: Option<std::time::Duration>,
+}
+
+impl TransientStepError {
+    /// Create a new transient error with code and message.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            source: None,
+            retry_after: None,
+        }
+    }
+
+    /// Attach the source error for debugging.
+    pub fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        self.source = Some(source.to_string());
+        self
+    }
+
+    /// Set a custom retry delay (e.g., from Retry-After header).
+    pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
+        self.retry_after = Some(delay);
+        self
+    }
+}
+
+impl std::fmt::Display for TransientStepError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for TransientStepError {}
+
 /// Error types for pgqrs operations.
 ///
 /// This enum covers all error cases that can occur when using pgqrs,
@@ -165,4 +238,19 @@ pub enum Error {
     /// Entity not found
     #[error("{entity} with id '{id}' not found")]
     NotFound { entity: String, id: String },
+
+    /// Transient error that can be retried
+    #[error("Transient error ({code}): {message}")]
+    Transient {
+        code: String,
+        message: String,
+        retry_after: Option<std::time::Duration>,
+    },
+
+    /// Step retries exhausted
+    #[error("Step failed after {attempts} attempts: {error}")]
+    RetriesExhausted {
+        error: serde_json::Value,
+        attempts: u32,
+    },
 }
