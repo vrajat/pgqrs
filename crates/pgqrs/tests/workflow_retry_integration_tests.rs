@@ -52,9 +52,6 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         StepResult::Skipped(_) => panic!("Step should execute first time"),
     }
 
-    // Give async operations time to complete
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
     // Immediately try to acquire again - should return StepNotReady (not block!)
     let start = std::time::Instant::now();
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -120,7 +117,6 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute on initial attempt"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Get the retry_at timestamp
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -132,16 +128,12 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         _ => panic!("Expected StepNotReady"),
     };
 
-    // Wait until after retry_at (add 200ms buffer)
-    let now = Utc::now();
-    if retry_at > now {
-        let wait_duration =
-            (retry_at - now).to_std().unwrap() + std::time::Duration::from_millis(200);
-        tokio::time::sleep(wait_duration).await;
-    }
+    // Simulate time advancing past retry_at by using with_time()
+    let simulated_time = retry_at + chrono::Duration::milliseconds(100);
 
     // Now should be able to acquire for execution
     let step_res = pgqrs::step(workflow_id, step_id)
+        .with_time(simulated_time)
         .acquire::<TestData, _>(&store)
         .await?;
 
@@ -207,7 +199,6 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute on initial attempt"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Retry 1
     {
@@ -218,12 +209,11 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 1"),
         };
-        let now = Utc::now();
-        if retry_at > now {
-            let wait = (retry_at - now).to_std().unwrap() + std::time::Duration::from_millis(100);
-            tokio::time::sleep(wait).await;
-        }
+
+        // Simulate time passing beyond retry_at
+        let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let step_res = pgqrs::step(workflow_id, step_id)
+            .with_time(simulated_time)
             .acquire::<TestData, _>(&store)
             .await?;
         match step_res {
@@ -237,7 +227,6 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             }
             _ => panic!("Should execute at Retry 1"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     // Retry 2
@@ -249,12 +238,11 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 2"),
         };
-        let now = Utc::now();
-        if retry_at > now {
-            let wait = (retry_at - now).to_std().unwrap() + std::time::Duration::from_millis(100);
-            tokio::time::sleep(wait).await;
-        }
+
+        // Simulate time passing beyond retry_at
+        let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let step_res = pgqrs::step(workflow_id, step_id)
+            .with_time(simulated_time)
             .acquire::<TestData, _>(&store)
             .await?;
         match step_res {
@@ -268,7 +256,6 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             }
             _ => panic!("Should execute at Retry 2"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     // Retry 3
@@ -280,12 +267,11 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 3"),
         };
-        let now = Utc::now();
-        if retry_at > now {
-            let wait = (retry_at - now).to_std().unwrap() + std::time::Duration::from_millis(100);
-            tokio::time::sleep(wait).await;
-        }
+
+        // Simulate time passing beyond retry_at
+        let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let step_res = pgqrs::step(workflow_id, step_id)
+            .with_time(simulated_time)
             .acquire::<TestData, _>(&store)
             .await?;
         match step_res {
@@ -299,7 +285,6 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             }
             _ => panic!("Should execute at Retry 3"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     // Now should fail with RetriesExhausted (retry_count = 3, should_retry(3) = false)
@@ -357,9 +342,6 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
         }
         StepResult::Skipped(_) => panic!("Step should execute first time"),
     }
-
-    // Give async operations time
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Should immediately fail with RetriesExhausted (0 retries for non-transient)
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -422,7 +404,6 @@ async fn test_retry_at_scheduled_in_future() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Get StepNotReady error
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -498,7 +479,6 @@ async fn test_retry_count_persisted() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute initially"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Check retry_count = 1
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -560,7 +540,6 @@ async fn test_custom_retry_after_delay() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Should get StepNotReady with retry_at ~2 seconds in future
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -618,7 +597,6 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Workflow should still be in RUNNING state (not ERROR)
     // Verify by executing another step - should work if workflow is RUNNING
@@ -675,7 +653,6 @@ async fn test_error_wrapping_non_transient() -> anyhow::Result<()> {
         }
         _ => panic!("Should execute"),
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Should fail immediately (wrapped as non-transient)
     let step_res = pgqrs::step(workflow_id, step_id)
@@ -752,9 +729,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 _ => panic!("Should execute"),
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-            // Get retry_at and wait
+            // Get retry_at and simulate time advancing
             let retry_at = match pgqrs::step(workflow_id, step_id)
                 .acquire::<TestData, _>(&store)
                 .await
@@ -763,15 +738,12 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 _ => panic!("Expected StepNotReady"),
             };
 
-            let now = Utc::now();
-            if retry_at > now {
-                let wait =
-                    (retry_at - now).to_std().unwrap() + std::time::Duration::from_millis(100);
-                tokio::time::sleep(wait).await;
-            }
+            // Simulate time passing beyond retry_at
+            let simulated_time = retry_at + chrono::Duration::milliseconds(100);
 
             // Retry and succeed
             let step_res = pgqrs::step(workflow_id, step_id)
+                .with_time(simulated_time)
                 .acquire::<TestData, _>(&store)
                 .await
                 .unwrap();
