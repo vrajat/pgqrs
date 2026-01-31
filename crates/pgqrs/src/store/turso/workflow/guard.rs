@@ -14,8 +14,8 @@ pub struct TursoStepGuard {
 }
 
 const SQL_ACQUIRE_STEP: &str = r#"
-    INSERT INTO pgqrs_workflow_steps (workflow_id, step_key, status, started_at)
-    VALUES (?, ?, 'RUNNING', datetime('now'))
+    INSERT INTO pgqrs_workflow_steps (workflow_id, step_key, status, started_at, retry_count)
+    VALUES (?, ?, 'RUNNING', datetime('now'), 0)
     ON CONFLICT (workflow_id, step_key) DO UPDATE SET workflow_id=workflow_id
     RETURNING status, output, error, retry_count
 "#;
@@ -72,9 +72,8 @@ impl TursoStepGuard {
                 row.get(2).map_err(|e| crate::error::Error::Internal {
                     message: e.to_string(),
                 })?;
-            let retry_count: i32 = row.get(3).map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
+            // Gracefully handle missing retry_count column for backwards compatibility
+            let retry_count: i32 = row.get(3).unwrap_or(0);
 
             // Parse error JSON to check if it's transient
             let error_json: serde_json::Value = if let Some(s) = &error_str {
@@ -111,17 +110,27 @@ impl TursoStepGuard {
             }
 
             // Calculate backoff delay
-            let delay_seconds =
-                if let Some(retry_after) = error_json.get("retry_after").and_then(|v| v.as_u64()) {
-                    // Use custom delay from error (e.g., Retry-After header)
-                    retry_after
+            let delay_seconds = if let Some(retry_after_value) = error_json.get("retry_after") {
+                // Support both a plain u64 value (seconds) and a Duration-like object
+                // serialized by serde as { "secs": <u64>, "nanos": <u32> }.
+                if let Some(seconds) = retry_after_value.as_u64() {
+                    // Use custom delay from error (e.g., Retry-After header) as seconds
+                    seconds
+                } else if let Some(seconds) = retry_after_value.get("secs").and_then(|v| v.as_u64())
+                {
+                    // Use the "secs" component from a serialized Duration
+                    seconds
                 } else {
-                    // Use policy backoff
+                    // Fallback to policy backoff if retry_after has an unexpected format
                     policy.calculate_delay(retry_count as u32) as u64
-                };
+                }
+            } else {
+                // Use policy backoff when no retry_after is provided
+                policy.calculate_delay(retry_count as u32) as u64
+            };
 
             tracing::info!(
-                "Step {} (workflow {}) failed with transient error (attempt {}), retrying after {}s",
+                "Step {} (workflow {}) failed with transient error ({} previous failures), retrying after {}s",
                 step_id,
                 workflow_id,
                 retry_count,
@@ -141,9 +150,10 @@ impl TursoStepGuard {
                 .await?;
 
             tracing::info!(
-                "Step {} (workflow {}) reset to RUNNING for retry attempt {}",
+                "Step {} (workflow {}) reset to RUNNING (retry attempt {}, total failures: {})",
                 step_id,
                 workflow_id,
+                new_retry_count,
                 new_retry_count
             );
 

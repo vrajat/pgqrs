@@ -641,11 +641,12 @@ impl StepRetryPolicy {
 
                 // Use true randomness for jitter to prevent multiple workflows
                 // retrying at exactly the same time (thundering herd problem)
+                // Use signed arithmetic for true ±25% jitter distribution
                 use rand::Rng;
-                let jitter = rand::thread_rng().gen_range(0..jitter_range * 2);
-                let jitter = jitter.saturating_sub(jitter_range); // Center around 0
+                let jitter =
+                    rand::thread_rng().gen_range(-(jitter_range as i64)..=(jitter_range as i64));
 
-                capped_delay.saturating_add(jitter)
+                capped_delay.saturating_add_signed(jitter as i32)
             }
         }
     }

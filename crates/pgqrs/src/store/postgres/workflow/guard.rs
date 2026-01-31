@@ -7,8 +7,8 @@ use sqlx::PgPool;
 use std::time::Duration;
 
 const SQL_ACQUIRE_STEP: &str = r#"
-INSERT INTO pgqrs_workflow_steps (workflow_id, step_id, status, started_at)
-VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, NOW())
+INSERT INTO pgqrs_workflow_steps (workflow_id, step_id, status, started_at, retry_count)
+VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, NOW(), 0)
 ON CONFLICT (workflow_id, step_id) DO UPDATE
 SET status = CASE
     WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'::pgqrs_workflow_status
@@ -127,17 +127,24 @@ impl StepGuard {
             }
 
             // Calculate backoff delay
-            let delay_seconds =
-                if let Some(retry_after) = error_val.get("retry_after").and_then(|v| v.as_u64()) {
-                    // Use custom delay from error (e.g., Retry-After header)
-                    retry_after
+            let delay_seconds = if let Some(retry_after_val) = error_val.get("retry_after") {
+                if let Some(secs) = retry_after_val.as_u64() {
+                    // Use custom delay from error as plain seconds (e.g., Retry-After header)
+                    secs
+                } else if let Some(secs) = retry_after_val.get("secs").and_then(|v| v.as_u64()) {
+                    // Use custom delay from error when serialized as a Duration { secs, nanos }
+                    secs
                 } else {
-                    // Use policy backoff
+                    // Use policy backoff if retry_after is present but not in a supported format
                     policy.calculate_delay(retry_count as u32) as u64
-                };
+                }
+            } else {
+                // Use policy backoff when no custom retry_after is provided
+                policy.calculate_delay(retry_count as u32) as u64
+            };
 
             tracing::info!(
-                "Step {} (workflow {}) failed with transient error (attempt {}), retrying after {}s",
+                "Step {} (workflow {}) failed with transient error ({} previous failures), retrying after {}s",
                 step_id_string,
                 workflow_id,
                 retry_count,
@@ -162,9 +169,10 @@ impl StepGuard {
                 })?;
 
             tracing::info!(
-                "Step {} (workflow {}) reset to RUNNING for retry attempt {}",
+                "Step {} (workflow {}) reset to RUNNING (retry attempt {}, total failures: {})",
                 step_id_string,
                 workflow_id,
+                new_retry_count,
                 new_retry_count
             );
 
