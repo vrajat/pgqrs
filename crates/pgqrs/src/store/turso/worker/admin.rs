@@ -327,6 +327,7 @@ impl Admin for TursoAdmin {
         const Q5: &str = include_str!("../../../../migrations/turso/05_create_workflows.sql");
         const Q6: &str = include_str!("../../../../migrations/turso/06_create_workflow_steps.sql");
         const Q7: &str = include_str!("../../../../migrations/turso/07_create_indices.sql");
+        const Q8: &str = include_str!("../../../../migrations/turso/08_add_step_retry_columns.sql");
 
         let migrations = vec![
             (1, "01_create_queues.sql", Q1),
@@ -336,6 +337,7 @@ impl Admin for TursoAdmin {
             (5, "05_create_workflows.sql", Q5),
             (6, "06_create_workflow_steps.sql", Q6),
             (7, "07_create_indices.sql", Q7),
+            (8, "08_add_step_retry_columns.sql", Q8),
         ];
 
         for (version, description, sql) in migrations {
