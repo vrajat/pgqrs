@@ -639,14 +639,19 @@ impl StepRetryPolicy {
                     return capped_delay;
                 }
 
+                // Cap jitter_range to i32::MAX to prevent overflow when casting
+                // This ensures safe conversion from i64 random value to i32
+                let jitter_range_i32 = jitter_range.min(i32::MAX as u32);
+
                 // Use true randomness for jitter to prevent multiple workflows
                 // retrying at exactly the same time (thundering herd problem)
                 // Use signed arithmetic for true ±25% jitter distribution
                 use rand::Rng;
-                let jitter =
-                    rand::thread_rng().gen_range(-(jitter_range as i64)..=(jitter_range as i64));
+                let jitter = rand::thread_rng()
+                    .gen_range(-(jitter_range_i32 as i64)..=(jitter_range_i32 as i64))
+                    as i32; // Safe cast: range is within i32::MIN..=i32::MAX
 
-                capped_delay.saturating_add_signed(jitter as i32)
+                capped_delay.saturating_add_signed(jitter)
             }
         }
     }
