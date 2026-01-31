@@ -15,5 +15,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_steps_retry
 ON pgqrs_workflow_steps(workflow_id, retry_count);
 
 -- Index for efficient retry_at polling
+-- Note: Partial index (WHERE retry_at IS NOT NULL) would be more efficient,
+-- but turso_core 0.4.2 has a bug parsing partial indices, so using full index
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_retry_at
-ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;
+ON pgqrs_workflow_steps(retry_at);
