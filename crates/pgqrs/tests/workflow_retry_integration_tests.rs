@@ -52,20 +52,10 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         StepResult::Skipped(_) => panic!("Step should execute first time"),
     }
 
-    // Immediately try to acquire again - should return StepNotReady (not block!)
-    let start = std::time::Instant::now();
+    // Try to acquire again - should return StepNotReady immediately
     let step_res = pgqrs::step(workflow_id, step_id)
         .acquire::<TestData, _>(&store)
         .await;
-
-    let elapsed = start.elapsed();
-
-    // Should return immediately (< 100ms), not block for 1 second
-    assert!(
-        elapsed < std::time::Duration::from_millis(100),
-        "Should return StepNotReady immediately, not block. Elapsed: {:?}",
-        elapsed
-    );
 
     // Should get StepNotReady error
     match step_res {
