@@ -149,13 +149,14 @@ pub use crate::store::{
 };
 
 pub use crate::config::Config;
-pub use crate::error::{Error, Result};
+pub use crate::error::{Error, Result, TransientStepError};
 pub use crate::rate_limit::RateLimitStatus;
 
 pub use crate::types::{
-    ArchivedMessage, NewArchivedMessage, NewMessage, NewQueue, NewWorker, NewWorkflow, QueueInfo,
-    QueueMessage, QueueMetrics, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStats,
-    WorkerStatus, WorkflowRecord, WorkflowStatus,
+    ArchivedMessage, BackoffStrategy, NewArchivedMessage, NewMessage, NewQueue, NewWorker,
+    NewWorkflow, QueueInfo, QueueMessage, QueueMetrics, StepRetryPolicy, SystemStats,
+    WorkerHealthStats, WorkerInfo, WorkerStats, WorkerStatus, WorkflowConfig, WorkflowRecord,
+    WorkflowStatus,
 };
 
 pub use crate::validation::ValidationConfig;

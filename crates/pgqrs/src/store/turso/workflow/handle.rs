@@ -112,7 +112,8 @@ impl crate::store::Workflow for TursoWorkflow {
     async fn acquire_step(
         &self,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::store::StepResult<serde_json::Value>> {
-        TursoStepGuard::acquire(&self.db, self.id, step_id).await
+        TursoStepGuard::acquire(&self.db, self.id, step_id, current_time).await
     }
 }

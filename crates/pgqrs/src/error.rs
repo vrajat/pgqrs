@@ -253,4 +253,43 @@ pub enum Error {
         error: serde_json::Value,
         attempts: u32,
     },
+
+    /// Step not ready for execution (retry scheduled)
+    ///
+    /// # Worker Behavior
+    ///
+    /// When a worker receives `StepNotReady`, it should:
+    /// 1. **Not retry immediately** - the step is scheduled for future retry
+    /// 2. Move on to other work (poll other workflows/steps)
+    /// 3. Come back after `retry_at` has passed
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use pgqrs::error::Error;
+    /// # use pgqrs::store::{StepResult, Store};
+    /// # async fn example(store: &impl Store, workflow_id: i64, step_id: &str) -> pgqrs::error::Result<()> {
+    /// let now = chrono::Utc::now();
+    /// match store.acquire_step(workflow_id, step_id, now).await {
+    ///     Err(Error::StepNotReady { retry_at, .. }) => {
+    ///         // Don't sleep! Do other work and poll again after retry_at
+    ///         tracing::info!("Step scheduled for retry at {}", retry_at);
+    ///         return Ok(()); // Move to next workflow
+    ///     }
+    ///     Ok(StepResult::Execute(guard)) => {
+    ///         // Execute the step
+    ///     }
+    ///     Ok(StepResult::Skipped(output)) => {
+    ///         // Step already completed
+    ///     }
+    ///     Err(e) => return Err(e),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[error("Step not ready for execution (retry scheduled for {retry_at})")]
+    StepNotReady {
+        retry_at: chrono::DateTime<chrono::Utc>,
+        retry_count: u32,
+    },
 }

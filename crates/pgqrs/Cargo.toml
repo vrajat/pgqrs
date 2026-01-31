@@ -62,6 +62,7 @@ tabled = "0.20.0"
 humantime = "2.1"
 async-trait = "0.1"
 turso = { version = "0.4.2", optional = true }
+rand = "0.8"
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)

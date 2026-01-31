@@ -170,10 +170,15 @@ impl Store for PostgresStore {
         &self,
         workflow_id: i64,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
-        let result =
-            PostgresStepGuard::acquire::<serde_json::Value>(&self.pool, workflow_id, step_id)
-                .await?;
+        let result = PostgresStepGuard::acquire::<serde_json::Value>(
+            &self.pool,
+            workflow_id,
+            step_id,
+            current_time,
+        )
+        .await?;
         Ok(result)
     }
 

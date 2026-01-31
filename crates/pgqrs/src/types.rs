@@ -610,7 +610,7 @@ impl StepRetryPolicy {
     ///
     /// # Arguments
     ///
-    /// * `attempt` - The retry attempt number (0 = first retry, 1 = second retry, etc.)
+    /// * `attempt` - The retry count (0 = before first retry, 1 = after first retry, etc.)
     ///
     /// # Returns
     ///
@@ -632,17 +632,26 @@ impl StepRetryPolicy {
                 let base_delay = base_seconds.saturating_mul(2u32.saturating_pow(attempt));
                 let capped_delay = base_delay.min(*max_seconds);
 
-                // Add jitter: ±25%
+                // Add jitter: ±25% using true randomness to prevent thundering herd
                 let jitter_range = capped_delay / 4; // 25% of delay
                 if jitter_range == 0 {
                     // No room for jitter on very small delays
                     return capped_delay;
                 }
 
-                let jitter = (attempt * 7) % (jitter_range * 2); // Pseudo-random jitter
-                let jitter = jitter.saturating_sub(jitter_range); // Center around 0
+                // Cap jitter_range to i32::MAX to prevent overflow when casting
+                // This ensures safe conversion from i64 random value to i32
+                let jitter_range_i32 = jitter_range.min(i32::MAX as u32);
 
-                capped_delay.saturating_add(jitter)
+                // Use true randomness for jitter to prevent multiple workflows
+                // retrying at exactly the same time (thundering herd problem)
+                // Use signed arithmetic for true ±25% jitter distribution
+                use rand::Rng;
+                let jitter = rand::thread_rng()
+                    .gen_range(-(jitter_range_i32 as i64)..=(jitter_range_i32 as i64))
+                    as i32; // Safe cast: range is within i32::MIN..=i32::MAX
+
+                capped_delay.saturating_add_signed(jitter)
             }
         }
     }
@@ -664,7 +673,7 @@ impl StepRetryPolicy {
 /// Workflow configuration (future use).
 ///
 /// Will be used to configure workflow-level settings including default retry policies.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     /// Default retry policy for all steps in the workflow
     pub default_step_retry_policy: Option<StepRetryPolicy>,

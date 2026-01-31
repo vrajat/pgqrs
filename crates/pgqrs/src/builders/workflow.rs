@@ -52,6 +52,7 @@ impl Default for WorkflowBuilder {
 pub struct StepBuilder {
     workflow_id: i64,
     step_id: String,
+    current_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl StepBuilder {
@@ -60,12 +61,39 @@ impl StepBuilder {
         Self {
             workflow_id,
             step_id: step_id.to_string(),
+            current_time: None,
         }
+    }
+
+    /// Set a custom current time for testing purposes.
+    ///
+    /// This method allows tests to control time for deterministic behavior
+    /// when testing retry logic with scheduled `retry_at` timestamps.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use pgqrs::{step, StepResult};
+    /// # use chrono::Utc;
+    /// # async fn example(store: &pgqrs::store::AnyStore) -> Result<(), Box<dyn std::error::Error>> {
+    /// let custom_time = Utc::now() + chrono::Duration::seconds(10);
+    /// let step_res = step(1, "my_step")
+    ///     .with_time(custom_time)
+    ///     .acquire::<serde_json::Value, _>(store)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_time(mut self, current_time: chrono::DateTime<chrono::Utc>) -> Self {
+        self.current_time = Some(current_time);
+        self
     }
 
     /// Acquire the step using the provided store.
     pub async fn acquire<T: DeserializeOwned, S: Store>(self, store: &S) -> Result<StepResult<T>> {
-        let res = store.acquire_step(self.workflow_id, &self.step_id).await?;
+        let current_time = self.current_time.unwrap_or_else(chrono::Utc::now);
+        let res = store
+            .acquire_step(self.workflow_id, &self.step_id, current_time)
+            .await?;
         match res {
             StepResult::Execute(guard) => Ok(StepResult::Execute(guard)),
             StepResult::Skipped(val) => {

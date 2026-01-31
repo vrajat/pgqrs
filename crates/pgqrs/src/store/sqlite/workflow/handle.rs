@@ -124,7 +124,8 @@ impl crate::store::Workflow for SqliteWorkflow {
     async fn acquire_step(
         &self,
         step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::store::StepResult<serde_json::Value>> {
-        SqliteStepGuard::acquire(&self.pool, self.id, step_id).await
+        SqliteStepGuard::acquire(&self.pool, self.id, step_id, current_time).await
     }
 }
