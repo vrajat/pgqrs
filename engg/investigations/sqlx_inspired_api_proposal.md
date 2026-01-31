@@ -695,21 +695,21 @@ import asyncio
 async def main():
     # Connect
     store = await pgqrs.connect("postgres://localhost/mydb")
-    
+
     # Setup (one-time)
     admin = pgqrs.admin(store)
     await admin.install()
     await admin.create_queue("orders")
-    
+
     # === Simple case: High-level API ===
-    
+
     # Produce
     await pgqrs.produce(store, "orders", {
         "order_id": "ORD-123",
         "customer": "Alice",
         "total": 99.99
     })
-    
+
     # Consume
     async def process_order(msg):
         order = msg.payload
@@ -717,31 +717,31 @@ async def main():
         # Do work...
         # Return normally = archive
         # Raise exception = retry
-    
+
     await pgqrs.consume(store, "orders", process_order)
-    
+
     # === Production case: Low-level API ===
-    
+
     producer = await store.producer("orders")
     consumer = await store.consumer("orders")
-    
+
     # Producer loop
     for order in get_orders():
         await pgqrs.enqueue(producer, order)
         await producer.heartbeat()
-    
+
     # Consumer loop
     while True:
         await consumer.heartbeat()
         msgs = await pgqrs.dequeue(consumer, batch_size=10)
-        
+
         for msg in msgs:
             try:
                 await process_order(msg)
                 await pgqrs.archive(consumer, msg)
             except Exception as e:
                 print(f"Failed: {e}")  # Will retry
-    
+
     # Cleanup
     await producer.shutdown()
     await consumer.shutdown()
@@ -761,7 +761,7 @@ async def validate_inventory(ctx, order):
     # ...
     return inventory_result
 
-@step  
+@step
 async def charge_payment(ctx, order):
     # ...
     return payment_result
