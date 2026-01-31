@@ -198,13 +198,25 @@ impl StepGuard {
 
             // Schedule retry for future
             let new_retry_count = retry_count + 1;
-            let retry_at_time = current_time + chrono::Duration::seconds(delay_seconds as i64);
 
-            // Validate retry_at is in the future
-            if retry_at_time <= current_time {
-                return Err(crate::error::Error::Internal {
-                    message: format!(
-                        "Invalid retry_at: {} is not after current_time {}",
+            // Validate delay_seconds fits within i64::MAX to prevent overflow
+            let delay_i64 =
+                delay_seconds
+                    .try_into()
+                    .map_err(|_| crate::error::Error::Internal {
+                        message: format!(
+                            "Retry delay {} seconds exceeds maximum allowed value (i64::MAX)",
+                            delay_seconds
+                        ),
+                    })?;
+
+            let retry_at_time = current_time + chrono::Duration::seconds(delay_i64);
+
+            // Validate retry_at is not in the past (allow immediate retry when delay is 0)
+            if retry_at_time < current_time {
+                return Err(crate::error::Error::ValidationFailed {
+                    reason: format!(
+                        "Invalid retry_at: {} is before current_time {}",
                         retry_at_time, current_time
                     ),
                 });
