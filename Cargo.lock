@@ -2265,6 +2265,7 @@ dependencies = [
  "humantime",
  "once_cell",
  "pgqrs-macros",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "serde_yaml",

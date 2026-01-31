@@ -172,11 +172,11 @@ fn test_backoff_overflow_protection() {
         max_attempts: 100,
         backoff: BackoffStrategy::Exponential {
             base_seconds: u32::MAX / 2,
-            max_seconds: u32::MAX,
+            max_seconds: 3600,
         },
     };
 
-    // Should not panic on overflow, should saturate
+    // Should not panic on overflow, should saturate at max_seconds
     let delay = policy.calculate_delay(50);
-    assert!(delay <= u32::MAX);
+    assert_eq!(delay, 3600); // Should cap at max_seconds
 }
