@@ -66,11 +66,8 @@ async def test_step_ready_after_retry_at(test_dsn, schema):
     await result.guard.fail_transient("TIMEOUT", "Initial failure")
 
     # Get retry_at
-    try:
+    with pytest.raises(pgqrs.StepNotReadyError):
         await wf.acquire_step(step_id)
-        pytest.fail("Should have raised StepNotReadyError")
-    except pgqrs.StepNotReadyError:
-        pass
 
     # Simulate time advancing by using current_time
     base_time = datetime.now(timezone.utc)
