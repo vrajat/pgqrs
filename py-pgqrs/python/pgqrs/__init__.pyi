@@ -38,12 +38,6 @@ class BackoffStrategy:
         """Create an exponential backoff with jitter strategy (±25%)."""
         ...
 
-    class ExponentialWithJitter:
-        """Exponential backoff with jitter (±25%)."""
-
-        base_seconds: int
-        max_seconds: int
-
 class StepRetryPolicy:
     """
     Retry policy for workflow steps.
@@ -53,7 +47,7 @@ class StepRetryPolicy:
     Example:
         >>> policy = StepRetryPolicy(
         ...     max_attempts=5,
-        ...     backoff=BackoffStrategy.ExponentialWithJitter(
+        ...     backoff=BackoffStrategy.exponential_with_jitter(
         ...         base_seconds=2, max_seconds=60
         ...     )
         ... )
@@ -69,7 +63,7 @@ class StepRetryPolicy:
 
         Args:
             max_attempts: Maximum number of retry attempts (default: 3)
-            backoff: Backoff strategy (default: ExponentialWithJitter with base=1s, max=60s)
+            backoff: Backoff strategy (default: exponential_with_jitter with base=1s, max=60s)
         """
         ...
 
