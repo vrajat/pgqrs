@@ -268,6 +268,22 @@ class PyStepResult:
 class PyStepGuard:
     async def success(self, result: Any) -> None: ...
     async def fail(self, error: str) -> None: ...
+    async def fail_transient(
+        self, code: str, message: str, retry_after: Optional[float] = None
+    ) -> None:
+        """
+        Fail the step with a transient error that triggers automatic retry.
+
+        Args:
+            code: Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED")
+            message: Human-readable error message
+            retry_after: Optional custom delay in seconds before retry (e.g., from Retry-After header)
+
+        Example:
+            await guard.fail_transient("TIMEOUT", "Connection timeout")
+            await guard.fail_transient("RATE_LIMITED", "Too many requests", retry_after=60.0)
+        """
+        ...
 
 async def connect(dsn: str) -> Store: ...
 async def connect_with(config: Config) -> Store: ...

@@ -1294,6 +1294,58 @@ impl PyStepGuard {
                 .map_err(to_py_err)
         })
     }
+
+    /// Fail the step with a transient error that triggers automatic retry.
+    ///
+    /// Args:
+    ///     code: Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED")
+    ///     message: Human-readable error message
+    ///     retry_after: Optional custom delay in seconds before retry (e.g., from Retry-After header)
+    ///
+    /// Example:
+    ///     await guard.fail_transient("TIMEOUT", "Connection timeout")
+    ///     await guard.fail_transient("RATE_LIMITED", "Too many requests", retry_after=60.0)
+    #[pyo3(signature = (code, message, retry_after=None))]
+    fn fail_transient<'a>(
+        &self,
+        py: Python<'a>,
+        code: String,
+        message: String,
+        retry_after: Option<f64>,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut error_json = serde_json::json!({
+                "is_transient": true,
+                "code": code,
+                "message": message,
+            });
+
+            // Add retry_after if provided
+            if let Some(delay_secs) = retry_after {
+                // Validate delay is non-negative
+                if delay_secs < 0.0 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "retry_after must be non-negative, got {}",
+                        delay_secs
+                    )));
+                }
+
+                // Convert float seconds to Duration-like JSON structure
+                // Match Rust's Duration serialization format: { "secs": u64, "nanos": u32 }
+                let secs = delay_secs.floor() as u64;
+                let nanos = ((delay_secs - delay_secs.floor()) * 1_000_000_000.0) as u32;
+
+                error_json["retry_after"] = serde_json::json!({
+                    "secs": secs,
+                    "nanos": nanos,
+                });
+            }
+
+            let mut guard = inner.lock().await;
+            guard.fail_with_json(error_json).await.map_err(to_py_err)
+        })
+    }
 }
 
 #[pyclass]
