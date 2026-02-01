@@ -13,9 +13,24 @@ async fn create_test_setup() -> AnyStore {
     let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_pgbouncer_test")
         .expect("Failed to create config with pgbouncer test schema");
 
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to connect to pgbouncer")
+        .expect("Failed to connect to pgbouncer");
+
+    // Manually create schema since we are using a fresh private container
+    if let pgqrs::store::AnyStore::Postgres(ref pool) = store {
+        sqlx::query("CREATE SCHEMA IF NOT EXISTS \"pgqrs_pgbouncer_test\"")
+            .execute(pool.pool())
+            .await
+            .expect("Failed to create pgbouncer test schema");
+    }
+
+    pgqrs::admin(&store)
+        .install()
+        .await
+        .expect("Failed to install schema in pgbouncer test");
+
+    store
 }
 
 #[tokio::test]

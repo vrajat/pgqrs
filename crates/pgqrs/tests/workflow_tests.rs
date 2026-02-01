@@ -10,13 +10,13 @@ struct TestData {
 }
 
 async fn create_store() -> AnyStore {
-    common::create_store("workflow_test").await
+    common::create_store("pgqrs_workflow_test").await
 }
 
 #[tokio::test]
 async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
-    pgqrs::admin(&store).install().await?;
+    // pgqrs::admin(&store).install().await?;
 
     // Start workflow
     let input = TestData {

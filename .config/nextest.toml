@@ -1,0 +1,2 @@
+[profile.default]
+# Setup scripts disabled due to config issues - handled by Makefile

@@ -113,10 +113,11 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
         .await
         .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
 
-    pgqrs::admin(&store)
-        .install()
-        .await
-        .expect("Failed to install schema");
+    // Global Setup: Schema is already installed.
+    // pgqrs::admin(&store)
+    //    .install()
+    //    .await
+    //    .expect("Failed to install schema");
 
     store
 }

@@ -161,10 +161,10 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     }; // All connections closed here
 
     // 9. Run CLI command
-    // cargo run -- -d <dsn> ...
+    // cargo run --bin pgqrs -- -d <dsn> ...
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut cmd = Command::new(cargo_bin);
-    cmd.arg("run");
+    cmd.arg("run").arg("--bin").arg("pgqrs");
 
     #[cfg(feature = "sqlite")]
     if common::current_backend() == pgqrs::store::BackendType::Sqlite {

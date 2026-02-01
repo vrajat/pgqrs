@@ -54,8 +54,23 @@ test-py: build  ## Run Python tests only
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Convenience targets for each backend
-test-postgres:  ## Run tests on Postgres backend
+# Convenience targets for each backend
+start-postgres: ## Start global Postgres container
+	docker rm -f pgqrs-test-db || true
+	docker run -d --name pgqrs-test-db -p 5433:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres postgres:15-alpine
+	@echo "Waiting for Postgres to be ready..."
+	@until docker exec pgqrs-test-db pg_isready; do sleep 1; done
+
+stop-postgres: ## Stop global Postgres container
+	docker rm -f pgqrs-test-db || true
+
+test-setup-postgres: start-postgres ## Provision schemas
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" cargo run -p pgqrs --bin setup_test_schemas
+
+test-postgres: test-setup-postgres ## Run tests on Postgres backend
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
+	$(MAKE) stop-postgres
 
 test-sqlite:  ## Run tests on SQLite backend
 	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite"
