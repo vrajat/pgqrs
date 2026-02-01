@@ -72,6 +72,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:

@@ -20,22 +20,34 @@ endif
 docs-requirements: .venv  ## Install documentation dependencies only
 	$(UV) pip install maturin "mkdocs-material[imaging]" mkdocs-catppuccin
 
-requirements: docs-requirements  ## Install all Python requirements
+requirements: .venv/requirements.timestamp  ## Install all Python requirements
+
+.venv/requirements.timestamp: py-pgqrs/pyproject.toml py-pgqrs/Cargo.toml
+	$(MAKE) docs-requirements
 	$(UV) pip install -e "py-pgqrs[test]"
+	@touch .venv/requirements.timestamp
+
 
 build: requirements  ## Build Rust and Python bindings
 	cargo build -p pgqrs $(CARGO_FEATURES)
 	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
 
-test-rust:  ## Run Rust tests only
+install-nextest: ## Install cargo-nextest
+	cargo install cargo-nextest --locked
+
+check-nextest:
+	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
+
+test-rust: check-nextest ## Run Rust tests only (using nextest)
 ifdef TEST
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES) --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES) --test $(TEST)
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES)
 endif
 
-test: build  ## Run all tests
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo test --workspace $(CARGO_FEATURES)
+
+test: build check-nextest  ## Run all tests
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 test-py: build  ## Run Python tests only
