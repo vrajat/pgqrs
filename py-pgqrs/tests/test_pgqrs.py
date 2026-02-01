@@ -550,8 +550,8 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
     queue = "ephemeral_batch_fail_q"
     q_info = await admin.create_queue(queue)
 
-    for i in range(3):
-        await pgqrs.produce(store, queue, {"i": i})
+    payloads = [{"i": i} for i in range(3)]
+    await pgqrs.produce_batch(store, queue, payloads)
 
     # Capture counts before consume attempt
     msgs_before = await (await admin.get_messages()).count()

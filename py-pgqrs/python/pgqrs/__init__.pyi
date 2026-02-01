@@ -14,6 +14,63 @@ class ValidationError(PgqrsError): ...
 class TimeoutError(PgqrsError): ...
 class InternalError(PgqrsError): ...
 class StateTransitionError(PgqrsError): ...
+class TransientStepError(PgqrsError): ...
+class RetriesExhaustedError(PgqrsError): ...
+class StepNotReadyError(PgqrsError): ...
+
+class BackoffStrategy:
+    """Backoff strategy for step retries."""
+
+    @staticmethod
+    def fixed(delay_seconds: int) -> "BackoffStrategy":
+        """Create a fixed delay backoff strategy."""
+        ...
+
+    @staticmethod
+    def exponential(base_seconds: int, max_seconds: int) -> "BackoffStrategy":
+        """Create an exponential backoff strategy: delay = base * 2^attempt."""
+        ...
+
+    @staticmethod
+    def exponential_with_jitter(
+        base_seconds: int, max_seconds: int
+    ) -> "BackoffStrategy":
+        """Create an exponential backoff with jitter strategy (±25%)."""
+        ...
+
+class StepRetryPolicy:
+    """
+    Retry policy for workflow steps.
+
+    Configures automatic retry behavior when steps fail with transient errors.
+
+    Example:
+        >>> policy = StepRetryPolicy(
+        ...     max_attempts=5,
+        ...     backoff=BackoffStrategy.exponential_with_jitter(
+        ...         base_seconds=2, max_seconds=60
+        ...     )
+        ... )
+    """
+
+    def __init__(
+        self,
+        max_attempts: int = 3,
+        backoff: Optional[BackoffStrategy] = None,
+    ) -> None:
+        """
+        Create a new retry policy.
+
+        Args:
+            max_attempts: Maximum number of retry attempts (default: 3)
+            backoff: Backoff strategy (default: exponential_with_jitter with base=1s, max=60s)
+        """
+        ...
+
+    @property
+    def max_attempts(self) -> int:
+        """Maximum number of retry attempts."""
+        ...
 
 class Config:
     def __init__(
@@ -192,7 +249,27 @@ class PyWorkflow:
     async def start(self) -> None: ...
     async def fail(self, error: str) -> None: ...
     async def success(self, result: Any) -> None: ...
-    async def acquire_step(self, step_id: str) -> "PyStepResult": ...
+    async def acquire_step(
+        self, step_id: str, current_time: Optional[str] = None
+    ) -> "PyStepResult":
+        """
+        Acquire a step for execution.
+
+        Args:
+            step_id: Unique identifier for the step
+            current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
+
+        Returns:
+            PyStepResult with status and optional guard
+
+        Example:
+            # Normal usage (uses system time)
+            step_res = await workflow.acquire_step("my_step")
+
+            # Testing with controlled time
+            step_res = await workflow.acquire_step("my_step", current_time="2024-01-15T10:30:00Z")
+        """
+        ...
 
 class PyStepResult:
     @property
@@ -205,6 +282,22 @@ class PyStepResult:
 class PyStepGuard:
     async def success(self, result: Any) -> None: ...
     async def fail(self, error: str) -> None: ...
+    async def fail_transient(
+        self, code: str, message: str, retry_after: Optional[float] = None
+    ) -> None:
+        """
+        Fail the step with a transient error that triggers automatic retry.
+
+        Args:
+            code: Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED")
+            message: Human-readable error message
+            retry_after: Optional custom delay in seconds before retry (e.g., from Retry-After header)
+
+        Example:
+            await guard.fail_transient("TIMEOUT", "Connection timeout")
+            await guard.fail_transient("RATE_LIMITED", "Too many requests", retry_after=60.0)
+        """
+        ...
 
 async def connect(dsn: str) -> Store: ...
 async def connect_with(config: Config) -> Store: ...

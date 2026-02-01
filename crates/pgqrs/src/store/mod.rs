@@ -288,7 +288,11 @@ pub trait StepGuard: Send + Sync {
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
 
     /// Fail the step.
-    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
+    async fn fail_with_json(
+        &mut self,
+        error: serde_json::Value,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<()>;
 }
 
 /// Extension trait for StepGuard to provide generic convenience methods.
@@ -309,7 +313,7 @@ pub trait StepGuardExt: StepGuard {
         error: &T,
     ) -> crate::error::Result<()> {
         let value = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
-        self.fail_with_json(value).await
+        self.fail_with_json(value, chrono::Utc::now()).await
     }
 }
 impl<T: ?Sized + StepGuard> StepGuardExt for T {}

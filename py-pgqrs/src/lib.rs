@@ -5,8 +5,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
-    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
-    WorkerStatus,
+    BackoffStrategy as RustBackoffStrategy, QueueInfo as RustQueueInfo,
+    QueueMessage as RustQueueMessage, StepRetryPolicy as RustStepRetryPolicy,
+    WorkerInfo as RustWorkerInfo, WorkerStatus,
 };
 use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
@@ -29,6 +30,9 @@ pyo3::create_exception!(pgqrs, ValidationError, PgqrsError);
 pyo3::create_exception!(pgqrs, TimeoutError, PgqrsError);
 pyo3::create_exception!(pgqrs, InternalError, PgqrsError);
 pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
+pyo3::create_exception!(pgqrs, TransientStepError, PgqrsError);
+pyo3::create_exception!(pgqrs, RetriesExhaustedError, PgqrsError);
+pyo3::create_exception!(pgqrs, StepNotReadyError, PgqrsError);
 
 fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     match err {
@@ -67,6 +71,11 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         #[cfg(any(feature = "postgres", feature = "sqlite"))]
         rust_pgqrs::Error::MigrationFailed(_) => InternalError::new_err(err.to_string()),
         rust_pgqrs::Error::Internal { .. } => InternalError::new_err(err.to_string()),
+        rust_pgqrs::Error::Transient { .. } => TransientStepError::new_err(err.to_string()),
+        rust_pgqrs::Error::RetriesExhausted { .. } => {
+            RetriesExhaustedError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::StepNotReady { .. } => StepNotReadyError::new_err(err.to_string()),
         _ => PgqrsError::new_err(err.to_string()),
     }
 }
@@ -220,6 +229,91 @@ impl PyConfig {
     #[setter]
     fn set_heartbeat_interval_seconds(&mut self, interval: u64) {
         self.inner.heartbeat_interval = interval;
+    }
+}
+
+/// Backoff strategy for step retries
+#[pyclass(name = "BackoffStrategy")]
+#[derive(Clone)]
+pub struct PyBackoffStrategy {
+    inner: RustBackoffStrategy,
+}
+
+#[pymethods]
+impl PyBackoffStrategy {
+    /// Create a fixed delay backoff strategy
+    #[staticmethod]
+    fn fixed(delay_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::Fixed { delay_seconds },
+        }
+    }
+
+    /// Create an exponential backoff strategy
+    #[staticmethod]
+    fn exponential(base_seconds: u32, max_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::Exponential {
+                base_seconds,
+                max_seconds,
+            },
+        }
+    }
+
+    /// Create an exponential backoff with jitter strategy
+    #[staticmethod]
+    fn exponential_with_jitter(base_seconds: u32, max_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::ExponentialWithJitter {
+                base_seconds,
+                max_seconds,
+            },
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
+/// Retry policy for workflow steps
+#[pyclass(name = "StepRetryPolicy")]
+#[derive(Clone)]
+pub struct PyStepRetryPolicy {
+    inner: RustStepRetryPolicy,
+}
+
+#[pymethods]
+impl PyStepRetryPolicy {
+    #[new]
+    #[pyo3(signature = (max_attempts=3, backoff=None))]
+    fn new(max_attempts: u32, backoff: Option<PyBackoffStrategy>) -> Self {
+        let backoff_inner =
+            backoff
+                .map(|b| b.inner)
+                .unwrap_or(RustBackoffStrategy::ExponentialWithJitter {
+                    base_seconds: 1,
+                    max_seconds: 60,
+                });
+
+        Self {
+            inner: RustStepRetryPolicy {
+                max_attempts,
+                backoff: backoff_inner,
+            },
+        }
+    }
+
+    #[getter]
+    fn max_attempts(&self) -> u32 {
+        self.inner.max_attempts
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "StepRetryPolicy(max_attempts={}, backoff={:?})",
+            self.inner.max_attempts, self.inner.backoff
+        )
     }
 }
 
@@ -1128,7 +1222,25 @@ impl PyWorkflow {
         })
     }
 
-    fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
+    /// Acquire a step for execution.
+    ///
+    /// Args:
+    ///     step_id: Unique identifier for the step
+    ///     current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
+    ///
+    /// Example:
+    ///     # Normal usage (uses system time)
+    ///     step_res = await workflow.acquire_step("my_step")
+    ///
+    ///     # Testing with controlled time
+    ///     step_res = await workflow.acquire_step("my_step", current_time="2024-01-15T10:30:00Z")
+    #[pyo3(signature = (step_id, current_time=None))]
+    fn acquire_step<'a>(
+        &self,
+        py: Python<'a>,
+        step_id: String,
+        current_time: Option<String>,
+    ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let store = self.store.clone();
 
@@ -1138,7 +1250,22 @@ impl PyWorkflow {
                 wf.id()
             };
 
+            // Determine time: use parameter or system time
+            let time = if let Some(time_str) = current_time {
+                chrono::DateTime::parse_from_rfc3339(&time_str)
+                    .map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Invalid ISO 8601 timestamp '{}': {}",
+                            time_str, e
+                        ))
+                    })?
+                    .with_timezone(&chrono::Utc)
+            } else {
+                chrono::Utc::now()
+            };
+
             let res: rust_pgqrs::StepResult<serde_json::Value> = rust_pgqrs::step(id, &step_id)
+                .with_time(time)
                 .acquire(&store)
                 .await
                 .map_err(to_py_err)?;
@@ -1149,6 +1276,7 @@ impl PyWorkflow {
                     value: py.None(),
                     guard: Some(PyStepGuard {
                         inner: Arc::new(tokio::sync::Mutex::new(guard)),
+                        current_time: time,
                     }),
                 }
                 .into_py(py)),
@@ -1177,6 +1305,7 @@ struct PyStepResult {
 #[derive(Clone)]
 struct PyStepGuard {
     inner: Arc<tokio::sync::Mutex<Box<dyn StepGuard>>>,
+    current_time: chrono::DateTime<chrono::Utc>,
 }
 
 #[pymethods]
@@ -1192,10 +1321,78 @@ impl PyStepGuard {
 
     fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let current_time = self.current_time;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut guard = inner.lock().await;
             guard
-                .fail_with_json(serde_json::Value::String(error))
+                .fail_with_json(serde_json::Value::String(error), current_time)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Fail the step with a transient error that triggers automatic retry.
+    ///
+    /// Args:
+    ///     code: Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED")
+    ///     message: Human-readable error message
+    ///     retry_after: Optional custom delay in seconds before retry (e.g., from Retry-After header)
+    ///
+    /// Example:
+    ///     await guard.fail_transient("TIMEOUT", "Connection timeout")
+    ///     await guard.fail_transient("RATE_LIMITED", "Too many requests", retry_after=60.0)
+    #[pyo3(signature = (code, message, retry_after=None))]
+    fn fail_transient<'a>(
+        &self,
+        py: Python<'a>,
+        code: String,
+        message: String,
+        retry_after: Option<f64>,
+    ) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let current_time = self.current_time;
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut error_json = serde_json::json!({
+                "is_transient": true,
+                "code": code,
+                "message": message,
+            });
+
+            // Add retry_after if provided
+            if let Some(delay_secs) = retry_after {
+                // Validate delay is finite (not NaN or Infinity)
+                if !delay_secs.is_finite() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "retry_after must be finite, got {}",
+                        delay_secs
+                    )));
+                }
+
+                // Validate delay is non-negative
+                if delay_secs < 0.0 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "retry_after must be non-negative, got {}",
+                        delay_secs
+                    )));
+                }
+
+                // Convert f64 seconds to integer seconds and nanoseconds
+                let secs = delay_secs.trunc() as u64;
+                let nanos =
+                    ((delay_secs.fract() * 1_000_000_000.0).round() as u32).min(999_999_999);
+
+                error_json.as_object_mut().unwrap().insert(
+                    "retry_after".to_string(),
+                    serde_json::json!({
+                        "secs": secs,
+                        "nanos": nanos,
+                    }),
+                );
+            }
+
+            let mut guard = inner.lock().await;
+            guard
+                .fail_with_json(error_json, current_time)
                 .await
                 .map_err(to_py_err)
         })
@@ -1296,6 +1493,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepGuard>()?;
     m.add_class::<ArchivedMessage>()?;
     m.add_class::<ConsumerIterator>()?;
+    m.add_class::<PyBackoffStrategy>()?;
+    m.add_class::<PyStepRetryPolicy>()?;
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;
@@ -1323,6 +1522,12 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
         "StateTransitionError",
         py.get_type::<StateTransitionError>(),
     )?;
+    m.add("TransientStepError", py.get_type::<TransientStepError>())?;
+    m.add(
+        "RetriesExhaustedError",
+        py.get_type::<RetriesExhaustedError>(),
+    )?;
+    m.add("StepNotReadyError", py.get_type::<StepNotReadyError>())?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;

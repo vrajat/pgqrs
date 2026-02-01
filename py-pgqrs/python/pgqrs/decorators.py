@@ -1,5 +1,7 @@
 import functools
 from ._pgqrs import PyWorkflow
+import pgqrs
+
 
 def workflow(func):
     """
@@ -11,10 +13,13 @@ def workflow(func):
     2. Executing the function body.
     3. Marking the workflow as SUCCESS (with return value) or ERROR (with exception).
     """
+
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
         if not isinstance(ctx, PyWorkflow):
-             raise TypeError(f"First argument to a workflow must be a PyWorkflow instance, got {type(ctx)}")
+            raise TypeError(
+                f"First argument to a workflow must be a PyWorkflow instance, got {type(ctx)}"
+            )
 
         # Start workflow
         await ctx.start()
@@ -24,12 +29,20 @@ def workflow(func):
             # Success
             await ctx.success(result)
             return result
+        except pgqrs.TransientStepError:
+            # Propagate transient errors without marking workflow as failed
+            # The step is already marked with retry scheduled
+            raise
+        except (pgqrs.StepNotReadyError, pgqrs.RetriesExhaustedError):
+            # Propagate retry control-flow exceptions
+            raise
         except Exception as e:
             # Failure
             await ctx.fail(str(e))
             raise
 
     return wrapper
+
 
 def step(func):
     """
@@ -42,14 +55,17 @@ def step(func):
     3. If not, executing the function body.
     4. Persisting the success/failure result.
     """
+
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
         if not isinstance(ctx, PyWorkflow):
-             raise TypeError(f"First argument to a step must be a PyWorkflow instance, got {type(ctx)}")
+            raise TypeError(
+                f"First argument to a step must be a PyWorkflow instance, got {type(ctx)}"
+            )
 
         step_id = func.__name__
 
-        # Acquire step
+        # Acquire step (uses system time by default, or current_time parameter in tests)
         step_result = await ctx.acquire_step(step_id)
 
         if step_result.status == "SKIPPED":
@@ -61,6 +77,13 @@ def step(func):
                 result = await func(ctx, *args, **kwargs)
                 await guard.success(result)
                 return result
+            except pgqrs.TransientStepError as e:
+                # Handle transient failures - schedule retry and propagate
+                await guard.fail_transient("TRANSIENT_ERROR", str(e))
+                raise
+            except (pgqrs.StepNotReadyError, pgqrs.RetriesExhaustedError):
+                # Propagate retry control-flow exceptions
+                raise
             except Exception as e:
                 await guard.fail(str(e))
                 raise
