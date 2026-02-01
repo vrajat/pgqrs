@@ -3,6 +3,17 @@ UV ?= uv
 # Database backend for testing (postgres, sqlite, turso)
 PGQRS_TEST_BACKEND ?= postgres
 
+# Auto-set CARGO_FEATURES based on PGQRS_TEST_BACKEND if not explicitly provided
+ifeq ($(PGQRS_TEST_BACKEND),postgres)
+	CARGO_FEATURES ?= --no-default-features --features postgres
+else ifeq ($(PGQRS_TEST_BACKEND),sqlite)
+	CARGO_FEATURES ?= --no-default-features --features sqlite
+else ifeq ($(PGQRS_TEST_BACKEND),turso)
+	CARGO_FEATURES ?= --no-default-features --features turso
+else
+	CARGO_FEATURES ?=
+endif
+
 .venv:  ## Set up Python virtual environment
 	$(UV) venv
 

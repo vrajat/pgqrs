@@ -668,6 +668,33 @@ impl StepRetryPolicy {
     pub fn should_retry(&self, attempt: u32) -> bool {
         attempt < self.max_attempts
     }
+
+    /// Extract retry delay from error or calculate from policy.
+    ///
+    /// Checks the error for a `retry_after` field and uses that if present.
+    /// Otherwise, calculates delay using the retry policy's backoff strategy.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The error value that may contain a `retry_after` field
+    /// * `retry_count` - The current retry count (0-indexed)
+    ///
+    /// # Returns
+    ///
+    /// Delay in seconds before the next retry attempt.
+    pub fn extract_retry_delay(&self, error: &serde_json::Value, retry_count: i32) -> u64 {
+        if let Some(retry_after_val) = error.get("retry_after") {
+            if let Some(secs) = retry_after_val.as_u64() {
+                // Use custom delay from error as plain seconds (e.g., Retry-After header)
+                return secs;
+            } else if let Some(secs) = retry_after_val.get("secs").and_then(|v| v.as_u64()) {
+                // Use custom delay from error when serialized as a Duration { secs, nanos }
+                return secs;
+            }
+        }
+        // Use policy backoff
+        self.calculate_delay(retry_count as u32) as u64
+    }
 }
 
 /// Workflow configuration (future use).

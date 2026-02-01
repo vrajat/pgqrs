@@ -1250,7 +1250,7 @@ impl PyWorkflow {
                 wf.id()
             };
 
-            // Parse current_time if provided, otherwise use system time
+            // Determine time: use parameter or system time
             let time = if let Some(time_str) = current_time {
                 chrono::DateTime::parse_from_rfc3339(&time_str)
                     .map_err(|e| {
@@ -1276,6 +1276,7 @@ impl PyWorkflow {
                     value: py.None(),
                     guard: Some(PyStepGuard {
                         inner: Arc::new(tokio::sync::Mutex::new(guard)),
+                        current_time: time,
                     }),
                 }
                 .into_py(py)),
@@ -1304,6 +1305,7 @@ struct PyStepResult {
 #[derive(Clone)]
 struct PyStepGuard {
     inner: Arc<tokio::sync::Mutex<Box<dyn StepGuard>>>,
+    current_time: chrono::DateTime<chrono::Utc>,
 }
 
 #[pymethods]
@@ -1319,10 +1321,11 @@ impl PyStepGuard {
 
     fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let current_time = self.current_time;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut guard = inner.lock().await;
             guard
-                .fail_with_json(serde_json::Value::String(error))
+                .fail_with_json(serde_json::Value::String(error), current_time)
                 .await
                 .map_err(to_py_err)
         })
@@ -1347,6 +1350,7 @@ impl PyStepGuard {
         retry_after: Option<f64>,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
+        let current_time = self.current_time;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut error_json = serde_json::json!({
                 "is_transient": true,
@@ -1372,31 +1376,25 @@ impl PyStepGuard {
                     )));
                 }
 
-                // Validate delay doesn't exceed u64::MAX seconds
-                const MAX_DELAY_SECS: f64 = u64::MAX as f64;
-                if delay_secs > MAX_DELAY_SECS {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "retry_after exceeds maximum ({} seconds)",
-                        MAX_DELAY_SECS
-                    )));
-                }
+                // Convert f64 seconds to integer seconds and nanoseconds
+                let secs = delay_secs.trunc() as u64;
+                let nanos =
+                    ((delay_secs.fract() * 1_000_000_000.0).round() as u32).min(999_999_999);
 
-                // Convert float seconds to Duration-like JSON structure
-                // Match Rust's Duration serialization format: { "secs": u64, "nanos": u32 }
-                let secs = delay_secs.floor() as u64; // Safe after validation above
-                let fractional = delay_secs - delay_secs.floor();
-                let nanos_f64 = fractional * 1_000_000_000.0;
-                // Clamp to valid nanosecond range (0-999,999,999) to prevent overflow
-                let nanos = nanos_f64.min(999_999_999.0) as u32;
-
-                error_json["retry_after"] = serde_json::json!({
-                    "secs": secs,
-                    "nanos": nanos,
-                });
+                error_json.as_object_mut().unwrap().insert(
+                    "retry_after".to_string(),
+                    serde_json::json!({
+                        "secs": secs,
+                        "nanos": nanos,
+                    }),
+                );
             }
 
             let mut guard = inner.lock().await;
-            guard.fail_with_json(error_json).await.map_err(to_py_err)
+            guard
+                .fail_with_json(error_json, current_time)
+                .await
+                .map_err(to_py_err)
         })
     }
 }
