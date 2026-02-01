@@ -24,6 +24,11 @@ include = [
 name = "pgqrs"
 path = "src/main.rs"
 
+[[bin]]
+name = "setup_test_schemas"
+path = "src/bin/setup_test_schemas.rs"
+required-features = ["postgres"]
+
 [dev-dependencies]
 tokio-test = "0.4"
 testcontainers = "0.25"
