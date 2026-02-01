@@ -14,6 +14,69 @@ class ValidationError(PgqrsError): ...
 class TimeoutError(PgqrsError): ...
 class InternalError(PgqrsError): ...
 class StateTransitionError(PgqrsError): ...
+class TransientStepError(PgqrsError): ...
+class RetriesExhaustedError(PgqrsError): ...
+class StepNotReadyError(PgqrsError): ...
+
+class BackoffStrategy:
+    """Backoff strategy for step retries."""
+
+    @staticmethod
+    def fixed(delay_seconds: int) -> "BackoffStrategy":
+        """Create a fixed delay backoff strategy."""
+        ...
+
+    @staticmethod
+    def exponential(base_seconds: int, max_seconds: int) -> "BackoffStrategy":
+        """Create an exponential backoff strategy: delay = base * 2^attempt."""
+        ...
+
+    @staticmethod
+    def exponential_with_jitter(
+        base_seconds: int, max_seconds: int
+    ) -> "BackoffStrategy":
+        """Create an exponential backoff with jitter strategy (±25%)."""
+        ...
+
+    class ExponentialWithJitter:
+        """Exponential backoff with jitter (±25%)."""
+
+        base_seconds: int
+        max_seconds: int
+
+class StepRetryPolicy:
+    """
+    Retry policy for workflow steps.
+
+    Configures automatic retry behavior when steps fail with transient errors.
+
+    Example:
+        >>> policy = StepRetryPolicy(
+        ...     max_attempts=5,
+        ...     backoff=BackoffStrategy.ExponentialWithJitter(
+        ...         base_seconds=2, max_seconds=60
+        ...     )
+        ... )
+    """
+
+    def __init__(
+        self,
+        max_attempts: int = 3,
+        backoff: Optional[BackoffStrategy] = None,
+    ) -> None:
+        """
+        Create a new retry policy.
+
+        Args:
+            max_attempts: Maximum number of retry attempts (default: 3)
+            backoff: Backoff strategy (default: ExponentialWithJitter with base=1s, max=60s)
+        """
+        ...
+
+    @property
+    def max_attempts(self) -> int:
+        """Maximum number of retry attempts."""
+        ...
 
 class Config:
     def __init__(

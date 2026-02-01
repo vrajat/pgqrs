@@ -5,8 +5,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
-    QueueInfo as RustQueueInfo, QueueMessage as RustQueueMessage, WorkerInfo as RustWorkerInfo,
-    WorkerStatus,
+    BackoffStrategy as RustBackoffStrategy, QueueInfo as RustQueueInfo,
+    QueueMessage as RustQueueMessage, StepRetryPolicy as RustStepRetryPolicy,
+    WorkerInfo as RustWorkerInfo, WorkerStatus,
 };
 use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
@@ -29,6 +30,9 @@ pyo3::create_exception!(pgqrs, ValidationError, PgqrsError);
 pyo3::create_exception!(pgqrs, TimeoutError, PgqrsError);
 pyo3::create_exception!(pgqrs, InternalError, PgqrsError);
 pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
+pyo3::create_exception!(pgqrs, TransientStepError, PgqrsError);
+pyo3::create_exception!(pgqrs, RetriesExhaustedError, PgqrsError);
+pyo3::create_exception!(pgqrs, StepNotReadyError, PgqrsError);
 
 fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     match err {
@@ -67,6 +71,11 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         #[cfg(any(feature = "postgres", feature = "sqlite"))]
         rust_pgqrs::Error::MigrationFailed(_) => InternalError::new_err(err.to_string()),
         rust_pgqrs::Error::Internal { .. } => InternalError::new_err(err.to_string()),
+        rust_pgqrs::Error::Transient { .. } => TransientStepError::new_err(err.to_string()),
+        rust_pgqrs::Error::RetriesExhausted { .. } => {
+            RetriesExhaustedError::new_err(err.to_string())
+        }
+        rust_pgqrs::Error::StepNotReady { .. } => StepNotReadyError::new_err(err.to_string()),
         _ => PgqrsError::new_err(err.to_string()),
     }
 }
@@ -220,6 +229,91 @@ impl PyConfig {
     #[setter]
     fn set_heartbeat_interval_seconds(&mut self, interval: u64) {
         self.inner.heartbeat_interval = interval;
+    }
+}
+
+/// Backoff strategy for step retries
+#[pyclass(name = "BackoffStrategy")]
+#[derive(Clone)]
+pub struct PyBackoffStrategy {
+    inner: RustBackoffStrategy,
+}
+
+#[pymethods]
+impl PyBackoffStrategy {
+    /// Create a fixed delay backoff strategy
+    #[staticmethod]
+    fn fixed(delay_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::Fixed { delay_seconds },
+        }
+    }
+
+    /// Create an exponential backoff strategy
+    #[staticmethod]
+    fn exponential(base_seconds: u32, max_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::Exponential {
+                base_seconds,
+                max_seconds,
+            },
+        }
+    }
+
+    /// Create an exponential backoff with jitter strategy
+    #[staticmethod]
+    fn exponential_with_jitter(base_seconds: u32, max_seconds: u32) -> Self {
+        Self {
+            inner: RustBackoffStrategy::ExponentialWithJitter {
+                base_seconds,
+                max_seconds,
+            },
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
+/// Retry policy for workflow steps
+#[pyclass(name = "StepRetryPolicy")]
+#[derive(Clone)]
+pub struct PyStepRetryPolicy {
+    inner: RustStepRetryPolicy,
+}
+
+#[pymethods]
+impl PyStepRetryPolicy {
+    #[new]
+    #[pyo3(signature = (max_attempts=3, backoff=None))]
+    fn new(max_attempts: u32, backoff: Option<PyBackoffStrategy>) -> Self {
+        let backoff_inner =
+            backoff
+                .map(|b| b.inner)
+                .unwrap_or(RustBackoffStrategy::ExponentialWithJitter {
+                    base_seconds: 1,
+                    max_seconds: 60,
+                });
+
+        Self {
+            inner: RustStepRetryPolicy {
+                max_attempts,
+                backoff: backoff_inner,
+            },
+        }
+    }
+
+    #[getter]
+    fn max_attempts(&self) -> u32 {
+        self.inner.max_attempts
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "StepRetryPolicy(max_attempts={}, backoff={:?})",
+            self.inner.max_attempts, self.inner.backoff
+        )
     }
 }
 
@@ -1296,6 +1390,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepGuard>()?;
     m.add_class::<ArchivedMessage>()?;
     m.add_class::<ConsumerIterator>()?;
+    m.add_class::<PyBackoffStrategy>()?;
+    m.add_class::<PyStepRetryPolicy>()?;
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;
@@ -1323,6 +1419,12 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
         "StateTransitionError",
         py.get_type::<StateTransitionError>(),
     )?;
+    m.add("TransientStepError", py.get_type::<TransientStepError>())?;
+    m.add(
+        "RetriesExhaustedError",
+        py.get_type::<RetriesExhaustedError>(),
+    )?;
+    m.add("StepNotReadyError", py.get_type::<StepNotReadyError>())?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;
