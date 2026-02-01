@@ -1,6 +1,23 @@
-# CLAUDE.md
+# Project Processes and Conventions
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file defines the development processes, conventions, and architecture for the **pgqrs** project.
+
+---
+
+## Agent Configuration Structure
+
+**For role-based development guidance**, see:
+- `agents/personas/planner.md` - Planning and design phase
+- `agents/personas/builder.md` - Implementation phase
+- `agents/personas/tester.md` - Testing phase
+- `agents/personas/reviewer.md` - Review phase
+
+**For model-specific entry points**, see:
+- `CLAUDE.md` (root) - Claude configuration
+- `GEMINI.md` (root) - Gemini configuration (when applicable)
+- `OPENCODE.md` (root) - OpenCode configuration (when applicable)
+
+---
 
 ## Contribution Guidelines
 
@@ -417,9 +434,14 @@ benchmark/
 ```
 ├── Cargo.toml         # Rust package configuration with feature flags
 ├── README.md          # User-facing documentation with updated architecture
-├── CLAUDE.md          # Development guidelines and architecture (this file)
-└── crates/            # Future: separate crates for different components
-    └── pgqrs-server/  # Future: optional server component
+├── CLAUDE.md          # Claude model configuration
+└── agents/            # Agent configuration directory
+    ├── agents.md      # This file - project processes
+    └── personas/      # Role-specific development guidelines
+        ├── planner.md
+        ├── builder.md
+        ├── tester.md
+        └── reviewer.md
 ```
 
 ### API Surface Organization
