@@ -123,10 +123,6 @@ pub enum Error {
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    /// Configuration loading or parsing failed
-    #[error("Configuration error: {0}")]
-    Config(#[from] config::ConfigError),
-
     /// Required configuration field is missing
     #[error("Missing required configuration: {field}")]
     MissingConfig { field: String },

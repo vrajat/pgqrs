@@ -46,9 +46,9 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
         }
         rust_pgqrs::Error::MessageNotFound { .. } => MessageNotFoundError::new_err(err.to_string()),
         rust_pgqrs::Error::Serialization(_) => SerializationError::new_err(err.to_string()),
-        rust_pgqrs::Error::Config(_)
-        | rust_pgqrs::Error::MissingConfig { .. }
-        | rust_pgqrs::Error::InvalidConfig { .. } => ConfigError::new_err(err.to_string()),
+        rust_pgqrs::Error::MissingConfig { .. } | rust_pgqrs::Error::InvalidConfig { .. } => {
+            ConfigError::new_err(err.to_string())
+        }
         rust_pgqrs::Error::RateLimited { .. } => RateLimitedError::new_err(err.to_string()),
         rust_pgqrs::Error::ValidationFailed { .. }
         | rust_pgqrs::Error::PayloadTooLarge { .. }

@@ -1,0 +1,29 @@
+# Build optimizations for pgqrs
+#
+# These settings improve build performance, especially for incremental builds
+# during development.
+
+[build]
+# Use more parallel jobs for compilation (default is usually good)
+# jobs = 4  # Uncomment to limit parallel jobs if needed
+
+[profile.dev]
+# Optimize for faster compilation in dev builds
+# Reduce codegen units for better incremental compilation performance
+codegen-units = 256
+
+# Enable incremental compilation (default in dev, but explicit here)
+incremental = true
+
+[profile.dev.package."*"]
+# Optimize dependencies even in dev builds (they change less frequently)
+opt-level = 1
+
+[target.aarch64-apple-darwin]
+# Use faster linker on macOS (Apple Silicon)
+# The default linker is already fast on macOS, but we ensure it's used
+rustflags = ["-C", "link-arg=-fuse-ld=ld"]
+
+[target.x86_64-apple-darwin]
+# Use faster linker on macOS (Intel)
+rustflags = ["-C", "link-arg=-fuse-ld=ld"]

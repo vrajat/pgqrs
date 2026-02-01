@@ -48,7 +48,7 @@ sqlite = ["sqlx", "sqlx/sqlite"]
 turso = ["dep:turso"]
 
 [dependencies]
-sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"], optional = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros", "migrate"], optional = true }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -59,7 +59,6 @@ thiserror = "1.0"
 anyhow = "1.0"
 pgqrs-macros = { path = "../pgqrs-macros", version = "0.13.0" }
 clap = { version = "4.0", features = ["derive"] }
-config = "0.15"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 serde_yaml = "0.9"
