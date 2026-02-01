@@ -1222,7 +1222,25 @@ impl PyWorkflow {
         })
     }
 
-    fn acquire_step<'a>(&self, py: Python<'a>, step_id: String) -> PyResult<&'a PyAny> {
+    /// Acquire a step for execution.
+    ///
+    /// Args:
+    ///     step_id: Unique identifier for the step
+    ///     current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
+    ///
+    /// Example:
+    ///     # Normal usage (uses system time)
+    ///     step_res = await workflow.acquire_step("my_step")
+    ///
+    ///     # Testing with controlled time
+    ///     step_res = await workflow.acquire_step("my_step", current_time="2024-01-15T10:30:00Z")
+    #[pyo3(signature = (step_id, current_time=None))]
+    fn acquire_step<'a>(
+        &self,
+        py: Python<'a>,
+        step_id: String,
+        current_time: Option<String>,
+    ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let store = self.store.clone();
 
@@ -1232,7 +1250,22 @@ impl PyWorkflow {
                 wf.id()
             };
 
+            // Parse current_time if provided, otherwise use system time
+            let time = if let Some(time_str) = current_time {
+                chrono::DateTime::parse_from_rfc3339(&time_str)
+                    .map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Invalid ISO 8601 timestamp '{}': {}",
+                            time_str, e
+                        ))
+                    })?
+                    .with_timezone(&chrono::Utc)
+            } else {
+                chrono::Utc::now()
+            };
+
             let res: rust_pgqrs::StepResult<serde_json::Value> = rust_pgqrs::step(id, &step_id)
+                .with_time(time)
                 .acquire(&store)
                 .await
                 .map_err(to_py_err)?;

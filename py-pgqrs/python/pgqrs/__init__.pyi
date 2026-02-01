@@ -255,7 +255,27 @@ class PyWorkflow:
     async def start(self) -> None: ...
     async def fail(self, error: str) -> None: ...
     async def success(self, result: Any) -> None: ...
-    async def acquire_step(self, step_id: str) -> "PyStepResult": ...
+    async def acquire_step(
+        self, step_id: str, current_time: Optional[str] = None
+    ) -> "PyStepResult":
+        """
+        Acquire a step for execution.
+
+        Args:
+            step_id: Unique identifier for the step
+            current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
+
+        Returns:
+            PyStepResult with status and optional guard
+
+        Example:
+            # Normal usage (uses system time)
+            step_res = await workflow.acquire_step("my_step")
+
+            # Testing with controlled time
+            step_res = await workflow.acquire_step("my_step", current_time="2024-01-15T10:30:00Z")
+        """
+        ...
 
 class PyStepResult:
     @property
