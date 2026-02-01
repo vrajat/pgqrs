@@ -402,3 +402,72 @@ async def test_negative_retry_after_rejected(test_dsn: str, schema: str | None):
     # Attempt to fail with negative retry_after
     with pytest.raises(ValueError, match="retry_after must be non-negative"):
         await guard.fail_transient("TEST", "Test error", retry_after=-5.0)
+
+
+@pytest.mark.asyncio
+async def test_infinity_retry_after_rejected(test_dsn: str, schema: str | None):
+    """Test that Infinity retry_after is rejected."""
+    store = await pgqrs.connect(test_dsn)
+    admin = pgqrs.admin(store)
+
+    await admin.install()
+
+    wf = await admin.create_workflow("infinity_test", {})
+    await wf.start()
+
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+    step_res = await wf.acquire_step(
+        "infinity_step", current_time=base_time.isoformat()
+    )
+    guard = step_res.guard
+
+    # Attempt to fail with Infinity retry_after
+    with pytest.raises(ValueError, match="retry_after must be finite"):
+        await guard.fail_transient("TEST", "Test error", retry_after=float("inf"))
+
+
+@pytest.mark.asyncio
+async def test_nan_retry_after_rejected(test_dsn: str, schema: str | None):
+    """Test that NaN retry_after is rejected."""
+    store = await pgqrs.connect(test_dsn)
+    admin = pgqrs.admin(store)
+
+    await admin.install()
+
+    wf = await admin.create_workflow("nan_test", {})
+    await wf.start()
+
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+    step_res = await wf.acquire_step("nan_step", current_time=base_time.isoformat())
+    guard = step_res.guard
+
+    # Attempt to fail with NaN retry_after
+    with pytest.raises(ValueError, match="retry_after must be finite"):
+        await guard.fail_transient("TEST", "Test error", retry_after=float("nan"))
+
+
+@pytest.mark.asyncio
+async def test_fractional_retry_after_accepted(test_dsn: str, schema: str | None):
+    """Test that fractional retry_after values (milliseconds) are accepted."""
+    store = await pgqrs.connect(test_dsn)
+    admin = pgqrs.admin(store)
+
+    await admin.install()
+
+    wf = await admin.create_workflow("fractional_test", {})
+    await wf.start()
+
+    base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+    step_res = await wf.acquire_step(
+        "fractional_step", current_time=base_time.isoformat()
+    )
+    guard = step_res.guard
+
+    # Fractional seconds (500ms) should be accepted
+    try:
+        await guard.fail_transient("TEST", "Test error", retry_after=0.5)
+    except pgqrs.StepNotReadyError:
+        # Expected: step scheduled for retry
+        pass
+    except ValueError:
+        pytest.fail("Fractional retry_after should be accepted")

@@ -1356,6 +1356,14 @@ impl PyStepGuard {
 
             // Add retry_after if provided
             if let Some(delay_secs) = retry_after {
+                // Validate delay is finite (not NaN or Infinity)
+                if !delay_secs.is_finite() {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "retry_after must be finite, got {}",
+                        delay_secs
+                    )));
+                }
+
                 // Validate delay is non-negative
                 if delay_secs < 0.0 {
                     return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -1364,10 +1372,22 @@ impl PyStepGuard {
                     )));
                 }
 
+                // Validate delay doesn't exceed u64::MAX seconds
+                const MAX_DELAY_SECS: f64 = u64::MAX as f64;
+                if delay_secs > MAX_DELAY_SECS {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "retry_after exceeds maximum ({} seconds)",
+                        MAX_DELAY_SECS
+                    )));
+                }
+
                 // Convert float seconds to Duration-like JSON structure
                 // Match Rust's Duration serialization format: { "secs": u64, "nanos": u32 }
-                let secs = delay_secs.floor() as u64;
-                let nanos = ((delay_secs - delay_secs.floor()) * 1_000_000_000.0) as u32;
+                let secs = delay_secs.floor() as u64; // Safe after validation above
+                let fractional = delay_secs - delay_secs.floor();
+                let nanos_f64 = fractional * 1_000_000_000.0;
+                // Clamp to valid nanosecond range (0-999,999,999) to prevent overflow
+                let nanos = nanos_f64.min(999_999_999.0) as u32;
 
                 error_json["retry_after"] = serde_json::json!({
                     "secs": secs,
