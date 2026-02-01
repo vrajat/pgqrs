@@ -258,7 +258,7 @@ impl StepGuard for TursoStepGuard {
             // Schedule retry
             crate::store::turso::query(SQL_SCHEDULE_RETRY)
                 .bind(new_retry_count)
-                .bind(&retry_at_str)
+                .bind(retry_at_str)
                 .bind(self.workflow_id)
                 .bind(self.step_id.as_str())
                 .execute_once(&self.db)
