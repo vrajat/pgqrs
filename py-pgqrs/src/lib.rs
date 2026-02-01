@@ -12,8 +12,8 @@ use rust_pgqrs::types::{
 use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
 
 use pyo3::pyasync::IterANextOutput;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::future::Future;
+use std::sync::{Arc, LazyLock};
 use tokio::runtime::Runtime;
 
 // Exceptions
@@ -80,10 +80,26 @@ fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     }
 }
 
-static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+struct RuntimeManager {
+    rt: Runtime,
+}
 
-fn get_runtime() -> &'static Runtime {
-    RUNTIME.get_or_init(|| Runtime::new().unwrap())
+impl RuntimeManager {
+    fn new() -> Self {
+        Self {
+            rt: Runtime::new().expect("Failed to initialize Tokio runtime"),
+        }
+    }
+
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.rt.block_on(future)
+    }
+}
+
+static RUNTIME: LazyLock<RuntimeManager> = LazyLock::new(RuntimeManager::new);
+
+fn get_runtime() -> &'static RuntimeManager {
+    &RUNTIME
 }
 
 // Helper to convert serde-json value to PyObject
@@ -881,7 +897,7 @@ impl Producer {
         let store = admin.store.clone();
         let rt = get_runtime();
 
-        let producer = rt.block_on(async move {
+        let producer = rt.block_on(async {
             // Use Store trait method directly - returns Box<dyn Producer + 'static>
             store
                 .producer(&queue, &hostname, port, store.config())
@@ -948,7 +964,7 @@ impl Consumer {
         let store = admin.store.clone();
         let rt = get_runtime();
 
-        let consumer = rt.block_on(async move {
+        let consumer = rt.block_on(async {
             // Use Store trait method directly - returns Box<dyn Consumer + 'static>
             store
                 .consumer(&queue, &hostname, port, store.config())
