@@ -21,10 +21,10 @@
     - [ ] Update `main.rs` and `lib.rs` to use `PostgresStore` <!-- id: 8 -->
     - [ ] Verify existing tests pass with `PostgresStore` <!-- id: 9 --> (Issue #110)
 - [ ] **Phase 3: New Backends**
-    - [ ] Implement `SqliteStore` (`feature = "sqlite"`) <!-- id: 10 --> (Issue #106)
-    - [ ] Implement `TursoStore` (`feature = "turso"`) <!-- id: 11 --> (Issue #108)
+    - [ ] Implement `SqliteStore` (`feature = "sqlite"`) <!-- id: 15 --> (Issue #106)
+    - [ ] Implement `TursoStore` (`feature = "turso"`) <!-- id: 16 --> (Issue #108)
 - [ ] **Phase 4: Bindings & Cleanup**
-    - [ ] Update Python bindings with `PyStore` enum wrappers <!-- id: 12 --> (Issue #113)
-    - [ ] Add integration tests for all backends <!-- id: 13 --> (Issue #110)
+    - [ ] Update Python bindings with `PyStore` enum wrappers <!-- id: 17 --> (Issue #113)
+    - [ ] Add integration tests for all backends <!-- id: 18 --> (Issue #110)
 - [ ] **Phase 5: Documentation & Verification**
-    - [ ] Document new architecture and usage <!-- id: 14 --> (Issue #111)
+    - [ ] Document new architecture and usage <!-- id: 19 --> (Issue #111)
