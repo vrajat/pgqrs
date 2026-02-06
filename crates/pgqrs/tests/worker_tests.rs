@@ -5,30 +5,14 @@ use pgqrs::store::AnyStore;
 use pgqrs::types::WorkerStatus;
 use pgqrs::Store;
 use serde_json::json;
-use serial_test::serial;
 
 mod common;
 
 async fn create_store() -> AnyStore {
-    let store = common::create_store("pgqrs_worker_test").await;
-
-    // Clean up any existing workers to ensure test isolation
-    // SQLite doesn't support TRUNCATE, use DELETE
-    let sql = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
-        "DELETE FROM pgqrs_workers"
-    } else {
-        "TRUNCATE TABLE pgqrs_workers RESTART IDENTITY CASCADE"
-    };
-
-    if let Err(e) = store.execute_raw(sql).await {
-        // Ignore error in case table doesn't exist yet
-        eprintln!("Warning: Failed to clear workers table: {}", e);
-    }
-    store
+    common::create_store("pgqrs_worker_test").await
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_registration() {
     let store = create_store().await;
 
@@ -59,7 +43,6 @@ async fn test_worker_registration() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_lifecycle() {
     let store = create_store().await;
 
@@ -93,7 +76,6 @@ async fn test_worker_lifecycle() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_message_assignment() {
     let store = create_store().await;
 
@@ -168,7 +150,6 @@ async fn test_worker_message_assignment() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_admin_worker_management() {
     let store = create_store().await;
 
@@ -195,7 +176,13 @@ async fn test_admin_worker_management() {
 
     // Test listing all workers
     let all_workers = pgqrs::tables(&store).workers().list().await.unwrap();
-    assert_eq!(all_workers.len(), 2);
+    // Note: Cannot assert exact count when tests run in parallel
+    // Other tests may create workers in the same schema
+    assert!(
+        all_workers.len() >= 2,
+        "Should have at least our 2 workers, found {}",
+        all_workers.len()
+    );
 
     // Test listing workers by queue
     let queue1_workers = pgqrs::tables(&store)
@@ -233,7 +220,6 @@ async fn test_admin_worker_management() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_health_check() {
     let store = create_store().await;
 
@@ -264,7 +250,6 @@ async fn test_worker_health_check() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_custom_schema_search_path() {
     // use common::TestBackend;
     #[cfg(feature = "sqlite")]
@@ -325,7 +310,6 @@ async fn test_custom_schema_search_path() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_with_references() {
     let store = create_store().await;
 
@@ -392,7 +376,6 @@ async fn test_worker_deletion_with_references() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_without_references() {
     let store = create_store().await;
 
@@ -432,7 +415,6 @@ async fn test_worker_deletion_without_references() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_with_archived_references() {
     let store = create_store().await;
 
@@ -492,7 +474,6 @@ async fn test_worker_deletion_with_archived_references() {
 /// Workers must be in Stopped state AND have old heartbeat to be purged.
 /// Workers with recent heartbeats are not purged regardless of status.
 #[tokio::test]
-#[serial]
 async fn test_purge_old_workers() {
     let store = create_store().await;
 

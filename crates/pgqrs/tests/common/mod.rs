@@ -1,42 +1,9 @@
 #![allow(clippy::await_holding_lock)]
-pub mod constants;
-
-#[cfg(feature = "postgres")]
-pub mod database_setup;
-#[cfg(feature = "postgres")]
-pub mod pgbouncer;
-#[cfg(feature = "postgres")]
-pub mod postgres;
 pub mod resource;
 
 use ctor::dtor;
 use pgqrs::store::BackendType;
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
-
-#[allow(dead_code)]
-#[cfg(feature = "postgres")]
-pub async fn get_pgbouncer_dsn(schema: Option<&str>) -> String {
-    {
-        let guard = RESOURCE_MANAGER.read().unwrap();
-        if guard.is_some() {
-            return guard.as_ref().unwrap().resource.get_dsn(schema).await;
-        }
-    }
-
-    let mut guard = RESOURCE_MANAGER.write().unwrap();
-    if guard.is_some() {
-        return guard.as_ref().unwrap().resource.get_dsn(schema).await;
-    }
-
-    let resource: Box<dyn TestResource> = {
-        let r = pgbouncer::PgBouncerResource::new();
-        r.initialize().await.expect("Failed to init pgbouncer");
-        Box::new(r)
-    };
-    let dsn = resource.get_dsn(schema).await;
-    *guard = Some(ResourceManager::new(resource));
-    dsn
-}
 
 /// Get the current test backend.
 #[allow(dead_code)]
@@ -76,9 +43,7 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
             std::env::var("PGQRS_TEST_POSTGRES_DSN")
                 .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
                 .ok()
-                .map(|dsn| {
-                    Box::new(postgres::ExternalPostgresResource::new(dsn)) as Box<dyn TestResource>
-                })
+                .map(|dsn| Box::new(resource::ExternalResource::new(dsn)) as Box<dyn TestResource>)
         }
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => {
@@ -113,10 +78,29 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
         .await
         .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
 
-    pgqrs::admin(&store)
-        .install()
-        .await
-        .expect("Failed to install schema");
+    // Install schema based on backend:
+    // - Postgres: Uses global setup (setup_test_schemas binary), skip install
+    // - SQLite/Turso: No global setup, install per-test
+    match current_backend() {
+        #[cfg(feature = "postgres")]
+        BackendType::Postgres => {
+            // Schema already provisioned by setup_test_schemas binary
+        }
+        #[cfg(feature = "sqlite")]
+        BackendType::Sqlite => {
+            pgqrs::admin(&store)
+                .install()
+                .await
+                .expect("Failed to install SQLite schema");
+        }
+        #[cfg(feature = "turso")]
+        BackendType::Turso => {
+            pgqrs::admin(&store)
+                .install()
+                .await
+                .expect("Failed to install Turso schema");
+        }
+    }
 
     store
 }
@@ -144,9 +128,12 @@ pub async fn get_test_dsn(schema: &str) -> String {
         match backend {
             #[cfg(feature = "postgres")]
             BackendType::Postgres => {
-                let r = postgres::PostgresResource::new();
-                r.initialize().await.expect("Failed to init postgres");
-                Box::new(r)
+                // Postgres requires external database (from CI services or local Docker)
+                // If PGQRS_TEST_DSN is not set, tests will fail with connection error
+                panic!(
+                    "Postgres backend requires PGQRS_TEST_DSN environment variable. \
+                     Run 'make test-postgres' or set PGQRS_TEST_DSN manually."
+                );
             }
             #[cfg(feature = "sqlite")]
             BackendType::Sqlite => {

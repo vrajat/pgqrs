@@ -24,14 +24,21 @@ include = [
 name = "pgqrs"
 path = "src/main.rs"
 
+[[bin]]
+name = "setup_test_schemas"
+path = "src/bin/setup_test_schemas.rs"
+required-features = ["postgres"]
+
 [dev-dependencies]
 tokio-test = "0.4"
-testcontainers = "0.25"
-testcontainers-modules = { version = "0.13", features = ["postgres"] }
 ctor = "0.2.4"
 once_cell = "1.19"
 
 serial_test = "3.2"
+
+# CLI testing dependencies
+assert_cmd = "2.0"
+predicates = "3.0"
 
 [features]
 default = ["postgres"]
@@ -43,7 +50,7 @@ sqlite = ["sqlx", "sqlx/sqlite"]
 turso = ["dep:turso"]
 
 [dependencies]
-sqlx = { version = "0.8.6", features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros"], optional = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros", "migrate"], optional = true }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -54,7 +61,6 @@ thiserror = "1.0"
 anyhow = "1.0"
 pgqrs-macros = { path = "../pgqrs-macros", version = "0.13.0" }
 clap = { version = "4.0", features = ["derive"] }
-config = "0.15"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 serde_yaml = "0.9"

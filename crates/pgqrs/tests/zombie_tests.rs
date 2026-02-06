@@ -160,27 +160,11 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         )
     }; // All connections closed here
 
-    // 9. Run CLI command
-    // cargo run -- -d <dsn> ...
-    let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let mut cmd = Command::new(cargo_bin);
-    cmd.arg("run");
-
-    #[cfg(feature = "sqlite")]
-    if common::current_backend() == pgqrs::store::BackendType::Sqlite {
-        cmd.args(["--no-default-features", "--features", "sqlite"]);
-    }
-
-    #[cfg(feature = "turso")]
-    if common::current_backend() == pgqrs::store::BackendType::Turso {
-        cmd.args(["--no-default-features", "--features", "turso"]);
-    }
-
+    // 9. Run CLI command using pre-built binary
     assert!(!dsn_str.is_empty());
 
-    let output = cmd
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args([
-            "--",
             "-d",
             &dsn_str,
             "--schema",

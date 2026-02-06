@@ -78,8 +78,7 @@ async fn workflow_fail_at_end(
 #[tokio::test]
 async fn test_macro_suite() -> anyhow::Result<()> {
     // Setup
-    let store = common::create_store("macro_test_suite_v3").await;
-    pgqrs::admin(&store).install().await?;
+    let store = common::create_store("pgqrs_workflow_test").await;
 
     // --- CASE 0: Creation State (Pending) ---
     {

@@ -142,10 +142,50 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
 - `cargo test -- --test-threads=1` - Run tests sequentially (useful for database tests)
 
 ### Database Testing
-- Tests use `testcontainers` for isolated PostgreSQL instances
-- Integration tests are in `tests/` directory
+
+#### Test Infrastructure Strategy
+
+**Rust Tests (PostgreSQL):**
+- Use **Global Setup** pattern for faster, parallel test execution
+- Schema provisioning handled by `setup_test_schemas` binary (in `src/bin/setup_test_schemas.rs`)
+- All test schemas are created once at the start of the test suite
+- Individual tests verify connection and use pre-provisioned schemas
+- External PostgreSQL required (CI services or local Docker via Makefile)
+
+**Global Setup Binary (`setup_test_schemas`):**
+```rust
+// Located at: crates/pgqrs/src/bin/setup_test_schemas.rs
+// Purpose: Pre-provision all test schemas before running test suite
+// Invoked by: make test-postgres (via setup_test_schemas target)
+```
+
+This binary:
+1. Connects to PostgreSQL using `PGQRS_TEST_DSN`
+2. Creates all test schemas (e.g., `pgqrs_workflow_test`, `pgqrs_builder_test`)
+3. Runs migrations (`install()`) for each schema
+4. Enables parallel test execution without schema conflicts
+
+**Why this approach:**
+- **Performance:** ~3s for 168 tests (vs ~30s+ with per-test setup)
+- **Parallelism:** All tests run concurrently via `cargo-nextest`
+- **No conflicts:** Each test uses its own pre-provisioned schema
+- **Reliability:** Schemas created by production code, not test-specific logic
+
+**Python Tests:**
+- Use `testcontainers` for isolated PostgreSQL instances
+- Each test gets its own ephemeral database
+- Slower but provides complete isolation
+
+**Test Execution:**
+- `make test-postgres` - Run full test suite (setup → test → cleanup)
+- `cargo nextest run` - Run tests directly (requires schemas already set up)
 - Use `RUST_LOG=debug` for detailed test output
-- Tests marked with `#[serial_test::serial]` run sequentially to avoid database conflicts
+
+**Test Cleanup:**
+- Schemas are automatically dropped after `make test-postgres` completes
+- Set `PGQRS_KEEP_TEST_DATA=1` to preserve schemas for debugging
+- Manual cleanup: `make test-cleanup-postgres`
+- Uses same binary as setup: `setup_test_schemas --cleanup`
 
 ### Code Quality and Linting
 - `cargo clippy` - Run Rust linter
@@ -182,7 +222,7 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
 - Use prepared statements for performance and security
 - Wrap operations in transactions where appropriate
 - Handle connection errors gracefully
-- Test with real PostgreSQL instances using testcontainers
+- Test with real PostgreSQL instances (external databases in CI/local, testcontainers for Python)
 
 ### CLI Design Principles
 - Follow conventional CLI patterns with clap
@@ -199,7 +239,8 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
    - Configuration parsing
 
 2. **Integration Tests** (`tests/` directory)
-   - Use `testcontainers` for isolated PostgreSQL testing
+   - Rust tests use external PostgreSQL (via `PGQRS_TEST_DSN` env var)
+   - Python tests use `testcontainers` for isolated PostgreSQL testing
    - Database operations
    - CLI command execution
    - End-to-end workflows
@@ -217,7 +258,8 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
 - Run tests with `--test-threads=1` when database conflicts occur
 
 #### Test Data Management
-- Use `testcontainers` for isolated PostgreSQL instances in integration tests
+- Rust tests connect to external PostgreSQL (CI services or local Docker managed by Makefile)
+- Python tests use `testcontainers` for isolated PostgreSQL instances
 - Clean up test data between test runs
 - Use meaningful test data that reflects real-world scenarios
 - Avoid hardcoded values; use constants or generate test data programmatically
@@ -253,9 +295,10 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 - Subcommands organized by domain (install, queue, message, metrics, worker)
 
 **Testing:**
-- `tests/` - Integration tests using testcontainers for all components
+- `tests/` - Integration tests using external PostgreSQL for Rust, testcontainers for Python
 - `tests/common/` - Shared test utilities and helpers
-- Uses PostgreSQL testcontainers for isolated test environments
+- Rust tests connect to external databases (CI or local Docker)
+- Python tests use testcontainers for isolated test environments
 
 **Examples and Benchmarking:**
 - `examples/` - Usage examples for different API patterns
@@ -351,11 +394,12 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 - `sqlx` - Database operations (async PostgreSQL driver with compile-time checked queries)
 - `tokio` - Async runtime providing the foundation for all async operations
 - `clap` - CLI argument parsing with derive macros for clean command definition
-- `testcontainers` - Integration testing with isolated Docker-based PostgreSQL instances
 - `serde` - JSON serialization/deserialization for message payloads and configuration
 - `anyhow` - Error handling with context and chaining capabilities
 - `tracing` - Structured logging and instrumentation
 - `uuid` - Message ID generation and queue identification
+
+**Note:** Rust tests use external PostgreSQL instances (no testcontainers dependency). Python tests still use `testcontainers` for isolated testing.
 
 #### PostgreSQL Version Compatibility
 - **Minimum**: PostgreSQL 13 (required for improved `SKIP LOCKED` performance and reliability)

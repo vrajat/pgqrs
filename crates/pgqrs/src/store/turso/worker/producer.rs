@@ -178,6 +178,50 @@ impl crate::store::Producer for TursoProducer {
         Ok(queue_messages)
     }
 
+    async fn enqueue_at(
+        &self,
+        payload: &serde_json::Value,
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> Result<QueueMessage> {
+        use crate::store::MessageTable;
+        self.validator.validate(payload)?;
+
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+        let id = self.insert_message(payload, now, vt).await?;
+        self.messages.get(id).await
+    }
+
+    async fn batch_enqueue_at(
+        &self,
+        payloads: &[serde_json::Value],
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> Result<Vec<QueueMessage>> {
+        use crate::store::MessageTable;
+        self.validator.validate_batch(payloads)?;
+
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+
+        let ids = self
+            .messages
+            .batch_insert(
+                self.queue_info.id,
+                payloads,
+                crate::types::BatchInsertParams {
+                    read_ct: 0,
+                    enqueued_at: now,
+                    vt,
+                    producer_worker_id: Some(self.worker_info.id),
+                    consumer_worker_id: None,
+                },
+            )
+            .await?;
+
+        let queue_messages = self.messages.get_by_ids(&ids).await?;
+        Ok(queue_messages)
+    }
+
     async fn insert_message(
         &self,
         payload: &serde_json::Value,

@@ -9,13 +9,21 @@ const TEST_QUEUE_PGBOUNCER_LIST: &str = "test_pgbouncer_list_path";
 mod common;
 
 async fn create_test_setup() -> AnyStore {
-    let database_url = common::get_pgbouncer_dsn(Some("pgqrs_pgbouncer_test")).await;
-    let config = pgqrs::config::Config::from_dsn_with_schema(database_url, "pgqrs_pgbouncer_test")
+    // Use PGBOUNCER_TEST_DSN from environment (set by CI or Makefile)
+    let database_url = std::env::var("PGBOUNCER_TEST_DSN")
+        .expect("PGBOUNCER_TEST_DSN must be set for pgbouncer tests. Run via 'make test-postgres' or set in CI.");
+
+    let config = pgqrs::config::Config::from_dsn_with_schema(&database_url, "pgqrs_pgbouncer_test")
         .expect("Failed to create config with pgbouncer test schema");
 
-    pgqrs::connect_with_config(&config)
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to connect to pgbouncer")
+        .expect("Failed to connect to pgbouncer");
+
+    // Schema should already be provisioned by setup_test_schemas binary
+    // (run by Makefile or CI before tests)
+
+    store
 }
 
 #[tokio::test]

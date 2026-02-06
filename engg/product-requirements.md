@@ -61,7 +61,8 @@ We will support running tests against different backends using environment varia
 
 *   **Default**: `make test` runs SQLite (fast, no deps).
 *   **Postgres**: `make test DB=postgres` runs Postgres tests.
-    *   Tests requiring Postgres will check `std::env::var("PG_DSN")` or start a container via `testcontainers` if the feature is enabled.
+    *   Rust tests use external PostgreSQL (via `PGQRS_TEST_DSN` env var, no testcontainers).
+    *   Python tests check `std::env::var("PG_DSN")` or start a container via `testcontainers` if enabled.
 *   **Running All**: `make test-all` runs for all available backends.
 
 #### Implementation details

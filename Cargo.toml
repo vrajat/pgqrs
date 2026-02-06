@@ -13,3 +13,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/vrajat/pgqrs"
 homepage = "https://github.com/vrajat/pgqrs"
 authors = ["Rajat Venkatesh"]
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = 0

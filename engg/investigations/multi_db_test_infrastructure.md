@@ -29,7 +29,7 @@ The `common` module in `tests/common/mod.rs` provides:
 ```rust
 pub async fn get_postgres_dsn(schema: Option<&str>) -> String {
     let external_dsn = std::env::var("PGQRS_TEST_DSN").ok();
-    // Falls back to testcontainers if not set
+    // Uses external PostgreSQL (CI or local Docker) if set
     container::get_postgres_dsn(schema).await
 }
 ```
@@ -123,7 +123,8 @@ pub trait TestDsnProvider: Send + Sync {
     async fn cleanup(&self) {}
 }
 
-/// Postgres provider - uses testcontainers or external DSN
+/// Postgres provider - uses external DSN (CI or local Docker)
+/// Note: Rust tests no longer use testcontainers. Python tests still do.
 pub struct PostgresProvider;
 
 #[async_trait::async_trait]
@@ -151,7 +152,8 @@ impl TestDsnProvider for SqliteProvider {
     }
 }
 
-/// Turso provider - requires external DSN (no testcontainer available)
+/// Turso provider - requires external DSN (no testcontainer)
+/// Note: Python tests use testcontainers for Postgres, but external DSNs for SQLite/Turso
 pub struct TursoProvider;
 
 #[async_trait::async_trait]
