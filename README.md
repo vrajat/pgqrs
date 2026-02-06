@@ -218,7 +218,7 @@ pgqrs-macros = "0.13.0"
 
 ## Documentation
 
-- **[Full Documentation](https://vrajat.github.io/pgqrs/)** - Complete guides and API reference
+- **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
 - **[Rust API Docs](https://docs.rs/pgqrs)** - Rust crate documentation
 - **[Python Examples](py-pgqrs/tests/test_pgqrs.py)** - Python test suite with examples
 
