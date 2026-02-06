@@ -177,9 +177,15 @@ This binary:
 - Slower but provides complete isolation
 
 **Test Execution:**
-- `make test-postgres` - Run full test suite (includes schema setup)
+- `make test-postgres` - Run full test suite (setup → test → cleanup)
 - `cargo nextest run` - Run tests directly (requires schemas already set up)
 - Use `RUST_LOG=debug` for detailed test output
+
+**Test Cleanup:**
+- Schemas are automatically dropped after `make test-postgres` completes
+- Set `PGQRS_KEEP_TEST_DATA=1` to preserve schemas for debugging
+- Manual cleanup: `make test-cleanup-postgres`
+- Uses same binary as setup: `setup_test_schemas --cleanup`
 
 ### Code Quality and Linting
 - `cargo clippy` - Run Rust linter

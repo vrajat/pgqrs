@@ -110,12 +110,29 @@ ifdef CI_POSTGRES_RUNNING
 	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" \
 	PGBOUNCER_TEST_DSN="$${PGBOUNCER_TEST_DSN:-postgres://postgres@localhost:6432/postgres}" \
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
+	$(MAKE) test-cleanup-postgres
 else
 	@echo "Running tests with local Postgres"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
 	PGBOUNCER_TEST_DSN="postgres://postgres:postgres@localhost:6433/postgres" \
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
+	$(MAKE) test-cleanup-postgres
 	$(MAKE) stop-postgres
+endif
+
+test-cleanup-postgres: ## Drop all test schemas (respects PGQRS_KEEP_TEST_DATA)
+ifdef PGQRS_KEEP_TEST_DATA
+	@echo "Skipping cleanup: PGQRS_KEEP_TEST_DATA is set"
+else
+ifdef CI_POSTGRES_RUNNING
+	@echo "Cleaning up CI Postgres schemas"
+	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" \
+		cargo run -p pgqrs --bin setup_test_schemas --features postgres -- --cleanup
+else
+	@echo "Cleaning up local Postgres schemas"
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
+		cargo run -p pgqrs --bin setup_test_schemas --features postgres -- --cleanup
+endif
 endif
 
 test-sqlite:  ## Run tests on SQLite backend

@@ -135,20 +135,23 @@ impl TestResource for FileResource {
     }
 }
 
-// --- External File Resource Implementation ---
+// --- External Resource Implementation ---
 
 /// Generic external resource that just returns a DSN
 /// Used for external databases or files managed outside the test suite
+#[cfg(feature = "postgres")]
 pub struct ExternalResource {
     dsn: String,
 }
 
+#[cfg(feature = "postgres")]
 impl ExternalResource {
     pub fn new(dsn: String) -> Self {
         Self { dsn }
     }
 }
 
+#[cfg(feature = "postgres")]
 #[async_trait]
 impl TestResource for ExternalResource {
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {

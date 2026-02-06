@@ -35,35 +35,51 @@ const TEST_SCHEMAS: &[&str] = &[
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    let cleanup_mode = args.get(1).map(|s| s.as_str()) == Some("--cleanup");
+
     let dsn = env::var(TEST_DB_DSN_ENV).unwrap_or_else(|_| DEFAULT_TEST_DSN.to_string());
-    println!("Setting up test databases using DSN: {}", dsn);
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&dsn)
         .await?;
 
-    println!("Connected to database.");
+    if cleanup_mode {
+        println!("Cleaning up test schemas using DSN: {}", dsn);
 
-    for schema in TEST_SCHEMAS {
-        println!("Provisioning schema: {}", schema);
+        for schema in TEST_SCHEMAS {
+            println!("Dropping schema: {}", schema);
+            let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
+            sqlx::query(&drop_sql).execute(&pool).await?;
+        }
 
-        // 1. Drop and Recreate Schema (Clean Slate for Suite)
-        let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
-        sqlx::query(&drop_sql).execute(&pool).await?;
+        println!("All test schemas cleaned up successfully!");
+    } else {
+        println!("Setting up test databases using DSN: {}", dsn);
+        println!("Connected to database.");
 
-        let create_sql = format!("CREATE SCHEMA \"{}\"", schema);
-        sqlx::query(&create_sql).execute(&pool).await?;
+        for schema in TEST_SCHEMAS {
+            println!("Provisioning schema: {}", schema);
 
-        // 2. Install Migration
-        // We rely on search_path to install tables into the new schema
-        let config = pgqrs::config::Config::from_dsn_with_schema(&dsn, *schema)?;
-        let store = pgqrs::connect_with_config(&config).await?;
+            // 1. Drop and Recreate Schema (Clean Slate for Suite)
+            let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
+            sqlx::query(&drop_sql).execute(&pool).await?;
 
-        pgqrs::admin(&store).install().await?;
-        println!("  -> Installed pgqrs tables.");
+            let create_sql = format!("CREATE SCHEMA \"{}\"", schema);
+            sqlx::query(&create_sql).execute(&pool).await?;
+
+            // 2. Install Migration
+            // We rely on search_path to install tables into the new schema
+            let config = pgqrs::config::Config::from_dsn_with_schema(&dsn, *schema)?;
+            let store = pgqrs::connect_with_config(&config).await?;
+
+            pgqrs::admin(&store).install().await?;
+            println!("  -> Installed pgqrs tables.");
+        }
+
+        println!("All test schemas provisioned successfully!");
     }
 
-    println!("All test schemas provisioned successfully!");
     Ok(())
 }
