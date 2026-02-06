@@ -7,7 +7,7 @@ type: subagent
 version: 2.0.0
 author: opencode
 mode: subagent
-model: google/gemini-1.5-pro
+model: google/gemini-3-pro-preview
 temperature: 0.1
 
 # Project-specific context

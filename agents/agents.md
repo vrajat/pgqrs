@@ -4,6 +4,43 @@ This file defines the development processes, conventions, and architecture for t
 
 ---
 
+## Initialization
+
+**IMPORTANT: First thing when starting a new session:**
+
+Before beginning any work, test all sub-agents to ensure they are operational:
+
+```bash
+# Run sub-agent health check
+Test all sub-agents by asking each to create a file at:
+.tmp/subagent-tests/{subagent-name}.txt
+
+Each file should contain:
+- Sub-agent name
+- Current timestamp
+- Status: Operational
+- Test result message
+
+Sub-agents to test:
+- ContextScout (read-only - will refuse, this is correct)
+- ExternalScout
+- TaskManager
+- DocWriter
+- CodeReviewer (read-only - will refuse, this is correct)
+- CoderAgent
+- BuildAgent
+- TestEngineer
+- OpenDevopsSpecialist
+- OpenFrontendSpecialist
+- ContextOrganizer
+
+Check .tmp/subagent-tests/TEST_RESULTS.md for test summary.
+```
+
+**Note:** ContextScout and CodeReviewer are read-only agents and will correctly refuse to create files. This is expected behavior.
+
+---
+
 ## Agent Configuration Structure
 
 **For role-based development guidance**, see:
