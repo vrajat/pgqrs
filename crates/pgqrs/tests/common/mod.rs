@@ -113,11 +113,29 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
         .await
         .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
 
-    // Global Setup: Schema is already installed.
-    // pgqrs::admin(&store)
-    //    .install()
-    //    .await
-    //    .expect("Failed to install schema");
+    // Install schema based on backend:
+    // - Postgres: Uses global setup (setup_test_schemas binary), skip install
+    // - SQLite/Turso: No global setup, install per-test
+    match current_backend() {
+        #[cfg(feature = "postgres")]
+        BackendType::Postgres => {
+            // Schema already provisioned by setup_test_schemas binary
+        }
+        #[cfg(feature = "sqlite")]
+        BackendType::Sqlite => {
+            pgqrs::admin(&store)
+                .install()
+                .await
+                .expect("Failed to install SQLite schema");
+        }
+        #[cfg(feature = "turso")]
+        BackendType::Turso => {
+            pgqrs::admin(&store)
+                .install()
+                .await
+                .expect("Failed to install Turso schema");
+        }
+    }
 
     store
 }
