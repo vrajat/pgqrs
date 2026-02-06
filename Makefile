@@ -28,8 +28,11 @@ requirements: .venv/requirements.timestamp  ## Install all Python requirements
 	@touch .venv/requirements.timestamp
 
 
-build: requirements  ## Build Rust and Python bindings
+build: requirements  ## Build Rust library and Python bindings
 	cargo build -p pgqrs $(CARGO_FEATURES)
+	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
+
+build-python: requirements  ## Build Python bindings only (for tests)
 	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
 
 install-nextest: ## Install cargo-nextest
@@ -40,17 +43,17 @@ check-nextest:
 
 test-rust: check-nextest ## Run Rust tests only (using nextest)
 ifdef TEST
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES) --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) --test $(TEST)
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES)
 endif
 
 
-test: build check-nextest  ## Run all tests
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --workspace $(CARGO_FEATURES)
+test: build-python check-nextest  ## Run all tests
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
-test-py: build  ## Run Python tests only
+test-py: build-python  ## Run Python tests only
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Convenience targets for each backend
