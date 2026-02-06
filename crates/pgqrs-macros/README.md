@@ -13,23 +13,22 @@
 [![Rust](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml/badge.svg)](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/pgqrs.svg)](https://badge.fury.io/py/pgqrs)
 
-**pgqrs** is a PostgreSQL-backed durable workflow engine and job queue. Written in Rust with Python bindings.
+**pgqrs is a postgres-native, library-only durable execution engine.**
 
-## Features
+Written in Rust with Python bindings. Built for Postgres. Also supports SQLite and Turso.
 
-### Core
-* **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-* **Connection Pooler Compatible**: Works with pgBouncer and pgcat for connection scaling.
+## What is Durable Execution?
 
-### Job Queue
-* **Efficient**: Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching.
-* **Exactly-once Delivery**: Guarantees within visibility timeout window.
-* **Message Archiving**: Built-in audit trails and historical data retention.
+A durable execution engine ensures workflows resume from application crashes or pauses. 
+Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
 
-### Durable Workflows
-* **Crash Recovery**: Resume from the last completed step after failures.
-* **Exactly-once Steps**: Completed steps are never re-executed.
-* **Persistent State**: All workflow progress stored in PostgreSQL.
+## Key Properties
+
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Library-only:** Runs in-process with your application
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Type-safe:** Rust core with idiomatic Python bindings
+- **Transaction-safe:** Exactly-once step execution within database transactions
 
 ## Quick Start
 
@@ -203,7 +202,7 @@ pgqrs-macros = "0.5"  # For workflow macros
 
 ## Documentation
 
-- **[Full Documentation](https://vrajat.github.io/pgqrs/)** - Complete guides and API reference
+- **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
 - **[Rust API Docs](https://docs.rs/pgqrs)** - Rust crate documentation
 - **[Python Examples](py-pgqrs/tests/test_pgqrs.py)** - Python test suite with examples
 

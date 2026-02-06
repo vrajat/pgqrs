@@ -1,6 +1,21 @@
 # py-pgqrs
 
-Python bindings for `pgqrs`, a high-performance multi-backend queue (PostgreSQL, SQLite, Turso).
+**pgqrs is a postgres-native, library-only durable execution engine.**
+
+Python bindings for the Rust core. Built for Postgres. Also supports SQLite and Turso.
+
+## What is Durable Execution?
+
+A durable execution engine ensures workflows resume from application crashes or pauses. 
+Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
+
+## Key Properties
+
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Library-only:** Runs in-process with your application
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Type-safe:** Rust core with idiomatic Python bindings
+- **Transaction-safe:** Exactly-once step execution within database transactions
 
 ## Installation
 

@@ -3,31 +3,24 @@
 [![Rust](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml/badge.svg)](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/pgqrs.svg)](https://badge.fury.io/py/pgqrs)
 
-**pgqrs** is a durable workflow engine and job queue that works with **PostgreSQL, SQLite, and Turso**. Written in Rust with Python bindings.
+**pgqrs is a postgres-native, library-only durable execution engine.**
 
-Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing, and embedded apps.
+Written in Rust with Python bindings. Built for Postgres. Also supports SQLite and Turso.
 
-## Features
+## What is Durable Execution?
 
-### Multi-Backend Support
-* **PostgreSQL**: Production-ready with unlimited concurrent workers
-* **SQLite**: Zero-config embedded option for single-process applications
-* **Turso**: SQLite-compatible with enhanced features for local storage
-* **Unified API**: Switch backends by changing your connection string
+A durable execution engine ensures workflows resume from application crashes or pauses. 
+Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
 
-### Core
-* **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-* **Connection Pooler Compatible**: Works with pgBouncer and pgcat for connection scaling (PostgreSQL).
+## Key Properties
 
-### Job Queue
-* **Efficient**: Uses `SKIP LOCKED` (PostgreSQL) for concurrent job fetching.
-* **Exactly-once Delivery**: Guarantees within visibility timeout window.
-* **Message Archiving**: Built-in audit trails and historical data retention.
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Library-only:** Runs in-process with your application
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Type-safe:** Rust core with idiomatic Python bindings
+- **Transaction-safe:** Exactly-once step execution within database transactions
 
-### Durable Workflows
-* **Crash Recovery**: Resume from the last completed step after failures.
-* **Exactly-once Steps**: Completed steps are never re-executed.
-* **Persistent State**: All workflow progress stored durably.
+
 
 ## Choose Your Backend
 
@@ -225,7 +218,7 @@ pgqrs-macros = "0.13.0"
 
 ## Documentation
 
-- **[Full Documentation](https://vrajat.github.io/pgqrs/)** - Complete guides and API reference
+- **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
 - **[Rust API Docs](https://docs.rs/pgqrs)** - Rust crate documentation
 - **[Python Examples](py-pgqrs/tests/test_pgqrs.py)** - Python test suite with examples
 

@@ -1,6 +1,6 @@
 site_name: pgqrs
-site_url: https://pgqrs.com
-site_description: A durable workflow engine and job queue for PostgreSQL and SQLite - Rust and Python
+site_url: https://pgqrs.vrajat.com
+site_description: A postgres-native, library-only durable execution engine - Rust and Python
 site_author: vrajat
 repo_url: https://github.com/vrajat/pgqrs
 repo_name: vrajat/pgqrs
