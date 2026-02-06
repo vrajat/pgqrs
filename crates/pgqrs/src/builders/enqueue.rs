@@ -34,6 +34,7 @@ pub struct EnqueueBuilder<'a, T> {
     queue: Option<String>,
     worker: Option<&'a dyn crate::store::Producer>,
     delay_seconds: Option<u32>,
+    at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for EnqueueBuilder<'static, ()> {
@@ -49,6 +50,7 @@ impl EnqueueBuilder<'static, ()> {
             queue: None,
             worker: None,
             delay_seconds: None,
+            at: None,
         }
     }
 
@@ -59,6 +61,7 @@ impl EnqueueBuilder<'static, ()> {
             queue: self.queue,
             worker: self.worker,
             delay_seconds: self.delay_seconds,
+            at: self.at,
         }
     }
 
@@ -72,6 +75,7 @@ impl EnqueueBuilder<'static, ()> {
             queue: self.queue,
             worker: self.worker,
             delay_seconds: self.delay_seconds,
+            at: self.at,
         }
     }
 }
@@ -101,6 +105,32 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         self
     }
 
+    /// Set a custom reference time for the enqueue operation (useful for testing delays).
+    ///
+    /// This allows tests to control time for deterministic behavior when testing
+    /// message delays and visibility timeouts.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use pgqrs::enqueue;
+    /// # use chrono::Utc;
+    /// # async fn example(store: &pgqrs::store::AnyStore, producer: &dyn pgqrs::store::Producer) -> Result<(), Box<dyn std::error::Error>> {
+    /// let custom_time = Utc::now() - chrono::Duration::seconds(3600); // 1 hour ago
+    /// let msg_ids = enqueue()
+    ///     .message(&serde_json::json!({"test": "value"}))
+    ///     .worker(producer)
+    ///     .with_delay(std::time::Duration::from_secs(10))
+    ///     .at(custom_time)
+    ///     .execute(store)
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
+        self.at = Some(time);
+        self
+    }
+
     /// Execute the enqueue operation.
     /// Returns a vector of message IDs (even for single message).
     pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<Vec<i64>> {
@@ -118,8 +148,12 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         }
 
         if let Some(producer) = self.worker {
-            // Batch or standard enqueue
-            if let Some(delay) = self.delay_seconds {
+            // Check if using custom time (for testing)
+            if let Some(at) = self.at {
+                let delay = self.delay_seconds.unwrap_or(0);
+                let msgs = producer.batch_enqueue_at(&json_payloads, at, delay).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
+            } else if let Some(delay) = self.delay_seconds {
                 let msgs = producer
                     .batch_enqueue_delayed(&json_payloads, delay)
                     .await?;
@@ -139,7 +173,12 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
 
             let producer = store.producer_ephemeral(&queue, store.config()).await?;
 
-            if let Some(delay) = self.delay_seconds {
+            // Check if using custom time (for testing)
+            if let Some(at) = self.at {
+                let delay = self.delay_seconds.unwrap_or(0);
+                let msgs = producer.batch_enqueue_at(&json_payloads, at, delay).await?;
+                Ok(msgs.iter().map(|m| m.id).collect())
+            } else if let Some(delay) = self.delay_seconds {
                 let msgs = producer
                     .batch_enqueue_delayed(&json_payloads, delay)
                     .await?;

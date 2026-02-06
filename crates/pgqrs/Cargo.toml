@@ -38,6 +38,10 @@ once_cell = "1.19"
 
 serial_test = "3.2"
 
+# CLI testing dependencies
+assert_cmd = "2.0"
+predicates = "3.0"
+
 [features]
 default = ["postgres"]
 sqlx = ["dep:sqlx"]

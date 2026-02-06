@@ -184,6 +184,24 @@ pub trait Producer: Worker {
         delay_seconds: u32,
     ) -> crate::error::Result<Vec<QueueMessage>>;
 
+    /// Enqueue a message at a specific time (for testing/time mocking).
+    ///
+    /// This allows tests to control the enqueue time for deterministic behavior.
+    async fn enqueue_at(
+        &self,
+        payload: &Value,
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> crate::error::Result<QueueMessage>;
+
+    /// Batch enqueue messages at a specific time (for testing/time mocking).
+    async fn batch_enqueue_at(
+        &self,
+        payloads: &[Value],
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+
     // Internal but public method in source
     async fn insert_message(
         &self,

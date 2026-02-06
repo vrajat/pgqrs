@@ -85,7 +85,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum AdminCommands {
+pub enum AdminCommands {
     /// Install pgqrs schema (schema must be pre-created)
     Install,
     /// Verify pgqrs installation
@@ -106,7 +106,7 @@ enum AdminCommands {
 }
 
 #[derive(Subcommand)]
-enum QueueCommands {
+pub enum QueueCommands {
     /// Create a new queue
     Create {
         /// Name of the queue
@@ -144,7 +144,7 @@ enum QueueCommands {
 }
 
 #[derive(Subcommand)]
-enum WorkerCommands {
+pub enum WorkerCommands {
     /// List all workers
     List {
         /// Name of the queue to filter workers by
@@ -303,7 +303,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_admin_commands(
+pub async fn handle_admin_commands(
     store: &impl pgqrs::store::Store,
     command: AdminCommands,
     writer: OutputWriter,
@@ -354,7 +354,7 @@ async fn handle_admin_commands(
     Ok(())
 }
 
-async fn handle_queue_commands(
+pub async fn handle_queue_commands(
     store: &impl pgqrs::store::Store,
     command: QueueCommands,
     writer: OutputWriter,
@@ -424,7 +424,7 @@ async fn handle_queue_commands(
     Ok(())
 }
 
-async fn handle_worker_commands(
+pub async fn handle_worker_commands(
     store: &impl pgqrs::store::Store,
     command: WorkerCommands,
     writer: OutputWriter,

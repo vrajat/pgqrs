@@ -301,6 +301,62 @@ impl crate::store::Producer for Producer {
         Ok(queue_messages)
     }
 
+    /// Enqueue a message at a specific time (for testing/time mocking).
+    ///
+    /// This allows tests to control the enqueue time for deterministic behavior.
+    ///
+    /// # Arguments
+    /// * `payload` - JSON payload for the message
+    /// * `now` - Custom "current time" for testing
+    /// * `delay_seconds` - Seconds to delay before message becomes available
+    async fn enqueue_at(
+        &self,
+        payload: &serde_json::Value,
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> Result<QueueMessage> {
+        // Validate the payload before enqueueing
+        self.validator.validate(payload)?;
+
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+        let id = self.insert_message(payload, now, vt).await?;
+        self.get_message_by_id(id).await
+    }
+
+    /// Batch enqueue messages at a specific time (for testing/time mocking).
+    async fn batch_enqueue_at(
+        &self,
+        payloads: &[serde_json::Value],
+        now: chrono::DateTime<chrono::Utc>,
+        delay_seconds: u32,
+    ) -> Result<Vec<QueueMessage>> {
+        // Validate all payloads atomically (including rate limiting)
+        self.validator.validate_batch(payloads)?;
+
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+
+        // Use the batch insert method from the messages table
+        let ids = self
+            .messages
+            .batch_insert(
+                self.queue_info.id,
+                payloads,
+                crate::types::BatchInsertParams {
+                    read_ct: 0,
+                    enqueued_at: now,
+                    vt,
+                    producer_worker_id: Some(self.worker_info.id),
+                    consumer_worker_id: None,
+                },
+            )
+            .await?;
+
+        // Fetch all messages in a single query
+        let queue_messages = self.messages.get_by_ids(&ids).await?;
+
+        Ok(queue_messages)
+    }
+
     /// Internal method to insert a message with specific timestamps.
     ///
     /// # Arguments

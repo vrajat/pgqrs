@@ -193,12 +193,17 @@ async fn test_builder_method_chaining() {
         .await
         .expect("Failed to create consumer");
 
-    // Test chaining multiple ergonomic methods
+    // Test chaining multiple ergonomic methods with time mocking
     let payload = json!({"test": "chaining"});
+
+    // Use a custom time in the past for the enqueue operation
+    let custom_time = chrono::Utc::now() - chrono::Duration::seconds(20);
+
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
         .worker(&*producer)
         .with_delay(Duration::from_secs(10))
+        .at(custom_time) // Mock time: message was enqueued 20s ago with 10s delay
         .execute(&store)
         .await
         .expect("Failed to enqueue");
@@ -206,14 +211,16 @@ async fn test_builder_method_chaining() {
 
     assert!(msg_id > 0);
 
-    // Wait for message to become visible
-    tokio::time::sleep(std::time::Duration::from_secs(11)).await;
+    // Message should already be visible (enqueued 20s ago + 10s delay = -10s from now)
+    // Dequeue with custom time that matches the message visibility
+    let dequeue_time = custom_time + chrono::Duration::seconds(15); // 15s after enqueue, 5s after vt
 
-    // Dequeue with chained ergonomic methods
+    // Dequeue with chained ergonomic methods and custom time
     let messages = pgqrs::dequeue()
         .worker(&*consumer)
         .limit(1)
         .with_vt(Duration::from_secs(30))
+        .at(dequeue_time) // Use time that ensures message is visible
         .fetch_all(&store)
         .await
         .expect("Failed to dequeue");
