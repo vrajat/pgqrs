@@ -1,30 +1,10 @@
 //! Integration tests for worker management functionality
-//!
-//! NOTE: These tests are currently DISABLED (#[cfg(ignore_due_to_global_setup)])
-//! because they are incompatible with the global schema setup optimization.
-//!
-//! Problem: All worker tests share the pgqrs_worker_test schema. With parallel
-//! execution (cargo-nextest), tests interfere with each other's state.
-//!
-//! Solutions considered:
-//! 1. TRUNCATE tables before each test - Creates race conditions, defeats parallelism
-//! 2. Per-test schemas - Defeats global setup optimization  
-//! 3. Serial execution only - Defeats parallel test optimization
-//!
-//! Decision: Disable these tests in favor of CI performance. Worker functionality
-//! is still tested via lib_tests.rs (test_admin_worker_management, test_worker_health_and_heartbeat).
-//!
-//! To run these tests: Use a non-global-setup approach or run serially:
-//! `cargo test --test worker_tests -- --test-threads=1`
-
-#![cfg(ignore_due_to_global_setup)] // Disables entire file
 
 use chrono::Duration;
 use pgqrs::store::AnyStore;
 use pgqrs::types::WorkerStatus;
 use pgqrs::Store;
 use serde_json::json;
-use serial_test::serial;
 
 mod common;
 
@@ -33,7 +13,6 @@ async fn create_store() -> AnyStore {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_registration() {
     let store = create_store().await;
 
@@ -64,7 +43,6 @@ async fn test_worker_registration() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_lifecycle() {
     let store = create_store().await;
 
@@ -98,7 +76,6 @@ async fn test_worker_lifecycle() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_message_assignment() {
     let store = create_store().await;
 
@@ -173,7 +150,6 @@ async fn test_worker_message_assignment() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_admin_worker_management() {
     let store = create_store().await;
 
@@ -238,7 +214,6 @@ async fn test_admin_worker_management() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_health_check() {
     let store = create_store().await;
 
@@ -269,7 +244,6 @@ async fn test_worker_health_check() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_custom_schema_search_path() {
     // use common::TestBackend;
     #[cfg(feature = "sqlite")]
@@ -330,7 +304,6 @@ async fn test_custom_schema_search_path() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_with_references() {
     let store = create_store().await;
 
@@ -397,7 +370,6 @@ async fn test_worker_deletion_with_references() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_without_references() {
     let store = create_store().await;
 
@@ -437,7 +409,6 @@ async fn test_worker_deletion_without_references() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_worker_deletion_with_archived_references() {
     let store = create_store().await;
 
@@ -497,7 +468,6 @@ async fn test_worker_deletion_with_archived_references() {
 /// Workers must be in Stopped state AND have old heartbeat to be purged.
 /// Workers with recent heartbeats are not purged regardless of status.
 #[tokio::test]
-#[serial]
 async fn test_purge_old_workers() {
     let store = create_store().await;
 
