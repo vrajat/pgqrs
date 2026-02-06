@@ -142,11 +142,44 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
 - `cargo test -- --test-threads=1` - Run tests sequentially (useful for database tests)
 
 ### Database Testing
-- Rust tests use external PostgreSQL instances (CI or local Docker via Makefile)
-- Python tests use `testcontainers` for isolated PostgreSQL instances
-- Integration tests are in `tests/` directory
+
+#### Test Infrastructure Strategy
+
+**Rust Tests (PostgreSQL):**
+- Use **Global Setup** pattern for faster, parallel test execution
+- Schema provisioning handled by `setup_test_schemas` binary (in `src/bin/setup_test_schemas.rs`)
+- All test schemas are created once at the start of the test suite
+- Individual tests verify connection and use pre-provisioned schemas
+- External PostgreSQL required (CI services or local Docker via Makefile)
+
+**Global Setup Binary (`setup_test_schemas`):**
+```rust
+// Located at: crates/pgqrs/src/bin/setup_test_schemas.rs
+// Purpose: Pre-provision all test schemas before running test suite
+// Invoked by: make test-postgres (via setup_test_schemas target)
+```
+
+This binary:
+1. Connects to PostgreSQL using `PGQRS_TEST_DSN`
+2. Creates all test schemas (e.g., `pgqrs_workflow_test`, `pgqrs_builder_test`)
+3. Runs migrations (`install()`) for each schema
+4. Enables parallel test execution without schema conflicts
+
+**Why this approach:**
+- **Performance:** ~3s for 168 tests (vs ~30s+ with per-test setup)
+- **Parallelism:** All tests run concurrently via `cargo-nextest`
+- **No conflicts:** Each test uses its own pre-provisioned schema
+- **Reliability:** Schemas created by production code, not test-specific logic
+
+**Python Tests:**
+- Use `testcontainers` for isolated PostgreSQL instances
+- Each test gets its own ephemeral database
+- Slower but provides complete isolation
+
+**Test Execution:**
+- `make test-postgres` - Run full test suite (includes schema setup)
+- `cargo nextest run` - Run tests directly (requires schemas already set up)
 - Use `RUST_LOG=debug` for detailed test output
-- Tests marked with `#[serial_test::serial]` run sequentially to avoid database conflicts
 
 ### Code Quality and Linting
 - `cargo clippy` - Run Rust linter

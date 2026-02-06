@@ -10,6 +10,7 @@ use std::sync::RwLock;
 #[async_trait]
 pub trait TestResource: Send + Sync {
     /// Initialize the resource (start container or prepare directory)
+    #[allow(dead_code)]
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Get a DSN for the resource, optionally specifying a schema/filename suffix
@@ -135,6 +136,35 @@ impl TestResource for FileResource {
 }
 
 // --- External File Resource Implementation ---
+
+/// Generic external resource that just returns a DSN
+/// Used for external databases or files managed outside the test suite
+pub struct ExternalResource {
+    dsn: String,
+}
+
+impl ExternalResource {
+    pub fn new(dsn: String) -> Self {
+        Self { dsn }
+    }
+}
+
+#[async_trait]
+impl TestResource for ExternalResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    async fn get_dsn(&self, _schema: Option<&str>) -> String {
+        self.dsn.clone()
+    }
+
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+}
+
+// --- External File Resource Implementation (Deprecated - use ExternalResource) ---
 
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 pub struct ExternalFileResource {

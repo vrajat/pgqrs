@@ -50,7 +50,7 @@ endif
 
 
 test: build-python check-nextest  ## Run all tests
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES)
+	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 test-py: build-python  ## Run Python tests only
@@ -77,7 +77,7 @@ else
 		-p 6433:5432 \
 		-e DATABASE_URL="postgres://postgres:postgres@postgres:5432/postgres" \
 		-e POOL_MODE=session \
-		-e AUTH_TYPE=trust \
+		-e AUTH_TYPE=scram-sha-256 \
 		-e MAX_CLIENT_CONN=100 \
 		-e DEFAULT_POOL_SIZE=20 \
 		-e ADMIN_USERS=postgres \
@@ -95,7 +95,7 @@ else
 	docker rm -f pgqrs-test-db || true
 endif
 
-test-setup-postgres: start-postgres ## Provision schemas (uses CI database if available)
+test-setup-postgres: start-pgbouncer ## Provision schemas (uses CI database if available)
 ifdef CI_POSTGRES_RUNNING
 	@echo "Using CI Postgres database"
 	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" cargo run -p pgqrs --bin setup_test_schemas
@@ -113,6 +113,7 @@ ifdef CI_POSTGRES_RUNNING
 else
 	@echo "Running tests with local Postgres"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
+	PGBOUNCER_TEST_DSN="postgres://postgres:postgres@localhost:6433/postgres" \
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
 	$(MAKE) stop-postgres
 endif

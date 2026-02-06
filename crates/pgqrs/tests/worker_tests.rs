@@ -176,7 +176,13 @@ async fn test_admin_worker_management() {
 
     // Test listing all workers
     let all_workers = pgqrs::tables(&store).workers().list().await.unwrap();
-    assert_eq!(all_workers.len(), 2);
+    // Note: Cannot assert exact count when tests run in parallel
+    // Other tests may create workers in the same schema
+    assert!(
+        all_workers.len() >= 2,
+        "Should have at least our 2 workers, found {}",
+        all_workers.len()
+    );
 
     // Test listing workers by queue
     let queue1_workers = pgqrs::tables(&store)

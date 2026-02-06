@@ -1,10 +1,4 @@
 #![allow(clippy::await_holding_lock)]
-pub mod constants;
-
-#[cfg(feature = "postgres")]
-pub mod database_setup;
-#[cfg(feature = "postgres")]
-pub mod postgres;
 pub mod resource;
 
 use ctor::dtor;
@@ -49,9 +43,7 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
             std::env::var("PGQRS_TEST_POSTGRES_DSN")
                 .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
                 .ok()
-                .map(|dsn| {
-                    Box::new(postgres::ExternalPostgresResource::new(dsn)) as Box<dyn TestResource>
-                })
+                .map(|dsn| Box::new(resource::ExternalResource::new(dsn)) as Box<dyn TestResource>)
         }
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => {

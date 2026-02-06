@@ -16,7 +16,6 @@ async fn create_store() -> AnyStore {
 #[tokio::test]
 async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
-    // pgqrs::admin(&store).install().await?;
 
     // Start workflow
     let input = TestData {
