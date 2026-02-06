@@ -12,7 +12,6 @@
 
 mod common;
 
-use assert_cmd::cargo::CommandCargoExt;
 use pgqrs::store::Store;
 use serde_json::Value;
 use std::process::Command;
@@ -25,8 +24,7 @@ fn get_test_db_url(schema: &str) -> String {
 
 /// Helper to run CLI command and parse JSON output
 fn run_cli_json<T: serde::de::DeserializeOwned>(db_url: &str, schema: &str, args: &[&str]) -> T {
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", db_url, "--schema", schema, "--format", "json"])
         .args(args)
         .output()
@@ -38,8 +36,7 @@ fn run_cli_json<T: serde::de::DeserializeOwned>(db_url: &str, schema: &str, args
 
 /// Helper to run CLI command and get stdout as string
 fn run_cli_output(db_url: &str, schema: &str, format: &str, args: &[&str]) -> String {
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", db_url, "--schema", schema, "--format", format])
         .args(args)
         .output()
@@ -55,8 +52,7 @@ fn run_cli_output(db_url: &str, schema: &str, format: &str, args: &[&str]) -> St
 
 #[test]
 fn test_cli_help() {
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .arg("--help")
         .output()
         .expect("Failed to execute command");
@@ -68,8 +64,7 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_version() {
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .arg("--version")
         .output()
         .expect("Failed to execute command");
@@ -205,8 +200,7 @@ fn test_queue_delete() {
     run_cli_json::<Value>(&db_url, schema, &["queue", "create", "test_delete"]);
 
     // Delete queue
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", &db_url, "--schema", schema, "--format", "json"])
         .args(["queue", "delete", "test_delete"])
         .output()
@@ -259,8 +253,7 @@ fn test_queue_purge() {
     });
 
     // Purge via CLI
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", &db_url, "--schema", schema])
         .args(["queue", "purge", "test_purge"])
         .output()
@@ -294,8 +287,7 @@ fn test_queue_get_nonexistent_fails() {
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", &db_url, "--schema", schema, "--format", "json"])
         .args(["queue", "get", "nonexistent"])
         .output()
@@ -309,9 +301,7 @@ fn test_invalid_format_flag() {
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
-    // Invalid format should still work (defaults to table)
-    let output = Command::cargo_bin("pgqrs")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args(["--dsn", &db_url, "--schema", schema, "--format", "xml"])
         .args(["queue", "list"])
         .output()

@@ -1,4 +1,3 @@
-use assert_cmd::cargo::CommandCargoExt;
 use pgqrs::{store::Store, types::WorkerStatus};
 use serial_test::serial;
 use std::process::Command;
@@ -164,8 +163,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // 9. Run CLI command using pre-built binary
     assert!(!dsn_str.is_empty());
 
-    let output = Command::cargo_bin("pgqrs")
-        .expect("Failed to get pgqrs binary")
+    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
         .args([
             "-d",
             &dsn_str,
