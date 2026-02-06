@@ -1,15 +1,21 @@
-
 # pgqrs
 
-A PostgreSQL, SQLite, and Turso-backed job queue for Rust applications.
+**pgqrs is a postgres-native, library-only durable execution engine.**
 
-## Features
-- **Lightweight**: No servers to operate. Directly use `pgqrs` as a library in your Rust applications.
-- **Multi-Backend Support**: Choose between PostgreSQL for production, or SQLite/Turso for embedded use cases.
-- **Compatible with Connection Poolers**: Use with [pgBouncer](https://www.pgbouncer.org) or [pgcat](https://github.com/postgresml/pgcat) to scale connections (PostgreSQL).
-- **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
-- **Exactly Once Delivery**: Guarantees exactly-once delivery within a time range specified by time limit.
-- **Message Archiving**: Built-in archiving system for audit trails and historical data retention.
+Written in Rust. Built for Postgres. Also supports SQLite and Turso.
+
+## What is Durable Execution?
+
+A durable execution engine ensures workflows resume from application crashes or pauses. 
+Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
+
+## Key Properties
+
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Library-only:** Runs in-process with your application
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Type-safe:** Rust core with idiomatic Python bindings
+- **Transaction-safe:** Exactly-once step execution within database transactions
 
 ## Example
 

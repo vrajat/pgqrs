@@ -1,30 +1,21 @@
 # pgqrs
 
-`pgqrs` is a durable workflow engine and job queue that works with **PostgreSQL, SQLite, and Turso**. Written in Rust with Python bindings.
+**pgqrs is a postgres-native, library-only durable execution engine.**
 
-Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing, and embedded apps.
+Written in Rust with Python bindings. Built for Postgres. Also supports SQLite and Turso.
 
-## Key Features
+## What is Durable Execution?
 
-### Multi-Backend Support
-- **PostgreSQL**: Production-ready with unlimited concurrent workers
-- **SQLite**: Zero-config embedded option for single-process applications
-- **Turso**: SQLite-compatible with enhanced features for local storage
-- **Unified API**: Switch backends by changing your connection string
+A durable execution engine ensures workflows resume from application crashes or pauses. 
+Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
 
-### Core
-- **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-- **Connection Pooler Compatible**: Works with [pgBouncer](https://www.pgbouncer.org) and [pgcat](https://github.com/postgresml/pgcat) for connection scaling (PostgreSQL).
+## Key Properties
 
-### Job Queue
-- **Efficient**: [Uses PostgreSQL's `SKIP LOCKED` for concurrent job fetching](https://vrajat.com/posts/postgres-queue-skip-locked-unlogged/).
-- **Exactly-once Delivery**: Guarantees within visibility timeout window.
-- **Message Archiving**: Built-in audit trails and historical data retention.
-
-### Workflows
-- **Crash Recovery**: Resume from the last completed step after failures.
-- **Exactly-once Steps**: Completed steps are never re-executed.
-- **Persistent State**: All workflow progress stored durably.
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Library-only:** Runs in-process with your application
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Type-safe:** Rust core with idiomatic Python bindings
+- **Transaction-safe:** Exactly-once step execution within database transactions
 
 ## Choose Your Backend
 
