@@ -33,7 +33,7 @@ Tests define what "working" means. They should:
 **Integration Tests** (`tests/` directory)
 - **Purpose:** Test components working together
 - **Scope:** Database ops, workflows, CLI
-- **Speed:** Moderate (with testcontainers)
+- **Speed:** Moderate (Rust: external DBs; Python: testcontainers)
 - **Run:** `cargo test`
 
 **Backend Tests** (multi-backend validation)

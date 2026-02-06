@@ -57,23 +57,65 @@ test-py: build-python  ## Run Python tests only
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Convenience targets for each backend
-# Convenience targets for each backend
-start-postgres: ## Start global Postgres container
+start-postgres: ## Start global Postgres container (skipped if CI_POSTGRES_RUNNING=true)
+ifdef CI_POSTGRES_RUNNING
+	@echo "Skipping Postgres container start (CI_POSTGRES_RUNNING=true)"
+else
 	docker rm -f pgqrs-test-db || true
 	docker run -d --name pgqrs-test-db -p 5433:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres postgres:15-alpine
 	@echo "Waiting for Postgres to be ready..."
 	@until docker exec pgqrs-test-db pg_isready; do sleep 1; done
+endif
 
-stop-postgres: ## Stop global Postgres container
+start-pgbouncer: start-postgres ## Start PgBouncer container (skipped if CI_POSTGRES_RUNNING=true)
+ifdef CI_POSTGRES_RUNNING
+	@echo "Skipping PgBouncer container start (CI_POSTGRES_RUNNING=true)"
+else
+	docker rm -f pgqrs-test-pgbouncer || true
+	docker run -d --name pgqrs-test-pgbouncer \
+		--link pgqrs-test-db:postgres \
+		-p 6433:5432 \
+		-e DATABASE_URL="postgres://postgres:postgres@postgres:5432/postgres" \
+		-e POOL_MODE=session \
+		-e AUTH_TYPE=trust \
+		-e MAX_CLIENT_CONN=100 \
+		-e DEFAULT_POOL_SIZE=20 \
+		-e ADMIN_USERS=postgres \
+		-e STATS_USERS=postgres \
+		edoburu/pgbouncer:latest
+	@echo "Waiting for PgBouncer to be ready..."
+	@sleep 3
+endif
+
+stop-postgres: ## Stop global Postgres and PgBouncer containers (skipped if CI_POSTGRES_RUNNING=true)
+ifdef CI_POSTGRES_RUNNING
+	@echo "Skipping container stop (CI_POSTGRES_RUNNING=true)"
+else
+	docker rm -f pgqrs-test-pgbouncer || true
 	docker rm -f pgqrs-test-db || true
+endif
 
-test-setup-postgres: start-postgres ## Provision schemas
+test-setup-postgres: start-postgres ## Provision schemas (uses CI database if available)
+ifdef CI_POSTGRES_RUNNING
+	@echo "Using CI Postgres database"
+	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" cargo run -p pgqrs --bin setup_test_schemas
+else
+	@echo "Using local Postgres database"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" cargo run -p pgqrs --bin setup_test_schemas
+endif
 
-test-postgres: test-setup-postgres ## Run tests on Postgres backend
+test-postgres: test-setup-postgres ## Run tests on Postgres backend (supports CI and local modes)
+ifdef CI_POSTGRES_RUNNING
+	@echo "Running tests with CI Postgres"
+	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" \
+	PGBOUNCER_TEST_DSN="$${PGBOUNCER_TEST_DSN:-postgres://postgres@localhost:6432/postgres}" \
+	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
+else
+	@echo "Running tests with local Postgres"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
 	$(MAKE) test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
 	$(MAKE) stop-postgres
+endif
 
 test-sqlite:  ## Run tests on SQLite backend
 	$(MAKE) test PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite"

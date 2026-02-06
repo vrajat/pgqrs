@@ -105,7 +105,9 @@ asyncio.run(admin_tasks())
 
 ## Testing
 
-Tests use `pytest` and `testcontainers` to run against a real Postgres instance.
+Python tests use `pytest` and `testcontainers` to run against a real Postgres instance.
+
+**Note:** Rust tests use external PostgreSQL instances (no testcontainers). Python tests continue to use testcontainers for isolated testing.
 
 ```bash
 pip install pytest pytest-asyncio testcontainers psycopg[binary]

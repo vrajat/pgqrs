@@ -86,6 +86,7 @@ jobs:
         run: |
           make test-${{ matrix.backend }} UV=uv CARGO_FEATURES="--no-default-features --features ${{ matrix.backend }}"
         env:
+          CI_POSTGRES_RUNNING: "true"  # Skip local Docker management (use GitHub services)
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
           PGBOUNCER_TEST_DSN: postgres://postgres@localhost:6432/postgres
