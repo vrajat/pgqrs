@@ -1,7 +1,7 @@
 use chrono::Utc;
 use pgqrs::error::Error;
 use pgqrs::store::AnyStore;
-use pgqrs::{RunExt, StepGuardExt, StepResult};
+use pgqrs::{StepGuardExt, StepResult};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 

@@ -8,51 +8,51 @@ use turso::Database;
 
 pub struct TursoStepGuard {
     db: Arc<Database>,
-    workflow_id: i64,
+    run_id: i64,
     step_id: String,
     completed: bool,
 }
 
 const SQL_ACQUIRE_STEP: &str = r#"
-    INSERT INTO pgqrs_workflow_steps (workflow_id, step_key, status, started_at, retry_count)
+    INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, started_at, retry_count)
     VALUES (?, ?, 'RUNNING', datetime('now'), 0)
-    ON CONFLICT (workflow_id, step_key) DO UPDATE SET workflow_id=workflow_id
+    ON CONFLICT (run_id, step_id) DO UPDATE SET run_id=run_id
     RETURNING status, output, error, retry_count, retry_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET retry_count = ?, retry_at = ?, last_retry_at = datetime('now')
-    WHERE workflow_id = ? AND step_key = ?
+    WHERE run_id = ? AND step_id = ?
 "#;
 
 const SQL_CLEAR_RETRY: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'RUNNING', retry_at = NULL, error = NULL
-    WHERE workflow_id = ? AND step_key = ?
+    WHERE run_id = ? AND step_id = ?
 "#;
 
 const SQL_STEP_SUCCESS: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'SUCCESS', output = ?, completed_at = datetime('now')
-    WHERE workflow_id = ? AND step_key = ?
+    WHERE run_id = ? AND step_id = ?
 "#;
 
 const SQL_STEP_FAIL: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'ERROR', error = ?, completed_at = datetime('now')
-    WHERE workflow_id = ? AND step_key = ?
+    WHERE run_id = ? AND step_id = ?
 "#;
 
 impl TursoStepGuard {
     pub async fn acquire(
         db: &Arc<Database>,
-        workflow_id: i64,
+        run_id: i64,
         step_id: &str,
         current_time: DateTime<Utc>,
     ) -> Result<StepResult<serde_json::Value>> {
         let row = crate::store::turso::query(SQL_ACQUIRE_STEP)
-            .bind(workflow_id)
+            .bind(run_id)
             .bind(step_id)
             .fetch_one_once(db)
             .await?;
@@ -103,22 +103,22 @@ impl TursoStepGuard {
 
                 // Time to retry! Clear retry_at and proceed
                 crate::store::turso::query(SQL_CLEAR_RETRY)
-                    .bind(workflow_id)
+                    .bind(run_id)
                     .bind(step_id)
                     .execute_once(db)
                     .await?;
 
                 tracing::info!(
-                    "Step {} (workflow {}) ready for retry (attempt {}, scheduled at {})",
+                    "Step {} (run {}) ready for retry (attempt {}, scheduled at {})",
                     step_id,
-                    workflow_id,
+                    run_id,
                     retry_count + 1,
                     retry_at
                 );
 
                 return Ok(StepResult::Execute(Box::new(Self {
                     db: db.clone(),
-                    workflow_id,
+                    run_id,
                     step_id: step_id.to_string(),
                     completed: false,
                 })));
@@ -143,7 +143,7 @@ impl TursoStepGuard {
         // Step is RUNNING or in other state, proceed with execution
         Ok(StepResult::Execute(Box::new(Self {
             db: db.clone(),
-            workflow_id,
+            run_id,
             step_id: step_id.to_string(),
             completed: false,
         })))
@@ -157,7 +157,7 @@ impl StepGuard for TursoStepGuard {
         let output_str = output.to_string();
         crate::store::turso::query(SQL_STEP_SUCCESS)
             .bind(output_str)
-            .bind(self.workflow_id)
+            .bind(self.run_id)
             .bind(self.step_id.as_str())
             .execute_once(&self.db)
             .await?;
@@ -191,12 +191,12 @@ impl StepGuard for TursoStepGuard {
         if is_transient {
             // Get current retry count from DB
             let row = crate::store::turso::query(
-                "SELECT retry_count FROM pgqrs_workflow_steps WHERE workflow_id = ? AND step_key = ?"
+                "SELECT retry_count FROM pgqrs_workflow_steps WHERE run_id = ? AND step_id = ?",
             )
-                .bind(self.workflow_id)
-                .bind(self.step_id.as_str())
-                .fetch_one_once(&self.db)
-                .await?;
+            .bind(self.run_id)
+            .bind(self.step_id.as_str())
+            .fetch_one_once(&self.db)
+            .await?;
 
             let retry_count: i32 = row.get(0).map_err(|e| crate::error::Error::Internal {
                 message: e.to_string(),
@@ -209,7 +209,7 @@ impl StepGuard for TursoStepGuard {
                 let error_str = error_record.to_string();
                 crate::store::turso::query(SQL_STEP_FAIL)
                     .bind(error_str)
-                    .bind(self.workflow_id)
+                    .bind(self.run_id)
                     .bind(self.step_id.as_str())
                     .execute_once(&self.db)
                     .await?;
@@ -250,7 +250,7 @@ impl StepGuard for TursoStepGuard {
             let error_str = error_record.to_string();
             crate::store::turso::query(SQL_STEP_FAIL)
                 .bind(error_str)
-                .bind(self.workflow_id)
+                .bind(self.run_id)
                 .bind(self.step_id.as_str())
                 .execute_once(&self.db)
                 .await?;
@@ -259,15 +259,15 @@ impl StepGuard for TursoStepGuard {
             crate::store::turso::query(SQL_SCHEDULE_RETRY)
                 .bind(new_retry_count)
                 .bind(retry_at_str)
-                .bind(self.workflow_id)
+                .bind(self.run_id)
                 .bind(self.step_id.as_str())
                 .execute_once(&self.db)
                 .await?;
 
             tracing::info!(
-                "Step {} (workflow {}) scheduled for retry at {} ({} previous failures, delay {}s)",
+                "Step {} (run {}) scheduled for retry at {} ({} previous failures, delay {}s)",
                 self.step_id,
-                self.workflow_id,
+                self.run_id,
                 retry_at,
                 retry_count,
                 delay_seconds
@@ -277,7 +277,7 @@ impl StepGuard for TursoStepGuard {
             let error_str = error_record.to_string();
             crate::store::turso::query(SQL_STEP_FAIL)
                 .bind(error_str)
-                .bind(self.workflow_id)
+                .bind(self.run_id)
                 .bind(self.step_id.as_str())
                 .execute_once(&self.db)
                 .await?;
@@ -292,7 +292,7 @@ impl Drop for TursoStepGuard {
     fn drop(&mut self) {
         if !self.completed {
             let db = self.db.clone();
-            let workflow_id = self.workflow_id;
+            let run_id = self.run_id;
             let step_id = self.step_id.clone();
 
             tokio::spawn(async move {
@@ -306,7 +306,7 @@ impl Drop for TursoStepGuard {
 
                 let _ = crate::store::turso::query(SQL_STEP_FAIL)
                     .bind(error_str)
-                    .bind(workflow_id)
+                    .bind(run_id)
                     .bind(step_id)
                     .execute_once(&db)
                     .await;

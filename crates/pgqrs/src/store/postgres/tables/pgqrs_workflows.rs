@@ -1,9 +1,8 @@
 use crate::error::Result;
-use sqlx::PgPool;
-
-// Import shared types instead of redefining them
-// Import shared types instead of redefining them
-pub use crate::types::{NewWorkflow, WorkflowRecord};
+use crate::types::{NewWorkflow, WorkflowRecord};
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::{PgPool, Row};
 
 #[derive(Debug, Clone)]
 pub struct Workflows {
@@ -15,67 +14,84 @@ impl Workflows {
         Self { pool }
     }
 
-    pub async fn complete_workflow(
-        executor: &mut sqlx::PgConnection,
-        id: i64,
-        output: serde_json::Value,
-    ) -> Result<()> {
-        sqlx::query(
+    pub async fn create(&self, name: &str, queue_id: i64) -> Result<WorkflowRecord> {
+        let row = sqlx::query(
             r#"
-            UPDATE pgqrs_workflows
-            SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, updated_at = NOW()
-            WHERE workflow_id = $1
+            INSERT INTO pgqrs_workflows (name, queue_id)
+            VALUES ($1, $2)
+            RETURNING workflow_id, name, created_at
             "#,
         )
-        .bind(id)
-        .bind(output)
-        .execute(executor)
+        .bind(name)
+        .bind(queue_id)
+        .fetch_one(&self.pool)
         .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "COMPLETE_WORKFLOW".into(),
-            source: Box::new(e),
-            context: format!("Failed to complete workflow {}", id),
+        .map_err(|e| {
+            if let sqlx::Error::Database(db_err) = &e {
+                // Postgres unique violation is SQLSTATE 23505
+                if db_err.code().as_deref() == Some("23505") {
+                    return crate::error::Error::WorkflowAlreadyExists {
+                        name: name.to_string(),
+                    };
+                }
+            }
+
+            crate::error::Error::QueryFailed {
+                query: "CREATE_WORKFLOW_DEF".into(),
+                source: Box::new(e),
+                context: format!("Failed to create workflow '{}'", name),
+            }
         })?;
-        Ok(())
+
+        Self::map_row(row)
     }
 
-    pub async fn fail_workflow(
-        executor: &mut sqlx::PgConnection,
-        id: i64,
-        error: serde_json::Value,
-    ) -> Result<()> {
-        sqlx::query(
+    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+        let row = sqlx::query(
             r#"
-            UPDATE pgqrs_workflows
-            SET status = 'ERROR'::pgqrs_workflow_status, error = $2, updated_at = NOW()
-            WHERE workflow_id = $1
+            SELECT workflow_id, name, created_at
+            FROM pgqrs_workflows
+            WHERE name = $1
             "#,
         )
-        .bind(id)
-        .bind(error)
-        .execute(executor)
+        .bind(name)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
-            query: "FAIL_WORKFLOW".into(),
+            query: "GET_WORKFLOW_BY_NAME".into(),
             source: Box::new(e),
-            context: format!("Failed to fail workflow {}", id),
+            context: format!("Failed to get workflow '{}' by name", name),
         })?;
-        Ok(())
+
+        Self::map_row(row)
+    }
+
+    fn map_row(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
+        let workflow_id: i64 = row.try_get("workflow_id")?;
+        let name: String = row.try_get("name")?;
+        let created_at: DateTime<Utc> = row.try_get("created_at")?;
+
+        Ok(WorkflowRecord {
+            workflow_id,
+            name,
+            created_at,
+        })
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl crate::store::WorkflowTable for Workflows {
     async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
-        let row = sqlx::query_as::<_, WorkflowRecord>(
+        // Note: this generic insert doesn't attach a queue_id; workflow definitions should
+        // be created via `create(name, queue_id)`.
+        let row = sqlx::query(
             r#"
-            INSERT INTO pgqrs_workflows (name, status, input)
-            VALUES ($1, 'PENDING'::pgqrs_workflow_status, $2)
-            RETURNING workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
+            INSERT INTO pgqrs_workflows (name, queue_id)
+            VALUES ($1, (SELECT id FROM pgqrs_queues WHERE queue_name = $1))
+            RETURNING workflow_id, name, created_at
             "#,
         )
         .bind(&data.name)
-        .bind(data.input)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
@@ -84,13 +100,13 @@ impl crate::store::WorkflowTable for Workflows {
             context: format!("Failed to insert workflow '{}'", data.name),
         })?;
 
-        Ok(row)
+        Self::map_row(row)
     }
 
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
-        let row = sqlx::query_as::<_, WorkflowRecord>(
+        let row = sqlx::query(
             r#"
-            SELECT workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
+            SELECT workflow_id, name, created_at
             FROM pgqrs_workflows
             WHERE workflow_id = $1
             "#,
@@ -104,13 +120,13 @@ impl crate::store::WorkflowTable for Workflows {
             context: format!("Failed to get workflow {}", id),
         })?;
 
-        Ok(row)
+        Self::map_row(row)
     }
 
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
-        let rows = sqlx::query_as::<_, WorkflowRecord>(
+        let rows = sqlx::query(
             r#"
-            SELECT workflow_id, name, status, input, output, error, created_at, updated_at, executor_id
+            SELECT workflow_id, name, created_at
             FROM pgqrs_workflows
             ORDER BY created_at DESC
             "#,
@@ -123,11 +139,11 @@ impl crate::store::WorkflowTable for Workflows {
             context: "Failed to list workflows".into(),
         })?;
 
-        Ok(rows)
+        rows.into_iter().map(Self::map_row).collect()
     }
 
     async fn count(&self) -> Result<i64> {
-        let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -139,7 +155,7 @@ impl crate::store::WorkflowTable for Workflows {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let rows_affected = sqlx::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
+        let result = sqlx::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
@@ -147,8 +163,7 @@ impl crate::store::WorkflowTable for Workflows {
                 query: format!("DELETE_WORKFLOW ({})", id),
                 source: Box::new(e),
                 context: format!("Failed to delete workflow {}", id),
-            })?
-            .rows_affected();
-        Ok(rows_affected)
+            })?;
+        Ok(result.rows_affected())
     }
 }

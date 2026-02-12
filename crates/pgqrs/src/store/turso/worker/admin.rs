@@ -320,13 +320,12 @@ impl Admin for TursoAdmin {
         })?;
 
         // Migration list: (version, description, sql)
+        // NOTE: Turso migrations live under `crates/pgqrs/migrations/turso/`.
         const Q1: &str = include_str!("../../../../migrations/turso/01_create_queues.sql");
         const Q2: &str = include_str!("../../../../migrations/turso/02_create_workers.sql");
         const Q3: &str = include_str!("../../../../migrations/turso/03_create_messages.sql");
         const Q4: &str = include_str!("../../../../migrations/turso/04_create_archive.sql");
         const Q5: &str = include_str!("../../../../migrations/turso/05_create_workflows.sql");
-        const Q6: &str = include_str!("../../../../migrations/turso/06_create_workflow_steps.sql");
-        const Q7: &str = include_str!("../../../../migrations/turso/07_create_indices.sql");
 
         let migrations = vec![
             (1, "01_create_queues.sql", Q1),
@@ -334,8 +333,6 @@ impl Admin for TursoAdmin {
             (3, "03_create_messages.sql", Q3),
             (4, "04_create_archive.sql", Q4),
             (5, "05_create_workflows.sql", Q5),
-            (6, "06_create_workflow_steps.sql", Q6),
-            (7, "07_create_indices.sql", Q7),
         ];
 
         for (version, description, sql) in migrations {
@@ -364,11 +361,24 @@ impl Admin for TursoAdmin {
 
             tracing::info!("Applying migration {}: {}", version, description);
 
-            conn.execute(sql, ())
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to run migration {}: {}", version, e),
-                })?;
+            // Turso/libSQL does not reliably support executing multiple statements in a single
+            // `execute()` call. Our migration files commonly contain multiple CREATE TABLE/INDEX
+            // statements, so we split and execute each statement individually.
+            let statements = sql
+                .split(';')
+                .map(str::trim)
+                .filter(|stmt| !stmt.is_empty());
+
+            for stmt in statements {
+                conn.execute(stmt, ())
+                    .await
+                    .map_err(|e| crate::error::Error::Internal {
+                        message: format!(
+                            "Failed to run migration {} ({}): {}",
+                            version, description, e
+                        ),
+                    })?;
+            }
 
             // Record success
             conn.execute(

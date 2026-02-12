@@ -39,6 +39,12 @@ CREATE TABLE pgqrs_workflow_steps (
     error JSONB,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
+
+    -- Retry scheduling
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    retry_at TIMESTAMPTZ,
+    last_retry_at TIMESTAMPTZ,
+
     PRIMARY KEY (run_id, step_id)
 );
 
@@ -47,6 +53,7 @@ CREATE INDEX idx_pgqrs_workflows_name ON pgqrs_workflows(name);
 CREATE INDEX idx_pgqrs_workflow_runs_workflow_id ON pgqrs_workflow_runs(workflow_id);
 CREATE INDEX idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
 CREATE INDEX idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
+CREATE INDEX idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;
 
 -- Comments
 COMMENT ON TABLE pgqrs_workflows IS 'Workflow definitions (templates)';

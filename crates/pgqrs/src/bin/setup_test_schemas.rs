@@ -19,6 +19,7 @@ const TEST_SCHEMAS: &[&str] = &[
     "pgqrs_cli_test",
     "pgqrs_worker_test",
     "pgqrs_workflow_test",
+    "pgqrs_workflow_creation_test",
     "pgqrs_workflow_retry_test",
     // Workflow retry integration test schemas
     "workflow_retry_not_ready",
