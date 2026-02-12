@@ -275,7 +275,29 @@ impl Store for SqliteStore {
         let queue = self.queues.get_by_name(name).await?;
 
         // Create workflow definition. This is strict: it errors if the workflow already exists.
-        self.workflows.create(name, queue.id).await?;
+        let _workflow = self
+            .workflows
+            .insert(crate::types::NewWorkflow {
+                name: name.to_string(),
+                queue_id: queue.id,
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                // SQLite unique constraint violation code is 2067 (SQLITE_CONSTRAINT_UNIQUE)
+                if let crate::error::Error::QueryFailed { source, .. } = &e {
+                    if let Some(sqlx::Error::Database(db_err)) =
+                        source.downcast_ref::<sqlx::Error>()
+                    {
+                        if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
+                            return crate::error::Error::WorkflowAlreadyExists {
+                                name: name.to_string(),
+                            };
+                        }
+                    }
+                }
+                e
+            })?;
 
         Ok(())
     }

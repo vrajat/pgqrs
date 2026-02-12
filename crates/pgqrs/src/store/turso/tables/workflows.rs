@@ -19,11 +19,13 @@ impl TursoWorkflowTable {
     fn map_row(row: &turso::Row) -> Result<WorkflowRecord> {
         let workflow_id: i64 = row.get(0)?;
         let name: String = row.get(1)?;
-        let created_at = parse_turso_timestamp(&row.get::<String>(2)?)?;
+        let queue_id: i64 = row.get(2)?;
+        let created_at = parse_turso_timestamp(&row.get::<String>(3)?)?;
 
         Ok(WorkflowRecord {
             workflow_id,
             name,
+            queue_id,
             created_at,
         })
     }
@@ -79,12 +81,13 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
 
         let row = crate::store::turso::query(
             r#"
-            INSERT INTO pgqrs_workflows (name, created_at)
-            VALUES (?, ?)
-            RETURNING workflow_id, name, created_at
+            INSERT INTO pgqrs_workflows (name, queue_id, created_at)
+            VALUES (?, ?, ?)
+            RETURNING workflow_id, name, queue_id, created_at
             "#,
         )
         .bind(data.name.as_str())
+        .bind(data.queue_id)
         .bind(now_str)
         .fetch_one_once(&self.db)
         .await?;
@@ -95,7 +98,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
         let row = crate::store::turso::query(
             r#"
-            SELECT workflow_id, name, created_at
+            SELECT workflow_id, name, queue_id, created_at
             FROM pgqrs_workflows
             WHERE workflow_id = ?
             "#,
@@ -110,7 +113,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT workflow_id, name, created_at
+            SELECT workflow_id, name, queue_id, created_at
             FROM pgqrs_workflows
             ORDER BY created_at DESC
             "#,

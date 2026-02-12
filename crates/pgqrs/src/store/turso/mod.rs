@@ -542,12 +542,6 @@ pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
     }
 }
 
-const SQL_TURSO_INSERT_WORKFLOW: &str = r#"
-INSERT INTO pgqrs_workflows (name, queue_id)
-VALUES ($1, $2)
-RETURNING workflow_id;
-"#;
-
 const SQL_TURSO_INSERT_RUN: &str = r#"
 INSERT INTO pgqrs_workflow_runs (workflow_name, status, input)
 VALUES ($1, $2, $3)
@@ -785,10 +779,12 @@ impl Store for TursoStore {
 
         let queue = self.queues.get_by_name(name).await?;
 
-        let insert_res = query(SQL_TURSO_INSERT_WORKFLOW)
-            .bind(name)
-            .bind(queue.id)
-            .fetch_one_once(&self.db)
+        let insert_res = self
+            .workflows
+            .insert(crate::types::NewWorkflow {
+                name: name.to_string(),
+                queue_id: queue.id,
+            })
             .await;
 
         match insert_res {

@@ -14,42 +14,10 @@ impl Workflows {
         Self { pool }
     }
 
-    pub async fn create(&self, name: &str, queue_id: i64) -> Result<WorkflowRecord> {
-        let row = sqlx::query(
-            r#"
-            INSERT INTO pgqrs_workflows (name, queue_id)
-            VALUES ($1, $2)
-            RETURNING workflow_id, name, created_at
-            "#,
-        )
-        .bind(name)
-        .bind(queue_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(db_err) = &e {
-                // Postgres unique violation is SQLSTATE 23505
-                if db_err.code().as_deref() == Some("23505") {
-                    return crate::error::Error::WorkflowAlreadyExists {
-                        name: name.to_string(),
-                    };
-                }
-            }
-
-            crate::error::Error::QueryFailed {
-                query: "CREATE_WORKFLOW_DEF".into(),
-                source: Box::new(e),
-                context: format!("Failed to create workflow '{}'", name),
-            }
-        })?;
-
-        Self::map_row(row)
-    }
-
     pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
-            SELECT workflow_id, name, created_at
+            SELECT workflow_id, name, queue_id, created_at
             FROM pgqrs_workflows
             WHERE name = $1
             "#,
@@ -69,11 +37,13 @@ impl Workflows {
     fn map_row(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
         let workflow_id: i64 = row.try_get("workflow_id")?;
         let name: String = row.try_get("name")?;
+        let queue_id: i64 = row.try_get("queue_id")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
 
         Ok(WorkflowRecord {
             workflow_id,
             name,
+            queue_id,
             created_at,
         })
     }
@@ -82,16 +52,16 @@ impl Workflows {
 #[async_trait]
 impl crate::store::WorkflowTable for Workflows {
     async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
-        // Note: this generic insert doesn't attach a queue_id; workflow definitions should
-        // be created via `create(name, queue_id)`.
+        // Workflow definitions require `queue_id` (FK to pgqrs_queues).
         let row = sqlx::query(
             r#"
             INSERT INTO pgqrs_workflows (name, queue_id)
-            VALUES ($1, (SELECT id FROM pgqrs_queues WHERE queue_name = $1))
-            RETURNING workflow_id, name, created_at
+            VALUES ($1, $2)
+            RETURNING workflow_id, name, queue_id, created_at
             "#,
         )
         .bind(&data.name)
+        .bind(data.queue_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
@@ -106,7 +76,7 @@ impl crate::store::WorkflowTable for Workflows {
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
-            SELECT workflow_id, name, created_at
+            SELECT workflow_id, name, queue_id, created_at
             FROM pgqrs_workflows
             WHERE workflow_id = $1
             "#,
@@ -126,7 +96,7 @@ impl crate::store::WorkflowTable for Workflows {
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT workflow_id, name, created_at
+            SELECT workflow_id, name, queue_id, created_at
             FROM pgqrs_workflows
             ORDER BY created_at DESC
             "#,

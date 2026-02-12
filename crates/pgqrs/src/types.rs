@@ -521,11 +521,13 @@ impl std::str::FromStr for WorkflowStatus {
 pub struct WorkflowRecord {
     pub workflow_id: i64,
     pub name: String,
+    pub queue_id: i64,
     pub created_at: DateTime<Utc>,
 }
 
 pub struct NewWorkflow {
     pub name: String,
+    pub queue_id: i64,
 }
 
 /// Backoff strategy for workflow step retries.
