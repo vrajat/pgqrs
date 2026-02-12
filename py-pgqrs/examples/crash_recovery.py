@@ -1,32 +1,36 @@
 import asyncio
 from pgqrs import Admin
 from pgqrs.decorators import workflow, step
-from pgqrs import PyWorkflow
+from pgqrs import PyRun
 
 # Global flag to control failure simulation
 FAIL_ONCE = True
 
+
 @step
-async def step1(ctx: PyWorkflow, msg: str):
+async def step1(ctx: PyRun, msg: str):
     print(f"  [Step 1] Executing with msg: {msg}")
     return f"processed_{msg}"
 
+
 @step
-async def step2(ctx: PyWorkflow, val: str):
+async def step2(ctx: PyRun, val: str):
     print(f"  [Step 2] Executing with val: {val}")
     if FAIL_ONCE:
         print("  [Step 2] SIMULATING FAILURE!")
         raise RuntimeError("Simulated failure in step 2")
     return f"step2_{val}"
 
+
 @workflow
-async def my_workflow(ctx: PyWorkflow, arg: str):
+async def my_workflow(ctx: PyRun, arg: str):
     print(f"[Workflow] Starting with arg: {arg}")
     res1 = await step1(ctx, arg)
     print(f"[Workflow] Step 1 result: {res1}")
     res2 = await step2(ctx, res1)
     print(f"[Workflow] Step 2 result: {res2}")
     return res2
+
 
 async def run_resumable_workflow(dsn):
     global FAIL_ONCE
@@ -47,11 +51,12 @@ async def run_resumable_workflow(dsn):
         print(f"Run 1 failed as expected: {e}")
 
     print("\n--- RUN 2: Resuming (Expecting Success) ---")
-    FAIL_ONCE = False # Disable failure
+    FAIL_ONCE = False  # Disable failure
 
     # In a real scenario, we would reload the workflow by ID.
     # But here we pass the SAME context (or create new handle for same ID if possible).
     # Re-running `my_workflow` with the same context will leverage idempotency.
+
 
 async def test_crash_recovery(dsn):
     admin = Admin(dsn, None)
@@ -83,32 +88,37 @@ async def test_crash_recovery(dsn):
     print(f"Result: {res}")
     assert res == "step2_processed_input"
 
+
 # Renamed to avoid redefinition error
 @step
-async def step1_v2(ctx: PyWorkflow, msg: str):
+async def step1_v2(ctx: PyRun, msg: str):
     print("  [Step 1] Executing")
     return f"processed_{msg}"
 
+
 @step
-async def step2_v2(ctx: PyWorkflow, val: str):
+async def step2_v2(ctx: PyRun, val: str):
     print("  [Step 2] Executing")
     return f"step2_{val}"
 
+
 # A generic runner that mimics the workflow decorator but crashes
-async def crashing_workflow(ctx: PyWorkflow, arg: str):
+async def crashing_workflow(ctx: PyRun, arg: str):
     await ctx.start()
     res1 = await step1_v2(ctx, arg)
     print(f"Step 1 done: {res1}")
     print("Simulating crash now...")
     raise ZeroDivisionError("Crash")
 
+
 # Full workflow using normal decorator (but reusing context)
 @workflow
-async def full_workflow(ctx: PyWorkflow, arg: str):
+async def full_workflow(ctx: PyRun, arg: str):
     # This wrapper calls start(). If stuck in RUNNING, start() is OK.
-    res1 = await step1_v2(ctx, arg) # Should SKIP
-    res2 = await step2_v2(ctx, res1) # Should EXECUTE
+    res1 = await step1_v2(ctx, arg)  # Should SKIP
+    res2 = await step2_v2(ctx, res1)  # Should EXECUTE
     return res2
+
 
 def main():
     try:
@@ -119,6 +129,7 @@ def main():
     with PostgresContainer("postgres:15") as postgres:
         dsn = postgres.get_connection_url().replace("psycopg2", "postgresql")
         asyncio.run(test_crash_recovery(dsn))
+
 
 if __name__ == "__main__":
     main()

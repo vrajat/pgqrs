@@ -2,7 +2,7 @@ import pytest
 import pgqrs
 import asyncio
 
-from pgqrs import PyWorkflow
+from pgqrs import PyRun
 from pgqrs.decorators import workflow, step
 
 
@@ -330,17 +330,17 @@ async def test_api_redesign_low_level(test_dsn, schema):
 
 
 @step
-async def step1(ctx: PyWorkflow, msg: str):
+async def step1(ctx: PyRun, msg: str):
     return f"processed_{msg}"
 
 
 @step
-async def step2(ctx: PyWorkflow, val: str):
+async def step2(ctx: PyRun, val: str):
     return f"step2_{val}"
 
 
 @workflow
-async def simple_wf(ctx: PyWorkflow, arg: str):
+async def simple_wf(ctx: PyRun, arg: str):
     res1 = await step1(ctx, arg)
     res2 = await step2(ctx, res1)
     return res2

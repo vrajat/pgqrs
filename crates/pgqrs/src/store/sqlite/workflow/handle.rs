@@ -1,100 +1,85 @@
 use crate::error::Result;
-use crate::store::sqlite::tables::workflows::SqliteWorkflowTable;
+use crate::store::sqlite::tables::runs::SqliteWorkflowRunTable;
 use crate::store::sqlite::workflow::guard::SqliteStepGuard;
 use crate::types::WorkflowStatus;
 use async_trait::async_trait;
-use serde::Serialize;
 use sqlx::SqlitePool;
 use std::str::FromStr;
 
-const SQL_CREATE_WORKFLOW: &str = r#"
-INSERT INTO pgqrs_workflows (name, status, input, created_at, updated_at)
-VALUES ($1, 'PENDING', $2, datetime('now'), datetime('now'))
-RETURNING workflow_id
-"#;
-
-const SQL_START_WORKFLOW: &str = r#"
-UPDATE pgqrs_workflows
+const SQL_START_RUN: &str = r#"
+UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING', updated_at = datetime('now')
-WHERE workflow_id = $1 AND status = 'PENDING'
+WHERE run_id = $1 AND status = 'PENDING'
 RETURNING status, error
 "#;
 
 #[derive(Debug, Clone)]
 pub struct SqliteWorkflow {
-    id: i64,
-    pool: SqlitePool,
+    name: String,
 }
 
 impl SqliteWorkflow {
-    /// Create a new workflow in the database.
-    pub async fn create<T: Serialize>(pool: SqlitePool, name: &str, input: &T) -> Result<Self> {
-        let input_json = serde_json::to_value(input)
-            .map_err(crate::error::Error::Serialization)?
-            .to_string();
-
-        let id: i64 = sqlx::query_scalar(SQL_CREATE_WORKFLOW)
-            .bind(name)
-            .bind(input_json)
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SQL_CREATE_WORKFLOW".into(),
-                source: Box::new(e),
-                context: format!("Failed to create workflow '{}'", name),
-            })?;
-
-        Ok(Self { id, pool })
-    }
-
-    /// Create a new workflow instance connected to the database.
-    ///
-    /// This is used when the ID is already known (e.g. loaded from DB).
-    pub fn new(pool: SqlitePool, id: i64) -> Self {
-        Self { id, pool }
-    }
-
-    /// Get a reference to the database pool.
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+        }
     }
 }
 
 #[async_trait]
 impl crate::store::Workflow for SqliteWorkflow {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteRun {
+    id: i64,
+    pool: SqlitePool,
+}
+
+impl SqliteRun {
+    pub fn new(pool: SqlitePool, id: i64) -> Self {
+        Self { id, pool }
+    }
+}
+
+#[async_trait]
+impl crate::store::Run for SqliteRun {
     fn id(&self) -> i64 {
         self.id
     }
 
     async fn start(&mut self) -> Result<()> {
         // Try to transition to RUNNING
-        let result = sqlx::query(SQL_START_WORKFLOW)
+        let result = sqlx::query(SQL_START_RUN)
             .bind(self.id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SQL_START_WORKFLOW".into(),
+                query: "SQL_START_RUN".into(),
                 source: Box::new(e),
-                context: format!("Failed to start workflow {}", self.id),
+                context: format!("Failed to start run {}", self.id),
             })?;
 
         // If no row update, check current status
         if result.is_none() {
             let status_str: Option<String> =
-                sqlx::query_scalar("SELECT status FROM pgqrs_workflows WHERE workflow_id = $1")
+                sqlx::query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE run_id = $1")
                     .bind(self.id)
                     .fetch_optional(&self.pool)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
-                        query: "CHECK_WORKFLOW_STATUS".into(),
+                        query: "CHECK_RUN_STATUS".into(),
                         source: Box::new(e),
-                        context: format!("Failed to check status for workflow {}", self.id),
+                        context: format!("Failed to check status for run {}", self.id),
                     })?;
 
             if let Some(s) = status_str {
                 if let Ok(WorkflowStatus::Error) = WorkflowStatus::from_str(&s) {
                     return Err(crate::error::Error::ValidationFailed {
-                        reason: format!("Workflow {} is in terminal ERROR state", self.id),
+                        reason: format!("Run {} is in terminal ERROR state", self.id),
                     });
                 }
             }
@@ -109,7 +94,7 @@ impl crate::store::Workflow for SqliteWorkflow {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowTable::complete_workflow(&mut conn, self.id, output).await
+        SqliteWorkflowRunTable::complete_run(&mut conn, self.id, output).await
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
@@ -118,7 +103,7 @@ impl crate::store::Workflow for SqliteWorkflow {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowTable::fail_workflow(&mut conn, self.id, error).await
+        SqliteWorkflowRunTable::fail_run(&mut conn, self.id, error).await
     }
 
     async fn acquire_step(
@@ -126,6 +111,7 @@ impl crate::store::Workflow for SqliteWorkflow {
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::store::StepResult<serde_json::Value>> {
-        SqliteStepGuard::acquire(&self.pool, self.id, step_id, current_time).await
+        SqliteStepGuard::acquire::<serde_json::Value>(&self.pool, self.id, step_id, current_time)
+            .await
     }
 }

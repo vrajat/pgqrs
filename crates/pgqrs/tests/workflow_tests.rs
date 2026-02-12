@@ -1,5 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{StepGuardExt, StepResult, WorkflowExt};
+use pgqrs::{RunExt, StepGuardExt, StepResult};
 use serde::{Deserialize, Serialize};
 
 mod common;

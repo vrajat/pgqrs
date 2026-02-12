@@ -2,7 +2,8 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
     Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
-    QueueTable, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
+    QueueTable, Run, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable,
+    WorkflowStepTable, WorkflowTable,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -588,24 +589,21 @@ impl Store for TursoStore {
         self.workflows.as_ref()
     }
 
-    async fn create_workflow<T: serde::Serialize + Send + Sync>(
-        &self,
-        name: &str,
-        input: &T,
-    ) -> Result<Box<dyn Workflow>> {
-        use self::workflow::handle::TursoWorkflow;
-        let workflow = TursoWorkflow::create(self.db.clone(), name, input).await?;
-        Ok(Box::new(workflow))
+    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+        unimplemented!("Not implemented")
+    }
+
+    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+        unimplemented!("Not implemented")
     }
 
     async fn acquire_step(
         &self,
-        workflow_id: i64,
-        step_id: &str,
-        current_time: DateTime<Utc>,
+        _run_id: i64,
+        _step_id: &str,
+        _current_time: DateTime<Utc>,
     ) -> Result<StepResult<serde_json::Value>> {
-        use self::workflow::guard::TursoStepGuard;
-        TursoStepGuard::acquire(&self.db, workflow_id, step_id, current_time).await
+        unimplemented!("Not implemented")
     }
 
     async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
@@ -665,9 +663,12 @@ impl Store for TursoStore {
         Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, id: i64) -> Box<dyn Workflow> {
-        use self::workflow::handle::TursoWorkflow;
-        Box::new(TursoWorkflow::new(self.db.clone(), id))
+    fn workflow(&self, _name: &str) -> Result<Box<dyn Workflow>> {
+        unimplemented!("Not implemented")
+    }
+
+    async fn run(&self, _name: &str, _input: Option<serde_json::Value>) -> Result<Box<dyn Run>> {
+        unimplemented!("Not implemented")
     }
 
     fn worker(&self, id: i64) -> Box<dyn Worker> {

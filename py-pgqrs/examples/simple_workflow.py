@@ -2,26 +2,30 @@ import asyncio
 
 from pgqrs import Admin
 from pgqrs.decorators import workflow, step
-from pgqrs import PyWorkflow
+from pgqrs import PyRun
+
 
 @step
-async def step1(ctx: PyWorkflow, msg: str):
+async def step1(ctx: PyRun, msg: str):
     print(f"  [Step 1] Executing with msg: {msg}")
     return f"processed_{msg}"
 
+
 @step
-async def step2(ctx: PyWorkflow, val: str):
+async def step2(ctx: PyRun, val: str):
     print(f"  [Step 2] Executing with val: {val}")
     return f"step2_{val}"
 
+
 @workflow
-async def my_workflow(ctx: PyWorkflow, arg: str):
+async def my_workflow(ctx: PyRun, arg: str):
     print(f"[Workflow] Starting with arg: {arg}")
     res1 = await step1(ctx, arg)
     print(f"[Workflow] Step 1 result: {res1}")
     res2 = await step2(ctx, res1)
     print(f"[Workflow] Step 2 result: {res2}")
     return res2
+
 
 async def run_workflow(dsn):
     try:
@@ -49,7 +53,9 @@ async def run_workflow(dsn):
     except Exception as e:
         print(f"Workflow execution failed: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 def main():
     try:
@@ -63,6 +69,7 @@ def main():
         dsn = postgres.get_connection_url().replace("psycopg2", "postgresql")
         print(f"DSN: {dsn}")
         asyncio.run(run_workflow(dsn))
+
 
 if __name__ == "__main__":
     main()

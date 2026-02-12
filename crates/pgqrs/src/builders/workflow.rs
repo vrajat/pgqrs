@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::store::{StepResult, Store, Workflow};
+use crate::store::{Run, StepResult, Store};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -31,14 +31,14 @@ impl WorkflowBuilder {
     }
 
     /// Create the workflow using the provided store.
-    pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn Workflow>> {
+    pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn Run>> {
         let name = self
             .name
             .ok_or_else(|| crate::error::Error::ValidationFailed {
                 reason: "Workflow name is required".to_string(),
             })?;
-        let input = self.input.unwrap_or(serde_json::Value::Null);
-        store.create_workflow(&name, &input).await
+        let input = self.input;
+        store.run(&name, input).await
     }
 }
 
@@ -50,16 +50,16 @@ impl Default for WorkflowBuilder {
 
 /// Builder for acquiring a step guard.
 pub struct StepBuilder {
-    workflow_id: i64,
+    run_id: i64,
     step_id: String,
     current_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl StepBuilder {
     /// Create a new step builder.
-    pub fn new(workflow_id: i64, step_id: &str) -> Self {
+    pub fn new(run_id: i64, step_id: &str) -> Self {
         Self {
-            workflow_id,
+            run_id,
             step_id: step_id.to_string(),
             current_time: None,
         }
@@ -92,7 +92,7 @@ impl StepBuilder {
     pub async fn acquire<T: DeserializeOwned, S: Store>(self, store: &S) -> Result<StepResult<T>> {
         let current_time = self.current_time.unwrap_or_else(chrono::Utc::now);
         let res = store
-            .acquire_step(self.workflow_id, &self.step_id, current_time)
+            .acquire_step(self.run_id, &self.step_id, current_time)
             .await?;
         match res {
             StepResult::Execute(guard) => Ok(StepResult::Execute(guard)),
@@ -111,6 +111,6 @@ pub fn workflow() -> WorkflowBuilder {
 }
 
 /// Entry point for acquiring a step.
-pub fn step(workflow_id: i64, step_id: &str) -> StepBuilder {
-    StepBuilder::new(workflow_id, step_id)
+pub fn step(run_id: i64, step_id: &str) -> StepBuilder {
+    StepBuilder::new(run_id, step_id)
 }

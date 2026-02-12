@@ -144,8 +144,8 @@ pub use builders::{
 // Re-export worker types and modules at crate root for convenience
 
 pub use crate::store::{
-    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, StepGuard, StepGuardExt,
-    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,
+    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, Run, RunExt, StepGuard,
+    StepGuardExt, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
 };
 
 pub use crate::config::Config;

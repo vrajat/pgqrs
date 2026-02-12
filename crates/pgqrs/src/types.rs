@@ -521,18 +521,11 @@ impl std::str::FromStr for WorkflowStatus {
 pub struct WorkflowRecord {
     pub workflow_id: i64,
     pub name: String,
-    pub status: WorkflowStatus,
-    pub input: Option<serde_json::Value>,
-    pub output: Option<serde_json::Value>,
-    pub error: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub executor_id: Option<String>,
 }
 
 pub struct NewWorkflow {
     pub name: String,
-    pub input: Option<serde_json::Value>,
 }
 
 /// Backoff strategy for workflow step retries.
@@ -651,7 +644,12 @@ impl StepRetryPolicy {
                     .gen_range(-(jitter_range_i32 as i64)..=(jitter_range_i32 as i64))
                     as i32; // Safe cast: range is within i32::MIN..=i32::MAX
 
-                capped_delay.saturating_add_signed(jitter)
+                let with_jitter = capped_delay.saturating_add_signed(jitter);
+
+                // Ensure we don't accidentally schedule an immediate retry when the
+                // policy is configured for a non-zero delay. This is specifically
+                // important for the default policy where base_seconds = 1.
+                with_jitter.max(1)
             }
         }
     }
@@ -704,4 +702,48 @@ impl StepRetryPolicy {
 pub struct WorkflowConfig {
     /// Default retry policy for all steps in the workflow
     pub default_step_retry_policy: Option<StepRetryPolicy>,
+}
+
+/// A workflow execution run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct WorkflowRun {
+    pub id: i64,
+    pub workflow_name: String,
+    pub status: WorkflowStatus,
+    pub input: Option<serde_json::Value>,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input data for creating a new workflow run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorkflowRun {
+    pub workflow_name: String,
+    pub input: Option<serde_json::Value>,
+}
+
+/// A step within a workflow run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+pub struct WorkflowStep {
+    pub id: i64,
+    pub run_id: i64,
+    pub step_id: String,
+    pub status: WorkflowStatus,
+    pub input: Option<serde_json::Value>,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input data for creating a new workflow step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorkflowStep {
+    pub run_id: i64,
+    pub step_id: String,
+    pub input: Option<serde_json::Value>,
 }

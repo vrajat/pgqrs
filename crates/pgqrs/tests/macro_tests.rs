@@ -1,4 +1,4 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Store, Workflow};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Run, StepGuardExt, Store};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ struct TestData {
 }
 
 #[pgqrs_step]
-async fn step_one(ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
+async fn step_one(ctx: &mut (impl Run + ?Sized), _input: &str) -> anyhow::Result<TestData> {
     Ok(TestData {
         msg: "step1_done".to_string(),
     })
@@ -19,7 +19,7 @@ async fn step_one(ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<T
 #[pgqrs_step]
 #[allow(unused_variables)] // Test attribute forwarding (should not warn about arg2)
 async fn step_multi_args(
-    ctx: &mut Box<dyn Workflow>,
+    ctx: &mut (impl Run + ?Sized),
     arg1: &str,
     arg2: i32,
 ) -> anyhow::Result<TestData> {
@@ -29,7 +29,10 @@ async fn step_multi_args(
 }
 
 #[pgqrs_step]
-async fn step_side_effect(_ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
+async fn step_side_effect(
+    _ctx: &mut (impl Run + ?Sized),
+    _input: &str,
+) -> anyhow::Result<TestData> {
     // This step returns a value that we will manually tamper with in the DB
     // to prove that the second execution returns the DB value, not this value.
     Ok(TestData {
@@ -38,12 +41,12 @@ async fn step_side_effect(_ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow:
 }
 
 #[pgqrs_step]
-async fn step_fail(ctx: &mut Box<dyn Workflow>, _input: &str) -> anyhow::Result<TestData> {
+async fn step_fail(ctx: &mut (impl Run + ?Sized), _input: &str) -> anyhow::Result<TestData> {
     anyhow::bail!("step failed intentionally")
 }
 
 #[pgqrs_workflow]
-async fn my_workflow(ctx: &mut Box<dyn Workflow>, input: &TestData) -> anyhow::Result<TestData> {
+async fn my_workflow(ctx: &mut (impl Run + ?Sized), input: &TestData) -> anyhow::Result<TestData> {
     // Step 1
     let s1 = step_one(ctx, "input").await?;
 
@@ -58,7 +61,7 @@ async fn my_workflow(ctx: &mut Box<dyn Workflow>, input: &TestData) -> anyhow::R
 
 #[pgqrs_workflow]
 async fn workflow_with_failing_step(
-    ctx: &mut Box<dyn Workflow>,
+    ctx: &mut (impl Run + ?Sized),
     _input: &TestData,
 ) -> anyhow::Result<TestData> {
     let _ = step_fail(ctx, "fail").await?;
@@ -69,7 +72,7 @@ async fn workflow_with_failing_step(
 
 #[pgqrs_workflow]
 async fn workflow_fail_at_end(
-    ctx: &mut Box<dyn Workflow>,
+    ctx: &mut (impl Run + ?Sized),
     _input: &TestData,
 ) -> anyhow::Result<TestData> {
     anyhow::bail!("workflow failed intentionally")
@@ -90,14 +93,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .arg(&input)?
             .create(&store)
             .await?;
-        let workflow_id = workflow.id();
+        let run_id = workflow.id();
 
         // Verify status is PENDING immediately after creation
-        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
         assert_eq!(
             record.status,
             pgqrs::WorkflowStatus::Pending,
-            "Workflow should be PENDING upon creation"
+            "Run should be PENDING upon creation"
         );
     }
 
@@ -111,13 +114,13 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .arg(&input)?
             .create(&store)
             .await?;
-        let workflow_id = workflow.id();
+        let run_id = workflow.id();
 
         let res = my_workflow(&mut workflow, &input).await?;
         assert_eq!(res.msg, "start, step1_done, multi: arg");
 
         // Verify persisting SUCCESS
-        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Success);
         let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
         assert_eq!(db_output.msg, "start, step1_done, multi: arg");
@@ -134,7 +137,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .arg(&input)?
             .create(&store)
             .await?;
-        let workflow_id = workflow.id();
+        let run_id = workflow.id();
 
         // 2. Run step first time -> Success
         let res1 = step_side_effect(&mut workflow, "run1").await?;
@@ -144,14 +147,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         // This proves that the next call reads from DB instead of running function logic
         let tampered_json = serde_json::json!({ "msg": "tampered_value" });
         let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
-        let step_col = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
-            "step_key"
-        } else {
-            "step_id"
-        };
+        let step_col = "step_id";
         let update_sql = format!(
-            "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE workflow_id = {} AND {} = 'step_side_effect'",
-            tampered_json_sql, workflow_id, step_col
+            "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE run_id = {} AND {} = 'step_side_effect'",
+            tampered_json_sql, run_id, step_col
         );
         store.execute_raw(&update_sql).await?;
 
@@ -173,14 +172,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .arg(&input)?
             .create(&store)
             .await?;
-        let workflow_id = workflow.id();
+        let run_id = workflow.id();
 
         let res = workflow_with_failing_step(&mut workflow, &input).await;
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
         // Verify persistence
-        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");
@@ -197,7 +196,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .arg(&input)?
             .create(&store)
             .await?;
-        let workflow_id = workflow.id();
+        let run_id = workflow.id();
 
         let res = workflow_fail_at_end(&mut workflow, &input).await;
         assert!(res.is_err());
@@ -207,7 +206,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         );
 
         // Verify persistence
-        let record = pgqrs::tables(&store).workflows().get(workflow_id).await?;
+        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");

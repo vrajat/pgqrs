@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Store, Worker as WorkerTrait, WorkerTable,
-    Workflow as WorkflowTrait, WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Run, Store, Worker as WorkerTrait, WorkerTable,
+    Workflow as WorkflowTrait, WorkflowRunTable, WorkflowStepTable, WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -22,8 +22,6 @@ use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
 use self::worker::admin::Admin as PostgresAdmin;
 use self::worker::consumer::Consumer as PostgresConsumer;
 use self::worker::producer::Producer as PostgresProducer;
-use self::workflow::guard::StepGuard as PostgresStepGuard;
-use self::workflow::handle::Workflow as PostgresWorkflow;
 
 use crate::config::Config;
 
@@ -127,6 +125,14 @@ impl Store for PostgresStore {
         self.workflows.as_ref()
     }
 
+    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+        unimplemented!("Not implemented")
+    }
+
+    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+        unimplemented!("Not implemented")
+    }
+
     async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
         let admin = PostgresAdmin::new(config).await?;
         Ok(Box::new(admin))
@@ -158,8 +164,16 @@ impl Store for PostgresStore {
         Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, id: i64) -> Box<dyn WorkflowTrait> {
-        Box::new(PostgresWorkflow::new(self.pool.clone(), id))
+    fn workflow(&self, _name: &str) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+        unimplemented!("Not implemented")
+    }
+
+    async fn run(
+        &self,
+        _name: &str,
+        _input: Option<serde_json::Value>,
+    ) -> crate::error::Result<Box<dyn Run>> {
+        unimplemented!("Not implemented")
     }
 
     fn worker(&self, id: i64) -> Box<dyn WorkerTrait> {
@@ -168,27 +182,11 @@ impl Store for PostgresStore {
 
     async fn acquire_step(
         &self,
-        workflow_id: i64,
-        step_id: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
+        _run_id: i64,
+        _step_id: &str,
+        _current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
-        let result = PostgresStepGuard::acquire::<serde_json::Value>(
-            &self.pool,
-            workflow_id,
-            step_id,
-            current_time,
-        )
-        .await?;
-        Ok(result)
-    }
-
-    async fn create_workflow<T: serde::Serialize + Send + Sync>(
-        &self,
-        name: &str,
-        input: &T,
-    ) -> crate::error::Result<Box<dyn WorkflowTrait>> {
-        let workflow = PostgresWorkflow::create(self.pool.clone(), name, input).await?;
-        Ok(Box::new(workflow))
+        unimplemented!("Not implemented")
     }
 
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {

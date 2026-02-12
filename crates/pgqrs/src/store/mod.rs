@@ -7,7 +7,10 @@ use crate::rate_limit::RateLimitStatus;
 use crate::types::{
     ArchivedMessage, NewArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus,
 };
-use crate::types::{NewQueue, NewWorkflow, WorkflowRecord};
+use crate::types::{
+    NewQueue, NewWorkflow, NewWorkflowRun, NewWorkflowStep, WorkflowRecord, WorkflowRun,
+    WorkflowStep,
+};
 use crate::validation::ValidationConfig;
 use crate::Config;
 use async_trait::async_trait;
@@ -250,24 +253,31 @@ pub trait Consumer: Worker {
     async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64>;
 }
 
-/// Interface for a durable workflow execution handle.
+/// Interface for a workflow definition.
 #[async_trait]
 pub trait Workflow: Send + Sync {
-    /// Get the workflow ID.
+    /// Get the workflow name.
+    fn name(&self) -> &str;
+}
+
+/// Interface for a workflow execution run.
+#[async_trait]
+pub trait Run: Send + Sync {
+    /// Get the run ID.
     fn id(&self) -> i64;
 
-    /// Start the workflow execution.
+    /// Start the run execution.
     async fn start(&mut self) -> crate::error::Result<()>;
 
-    /// Complete the workflow successfully with a value.
+    /// Complete the run successfully with a value.
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
 
-    /// Fail the workflow with an error value.
+    /// Fail the run with an error value.
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
 
-    /// Acquire a step lock for this workflow.
+    /// Acquire a step lock for this run.
     ///
-    /// This is used internally by macros to acquire steps within a workflow execution context.
+    /// This is used by the `#[pgqrs_step]` macro to provide step idempotency.
     async fn acquire_step(
         &self,
         step_id: &str,
@@ -275,10 +285,10 @@ pub trait Workflow: Send + Sync {
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>>;
 }
 
-/// Extension trait for Workflow to provide generic convenience methods.
+/// Extension trait for Run to provide generic convenience methods.
 #[async_trait]
-pub trait WorkflowExt: Workflow {
-    /// Complete the workflow successfully with a serializable output.
+pub trait RunExt: Run {
+    /// Complete the run successfully with a serializable output.
     async fn success<T: serde::Serialize + Send + Sync>(
         &mut self,
         output: &T,
@@ -287,7 +297,7 @@ pub trait WorkflowExt: Workflow {
         self.complete(value).await
     }
 
-    /// Fail the workflow with a serializable error.
+    /// Fail the run with a serializable error.
     async fn fail<T: serde::Serialize + Send + Sync>(
         &mut self,
         error: &T,
@@ -296,8 +306,36 @@ pub trait WorkflowExt: Workflow {
         self.fail_with_json(value).await
     }
 }
-// Automatically implement Extension on anything that implements Workflow
-impl<T: ?Sized + Workflow> WorkflowExt for T {}
+// Automatically implement Extension on anything that implements Run
+impl<T: ?Sized + Run> RunExt for T {}
+
+// Allow extension methods (and callers) to work with boxed run trait objects.
+#[async_trait]
+impl<T: ?Sized + Run> Run for Box<T> {
+    fn id(&self) -> i64 {
+        (**self).id()
+    }
+
+    async fn start(&mut self) -> crate::error::Result<()> {
+        (**self).start().await
+    }
+
+    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
+        (**self).complete(output).await
+    }
+
+    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {
+        (**self).fail_with_json(error).await
+    }
+
+    async fn acquire_step(
+        &self,
+        step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
+        (**self).acquire_step(step_id, current_time).await
+    }
+}
 
 /// A guard for a workflow step execution.
 #[async_trait]
@@ -395,22 +433,17 @@ pub trait Store: Send + Sync + 'static {
     fn archive(&self) -> &dyn ArchiveTable;
     /// Get access to the workflow repository.
     fn workflows(&self) -> &dyn WorkflowTable;
-
-    /// Create a new workflow.
-    ///
-    /// This is the low-level API. Use `pgqrs::workflow()` builder for convenience.
-    async fn create_workflow<T: serde::Serialize + Send + Sync>(
-        &self,
-        name: &str,
-        input: &T,
-    ) -> crate::error::Result<Box<dyn Workflow>>;
+    /// Get access to the workflow run repository.
+    fn workflow_runs(&self) -> &dyn WorkflowRunTable;
+    /// Get access to the workflow step repository.
+    fn workflow_steps(&self) -> &dyn WorkflowStepTable;
 
     /// Attempt to acquire a step lock.
     ///
     /// This is the low-level API. Use `pgqrs::step()` builder for convenience.
     async fn acquire_step(
         &self,
-        workflow_id: i64,
+        run_id: i64,
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<StepResult<serde_json::Value>>;
@@ -436,8 +469,15 @@ pub trait Store: Send + Sync + 'static {
         config: &Config,
     ) -> crate::error::Result<Box<dyn Consumer>>;
 
-    /// Get a workflow handle.
-    fn workflow(&self, id: i64) -> Box<dyn Workflow>;
+    /// Get a workflow definition handle.
+    fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
+
+    /// Create and start a new workflow run.
+    async fn run(
+        &self,
+        name: &str,
+        input: Option<serde_json::Value>,
+    ) -> crate::error::Result<Box<dyn Run>>;
 
     /// Get a generic worker handle by ID.
     fn worker(&self, id: i64) -> Box<dyn Worker>;
@@ -706,6 +746,28 @@ pub trait WorkflowTable: Send + Sync {
     async fn insert(&self, data: NewWorkflow) -> crate::error::Result<WorkflowRecord>;
     async fn get(&self, id: i64) -> crate::error::Result<WorkflowRecord>;
     async fn list(&self) -> crate::error::Result<Vec<WorkflowRecord>>;
+    async fn count(&self) -> crate::error::Result<i64>;
+    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+}
+
+/// Repository for managing workflow runs.
+#[async_trait]
+pub trait WorkflowRunTable: Send + Sync {
+    // Methods from Table
+    async fn insert(&self, data: NewWorkflowRun) -> crate::error::Result<WorkflowRun>;
+    async fn get(&self, id: i64) -> crate::error::Result<WorkflowRun>;
+    async fn list(&self) -> crate::error::Result<Vec<WorkflowRun>>;
+    async fn count(&self) -> crate::error::Result<i64>;
+    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+}
+
+/// Repository for managing workflow steps.
+#[async_trait]
+pub trait WorkflowStepTable: Send + Sync {
+    // Methods from Table
+    async fn insert(&self, data: NewWorkflowStep) -> crate::error::Result<WorkflowStep>;
+    async fn get(&self, id: i64) -> crate::error::Result<WorkflowStep>;
+    async fn list(&self) -> crate::error::Result<Vec<WorkflowStep>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 }
