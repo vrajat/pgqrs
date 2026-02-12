@@ -3,19 +3,17 @@ use crate::store::{Run, StepResult, Store};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// Builder for creating database-agnostic workflows.
+/// Workflow definition handle builder.
+///
+/// This represents a workflow *definition* (template). Use `.trigger(..).execute(..)` to create a run.
 pub struct WorkflowBuilder {
     name: Option<String>,
-    input: Option<serde_json::Value>,
 }
 
 impl WorkflowBuilder {
     /// Create a new workflow builder.
     pub fn new() -> Self {
-        Self {
-            name: None,
-            input: None,
-        }
+        Self { name: None }
     }
 
     /// Set the workflow name.
@@ -24,27 +22,54 @@ impl WorkflowBuilder {
         self
     }
 
-    /// Set the workflow input argument.
-    pub fn arg<T: Serialize>(mut self, input: &T) -> Result<Self> {
-        self.input = Some(serde_json::to_value(input).map_err(crate::error::Error::Serialization)?);
-        Ok(self)
-    }
-
-    /// Create the workflow using the provided store.
-    pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn Run>> {
+    /// Create/ensure the workflow definition using the provided store.
+    pub async fn create<S: Store>(self, store: &S) -> Result<()> {
         let name = self
             .name
             .ok_or_else(|| crate::error::Error::ValidationFailed {
                 reason: "Workflow name is required".to_string(),
             })?;
-        let input = self.input;
-        store.run(&name, input).await
+        store.create_workflow(&name).await
+    }
+
+    /// Begin building a workflow trigger.
+    pub fn trigger<T: Serialize>(self, input: &T) -> Result<WorkflowTriggerBuilder> {
+        let name = self
+            .name
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "Workflow name is required".to_string(),
+            })?;
+
+        let input = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
+
+        Ok(WorkflowTriggerBuilder {
+            name,
+            input: Some(input),
+        })
     }
 }
 
 impl Default for WorkflowBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Builder for triggering workflow runs.
+pub struct WorkflowTriggerBuilder {
+    name: String,
+    input: Option<serde_json::Value>,
+}
+
+impl WorkflowTriggerBuilder {
+    pub async fn execute<S: Store>(self, store: &S) -> Result<i64> {
+        store.trigger_workflow(&self.name, self.input).await
+    }
+
+    /// Create a local run handle for in-process execution.
+    pub async fn run<S: Store>(self, store: &S) -> Result<Box<dyn Run>> {
+        let run_id = self.execute(store).await?;
+        store.run(run_id).await
     }
 }
 

@@ -18,17 +18,20 @@ async fn test_create_workflow_creates_workflow_and_queue() -> anyhow::Result<()>
     let store = create_store().await;
     let workflow_name = "test_create_workflow_basic";
 
-    // Create workflow via builder (new API)
+    // Create workflow definition via builder (new API)
+    pgqrs::workflow().name(workflow_name).create(&store).await?;
+
+    // Trigger a run
     let input = TestParams {
         message: "hello".to_string(),
         count: 1,
     };
-    let workflow = pgqrs::workflow()
+
+    let run_id = pgqrs::workflow()
         .name(workflow_name)
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
-    let run_id = workflow.id();
     assert!(run_id > 0, "run_id should be positive");
 
     // Verify workflow run record exists and matches name
@@ -40,35 +43,22 @@ async fn test_create_workflow_creates_workflow_and_queue() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-async fn test_create_workflow_is_idempotent() -> anyhow::Result<()> {
+async fn test_create_workflow_is_not_idempotent() -> anyhow::Result<()> {
     let store = create_store().await;
-    let workflow_name = "test_idempotent_workflow";
+    let workflow_name = "test_duplicate_workflow_create";
 
-    let input = TestParams {
-        message: "hello".to_string(),
-        count: 1,
-    };
+    // Definition creation is strict by name
+    pgqrs::workflow().name(workflow_name).create(&store).await?;
 
-    // Workflows are not name-idempotent in the new API: each create() makes a new record.
-    // So we validate both exist and have the expected name.
-    let wf1 = pgqrs::workflow()
-        .name(workflow_name)
-        .arg(&input)?
-        .create(&store)
-        .await?;
-    let wf2 = pgqrs::workflow()
-        .name(workflow_name)
-        .arg(&input)?
-        .create(&store)
-        .await?;
+    let err = pgqrs::workflow().name(workflow_name).create(&store).await;
+    assert!(err.is_err(), "Expected duplicate workflow create to fail");
 
-    assert_ne!(wf1.id(), wf2.id(), "workflow ids should be unique");
-
-    let rec1 = pgqrs::tables(&store).workflow_runs().get(wf1.id()).await?;
-    let rec2 = pgqrs::tables(&store).workflow_runs().get(wf2.id()).await?;
-
-    assert_eq!(rec1.workflow_name, workflow_name);
-    assert_eq!(rec2.workflow_name, workflow_name);
+    match err.unwrap_err() {
+        pgqrs::Error::WorkflowAlreadyExists { name } => {
+            assert_eq!(name, workflow_name);
+        }
+        other => panic!("Expected WorkflowAlreadyExists, got: {other:?}"),
+    }
 
     Ok(())
 }
@@ -95,29 +85,33 @@ async fn test_create_multiple_workflows() -> anyhow::Result<()> {
         count: 1,
     };
 
-    let wf1 = pgqrs::workflow()
+    pgqrs::workflow().name("test_wf_1").create(&store).await?;
+    pgqrs::workflow().name("test_wf_2").create(&store).await?;
+    pgqrs::workflow().name("test_wf_3").create(&store).await?;
+
+    let run_1 = pgqrs::workflow()
         .name("test_wf_1")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
-    let wf2 = pgqrs::workflow()
+    let run_2 = pgqrs::workflow()
         .name("test_wf_2")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
-    let wf3 = pgqrs::workflow()
+    let run_3 = pgqrs::workflow()
         .name("test_wf_3")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
 
-    assert_ne!(wf1.id(), wf2.id());
-    assert_ne!(wf2.id(), wf3.id());
-    assert_ne!(wf1.id(), wf3.id());
+    assert_ne!(run_1, run_2);
+    assert_ne!(run_2, run_3);
+    assert_ne!(run_1, run_3);
 
-    let rec1 = pgqrs::tables(&store).workflow_runs().get(wf1.id()).await?;
-    let rec2 = pgqrs::tables(&store).workflow_runs().get(wf2.id()).await?;
-    let rec3 = pgqrs::tables(&store).workflow_runs().get(wf3.id()).await?;
+    let rec1 = pgqrs::tables(&store).workflow_runs().get(run_1).await?;
+    let rec2 = pgqrs::tables(&store).workflow_runs().get(run_2).await?;
+    let rec3 = pgqrs::tables(&store).workflow_runs().get(run_3).await?;
 
     assert_eq!(rec1.workflow_name, "test_wf_1");
     assert_eq!(rec2.workflow_name, "test_wf_2");
@@ -131,21 +125,20 @@ async fn test_workflow_with_unicode_name() -> anyhow::Result<()> {
     let store = create_store().await;
     let workflow_name = "テストワークフロー_🎉";
 
+    pgqrs::workflow().name(workflow_name).create(&store).await?;
+
     let input = TestParams {
         message: "hello".to_string(),
         count: 1,
     };
 
-    let workflow = pgqrs::workflow()
+    let run_id = pgqrs::workflow()
         .name(workflow_name)
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
 
-    let record = pgqrs::tables(&store)
-        .workflow_runs()
-        .get(workflow.id())
-        .await?;
+    let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
     assert_eq!(record.workflow_name, workflow_name);
 
     Ok(())
@@ -157,21 +150,23 @@ async fn test_workflow_with_long_name() -> anyhow::Result<()> {
     // Create a name close to the 255 char limit
     let workflow_name = "a".repeat(250);
 
+    pgqrs::workflow()
+        .name(&workflow_name)
+        .create(&store)
+        .await?;
+
     let input = TestParams {
         message: "hello".to_string(),
         count: 1,
     };
 
-    let workflow = pgqrs::workflow()
+    let run_id = pgqrs::workflow()
         .name(&workflow_name)
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .execute(&store)
         .await?;
 
-    let record = pgqrs::tables(&store)
-        .workflow_runs()
-        .get(workflow.id())
-        .await?;
+    let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
     assert_eq!(record.workflow_name, workflow_name);
 
     Ok(())

@@ -259,19 +259,66 @@ impl Store for SqliteStore {
         Ok(Box::new(SqliteWorkflow::new(name)))
     }
 
-    async fn run(&self, name: &str, input: Option<serde_json::Value>) -> Result<Box<dyn Run>> {
-        use self::workflow::handle::SqliteRun;
-        use crate::types::NewWorkflowRun;
+    async fn create_workflow(&self, name: &str) -> Result<()> {
+        // Ensure backing queue exists (name is the queue name for now).
+        // We avoid relying on backend-specific upsert SQL by doing: exists -> insert.
+        let queue_exists = self.queues.exists(name).await?;
+        if !queue_exists {
+            let _queue = self
+                .queues
+                .insert(crate::types::NewQueue {
+                    queue_name: name.to_string(),
+                })
+                .await?;
+        }
 
+        let queue = self.queues.get_by_name(name).await?;
+
+        // Create workflow definition. This is strict: it errors if the workflow already exists.
+        self.workflows.create(name, queue.id).await?;
+
+        Ok(())
+    }
+
+    async fn trigger_workflow(&self, name: &str, input: Option<serde_json::Value>) -> Result<i64> {
+        use crate::types::NewMessage;
+
+        // Strict semantics: triggering requires the workflow definition (and queue) to exist.
+        // Callers must create the workflow definition explicitly.
+        let queue = self.queues.get_by_name(name).await?;
+
+        // Create run record.
         let run = self
             .workflow_runs
-            .insert(NewWorkflowRun {
+            .insert(crate::types::NewWorkflowRun {
                 workflow_name: name.to_string(),
                 input,
             })
             .await?;
 
-        Ok(Box::new(SqliteRun::new(self.pool.clone(), run.id)))
+        // Enqueue message with only run_id.
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({ "run_id": run.id });
+
+        let _msg = self
+            .messages
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload,
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await?;
+
+        Ok(run.id)
+    }
+
+    async fn run(&self, run_id: i64) -> Result<Box<dyn Run>> {
+        use self::workflow::handle::SqliteRun;
+        Ok(Box::new(SqliteRun::new(self.pool.clone(), run_id)))
     }
 
     fn worker(&self, id: i64) -> Box<dyn Worker> {

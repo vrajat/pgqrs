@@ -88,10 +88,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "pending_check".to_string(),
         };
+        pgqrs::workflow().name("pending_wf").create(&store).await?;
         let workflow = pgqrs::workflow()
             .name("pending_wf")
-            .arg(&input)?
-            .create(&store)
+            .trigger(&input)?
+            .run(&store)
             .await?;
         let run_id = workflow.id();
 
@@ -109,10 +110,11 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "start".to_string(),
         };
+        pgqrs::workflow().name("my_workflow").create(&store).await?;
         let mut workflow = pgqrs::workflow()
             .name("my_workflow")
-            .arg(&input)?
-            .create(&store)
+            .trigger(&input)?
+            .run(&store)
             .await?;
         let run_id = workflow.id();
 
@@ -132,10 +134,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "idempotency".to_string(),
         };
+        pgqrs::workflow()
+            .name("idempotency_wf")
+            .create(&store)
+            .await?;
         let mut workflow = pgqrs::workflow()
             .name("idempotency_wf")
-            .arg(&input)?
-            .create(&store)
+            .trigger(&input)?
+            .run(&store)
             .await?;
         let run_id = workflow.id();
 
@@ -167,10 +173,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "fail_step".to_string(),
         };
+        pgqrs::workflow()
+            .name("workflow_with_failing_step")
+            .create(&store)
+            .await?;
         let mut workflow = pgqrs::workflow()
             .name("workflow_with_failing_step")
-            .arg(&input)?
-            .create(&store)
+            .trigger(&input)?
+            .run(&store)
             .await?;
         let run_id = workflow.id();
 
@@ -191,10 +201,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "fail_wf".to_string(),
         };
+        pgqrs::workflow()
+            .name("workflow_fail_at_end")
+            .create(&store)
+            .await?;
         let mut workflow = pgqrs::workflow()
             .name("workflow_fail_at_end")
-            .arg(&input)?
-            .create(&store)
+            .trigger(&input)?
+            .run(&store)
             .await?;
         let run_id = workflow.id();
 

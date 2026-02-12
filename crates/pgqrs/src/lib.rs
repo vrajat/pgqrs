@@ -111,10 +111,12 @@
 //!
 //! let url = "https://example.com/data";
 
+//! pgqrs::workflow().name("data_pipeline").create(&store).await?;
+//!
 //! let mut workflow = pgqrs::workflow()
 //!     .name("data_pipeline")
-//!     .arg(&url)?
-//!     .create(&store)
+//!     .trigger(&url)?
+//!     .run(&store)
 //!     .await?;
 //!
 //! let result = data_pipeline(workflow.as_mut(), url).await?;

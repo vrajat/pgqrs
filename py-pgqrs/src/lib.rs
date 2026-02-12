@@ -628,11 +628,17 @@ impl Admin {
         let json_arg = py_to_json(arg.as_ref(py))?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
+            rust_pgqrs::workflow()
+                .name(&name)
+                .create(&store)
+                .await
+                .map_err(to_py_err)?;
+
             let workflow = rust_pgqrs::workflow()
                 .name(&name)
-                .arg(&json_arg)
+                .trigger(&json_arg)
                 .map_err(to_py_err)?
-                .create(&store)
+                .run(&store)
                 .await
                 .map_err(to_py_err)?;
 

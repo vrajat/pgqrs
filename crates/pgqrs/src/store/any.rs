@@ -331,18 +331,40 @@ impl Store for AnyStore {
         }
     }
 
-    async fn run(
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<()> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.create_workflow(name).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.create_workflow(name).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.create_workflow(name).await,
+        }
+    }
+
+    async fn trigger_workflow(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<Box<dyn Run>> {
+    ) -> crate::error::Result<i64> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.run(name, input).await,
+            AnyStore::Postgres(s) => s.trigger_workflow(name, input).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.run(name, input).await,
+            AnyStore::Sqlite(s) => s.trigger_workflow(name, input).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.run(name, input).await,
+            AnyStore::Turso(s) => s.trigger_workflow(name, input).await,
+        }
+    }
+
+    async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.run(run_id).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.run(run_id).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.run(run_id).await,
         }
     }
 

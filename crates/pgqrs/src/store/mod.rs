@@ -472,12 +472,24 @@ pub trait Store: Send + Sync + 'static {
     /// Get a workflow definition handle.
     fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
 
-    /// Create and start a new workflow run.
-    async fn run(
+    /// Create a workflow definition (template) idempotently.
+    ///
+    /// This should ensure the backing queue exists and create the workflow record if missing.
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<()>;
+
+    /// Trigger a workflow run.
+    ///
+    /// This should create a run record and enqueue a message with payload `{ "run_id": ... }`.
+    async fn trigger_workflow(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<Box<dyn Run>>;
+    ) -> crate::error::Result<i64>;
+
+    /// Create a local run handle from an existing run id.
+    ///
+    /// Backends may use this to allow in-process execution after triggering.
+    async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>>;
 
     /// Get a generic worker handle by ID.
     fn worker(&self, id: i64) -> Box<dyn Worker>;

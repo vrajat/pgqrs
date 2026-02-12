@@ -139,6 +139,10 @@ pub enum Error {
     #[error("Queue '{name}' already exists")]
     QueueAlreadyExists { name: String },
 
+    /// Attempted to create a workflow definition that already exists
+    #[error("Workflow '{name}' already exists")]
+    WorkflowAlreadyExists { name: String },
+
     /// Attempted to access a message that doesn't exist
     #[error("Message with id '{id}' not found")]
     MessageNotFound { id: uuid::Uuid },
