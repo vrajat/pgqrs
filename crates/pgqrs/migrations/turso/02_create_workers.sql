@@ -8,3 +8,6 @@ CREATE TABLE IF NOT EXISTS pgqrs_workers (
     shutdown_at TEXT,
     status TEXT DEFAULT 'ready' NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_workers_queue_id ON pgqrs_workers(queue_id);
+CREATE INDEX IF NOT EXISTS idx_workers_status ON pgqrs_workers(status);

@@ -362,20 +362,26 @@ impl Admin for TursoAdmin {
             tracing::info!("Applying migration {}: {}", version, description);
 
             // Turso/libSQL does not reliably support executing multiple statements in a single
-            // `execute()` call.
+            // `execute()` call. Our migration files commonly contain multiple CREATE TABLE/INDEX
+            // statements, so we split and execute each statement individually.
             //
-            // IMPORTANT: We intentionally do NOT split by ';' here. Naively splitting SQL is not
-            // safe (it breaks on semicolons inside strings/comments and would be a footgun for any
-            // future migrations with more complex SQL). Instead, each migration file included here
-            // must contain exactly one statement.
-            conn.execute(sql, ())
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!(
-                        "Failed to run migration {} ({}): {}",
-                        version, description, e
-                    ),
-                })?;
+            // NOTE: This split is naive (not a real SQL parser). It's good enough for our current
+            // migrations which only contain simple DDL with no semicolons in strings/comments.
+            let statements = sql
+                .split(';')
+                .map(str::trim)
+                .filter(|stmt| !stmt.is_empty());
+
+            for stmt in statements {
+                conn.execute(stmt, ())
+                    .await
+                    .map_err(|e| crate::error::Error::Internal {
+                        message: format!(
+                            "Failed to run migration {} ({}): {}",
+                            version, description, e
+                        ),
+                    })?;
+            }
 
             // Record success
             conn.execute(
