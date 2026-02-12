@@ -7,7 +7,7 @@ EXCEPTION
 END $$;
 
 -- Workflow definitions (templates)
-CREATE TABLE pgqrs_workflows (
+CREATE TABLE IF NOT EXISTS pgqrs_workflows (
     workflow_id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     queue_id BIGINT NOT NULL REFERENCES pgqrs_queues(id),
@@ -15,7 +15,7 @@ CREATE TABLE pgqrs_workflows (
 );
 
 -- Workflow runs (executions)
-CREATE TABLE pgqrs_workflow_runs (
+CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
     run_id BIGSERIAL PRIMARY KEY,
     workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id) ON DELETE CASCADE,
     status pgqrs_workflow_status NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE pgqrs_workflow_runs (
 );
 
 -- Step state (for crash recovery)
-CREATE TABLE pgqrs_workflow_steps (
+CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
     run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(run_id) ON DELETE CASCADE,
     step_id VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
@@ -49,11 +49,11 @@ CREATE TABLE pgqrs_workflow_steps (
 );
 
 -- Indexes
-CREATE INDEX idx_pgqrs_workflows_name ON pgqrs_workflows(name);
-CREATE INDEX idx_pgqrs_workflow_runs_workflow_id ON pgqrs_workflow_runs(workflow_id);
-CREATE INDEX idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
-CREATE INDEX idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
-CREATE INDEX idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflows_name ON pgqrs_workflows(name);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_workflow_id ON pgqrs_workflow_runs(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;
 
 -- Comments
 COMMENT ON TABLE pgqrs_workflows IS 'Workflow definitions (templates)';

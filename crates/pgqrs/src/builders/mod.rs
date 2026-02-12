@@ -3,7 +3,6 @@ mod admin;
 mod connect;
 
 mod tables;
-// pub mod trigger;
 pub mod workflow;
 
 // Worker creation builders

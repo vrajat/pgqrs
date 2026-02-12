@@ -11,9 +11,3 @@ CREATE TABLE IF NOT EXISTS pgqrs_archive (
     producer_worker_id INTEGER,
     consumer_worker_id INTEGER
 );
-
-CREATE INDEX IF NOT EXISTS idx_archive_queue_id ON pgqrs_archive(queue_id);
-CREATE INDEX IF NOT EXISTS idx_archive_original_msg ON pgqrs_archive(original_msg_id);
-CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON pgqrs_archive(archived_at);
-CREATE INDEX IF NOT EXISTS idx_archive_producer ON pgqrs_archive(producer_worker_id);
-CREATE INDEX IF NOT EXISTS idx_archive_consumer ON pgqrs_archive(consumer_worker_id);
