@@ -79,211 +79,213 @@ async fn workflow_fail_at_end(
 }
 
 #[tokio::test]
-async fn test_macro_suite() -> anyhow::Result<()> {
-    // Setup
-    let store = common::create_store("pgqrs_workflow_test").await;
+async fn test_workflow_creation_state() -> anyhow::Result<()> {
+    let store = common::create_store("macro_test_creation").await;
+    let input = TestData {
+        msg: "pending_check".to_string(),
+    };
+    pgqrs::workflow()
+        .name("pending_wf")
+        .store(&store)
+        .create()
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name("pending_wf")
+        .store(&store)
+        .trigger(&input)?
+        .execute()
+        .await?;
 
-    // --- CASE 0: Creation State (Pending) ---
-    {
-        let input = TestData {
-            msg: "pending_check".to_string(),
-        };
-        pgqrs::workflow()
-            .name("pending_wf")
-            .store(&store)
-            .create()
-            .await?;
-        let run_msg = pgqrs::workflow()
-            .name("pending_wf")
-            .store(&store)
-            .trigger(&input)?
-            .execute()
-            .await?;
+    let run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
-        let run = pgqrs::run()
-            .message(run_msg)
-            .store(&store)
-            .execute()
-            .await?;
+    // Verify status is PENDING immediately after creation
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(
+        record.status,
+        pgqrs::WorkflowStatus::Pending,
+        "Run should be PENDING upon creation"
+    );
+    Ok(())
+}
 
-        // Verify status is PENDING immediately after creation
-        let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-        assert_eq!(
-            record.status,
-            pgqrs::WorkflowStatus::Pending,
-            "Run should be PENDING upon creation"
-        );
-    }
+#[tokio::test]
+async fn test_successful_workflow() -> anyhow::Result<()> {
+    let store = common::create_store("macro_test_success").await;
+    let input = TestData {
+        msg: "start".to_string(),
+    };
+    pgqrs::workflow()
+        .name("my_workflow")
+        .store(&store)
+        .create()
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name("my_workflow")
+        .store(&store)
+        .trigger(&input)?
+        .execute()
+        .await?;
 
-    // --- CASE 1: Successful Workflow (with multi-arg step) ---
-    {
-        let input = TestData {
-            msg: "start".to_string(),
-        };
-        pgqrs::workflow()
-            .name("my_workflow")
-            .store(&store)
-            .create()
-            .await?;
-        let run_msg = pgqrs::workflow()
-            .name("my_workflow")
-            .store(&store)
-            .trigger(&input)?
-            .execute()
-            .await?;
+    let mut my_wf_run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
-        let mut my_wf_run = pgqrs::run()
-            .message(run_msg)
-            .store(&store)
-            .execute()
-            .await?;
+    let res = my_workflow(&mut *my_wf_run, &input).await?;
+    assert_eq!(res.msg, "start, step1_done, multi: arg");
 
-        let res = my_workflow(&mut *my_wf_run, &input).await?;
-        assert_eq!(res.msg, "start, step1_done, multi: arg");
+    // Verify persisting SUCCESS
+    let record = pgqrs::tables(&store)
+        .workflow_runs()
+        .get(my_wf_run.id())
+        .await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Success);
+    let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
+    assert_eq!(db_output.msg, "start, step1_done, multi: arg");
+    Ok(())
+}
 
-        // Verify persisting SUCCESS
-        let record = pgqrs::tables(&store)
-            .workflow_runs()
-            .get(my_wf_run.id())
-            .await?;
-        assert_eq!(record.status, pgqrs::WorkflowStatus::Success);
-        let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
-        assert_eq!(db_output.msg, "start, step1_done, multi: arg");
-    }
+#[tokio::test]
+async fn test_step_idempotency() -> anyhow::Result<()> {
+    let store = common::create_store("macro_test_idempotency").await;
+    // 1. Create context
+    let input = TestData {
+        msg: "idempotency".to_string(),
+    };
+    pgqrs::workflow()
+        .name("idempotency_wf")
+        .store(&store)
+        .create()
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name("idempotency_wf")
+        .store(&store)
+        .trigger(&input)?
+        .execute()
+        .await?;
 
-    // --- CASE 2: Step Idempotency (Retry logic) ---
-    {
-        // 1. Create context
-        let input = TestData {
-            msg: "idempotency".to_string(),
-        };
-        pgqrs::workflow()
-            .name("idempotency_wf")
-            .store(&store)
-            .create()
-            .await?;
-        let run_msg = pgqrs::workflow()
-            .name("idempotency_wf")
-            .store(&store)
-            .trigger(&input)?
-            .execute()
-            .await?;
+    let mut idem_wf_run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
-        let mut idem_wf_run = pgqrs::run()
-            .message(run_msg)
-            .store(&store)
-            .execute()
-            .await?;
+    idem_wf_run.start().await?;
 
-        idem_wf_run.start().await?;
+    // 2. Run step first time -> Success
+    let res1 = step_side_effect(&mut *idem_wf_run, "run1").await?;
+    assert_eq!(res1.msg, "original_value");
 
-        // 2. Run step first time -> Success
-        let res1 = step_side_effect(&mut *idem_wf_run, "run1").await?;
-        assert_eq!(res1.msg, "original_value");
+    // 3. Manually TAMPER with the step output in the database
+    // This proves that the next call reads from DB instead of running function logic
+    let tampered_json = serde_json::json!({ "msg": "tampered_value" });
+    let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
+    let step_col = "step_name";
+    let update_sql = format!(
+        "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE run_id = {} AND {} = 'step_side_effect'",
+        tampered_json_sql, idem_wf_run.id(), step_col
+    );
+    store.execute_raw(&update_sql).await?;
 
-        // 3. Manually TAMPER with the step output in the database
-        // This proves that the next call reads from DB instead of running function logic
-        let tampered_json = serde_json::json!({ "msg": "tampered_value" });
-        let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
-        let step_col = "step_name";
-        let update_sql = format!(
-            "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE run_id = {} AND {} = 'step_side_effect'",
-            tampered_json_sql, idem_wf_run.id(), step_col
-        );
-        store.execute_raw(&update_sql).await?;
+    // 4. Run step second time -> Should return TAMPERED value
+    let res2 = step_side_effect(&mut *idem_wf_run, "run2").await?;
+    assert_eq!(
+        res2.msg, "tampered_value",
+        "Step should have returned cached (tampered) result from DB"
+    );
+    Ok(())
+}
 
-        // 4. Run step second time -> Should return TAMPERED value
-        let res2 = step_side_effect(&mut *idem_wf_run, "run2").await?;
-        assert_eq!(
-            res2.msg, "tampered_value",
-            "Step should have returned cached (tampered) result from DB"
-        );
-    }
+#[tokio::test]
+async fn test_step_failure() -> anyhow::Result<()> {
+    let store = common::create_store("macro_test_step_failure").await;
+    let input = TestData {
+        msg: "fail_step".to_string(),
+    };
+    pgqrs::workflow()
+        .name("workflow_with_failing_step")
+        .store(&store)
+        .create()
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name("workflow_with_failing_step")
+        .store(&store)
+        .trigger(&input)?
+        .execute()
+        .await?;
 
-    // --- CASE 3: Step Failure ---
-    {
-        let input = TestData {
-            msg: "fail_step".to_string(),
-        };
-        pgqrs::workflow()
-            .name("workflow_with_failing_step")
-            .store(&store)
-            .create()
-            .await?;
-        let run_msg = pgqrs::workflow()
-            .name("workflow_with_failing_step")
-            .store(&store)
-            .trigger(&input)?
-            .execute()
-            .await?;
+    let mut wf_failing_step_run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
-        let mut wf_failing_step_run = pgqrs::run()
-            .message(run_msg)
-            .store(&store)
-            .execute()
-            .await?;
+    let res = workflow_with_failing_step(&mut *wf_failing_step_run, &input).await;
+    assert!(res.is_err());
+    assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
-        let res = workflow_with_failing_step(&mut *wf_failing_step_run, &input).await;
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
+    // Verify persistence
+    let record = pgqrs::tables(&store)
+        .workflow_runs()
+        .get(wf_failing_step_run.id())
+        .await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
+    let error_val = record.error.expect("Should have error");
+    let error_str = error_val
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(error_str.contains("step failed intentionally"));
+    Ok(())
+}
 
-        // Verify persistence
-        let record = pgqrs::tables(&store)
-            .workflow_runs()
-            .get(wf_failing_step_run.id())
-            .await?;
-        assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
-        let error_val = record.error.expect("Should have error");
-        let error_str = error_val
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        assert!(error_str.contains("step failed intentionally"));
-    }
+#[tokio::test]
+async fn test_workflow_failure() -> anyhow::Result<()> {
+    let store = common::create_store("macro_test_workflow_failure").await;
+    let input = TestData {
+        msg: "fail_wf".to_string(),
+    };
+    pgqrs::workflow()
+        .name("workflow_fail_at_end")
+        .store(&store)
+        .create()
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name("workflow_fail_at_end")
+        .store(&store)
+        .trigger(&input)?
+        .execute()
+        .await?;
 
-    // --- CASE 4: Workflow Failure ---
-    {
-        let input = TestData {
-            msg: "fail_wf".to_string(),
-        };
-        pgqrs::workflow()
-            .name("workflow_fail_at_end")
-            .store(&store)
-            .create()
-            .await?;
-        let run_msg = pgqrs::workflow()
-            .name("workflow_fail_at_end")
-            .store(&store)
-            .trigger(&input)?
-            .execute()
-            .await?;
+    let mut wf_fail_run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
-        let mut wf_fail_run = pgqrs::run()
-            .message(run_msg)
-            .store(&store)
-            .execute()
-            .await?;
+    let res = workflow_fail_at_end(&mut *wf_fail_run, &input).await;
+    assert!(res.is_err());
+    assert_eq!(
+        res.unwrap_err().to_string(),
+        "workflow failed intentionally"
+    );
 
-        let res = workflow_fail_at_end(&mut *wf_fail_run, &input).await;
-        assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "workflow failed intentionally"
-        );
-
-        // Verify persistence
-        let record = pgqrs::tables(&store)
-            .workflow_runs()
-            .get(wf_fail_run.id())
-            .await?;
-        assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
-        let error_val = record.error.expect("Should have error");
-        let error_str = error_val
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        assert_eq!(error_str, "workflow failed intentionally");
-    }
-
+    // Verify persistence
+    let record = pgqrs::tables(&store)
+        .workflow_runs()
+        .get(wf_fail_run.id())
+        .await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
+    let error_val = record.error.expect("Should have error");
+    let error_str = error_val
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert_eq!(error_str, "workflow failed intentionally");
     Ok(())
 }
