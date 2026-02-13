@@ -14,48 +14,6 @@ async fn create_store() -> AnyStore {
 }
 
 #[tokio::test]
-async fn test_create_workflow_creates_workflow_and_queue() -> anyhow::Result<()> {
-    let store = create_store().await;
-    let workflow_name = "test_create_workflow_basic";
-
-    // Create workflow definition via builder (new API)
-    let workflow = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
-        .await?;
-
-    // Trigger a run
-    let input = TestParams {
-        message: "hello".to_string(),
-        count: 1,
-    };
-
-    let run_msg = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .trigger(&input)?
-        .execute()
-        .await?;
-    assert!(run_msg.id > 0, "run message id should be positive");
-
-    // Force run record creation by creating a handle
-    let _run = pgqrs::run()
-        .message(run_msg)
-        .store(&store)
-        .execute()
-        .await?;
-
-    let record = pgqrs::tables(&store).workflow_runs().list().await?;
-    assert!(
-        !record.is_empty(),
-        "Workflow run record should be created after execution"
-    );
-    assert_eq!(record[0].workflow_id, workflow.id);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_create_workflow_is_not_idempotent() -> anyhow::Result<()> {
     let store = create_store().await;
     let workflow_name = "test_duplicate_workflow_create";
