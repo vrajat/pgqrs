@@ -106,17 +106,9 @@ impl TursoStore {
     }
 }
 
-pub fn parse_turso_timestamp(s: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| crate::error::Error::Internal {
-            message: format!("Invalid timestamp: {}", e),
-        })
-}
-
-pub fn format_turso_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
+/// Re-export consolidated timestamp utilities
+pub use crate::store::sqlite_utils::format_timestamp as format_turso_timestamp;
+pub use crate::store::sqlite_utils::parse_timestamp as parse_turso_timestamp;
 
 pub trait FromTursoRow: Sized {
     fn from_row(row: &Row, idx: usize) -> Result<Self>;

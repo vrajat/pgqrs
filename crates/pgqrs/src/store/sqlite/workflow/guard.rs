@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::policy::StepRetryPolicy;
+use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::types::WorkflowStatus;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -321,16 +322,4 @@ impl crate::store::StepGuard for SqliteStepGuard {
         self.completed = true;
         Ok(())
     }
-}
-
-fn format_sqlite_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
-fn parse_sqlite_timestamp(s: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| crate::error::Error::Internal {
-            message: format!("Invalid timestamp '{}': {}", s, e),
-        })
 }

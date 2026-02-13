@@ -36,9 +36,7 @@ use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::types::{QueueRecord, WorkerRecord, WorkerStatus};
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 use async_trait::async_trait;
-use chrono::Utc;
 use sqlx::migrate::Migrator;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -421,7 +419,6 @@ impl crate::store::Worker for Admin {
 #[async_trait]
 impl crate::store::Admin for Admin {
     /// Verify that pgqrs installation is valid and healthy.
-
     ///
     /// This method checks that all required infrastructure is in place:
     /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)

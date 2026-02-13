@@ -34,6 +34,28 @@ pub mod turso;
 
 pub use any::AnyStore;
 
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+pub(crate) mod sqlite_utils {
+    use crate::error::{Error, Result};
+    use chrono::{DateTime, Utc};
+
+    /// Parse SQLite/Turso TEXT timestamp to DateTime<Utc>
+    pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
+        // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" format
+        // We append +0000 to parse it as UTC
+        DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
+            .map(|dt| dt.with_timezone(&Utc))
+            .map_err(|e| Error::Internal {
+                message: format!("Invalid timestamp: {}", e),
+            })
+    }
+
+    /// Format DateTime<Utc> for SQLite/Turso TEXT storage
+    pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
+        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+}
+
 /// Trait defining the interface for all worker types.
 #[async_trait]
 pub trait Worker: Send + Sync {

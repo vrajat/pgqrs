@@ -7,7 +7,6 @@ use crate::store::{
 };
 use crate::types::{RunRecord, WorkflowRecord};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 use std::sync::Arc;
@@ -79,21 +78,8 @@ impl SqliteStore {
     }
 }
 
-/// Parse SQLite TEXT timestamp to DateTime<Utc>
-pub fn parse_sqlite_timestamp(s: &str) -> Result<DateTime<Utc>> {
-    // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" format
-    // We append +0000 to parse it as UTC
-    DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::Internal {
-            message: format!("Invalid timestamp: {}", e),
-        })
-}
-
-/// Format DateTime<Utc> for SQLite TEXT storage
-pub fn format_sqlite_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
+pub use crate::store::sqlite_utils::format_timestamp as format_sqlite_timestamp;
+pub use crate::store::sqlite_utils::parse_timestamp as parse_sqlite_timestamp;
 
 #[async_trait]
 impl Store for SqliteStore {
@@ -275,8 +261,6 @@ impl Store for SqliteStore {
     }
 
     async fn create_workflow(&self, name: &str) -> Result<WorkflowRecord> {
-        // Ensure backing queue exists (name is the queue name for now).
-        // We avoid relying on backend-specific upsert SQL by doing: exists -> insert.
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -289,7 +273,6 @@ impl Store for SqliteStore {
 
         let queue = self.queues.get_by_name(name).await?;
 
-        // Create workflow definition. This is strict: it errors if the workflow already exists.
         let workflow = self
             .workflows
             .insert(crate::types::NewWorkflowRecord {
@@ -334,7 +317,6 @@ impl Store for SqliteStore {
             })
             .await?;
 
-        // Enqueue message with only run_id.
         let now = chrono::Utc::now();
         let payload = serde_json::json!({ "run_id": run.id });
 
