@@ -175,6 +175,38 @@ async fn test_workflow_with_unicode_name() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn test_workflow_insert_requires_and_persists_queue_id() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    // Arrange: create a backing queue and capture id
+    let queue = pgqrs::tables(&store)
+        .queues()
+        .insert(pgqrs::types::NewQueueRecord {
+            queue_name: "wf_insert_queue".to_string(),
+        })
+        .await?;
+
+    // Act: insert workflow definition via the generic table API
+    let inserted = pgqrs::tables(&store)
+        .workflows()
+        .insert(pgqrs::types::NewWorkflowRecord {
+            name: "wf_insert_workflow".to_string(),
+            queue_id: queue.id,
+        })
+        .await?;
+
+    // Assert: queue_id round-trips
+    assert_eq!(inserted.name, "wf_insert_workflow");
+    assert_eq!(inserted.queue_id, queue.id);
+
+    let fetched = pgqrs::tables(&store).workflows().get(inserted.id).await?;
+    assert_eq!(fetched.name, inserted.name);
+    assert_eq!(fetched.queue_id, queue.id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_workflow_with_long_name() -> anyhow::Result<()> {
     let store = create_store().await;
     // Create a name close to the 255 char limit
