@@ -134,8 +134,8 @@ fn json_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
     }
 }
 
-fn py_to_json(val: &PyAny) -> PyResult<serde_json::Value> {
-    let json_module = val.py().import("json")?;
+fn py_to_json(py: Python, val: &PyAny) -> PyResult<serde_json::Value> {
+    let json_module = py.import("json")?;
     let json_str = json_module
         .call_method1("dumps", (val,))?
         .extract::<String>()?;
@@ -618,38 +618,54 @@ impl Admin {
         pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Archive { store }) })
     }
 
+    #[pyo3(signature = (name, arg=None))]
     fn create_workflow<'a>(
         &self,
         py: Python<'a>,
         name: String,
-        arg: PyObject,
+        arg: Option<PyObject>,
     ) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
-        let json_arg = py_to_json(arg.as_ref(py))?;
+        let json_arg = if let Some(a) = arg {
+            Some(py_to_json(py, a.as_ref(py))?)
+        } else {
+            None
+        };
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            rust_pgqrs::workflow()
+            // Ensure workflow exists
+            let _wf_rec = rust_pgqrs::workflow()
+                .store(&store)
                 .name(&name)
-                .create(&store)
+                .create()
                 .await
                 .map_err(to_py_err)?;
 
-            let workflow = rust_pgqrs::workflow()
-                .name(&name)
-                .trigger(&json_arg)
-                .map_err(to_py_err)?
-                .run(&store)
-                .await
-                .map_err(to_py_err)?;
+            if let Some(input) = json_arg {
+                // If arg is provided, trigger and return a run handle
+                let run_msg = rust_pgqrs::workflow()
+                    .store(&store)
+                    .name(&name)
+                    .trigger(&input)
+                    .map_err(to_py_err)?
+                    .execute()
+                    .await
+                    .map_err(to_py_err)?;
 
-            // Cache the workflow id to avoid blocking reads later
-            let workflow_id = workflow.id();
+                let workflow = store.run(run_msg).await.map_err(to_py_err)?;
+                let workflow_id = workflow.id();
 
-            Ok(PyRun {
-                inner: Arc::new(tokio::sync::Mutex::new(workflow)),
-                store,
-                workflow_id,
-            })
+                Ok(PyRun {
+                    inner: Arc::new(tokio::sync::Mutex::new(workflow)),
+                    store,
+                    workflow_id,
+                })
+            } else {
+                // Return dummy result for non-triggering create
+                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "create_workflow in Python must have an arg to trigger a run",
+                ))
+            }
         })
     }
 }
@@ -657,6 +673,27 @@ impl Admin {
 #[pyfunction]
 fn admin(store: PyStore) -> Admin {
     Admin { store: store.inner }
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct WorkflowRecord {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    queue_id: i64,
+}
+
+impl From<rust_pgqrs::types::WorkflowRecord> for WorkflowRecord {
+    fn from(r: rust_pgqrs::types::WorkflowRecord) -> Self {
+        WorkflowRecord {
+            id: r.id,
+            name: r.name,
+            queue_id: r.queue_id,
+        }
+    }
 }
 
 #[pyfunction]
@@ -667,7 +704,7 @@ fn produce<'a>(
     payload: PyObject,
 ) -> PyResult<&'a PyAny> {
     let rust_store = store.inner.clone();
-    let json_payload = py_to_json(payload.as_ref(py))?;
+    let json_payload = py_to_json(py, payload.as_ref(py))?;
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let msg_ids = rust_pgqrs::enqueue()
             .message(&json_payload)
@@ -691,7 +728,7 @@ fn produce_batch<'a>(
     let rust_store = store.inner.clone();
     let mut json_payloads = Vec::new();
     for p in payloads {
-        json_payloads.push(py_to_json(p.as_ref(py))?);
+        json_payloads.push(py_to_json(py, p.as_ref(py))?);
     }
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let msg_ids = rust_pgqrs::enqueue()
@@ -783,7 +820,7 @@ fn consume_batch<'a>(
 #[pyfunction]
 fn enqueue<'a>(py: Python<'a>, producer: &Producer, payload: PyObject) -> PyResult<&'a PyAny> {
     let inner = producer.inner.clone();
-    let json_payload = py_to_json(payload.as_ref(py))?;
+    let json_payload = py_to_json(py, payload.as_ref(py))?;
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let msg = inner.enqueue(&json_payload).await.map_err(to_py_err)?;
         Ok(msg.id)
@@ -799,7 +836,7 @@ fn enqueue_batch<'a>(
     let inner = producer.inner.clone();
     let mut json_payloads = Vec::new();
     for p in payloads {
-        json_payloads.push(py_to_json(p.as_ref(py))?);
+        json_payloads.push(py_to_json(py, p.as_ref(py))?);
     }
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let msgs = inner
@@ -923,7 +960,7 @@ impl Producer {
 
     fn enqueue<'a>(&self, py: Python<'a>, payload: &PyAny) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
-        let json_payload = py_to_json(payload)?;
+        let json_payload = py_to_json(py, payload)?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let msg = inner.enqueue(&json_payload).await.map_err(to_py_err)?;
@@ -938,7 +975,7 @@ impl Producer {
         delay_seconds: u32,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
-        let json_payload = py_to_json(payload)?;
+        let json_payload = py_to_json(py, payload)?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let msg = inner
@@ -1207,7 +1244,6 @@ impl From<rust_pgqrs::types::ArchivedMessage> for ArchivedMessage {
 
 #[pyclass]
 struct PyRun {
-    #[allow(dead_code)]
     inner: Arc<tokio::sync::Mutex<Box<dyn Run>>>,
     store: AnyStore,
     workflow_id: i64,
@@ -1237,25 +1273,13 @@ impl PyRun {
 
     fn success<'a>(&self, py: Python<'a>, result: PyObject) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
-        let json_res = py_to_json(result.as_ref(py))?;
+        let json_res = py_to_json(py, result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut wf = inner.lock().await;
             wf.success(&json_res).await.map_err(to_py_err)
         })
     }
 
-    /// Acquire a step for execution.
-    ///
-    /// Args:
-    ///     step_id: Unique identifier for the step
-    ///     current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
-    ///
-    /// Example:
-    ///     # Normal usage (uses system time)
-    ///     step_res = await workflow.acquire_step("my_step")
-    ///
-    ///     # Testing with controlled time
-    ///     step_res = await workflow.acquire_step("my_step", current_time="2024-01-15T10:30:00Z")
     #[pyo3(signature = (step_id, current_time=None))]
     fn acquire_step<'a>(
         &self,
@@ -1267,47 +1291,55 @@ impl PyRun {
         let store = self.store.clone();
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let id = {
-                let wf = inner.lock().await;
-                wf.id()
+            let (run_id, time) = {
+                let run_handle = inner.lock().await;
+                let id = run_handle.id();
+
+                let time = if let Some(time_str) = current_time {
+                    chrono::DateTime::parse_from_rfc3339(&time_str)
+                        .map_err(|e| {
+                            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                                "Invalid ISO 8601 timestamp '{}': {}",
+                                time_str, e
+                            ))
+                        })?
+                        .with_timezone(&chrono::Utc)
+                } else {
+                    chrono::Utc::now()
+                };
+                (id, time)
             };
 
-            // Determine time: use parameter or system time
-            let time = if let Some(time_str) = current_time {
-                chrono::DateTime::parse_from_rfc3339(&time_str)
-                    .map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                            "Invalid ISO 8601 timestamp '{}': {}",
-                            time_str, e
-                        ))
-                    })?
-                    .with_timezone(&chrono::Utc)
-            } else {
-                chrono::Utc::now()
+            let res = {
+                let run_handle = inner.lock().await;
+                rust_pgqrs::step()
+                    .store(&store)
+                    .run(&**run_handle)
+                    .id(&step_id)
+                    .with_time(time)
+                    .execute()
+                    .await
+                    .map_err(to_py_err)?
             };
 
-            let res: rust_pgqrs::StepResult<serde_json::Value> = rust_pgqrs::step(id, &step_id)
-                .with_time(time)
-                .acquire(&store)
-                .await
-                .map_err(to_py_err)?;
-
-            Python::with_gil(|py| match res {
-                rust_pgqrs::StepResult::Execute(guard) => Ok(PyStepResult {
-                    status: "EXECUTE".to_string(),
-                    value: py.None(),
-                    guard: Some(PyStepGuard {
-                        inner: Arc::new(tokio::sync::Mutex::new(guard)),
-                        current_time: time,
-                    }),
+            Python::with_gil(|py| {
+                if res.status == rust_pgqrs::WorkflowStatus::Success {
+                    let output = res.output.unwrap_or(serde_json::Value::Null);
+                    Ok(PyStepResult {
+                        status: "SKIPPED".to_string(),
+                        value: json_to_py(py, &output)?,
+                        guard: None,
+                    }
+                    .into_py(py))
+                } else {
+                    let py_guard = PyStepGuard::new(store, run_id, step_id, time);
+                    Ok(PyStepResult {
+                        status: "EXECUTE".to_string(),
+                        value: py.None(),
+                        guard: Some(py_guard),
+                    }
+                    .into_py(py))
                 }
-                .into_py(py)),
-                rust_pgqrs::StepResult::Skipped(val) => Ok(PyStepResult {
-                    status: "SKIPPED".to_string(),
-                    value: json_to_py(py, &val)?,
-                    guard: None,
-                }
-                .into_py(py)),
             })
         })
     }
@@ -1334,7 +1366,7 @@ struct PyStepGuard {
 impl PyStepGuard {
     fn success<'a>(&self, py: Python<'a>, result: PyObject) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
-        let json_res = py_to_json(result.as_ref(py))?;
+        let json_res = py_to_json(py, result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut guard = inner.lock().await;
             guard.complete(json_res).await.map_err(to_py_err)
@@ -1353,16 +1385,6 @@ impl PyStepGuard {
         })
     }
 
-    /// Fail the step with a transient error that triggers automatic retry.
-    ///
-    /// Args:
-    ///     code: Error code for classification (e.g., "TIMEOUT", "RATE_LIMITED")
-    ///     message: Human-readable error message
-    ///     retry_after: Optional custom delay in seconds before retry (e.g., from Retry-After header)
-    ///
-    /// Example:
-    ///     await guard.fail_transient("TIMEOUT", "Connection timeout")
-    ///     await guard.fail_transient("RATE_LIMITED", "Too many requests", retry_after=60.0)
     #[pyo3(signature = (code, message, retry_after=None))]
     fn fail_transient<'a>(
         &self,
@@ -1380,35 +1402,18 @@ impl PyStepGuard {
                 "message": message,
             });
 
-            // Add retry_after if provided
             if let Some(delay_secs) = retry_after {
-                // Validate delay is finite (not NaN or Infinity)
-                if !delay_secs.is_finite() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "retry_after must be finite, got {}",
-                        delay_secs
-                    )));
+                if !delay_secs.is_finite() || delay_secs < 0.0 {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Invalid retry_after",
+                    ));
                 }
-
-                // Validate delay is non-negative
-                if delay_secs < 0.0 {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "retry_after must be non-negative, got {}",
-                        delay_secs
-                    )));
-                }
-
-                // Convert f64 seconds to integer seconds and nanoseconds
                 let secs = delay_secs.trunc() as u64;
                 let nanos =
                     ((delay_secs.fract() * 1_000_000_000.0).round() as u32).min(999_999_999);
-
                 error_json.as_object_mut().unwrap().insert(
                     "retry_after".to_string(),
-                    serde_json::json!({
-                        "secs": secs,
-                        "nanos": nanos,
-                    }),
+                    serde_json::json!({"secs": secs, "nanos": nanos}),
                 );
             }
 
@@ -1418,6 +1423,21 @@ impl PyStepGuard {
                 .await
                 .map_err(to_py_err)
         })
+    }
+}
+
+impl PyStepGuard {
+    fn new(
+        store: AnyStore,
+        run_id: i64,
+        step_id: String,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        let guard = store.step_guard(run_id, &step_id);
+        Self {
+            inner: Arc::new(tokio::sync::Mutex::new(guard)),
+            current_time,
+        }
     }
 }
 
@@ -1500,6 +1520,27 @@ impl From<RustWorkerInfo> for WorkerInfo {
     }
 }
 
+#[pyclass]
+#[derive(Clone)]
+struct WorkflowRecord {
+    #[pyo3(get)]
+    id: i64,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    queue_id: i64,
+}
+
+impl From<rust_pgqrs::types::WorkflowRecord> for WorkflowRecord {
+    fn from(r: rust_pgqrs::types::WorkflowRecord) -> Self {
+        WorkflowRecord {
+            id: r.id,
+            name: r.name,
+            queue_id: r.queue_id,
+        }
+    }
+}
+
 #[pymodule]
 fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<Admin>()?;
@@ -1520,6 +1561,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<ConsumerIterator>()?;
     m.add_class::<PyBackoffStrategy>()?;
     m.add_class::<PyStepRetryPolicy>()?;
+    m.add_class::<WorkflowRecord>()?;
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;

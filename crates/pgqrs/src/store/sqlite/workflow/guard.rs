@@ -1,10 +1,9 @@
 use crate::error::Result;
 use crate::policy::StepRetryPolicy;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::WorkflowStatus;
+use crate::types::{StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::de::DeserializeOwned;
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
@@ -21,7 +20,7 @@ started_at = CASE
     WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
     ELSE datetime('now')
 END
-RETURNING status, output, error, retry_count, retry_at
+RETURNING run_id, step_id, status, input, output, error, retry_count, retry_at, created_at, updated_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
@@ -56,12 +55,21 @@ pub struct SqliteStepGuard {
 }
 
 impl SqliteStepGuard {
-    pub async fn acquire<T: DeserializeOwned + 'static>(
+    pub fn new(pool: SqlitePool, run_id: i64, step_id: &str) -> Self {
+        Self {
+            pool,
+            run_id,
+            step_id: step_id.to_string(),
+            completed: false,
+        }
+    }
+
+    pub async fn acquire_record(
         pool: &SqlitePool,
         run_id: i64,
         step_id: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<crate::store::StepResult<T>> {
+    ) -> Result<StepRecord> {
         let step_id_string = step_id.to_string();
 
         let row = sqlx::query(SQL_ACQUIRE_STEP)
@@ -79,25 +87,11 @@ impl SqliteStepGuard {
             })?;
 
         let status_str: String = row.try_get("status")?;
-        let status = WorkflowStatus::from_str(&status_str)
+        let mut status = WorkflowStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
-        let output_str: Option<String> = row.try_get("output")?;
-        let error_str: Option<String> = row.try_get("error")?;
         let retry_count: i32 = row.try_get("retry_count")?;
         let retry_at_str: Option<String> = row.try_get("retry_at")?;
-
-        if status == WorkflowStatus::Success {
-            let output_val: serde_json::Value = if let Some(s) = output_str {
-                serde_json::from_str(&s)?
-            } else {
-                serde_json::Value::Null
-            };
-
-            let result: T =
-                serde_json::from_value(output_val).map_err(crate::error::Error::Serialization)?;
-            return Ok(crate::store::StepResult::Skipped(result));
-        }
 
         if status == WorkflowStatus::Error {
             if let Some(retry_at_s) = retry_at_str {
@@ -121,35 +115,40 @@ impl SqliteStepGuard {
                         context: format!("Failed to clear retry_at for step {}", step_id_string),
                     })?;
 
-                return Ok(crate::store::StepResult::Execute(Box::new(Self {
-                    pool: pool.clone(),
-                    run_id,
-                    step_id: step_id_string,
-                    completed: false,
-                })));
-            }
-
-            let error_val: serde_json::Value = if let Some(s) = error_str {
-                serde_json::from_str(&s)?
+                status = WorkflowStatus::Running;
             } else {
-                serde_json::json!({
-                    "is_transient": false,
-                    "message": "Unknown error"
-                })
-            };
+                let error_str: Option<String> = row.try_get("error")?;
+                let error_val: serde_json::Value = if let Some(s) = error_str {
+                    serde_json::from_str(&s)?
+                } else {
+                    serde_json::json!({
+                        "is_transient": false,
+                        "message": "Unknown error"
+                    })
+                };
 
-            return Err(crate::error::Error::RetriesExhausted {
-                error: error_val,
-                attempts: retry_count as u32,
-            });
+                return Err(crate::error::Error::RetriesExhausted {
+                    error: error_val,
+                    attempts: retry_count as u32,
+                });
+            }
         }
 
-        Ok(crate::store::StepResult::Execute(Box::new(Self {
-            pool: pool.clone(),
-            run_id,
-            step_id: step_id_string,
-            completed: false,
-        })))
+        let input_str: Option<String> = row.try_get("input")?;
+        let output_str: Option<String> = row.try_get("output")?;
+        let error_str: Option<String> = row.try_get("error")?;
+
+        Ok(StepRecord {
+            id: 0,
+            run_id: row.try_get("run_id")?,
+            step_id: row.try_get("step_id")?,
+            status,
+            input: input_str.and_then(|s| serde_json::from_str(&s).ok()),
+            output: output_str.and_then(|s| serde_json::from_str(&s).ok()),
+            error: error_str.and_then(|s| serde_json::from_str(&s).ok()),
+            created_at: parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?,
+            updated_at: parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?,
+        })
     }
 }
 
@@ -160,23 +159,21 @@ impl Drop for SqliteStepGuard {
             let run_id = self.run_id;
             let step_id = self.step_id.clone();
 
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let error_json = serde_json::json!({
-                        "is_transient": false,
-                        "code": "GUARD_DROPPED",
-                        "message": "Step execution interrupted (dropped without completion)",
-                    })
-                    .to_string();
+            tokio::spawn(async move {
+                let error_json = serde_json::json!({
+                    "is_transient": false,
+                    "code": "GUARD_DROPPED",
+                    "message": "Step execution interrupted (dropped without completion)",
+                })
+                .to_string();
 
-                    let _ = sqlx::query(SQL_STEP_FAIL)
-                        .bind(run_id)
-                        .bind(step_id)
-                        .bind(error_json)
-                        .execute(&pool)
-                        .await;
-                });
-            }
+                let _ = sqlx::query(SQL_STEP_FAIL)
+                    .bind(run_id)
+                    .bind(step_id)
+                    .bind(error_json)
+                    .execute(&pool)
+                    .await;
+            });
         }
     }
 }

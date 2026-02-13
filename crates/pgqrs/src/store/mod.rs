@@ -3,7 +3,6 @@
 //! This module defines the [`Store`] trait which enables pgqrs to support
 //! multiple database backends (Postgres, SQLite, Turso).
 
-use crate::types::{RunRecord, WorkflowRecord};
 use crate::Config;
 use async_trait::async_trait;
 
@@ -96,10 +95,13 @@ pub trait Store: Send + Sync + 'static {
         run_id: i64,
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<StepResult<serde_json::Value>>;
+    ) -> crate::error::Result<crate::types::StepRecord>;
 
     /// Initialize the pgqrs schema in the database.
     async fn bootstrap(&self) -> crate::error::Result<()>;
+
+    /// Create a step guard for manual management.
+    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard>;
 
     /// Get an admin worker interface.
     async fn admin(
@@ -131,20 +133,23 @@ pub trait Store: Send + Sync + 'static {
     ) -> crate::error::Result<Box<dyn Consumer>>;
 
     /// Get a workflow definition handle.
-    fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
-
-    /// Create a workflow definition (template) idempotently.
-    async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord>;
+    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
 
     /// Trigger a workflow run.
-    async fn trigger_workflow(
+    ///
+    /// This enqueues a message with the workflow input. The run record is created
+    /// when the worker starts processing the message.
+    async fn trigger(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<RunRecord>;
+    ) -> crate::error::Result<crate::types::QueueMessage>;
 
-    /// Create a local run handle from an existing run id.
-    async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>>;
+    /// Create a local run handle from a message.
+    ///
+    /// This should parse the message payload and either create a new RunRecord
+    /// (for new triggers) or fetch an existing one (for resumptions).
+    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Box<dyn Run>>;
 
     /// Get a generic worker handle by ID.
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>>;

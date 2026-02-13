@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
     Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
-    QueueTable, Run, RunRecordTable, StepRecordTable, StepResult, Store, Worker, WorkerTable,
+    QueueTable, Run, RunRecordTable, StepGuard, StepRecordTable, Store, Worker, WorkerTable,
     Workflow, WorkflowTable,
 };
-use crate::types::{NewQueueMessage, NewQueueRecord, RunRecord, WorkflowRecord, WorkflowStatus};
+use crate::types::{NewQueueMessage, NewQueueRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
@@ -63,7 +63,6 @@ impl TursoStore {
         })?;
 
         // Enable WAL mode and busy timeout for better concurrency in local mode
-        // PRAGMA journal_mode returns a row, so we use query() to avoid "unexpected row" error
         let mut rows = conn
             .query("PRAGMA journal_mode=WAL;", ())
             .await
@@ -612,8 +611,27 @@ impl crate::store::Run for TursoRun {
         &self,
         step_id: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<StepResult<serde_json::Value>> {
-        TursoStepGuard::acquire(&self.db, self.id, step_id, current_time).await
+    ) -> Result<crate::types::StepRecord> {
+        TursoStepGuard::acquire_record(&self.db, self.id, step_id, current_time).await
+    }
+
+    async fn complete_step(
+        &self,
+        step_id: &str,
+        output: serde_json::Value,
+    ) -> crate::error::Result<()> {
+        let mut guard = TursoStepGuard::new(self.db.clone(), self.id, step_id);
+        crate::store::StepGuard::complete(&mut guard, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        step_id: &str,
+        error: serde_json::Value,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<()> {
+        let mut guard = TursoStepGuard::new(self.db.clone(), self.id, step_id);
+        crate::store::StepGuard::fail_with_json(&mut guard, error, current_time).await
     }
 }
 
@@ -687,8 +705,8 @@ impl Store for TursoStore {
         run_id: i64,
         step_id: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<StepResult<serde_json::Value>> {
-        TursoStepGuard::acquire(&self.db, run_id, step_id, current_time).await
+    ) -> Result<crate::types::StepRecord> {
+        TursoStepGuard::acquire_record(&self.db, run_id, step_id, current_time).await
     }
 
     async fn bootstrap(&self) -> Result<()> {
@@ -741,6 +759,10 @@ impl Store for TursoStore {
             }
         }
         Ok(())
+    }
+
+    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard> {
+        Box::new(TursoStepGuard::new(self.db.clone(), run_id, step_id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
@@ -806,11 +828,7 @@ impl Store for TursoStore {
         Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
-        Ok(Box::new(TursoWorkflow::new(self.db.clone(), name)))
-    }
-
-    async fn create_workflow(&self, name: &str) -> Result<WorkflowRecord> {
+    async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -823,54 +841,45 @@ impl Store for TursoStore {
 
         let queue = self.queues.get_by_name(name).await?;
 
-        let insert_res = self
+        let workflow_record = self
             .workflows
             .insert(crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
-            .await;
-
-        match insert_res {
-            Ok(record) => Ok(record),
-            Err(e) => {
+            .await
+            .map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
-                    return Err(crate::error::Error::WorkflowAlreadyExists {
+                    return crate::error::Error::WorkflowAlreadyExists {
                         name: name.to_string(),
-                    });
+                    };
                 }
-                if let crate::error::Error::NotFound { .. } = e {
-                    return Err(crate::error::Error::WorkflowAlreadyExists {
-                        name: name.to_string(),
-                    });
-                }
-                Err(e)
-            }
-        }
+                e
+            })?;
+
+        Ok(Box::new(TursoWorkflow::new(
+            workflow_record,
+            self.db.clone(),
+        )))
     }
 
-    async fn trigger_workflow(
+    async fn trigger(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> Result<RunRecord> {
-        // Strict semantics: queue/workflow must already exist.
-        let queue = self.queues.get_by_name(name).await?;
+    ) -> Result<crate::types::QueueMessage> {
+        // Enqueue message with input and workflow name.
         let workflow = self.workflows.get_by_name(name).await?;
-
-        let run = self
-            .workflow_runs
-            .insert(crate::types::NewRunRecord {
-                workflow_id: workflow.id,
-                input,
-            })
-            .await?;
+        let queue = self.queues.get_by_name(name).await?;
 
         let now = Utc::now();
-        let payload = serde_json::json!({ "run_id": run.id });
+        let payload = serde_json::json!({
+            "workflow_id": workflow.id,
+            "input": input
+        });
 
-        let _msg = self
+        let msg = self
             .messages
             .insert(NewQueueMessage {
                 queue_id: queue.id,
@@ -883,10 +892,29 @@ impl Store for TursoStore {
             })
             .await?;
 
-        Ok(run)
+        Ok(msg)
     }
 
-    async fn run(&self, run_id: i64) -> Result<Box<dyn Run>> {
+    async fn run(&self, message: crate::types::QueueMessage) -> Result<Box<dyn Run>> {
+        let payload = &message.payload;
+
+        let run_id = if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
+            // Existing run resumption
+            run_id
+        } else if let Some(workflow_id) = payload.get("workflow_id").and_then(|v| v.as_i64()) {
+            // New trigger
+            let input = payload.get("input").cloned();
+            let run = self
+                .workflow_runs
+                .insert(crate::types::NewRunRecord { workflow_id, input })
+                .await?;
+            run.id
+        } else {
+            return Err(crate::error::Error::Internal {
+                message: "Invalid workflow message payload".to_string(),
+            });
+        };
+
         Ok(Box::new(TursoRun::new(self.db.clone(), run_id)))
     }
 

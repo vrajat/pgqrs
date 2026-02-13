@@ -189,25 +189,30 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 
             // Attempt to initialize the step via workflow context
             let current_time = chrono::Utc::now();
-            let guard_res = #first_arg_name.acquire_step(step_id, current_time).await?;
+            let step_rec = #first_arg_name.acquire_step(step_id, current_time).await?;
 
-            match guard_res {
-                pgqrs::store::StepResult::Skipped(val) => Ok(serde_json::from_value(val)?),
-                pgqrs::store::StepResult::Execute(mut guard) => {
-                    // Execute the original function body and capture the result
-                    let result: #output_type = async { #block }.await;
-
-                    match &result {
-                        Ok(val) => guard.success(val).await?,
-                        Err(e) => {
-                            // Pass the error string directly. guard.fail handles serialization.
-                            guard.fail(&e.to_string()).await?
-                        },
-                    }
-
-                    result
-                }
+            if step_rec.status == pgqrs::WorkflowStatus::Success {
+                return Ok(serde_json::from_value(step_rec.output.unwrap_or(serde_json::Value::Null))?);
             }
+
+            // Execute the original function body and capture the result
+            let result: #output_type = async { #block }.await;
+
+            match &result {
+                Ok(val) => {
+                    let output_val = serde_json::to_value(val)?;
+                    #first_arg_name.complete_step(step_id, output_val).await?;
+                }
+                Err(e) => {
+                    let error_val = serde_json::json!({
+                        "message": e.to_string(),
+                        "is_transient": false
+                    });
+                    #first_arg_name.fail_step(step_id, error_val, current_time).await?;
+                },
+            }
+
+            result
         }
     };
 
@@ -341,7 +346,13 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
             // Handle terminal state
             match &result {
                 Ok(val) => #first_arg_name.success(val).await?,
-                Err(e) => #first_arg_name.fail(&e.to_string()).await?,
+                Err(e) => {
+                    let error_val = serde_json::json!({
+                        "message": e.to_string(),
+                        "is_transient": false
+                    });
+                    #first_arg_name.fail_with_json(error_val).await?;
+                }
             }
 
             result

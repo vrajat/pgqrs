@@ -1,7 +1,10 @@
 //! High-level actor interfaces for workers, producers, and consumers.
 
 use crate::rate_limit::RateLimitStatus;
-use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
+pub use crate::types::{
+    ArchivedMessage, QueueMessage, QueueRecord, StepRecord, WorkerRecord, WorkerStatus,
+    WorkflowRecord,
+};
 use crate::validation::ValidationConfig;
 use async_trait::async_trait;
 use chrono::Duration;
@@ -173,7 +176,7 @@ pub trait Consumer: Worker {
 /// Interface for a workflow definition.
 #[async_trait]
 pub trait Workflow: Send + Sync {
-    fn name(&self) -> &str;
+    fn workflow_record(&self) -> &WorkflowRecord;
 }
 
 /// Interface for a workflow execution run.
@@ -187,7 +190,20 @@ pub trait Run: Send + Sync {
         &self,
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<StepResult<serde_json::Value>>;
+    ) -> crate::error::Result<crate::types::StepRecord>;
+
+    async fn complete_step(
+        &self,
+        step_id: &str,
+        output: serde_json::Value,
+    ) -> crate::error::Result<()>;
+
+    async fn fail_step(
+        &self,
+        step_id: &str,
+        error: serde_json::Value,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<()>;
 }
 
 /// Extension trait for Run to provide generic convenience methods.
@@ -233,8 +249,25 @@ impl<T: ?Sized + Run> Run for Box<T> {
         &self,
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<StepResult<serde_json::Value>> {
+    ) -> crate::error::Result<crate::types::StepRecord> {
         (**self).acquire_step(step_id, current_time).await
+    }
+
+    async fn complete_step(
+        &self,
+        step_id: &str,
+        output: serde_json::Value,
+    ) -> crate::error::Result<()> {
+        (**self).complete_step(step_id, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        step_id: &str,
+        error: serde_json::Value,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<()> {
+        (**self).fail_step(step_id, error, current_time).await
     }
 }
 
@@ -269,11 +302,3 @@ pub trait StepGuardExt: StepGuard {
     }
 }
 impl<T: ?Sized + StepGuard> StepGuardExt for T {}
-
-/// The result of attempting to start a step.
-pub enum StepResult<T> {
-    /// The step needs to be executed. The returned guard MUST be used to report success or failure.
-    Execute(Box<dyn StepGuard>),
-    /// The step was already completed successfully in a previous run. Contains the cached output.
-    Skipped(T),
-}

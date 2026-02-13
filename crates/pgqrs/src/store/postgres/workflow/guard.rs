@@ -1,10 +1,9 @@
-use super::WorkflowStatus;
 use crate::error::Result;
+use crate::types::{StepRecord, WorkflowStatus};
 use crate::StepRetryPolicy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::de::DeserializeOwned;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 const SQL_ACQUIRE_STEP: &str = r#"
 INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, started_at, retry_count)
@@ -19,7 +18,7 @@ started_at = CASE
     WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
     ELSE NOW()
 END
-RETURNING status, output, error, retry_count, retry_at
+RETURNING run_id, step_id, status, input, output, error, retry_count, retry_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
@@ -47,8 +46,6 @@ WHERE run_id = $1 AND step_id = $2
 "#;
 
 /// RAII guard for a workflow step execution.
-///
-/// Ensures exactly-once logical execution of steps by persisting state to the database.
 pub struct StepGuard {
     pool: PgPool,
     run_id: i64,
@@ -57,21 +54,24 @@ pub struct StepGuard {
 }
 
 impl StepGuard {
-    pub async fn acquire<T: DeserializeOwned + 'static>(
+    pub fn new(pool: PgPool, run_id: i64, step_id: &str) -> Self {
+        Self {
+            pool,
+            run_id,
+            step_id: step_id.to_string(),
+            completed: false,
+        }
+    }
+
+    pub async fn acquire_record(
         pool: &PgPool,
         run_id: i64,
         step_id: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<crate::store::StepResult<T>> {
+    ) -> Result<StepRecord> {
         let step_id_string = step_id.to_string();
 
-        let row: (
-            WorkflowStatus,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            i32,
-            Option<DateTime<Utc>>,
-        ) = sqlx::query_as(SQL_ACQUIRE_STEP)
+        let row = sqlx::query(SQL_ACQUIRE_STEP)
             .bind(run_id)
             .bind(&step_id_string)
             .fetch_one(pool)
@@ -85,14 +85,9 @@ impl StepGuard {
                 ),
             })?;
 
-        let (status, output, error, retry_count, retry_at) = row;
-
-        if status == WorkflowStatus::Success {
-            let output_val = output.unwrap_or(serde_json::Value::Null);
-            let result: T =
-                serde_json::from_value(output_val).map_err(crate::error::Error::Serialization)?;
-            return Ok(crate::store::StepResult::Skipped(result));
-        }
+        let mut status: WorkflowStatus = row.try_get("status")?;
+        let retry_count: i32 = row.try_get("retry_count")?;
+        let retry_at: Option<DateTime<Utc>> = row.try_get("retry_at")?;
 
         if status == WorkflowStatus::Error {
             if let Some(retry_at) = retry_at {
@@ -114,33 +109,34 @@ impl StepGuard {
                         context: format!("Failed to clear retry_at for step {}", step_id_string),
                     })?;
 
-                return Ok(crate::store::StepResult::Execute(Box::new(Self {
-                    pool: pool.clone(),
-                    run_id,
-                    step_id: step_id_string,
-                    completed: false,
-                })));
+                status = WorkflowStatus::Running;
+            } else {
+                let error: Option<serde_json::Value> = row.try_get("error")?;
+                let error_val = error.unwrap_or_else(|| {
+                    serde_json::json!({
+                        "is_transient": false,
+                        "message": "Unknown error"
+                    })
+                });
+
+                return Err(crate::error::Error::RetriesExhausted {
+                    error: error_val,
+                    attempts: retry_count as u32,
+                });
             }
-
-            let error_val = error.unwrap_or_else(|| {
-                serde_json::json!({
-                    "is_transient": false,
-                    "message": "Unknown error"
-                })
-            });
-
-            return Err(crate::error::Error::RetriesExhausted {
-                error: error_val,
-                attempts: retry_count as u32,
-            });
         }
 
-        Ok(crate::store::StepResult::Execute(Box::new(Self {
-            pool: pool.clone(),
-            run_id,
-            step_id: step_id_string,
-            completed: false,
-        })))
+        Ok(StepRecord {
+            id: 0,
+            run_id: row.try_get("run_id")?,
+            step_id: row.try_get("step_id")?,
+            status,
+            input: row.try_get("input")?,
+            output: row.try_get("output")?,
+            error: row.try_get("error")?,
+            created_at: Utc::now(), // Placeholder
+            updated_at: Utc::now(), // Placeholder
+        })
     }
 }
 
@@ -151,9 +147,6 @@ impl Drop for StepGuard {
             let run_id = self.run_id;
             let step_id = self.step_id.clone();
 
-            // Best-effort attempt to mark as error if dropped unexpectedly.
-            // We use tokio::spawn to run this asynchronously.
-            // Note: This relies on a tokio runtime being available.
             tokio::spawn(async move {
                 let error_json = serde_json::json!({
                     "is_transient": false,

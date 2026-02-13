@@ -1,4 +1,4 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Run, StepGuardExt, Store};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store};
 
 use serde::{Deserialize, Serialize};
 
@@ -88,11 +88,22 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "pending_check".to_string(),
         };
-        pgqrs::workflow().name("pending_wf").create(&store).await?;
-        let run = pgqrs::workflow()
+        pgqrs::workflow()
             .name("pending_wf")
+            .store(&store)
+            .create()
+            .await?;
+        let run_msg = pgqrs::workflow()
+            .name("pending_wf")
+            .store(&store)
             .trigger(&input)?
-            .run(&store)
+            .execute()
+            .await?;
+
+        let run = pgqrs::run()
+            .message(run_msg)
+            .store(&store)
+            .execute()
             .await?;
 
         // Verify status is PENDING immediately after creation
@@ -109,14 +120,25 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let input = TestData {
             msg: "start".to_string(),
         };
-        pgqrs::workflow().name("my_workflow").create(&store).await?;
-        let mut my_wf_run = pgqrs::workflow()
+        pgqrs::workflow()
             .name("my_workflow")
+            .store(&store)
+            .create()
+            .await?;
+        let run_msg = pgqrs::workflow()
+            .name("my_workflow")
+            .store(&store)
             .trigger(&input)?
-            .run(&store)
+            .execute()
             .await?;
 
-        let res = my_workflow(&mut my_wf_run, &input).await?;
+        let mut my_wf_run = pgqrs::run()
+            .message(run_msg)
+            .store(&store)
+            .execute()
+            .await?;
+
+        let res = my_workflow(&mut *my_wf_run, &input).await?;
         assert_eq!(res.msg, "start, step1_done, multi: arg");
 
         // Verify persisting SUCCESS
@@ -137,16 +159,26 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         pgqrs::workflow()
             .name("idempotency_wf")
-            .create(&store)
+            .store(&store)
+            .create()
             .await?;
-        let mut idem_wf_run = pgqrs::workflow()
+        let run_msg = pgqrs::workflow()
             .name("idempotency_wf")
+            .store(&store)
             .trigger(&input)?
-            .run(&store)
+            .execute()
             .await?;
 
+        let mut idem_wf_run = pgqrs::run()
+            .message(run_msg)
+            .store(&store)
+            .execute()
+            .await?;
+
+        idem_wf_run.start().await?;
+
         // 2. Run step first time -> Success
-        let res1 = step_side_effect(&mut idem_wf_run, "run1").await?;
+        let res1 = step_side_effect(&mut *idem_wf_run, "run1").await?;
         assert_eq!(res1.msg, "original_value");
 
         // 3. Manually TAMPER with the step output in the database
@@ -161,7 +193,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         store.execute_raw(&update_sql).await?;
 
         // 4. Run step second time -> Should return TAMPERED value
-        let res2 = step_side_effect(&mut idem_wf_run, "run2").await?;
+        let res2 = step_side_effect(&mut *idem_wf_run, "run2").await?;
         assert_eq!(
             res2.msg, "tampered_value",
             "Step should have returned cached (tampered) result from DB"
@@ -175,15 +207,23 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         pgqrs::workflow()
             .name("workflow_with_failing_step")
-            .create(&store)
+            .store(&store)
+            .create()
             .await?;
-        let mut wf_failing_step_run = pgqrs::workflow()
+        let run_msg = pgqrs::workflow()
             .name("workflow_with_failing_step")
+            .store(&store)
             .trigger(&input)?
-            .run(&store)
+            .execute()
             .await?;
 
-        let res = workflow_with_failing_step(&mut wf_failing_step_run, &input).await;
+        let mut wf_failing_step_run = pgqrs::run()
+            .message(run_msg)
+            .store(&store)
+            .execute()
+            .await?;
+
+        let res = workflow_with_failing_step(&mut *wf_failing_step_run, &input).await;
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
@@ -194,7 +234,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
-        let error_str = error_val.as_str().expect("Error should be string");
+        let error_str = error_val
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         assert!(error_str.contains("step failed intentionally"));
     }
 
@@ -205,15 +248,23 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         };
         pgqrs::workflow()
             .name("workflow_fail_at_end")
-            .create(&store)
+            .store(&store)
+            .create()
             .await?;
-        let mut wf_fail_run = pgqrs::workflow()
+        let run_msg = pgqrs::workflow()
             .name("workflow_fail_at_end")
+            .store(&store)
             .trigger(&input)?
-            .run(&store)
+            .execute()
             .await?;
 
-        let res = workflow_fail_at_end(&mut wf_fail_run, &input).await;
+        let mut wf_fail_run = pgqrs::run()
+            .message(run_msg)
+            .store(&store)
+            .execute()
+            .await?;
+
+        let res = workflow_fail_at_end(&mut *wf_fail_run, &input).await;
         assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
@@ -227,7 +278,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
-        let error_str = error_val.as_str().expect("Error should be string");
+        let error_str = error_val
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         assert_eq!(error_str, "workflow failed intentionally");
     }
 

@@ -491,7 +491,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Suspend { id } => {
             tracing::info!("Suspending worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.suspend().await?;
             tracing::info!("Worker {} suspended", id);
             writeln!(out, "Worker {} suspended", id)?;
@@ -499,7 +499,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Resume { id } => {
             tracing::info!("Resuming worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.resume().await?;
             tracing::info!("Worker {} resumed", id);
             writeln!(out, "Worker {} resumed", id)?;
@@ -507,7 +507,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Shutdown { id } => {
             tracing::info!("Shutting down worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.shutdown().await?;
             tracing::info!("Worker {} shut down successfully", id);
             writeln!(out, "Worker {} shut down successfully", id)?;
@@ -515,7 +515,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Heartbeat { id } => {
             tracing::info!("Updating heartbeat for worker {}...", id);
-            let worker = pgqrs::worker_handle(store, id).await?;
+            let worker = store.worker(id).await?;
             worker.heartbeat().await?;
             tracing::info!("Heartbeat updated for worker {}", id);
             writeln!(out, "Heartbeat updated for worker {}", id)?;
