@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::store::sqlite::tables::runs::SqliteWorkflowRunTable;
+use crate::store::sqlite::tables::runs::SqliteRunRecordTable;
 use crate::store::sqlite::workflow::guard::SqliteStepGuard;
 use crate::types::WorkflowStatus;
 use async_trait::async_trait;
@@ -94,7 +94,7 @@ impl crate::store::Run for SqliteRun {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowRunTable::complete_run(&mut conn, self.id, output).await
+        SqliteRunRecordTable::complete_run(&mut conn, self.id, output).await
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
@@ -103,7 +103,7 @@ impl crate::store::Run for SqliteRun {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowRunTable::fail_run(&mut conn, self.id, error).await
+        SqliteRunRecordTable::fail_run(&mut conn, self.id, error).await
     }
 
     async fn acquire_step(

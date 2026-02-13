@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::turso::parse_turso_timestamp;
-use crate::types::{NewWorkflowRun, WorkflowRun, WorkflowStatus};
+use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::str::FromStr;
@@ -8,16 +8,16 @@ use std::sync::Arc;
 use turso::Database;
 
 #[derive(Debug, Clone)]
-pub struct TursoWorkflowRunTable {
+pub struct TursoRunRecordTable {
     db: Arc<Database>,
 }
 
-impl TursoWorkflowRunTable {
+impl TursoRunRecordTable {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 
-    fn map_row(row: &turso::Row) -> Result<WorkflowRun> {
+    fn map_row(row: &turso::Row) -> Result<RunRecord> {
         let id: i64 = row.get(0)?;
         let workflow_id: i64 = row.get(1)?;
 
@@ -46,7 +46,7 @@ impl TursoWorkflowRunTable {
         let created_at = parse_turso_timestamp(&row.get::<String>(6)?)?;
         let updated_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
 
-        Ok(WorkflowRun {
+        Ok(RunRecord {
             id,
             workflow_id,
             status,
@@ -60,8 +60,8 @@ impl TursoWorkflowRunTable {
 }
 
 #[async_trait]
-impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
-    async fn insert(&self, data: NewWorkflowRun) -> Result<WorkflowRun> {
+impl crate::store::RunRecordTable for TursoRunRecordTable {
+    async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
         let input_str = data.input.map(|v| v.to_string());
 
         let row = crate::store::turso::query(
@@ -79,7 +79,7 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
         Self::map_row(&row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowRun> {
+    async fn get(&self, id: i64) -> Result<RunRecord> {
         let row = crate::store::turso::query(
             r#"
             SELECT id, workflow_id, status, input, output, error, created_at, updated_at
@@ -94,7 +94,7 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
         Self::map_row(&row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowRun>> {
+    async fn list(&self) -> Result<Vec<RunRecord>> {
         let rows = crate::store::turso::query(
             r#"
             SELECT id, workflow_id, status, input, output, error, created_at, updated_at

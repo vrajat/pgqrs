@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
     Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
-    QueueTable, Run, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable,
-    WorkflowStepTable, WorkflowTable,
+    QueueTable, Run, RunRecordTable, StepRecordTable, StepResult, Store, Worker, WorkerTable,
+    Workflow, WorkflowTable,
 };
-use crate::types::{NewMessage, NewQueue, WorkflowRecord, WorkflowRun, WorkflowStatus};
+use crate::types::{NewQueueMessage, NewQueueRecord, RunRecord, WorkflowRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
@@ -19,8 +19,8 @@ pub mod workflow;
 use self::tables::archive::TursoArchiveTable;
 use self::tables::messages::TursoMessageTable;
 use self::tables::queues::TursoQueueTable;
-use self::tables::runs::TursoWorkflowRunTable;
-use self::tables::steps::TursoWorkflowStepTable;
+use self::tables::runs::TursoRunRecordTable;
+use self::tables::steps::TursoStepRecordTable;
 use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
 use self::workflow::guard::TursoStepGuard;
@@ -35,8 +35,8 @@ pub struct TursoStore {
     workers: Arc<TursoWorkerTable>,
     archive: Arc<TursoArchiveTable>,
     workflows: Arc<TursoWorkflowTable>,
-    workflow_runs: Arc<TursoWorkflowRunTable>,
-    workflow_steps: Arc<TursoWorkflowStepTable>,
+    workflow_runs: Arc<TursoRunRecordTable>,
+    workflow_steps: Arc<TursoStepRecordTable>,
 }
 
 impl TursoStore {
@@ -100,8 +100,8 @@ impl TursoStore {
             workers: Arc::new(TursoWorkerTable::new(Arc::clone(&db))),
             archive: Arc::new(TursoArchiveTable::new(Arc::clone(&db))),
             workflows: Arc::new(TursoWorkflowTable::new(Arc::clone(&db))),
-            workflow_runs: Arc::new(TursoWorkflowRunTable::new(Arc::clone(&db))),
-            workflow_steps: Arc::new(TursoWorkflowStepTable::new(Arc::clone(&db))),
+            workflow_runs: Arc::new(TursoRunRecordTable::new(Arc::clone(&db))),
+            workflow_steps: Arc::new(TursoStepRecordTable::new(Arc::clone(&db))),
         })
     }
 }
@@ -682,11 +682,11 @@ impl Store for TursoStore {
         self.workflows.as_ref()
     }
 
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
         self.workflow_runs.as_ref()
     }
 
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
         self.workflow_steps.as_ref()
     }
 
@@ -765,7 +765,7 @@ impl Store for TursoStore {
         if !queue_exists {
             let _queue = self
                 .queues
-                .insert(NewQueue {
+                .insert(NewQueueRecord {
                     queue_name: name.to_string(),
                 })
                 .await?;
@@ -775,7 +775,7 @@ impl Store for TursoStore {
 
         let insert_res = self
             .workflows
-            .insert(crate::types::NewWorkflow {
+            .insert(crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
@@ -804,14 +804,14 @@ impl Store for TursoStore {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> Result<WorkflowRun> {
+    ) -> Result<RunRecord> {
         // Strict semantics: queue/workflow must already exist.
         let queue = self.queues.get_by_name(name).await?;
         let workflow = self.workflows.get_by_name(name).await?;
 
         let run = self
             .workflow_runs
-            .insert(crate::types::NewWorkflowRun {
+            .insert(crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 input,
             })
@@ -822,7 +822,7 @@ impl Store for TursoStore {
 
         let _msg = self
             .messages
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload,
                 read_ct: 0,

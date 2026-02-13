@@ -1,23 +1,23 @@
 use crate::error::Result;
-use crate::types::{NewWorkflowRun, WorkflowRun, WorkflowStatus};
+use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
-pub struct WorkflowRuns {
+pub struct RunRecords {
     pool: PgPool,
 }
 
-impl WorkflowRuns {
+impl RunRecords {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait]
-impl crate::store::WorkflowRunTable for WorkflowRuns {
-    async fn insert(&self, data: NewWorkflowRun) -> Result<WorkflowRun> {
-        let row = sqlx::query_as::<_, WorkflowRun>(
+impl crate::store::RunRecordTable for RunRecords {
+    async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(
             r#"
             INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
             VALUES (
@@ -49,8 +49,8 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
         Ok(row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowRun> {
-        let row = sqlx::query_as::<_, WorkflowRun>(
+    async fn get(&self, id: i64) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(
             r#"
             SELECT
               id,
@@ -77,8 +77,8 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
         Ok(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowRun>> {
-        let rows = sqlx::query_as::<_, WorkflowRun>(
+    async fn list(&self) -> Result<Vec<RunRecord>> {
+        let rows = sqlx::query_as::<_, RunRecord>(
             r#"
             SELECT
               id,

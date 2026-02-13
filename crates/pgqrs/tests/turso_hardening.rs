@@ -91,7 +91,7 @@ async fn test_no_phantom_duplicates_with_ephemeral_workers() {
     let queue_name = format!("test_queue_{}", Uuid::new_v4());
     let queue = store
         .queues()
-        .insert(pgqrs::types::NewQueue {
+        .insert(pgqrs::types::NewQueueRecord {
             queue_name: queue_name.clone(),
         })
         .await

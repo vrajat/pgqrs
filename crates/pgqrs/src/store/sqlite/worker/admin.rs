@@ -1,14 +1,13 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::store::sqlite::tables::archive::SqliteArchiveTable;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::queues::SqliteQueueTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::{ArchiveTable, MessageTable, QueueTable, WorkerTable};
-use crate::types::{
-    QueueInfo, QueueMessage, QueueMetrics, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus,
-};
+use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::sqlite::SqliteRow;
@@ -183,7 +182,7 @@ pub struct SqliteAdmin {
     pub messages: Arc<SqliteMessageTable>,
     pub workers: Arc<SqliteWorkerTable>,
     pub archive: Arc<SqliteArchiveTable>,
-    worker_info: Option<WorkerInfo>,
+    worker_info: Option<WorkerRecord>,
 }
 
 impl SqliteAdmin {
@@ -410,7 +409,7 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(())
     }
 
-    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
+    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerRecord> {
         if let Some(ref info) = self.worker_info {
             return Ok(info.clone());
         }
@@ -419,20 +418,20 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(info)
     }
 
-    async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
-        use crate::types::NewQueue;
+    async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
+        use crate::types::NewQueueRecord;
         self.queues
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: name.to_string(),
             })
             .await
     }
 
-    async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
+    async fn get_queue(&self, name: &str) -> Result<QueueRecord> {
         self.queues.get_by_name(name).await
     }
 
-    async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
+    async fn delete_queue(&self, queue_info: &QueueRecord) -> Result<()> {
         // SQLite doesn't strictly need the complexity of FOR UPDATE locking since access is serialized.
         // We can just check and delete in a transaction.
         let mut tx = self
@@ -656,7 +655,7 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(stats)
     }
 
-    async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+    async fn worker_stats(&self, queue_name: &str) -> Result<WorkerStats> {
         let queue_id = self.queues.get_by_name(queue_name).await?.id;
         let workers = self.workers.filter_by_fk(queue_id).await?;
 
@@ -698,7 +697,7 @@ impl crate::store::Admin for SqliteAdmin {
             .min()
             .unwrap_or(chrono::Duration::zero());
 
-        Ok(crate::types::WorkerStats {
+        Ok(WorkerStats {
             total_workers,
             ready_workers,
             suspended_workers,
@@ -722,7 +721,7 @@ impl crate::store::Admin for SqliteAdmin {
         self.workers.delete(worker_id).await
     }
 
-    async fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
+    async fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
         self.workers.list().await
     }
 

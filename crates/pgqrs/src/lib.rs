@@ -129,7 +129,9 @@
 
 pub mod config;
 pub mod error;
+pub mod policy;
 mod rate_limit;
+pub mod stats;
 pub mod store;
 pub mod types;
 mod validation;
@@ -152,13 +154,14 @@ pub use crate::store::{
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result, TransientStepError};
+pub use crate::policy::{BackoffStrategy, StepRetryPolicy, WorkflowConfig};
 pub use crate::rate_limit::RateLimitStatus;
+pub use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 pub use crate::types::{
-    ArchivedMessage, BackoffStrategy, NewArchivedMessage, NewMessage, NewQueue, NewWorker,
-    NewWorkflow, QueueInfo, QueueMessage, QueueMetrics, StepRetryPolicy, SystemStats,
-    WorkerHealthStats, WorkerInfo, WorkerStats, WorkerStatus, WorkflowConfig, WorkflowRecord,
-    WorkflowStatus,
+    ArchivedMessage, NewArchivedMessage, NewQueueMessage, NewQueueRecord, NewRunRecord,
+    NewStepRecord, NewWorkerRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord,
+    StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord, WorkflowStatus,
 };
 
 pub use crate::validation::ValidationConfig;

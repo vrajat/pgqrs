@@ -3,7 +3,7 @@ use crate::store::turso::tables::archive::TursoArchiveTable;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::WorkerTable;
-use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
+use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -13,8 +13,8 @@ use turso::Database;
 /// Producer interface for enqueueing messages to a specific queue.
 pub struct TursoProducer {
     pub db: Arc<Database>,
-    queue_info: QueueInfo,
-    worker_info: crate::types::WorkerInfo,
+    queue_info: QueueRecord,
+    worker_info: WorkerRecord,
     config: crate::config::Config,
     validator: PayloadValidator,
     messages: Arc<TursoMessageTable>,
@@ -25,7 +25,7 @@ pub struct TursoProducer {
 impl TursoProducer {
     pub async fn new(
         db: Arc<Database>,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
@@ -60,7 +60,7 @@ impl TursoProducer {
 
     pub async fn new_ephemeral(
         db: Arc<Database>,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers_arc = Arc::new(TursoWorkerTable::new(db.clone()));
@@ -229,9 +229,9 @@ impl crate::store::Producer for TursoProducer {
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
         use crate::store::MessageTable;
-        use crate::types::NewMessage;
+        use crate::types::NewQueueMessage;
 
-        let new_message = NewMessage {
+        let new_message = NewQueueMessage {
             queue_id: self.queue_info.id,
             payload: payload.clone(),
             read_ct: 0,

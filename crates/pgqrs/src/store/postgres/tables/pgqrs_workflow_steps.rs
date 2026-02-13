@@ -1,23 +1,23 @@
 use crate::error::Result;
-use crate::types::{NewWorkflowStep, WorkflowStatus, WorkflowStep};
+use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
-pub struct WorkflowSteps {
+pub struct StepRecords {
     pool: PgPool,
 }
 
-impl WorkflowSteps {
+impl StepRecords {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait]
-impl crate::store::WorkflowStepTable for WorkflowSteps {
-    async fn insert(&self, data: NewWorkflowStep) -> Result<WorkflowStep> {
-        let row = sqlx::query_as::<_, WorkflowStep>(
+impl crate::store::StepRecordTable for StepRecords {
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
+        let row = sqlx::query_as::<_, StepRecord>(
             r#"
             INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, input, started_at)
             VALUES ($1, $2, 'PENDING'::pgqrs_workflow_status, $3, NOW())
@@ -47,7 +47,7 @@ impl crate::store::WorkflowStepTable for WorkflowSteps {
         Ok(row)
     }
 
-    async fn get(&self, _id: i64) -> Result<WorkflowStep> {
+    async fn get(&self, _id: i64) -> Result<StepRecord> {
         Err(crate::error::Error::ValidationFailed {
             reason:
                 "Postgres workflow steps are keyed by (run_id, step_id); get(id) is unsupported"
@@ -55,8 +55,8 @@ impl crate::store::WorkflowStepTable for WorkflowSteps {
         })
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowStep>> {
-        let rows = sqlx::query_as::<_, WorkflowStep>(
+    async fn list(&self) -> Result<Vec<StepRecord>> {
+        let rows = sqlx::query_as::<_, StepRecord>(
             r#"
             SELECT
               0 as id,

@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::{NewWorkflowRun, WorkflowRun, WorkflowStatus};
+use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
@@ -8,16 +8,16 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
-pub struct SqliteWorkflowRunTable {
+pub struct SqliteRunRecordTable {
     pool: SqlitePool,
 }
 
-impl SqliteWorkflowRunTable {
+impl SqliteRunRecordTable {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRun> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord> {
         let id: i64 = row.try_get("id")?;
         let workflow_id: i64 = row.try_get("workflow_id")?;
 
@@ -46,7 +46,7 @@ impl SqliteWorkflowRunTable {
         let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
         let updated_at = parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?;
 
-        Ok(WorkflowRun {
+        Ok(RunRecord {
             id,
             workflow_id,
             status,
@@ -118,8 +118,8 @@ impl SqliteWorkflowRunTable {
 }
 
 #[async_trait]
-impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
-    async fn insert(&self, data: NewWorkflowRun) -> Result<WorkflowRun> {
+impl crate::store::RunRecordTable for SqliteRunRecordTable {
+    async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
         let input_str = data.input.map(|v| v.to_string());
@@ -145,7 +145,7 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
         Self::map_row(row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowRun> {
+    async fn get(&self, id: i64) -> Result<RunRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, workflow_id, status, input, output, error, created_at, updated_at
@@ -165,7 +165,7 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowRun>> {
+    async fn list(&self) -> Result<Vec<RunRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT id, workflow_id, status, input, output, error, created_at, updated_at

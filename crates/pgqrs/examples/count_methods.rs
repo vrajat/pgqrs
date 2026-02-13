@@ -21,14 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create some test queues
     let queue1 = pgqrs::tables(&store)
         .queues()
-        .insert(pgqrs::types::NewQueue {
+        .insert(pgqrs::types::NewQueueRecord {
             queue_name: "test_queue_1".to_string(),
         })
         .await?;
 
     let queue2 = pgqrs::tables(&store)
         .queues()
-        .insert(pgqrs::types::NewQueue {
+        .insert(pgqrs::types::NewQueueRecord {
             queue_name: "test_queue_2".to_string(),
         })
         .await?;
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create some test workers
     let worker1 = pgqrs::tables(&store)
         .workers()
-        .insert(pgqrs::types::NewWorker {
+        .insert(pgqrs::types::NewWorkerRecord {
             hostname: "worker-1".to_string(),
             port: 8080,
             queue_id: Some(queue1.id),
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _worker2 = pgqrs::tables(&store)
         .workers()
-        .insert(pgqrs::types::NewWorker {
+        .insert(pgqrs::types::NewWorkerRecord {
             hostname: "worker-2".to_string(),
             port: 8081,
             queue_id: Some(queue1.id),
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _worker3 = pgqrs::tables(&store)
         .workers()
-        .insert(pgqrs::types::NewWorker {
+        .insert(pgqrs::types::NewWorkerRecord {
             hostname: "worker-3".to_string(),
             port: 8082,
             queue_id: Some(queue2.id),
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
     let _msg1 = pgqrs::tables(&store)
         .messages()
-        .insert(pgqrs::types::NewMessage {
+        .insert(pgqrs::types::NewQueueMessage {
             queue_id: queue1.id,
             payload: json!({"task": "process_data_1"}),
             read_ct: 0,
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _msg2 = pgqrs::tables(&store)
         .messages()
-        .insert(pgqrs::types::NewMessage {
+        .insert(pgqrs::types::NewQueueMessage {
             queue_id: queue1.id,
             payload: json!({"task": "process_data_2"}),
             read_ct: 0,
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _msg3 = pgqrs::tables(&store)
         .messages()
-        .insert(pgqrs::types::NewMessage {
+        .insert(pgqrs::types::NewQueueMessage {
             queue_id: queue2.id,
             payload: json!({"task": "backup_data_1"}),
             read_ct: 0,

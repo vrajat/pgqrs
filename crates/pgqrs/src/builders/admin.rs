@@ -2,7 +2,8 @@
 
 use crate::error::Result;
 use crate::store::Store;
-use crate::types::WorkerInfo;
+use crate::types::{QueueRecord, WorkerRecord};
+use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 /// Builder for admin operations.
 ///
@@ -38,21 +39,18 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Create a new queue
-    pub async fn create_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
+    pub async fn create_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.create_queue(name).await
     }
 
-    pub async fn get_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
+    pub async fn get_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
         // Use the store's queue table directly as it's the standard way to get queue info
         self.store.queues().get_by_name(name).await
     }
 
     /// Delete a queue
-    pub async fn delete_queue(
-        self,
-        queue_info: &crate::types::QueueInfo,
-    ) -> crate::error::Result<()> {
+    pub async fn delete_queue(self, queue_info: &QueueRecord) -> crate::error::Result<()> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.delete_queue(queue_info).await
     }
@@ -76,7 +74,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// List all workers
-    pub async fn list_workers(self) -> Result<Vec<WorkerInfo>> {
+    pub async fn list_workers(self) -> Result<Vec<WorkerRecord>> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.list_workers().await
     }
@@ -107,7 +105,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Get worker statistics for a queue
-    pub async fn worker_stats(self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+    pub async fn worker_stats(self, queue_name: &str) -> Result<WorkerStats> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.worker_stats(queue_name).await
     }
@@ -119,19 +117,19 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Get metrics for a specific queue
-    pub async fn queue_metrics(self, queue_name: &str) -> Result<crate::types::QueueMetrics> {
+    pub async fn queue_metrics(self, queue_name: &str) -> Result<QueueMetrics> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.queue_metrics(queue_name).await
     }
 
     /// Get metrics for all queues
-    pub async fn all_queues_metrics(self) -> Result<Vec<crate::types::QueueMetrics>> {
+    pub async fn all_queues_metrics(self) -> Result<Vec<QueueMetrics>> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.all_queues_metrics().await
     }
 
     /// Get system stats
-    pub async fn system_stats(self) -> Result<crate::types::SystemStats> {
+    pub async fn system_stats(self) -> Result<SystemStats> {
         let admin = self.store.admin(self.store.config()).await?;
         admin.system_stats().await
     }
@@ -141,7 +139,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         self,
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
-    ) -> Result<Vec<crate::types::WorkerHealthStats>> {
+    ) -> Result<Vec<WorkerHealthStats>> {
         let admin = self.store.admin(self.store.config()).await?;
         admin
             .worker_health_stats(heartbeat_timeout, group_by_queue)

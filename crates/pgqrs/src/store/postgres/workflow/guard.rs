@@ -1,6 +1,6 @@
 use super::WorkflowStatus;
 use crate::error::Result;
-use crate::types::StepRetryPolicy;
+use crate::StepRetryPolicy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;

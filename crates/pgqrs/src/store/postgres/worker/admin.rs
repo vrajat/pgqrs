@@ -33,8 +33,8 @@ use crate::store::postgres::tables::pgqrs_archive::Archive;
 use crate::store::postgres::tables::pgqrs_messages::Messages;
 use crate::store::postgres::tables::pgqrs_queues::Queues;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
-use crate::types::QueueMetrics;
-use crate::types::{QueueInfo, SystemStats, WorkerHealthStats, WorkerInfo, WorkerStatus};
+use crate::types::{QueueRecord, WorkerRecord, WorkerStatus};
+use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -246,7 +246,7 @@ pub struct Admin {
     pub archive: Archive,
     pub workers: Workers,
     /// Worker info for this Admin instance (set after calling register())
-    worker_info: Option<WorkerInfo>,
+    worker_info: Option<WorkerRecord>,
 }
 
 impl Admin {
@@ -671,7 +671,7 @@ impl crate::store::Admin for Admin {
         Ok(total_released)
     }
 
-    async fn worker_stats(&self, queue_name: &str) -> Result<crate::types::WorkerStats> {
+    async fn worker_stats(&self, queue_name: &str) -> Result<WorkerStats> {
         let queue_id = self.queues.get_by_name(queue_name).await?.id;
         let workers = self.workers.filter_by_fk(queue_id).await?;
 
@@ -716,7 +716,7 @@ impl crate::store::Admin for Admin {
             .min()
             .unwrap_or(chrono::Duration::zero());
 
-        Ok(crate::types::WorkerStats {
+        Ok(WorkerStats {
             total_workers,
             ready_workers,
             suspended_workers,
@@ -770,7 +770,7 @@ impl crate::store::Admin for Admin {
     }
 
     /// Register this Admin instance as a worker.
-    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerInfo> {
+    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerRecord> {
         if let Some(ref worker_info) = self.worker_info {
             return Ok(worker_info.clone());
         }
@@ -790,10 +790,10 @@ impl crate::store::Admin for Admin {
     }
 
     /// Create a new queue in the database.
-    async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
+    async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
         // Create new queue data
-        use crate::types::NewQueue;
-        let new_queue = NewQueue {
+        use crate::types::NewQueueRecord;
+        let new_queue = NewQueueRecord {
             queue_name: name.to_string(),
         };
 
@@ -801,14 +801,14 @@ impl crate::store::Admin for Admin {
         self.queues.insert(new_queue).await
     }
 
-    /// Get a [`QueueInfo`] instance for a given queue name.
-    async fn get_queue(&self, name: &str) -> Result<QueueInfo> {
+    /// Get a [`QueueRecord`] instance for a given queue name.
+    async fn get_queue(&self, name: &str) -> Result<QueueRecord> {
         // Get queue info to get the queue_id
         self.queues.get_by_name(name).await
     }
 
     /// Delete a queue from the database.
-    async fn delete_queue(&self, queue_info: &QueueInfo) -> Result<()> {
+    async fn delete_queue(&self, queue_info: &QueueRecord) -> Result<()> {
         // Start a transaction for atomic deletion with row locking
         let mut tx =
             self.pool
@@ -1027,7 +1027,7 @@ impl crate::store::Admin for Admin {
         self.workers.delete(worker_id).await
     }
 
-    async fn list_workers(&self) -> Result<Vec<WorkerInfo>> {
+    async fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
         // Delegate to the workers table
         self.workers.list().await
     }

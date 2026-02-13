@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
-use crate::types::{WorkerInfo, WorkerStatus};
+use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::str::FromStr;
@@ -53,7 +53,7 @@ impl TursoWorkerTable {
         Self { db }
     }
 
-    fn map_row(row: &turso::Row) -> Result<WorkerInfo> {
+    fn map_row(row: &turso::Row) -> Result<WorkerRecord> {
         let id: i64 = row.get(0)?;
         let hostname: String = row.get(1)?;
         // Port might be returned as i64 in some contexts, cast if needed?
@@ -78,7 +78,7 @@ impl TursoWorkerTable {
         let status = WorkerStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
-        Ok(WorkerInfo {
+        Ok(WorkerRecord {
             id,
             hostname,
             port,
@@ -205,7 +205,7 @@ impl TursoWorkerTable {
 
 #[async_trait]
 impl crate::store::WorkerTable for TursoWorkerTable {
-    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+    async fn insert(&self, data: crate::types::NewWorkerRecord) -> Result<WorkerRecord> {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
         let status_str = WorkerStatus::Ready.to_string();
@@ -223,7 +223,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             .fetch_one_once(&self.db)
             .await?;
 
-        Ok(WorkerInfo {
+        Ok(WorkerRecord {
             id,
             hostname: data.hostname,
             port: data.port,
@@ -235,7 +235,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+    async fn get(&self, id: i64) -> Result<WorkerRecord> {
         let row = crate::store::turso::query(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.db)
@@ -244,7 +244,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         Self::map_row(&row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+    async fn list(&self) -> Result<Vec<WorkerRecord>> {
         let rows = crate::store::turso::query(LIST_ALL_WORKERS)
             .fetch_all(&self.db)
             .await?;
@@ -271,7 +271,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         Ok(count)
     }
 
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
         let rows = crate::store::turso::query(LIST_WORKERS_BY_QUEUE)
             .bind(queue_id)
             .fetch_all(&self.db)
@@ -320,7 +320,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
+    ) -> Result<Vec<WorkerRecord>> {
         let state_str = state.to_string();
         let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC")
             .bind(queue_id)
@@ -339,7 +339,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
-    ) -> Result<Vec<WorkerInfo>> {
+    ) -> Result<Vec<WorkerRecord>> {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_turso_timestamp(&threshold);
 
@@ -361,7 +361,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         queue_id: Option<i64>,
         hostname: &str,
         port: i32,
-    ) -> Result<WorkerInfo> {
+    ) -> Result<WorkerRecord> {
         let existing = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = ? AND port = ?")
             .bind(hostname)
             .bind(port)
@@ -403,7 +403,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             }
         } else {
             // Create new
-            self.insert(crate::types::NewWorker {
+            self.insert(crate::types::NewWorkerRecord {
                 hostname: hostname.to_string(),
                 port,
                 queue_id,
@@ -412,7 +412,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         }
     }
 
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);

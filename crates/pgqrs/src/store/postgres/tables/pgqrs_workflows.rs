@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::types::{NewWorkflow, WorkflowRecord};
+use crate::types::{NewWorkflowRecord, WorkflowRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -51,7 +51,7 @@ impl Workflows {
 
 #[async_trait]
 impl crate::store::WorkflowTable for Workflows {
-    async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
+    async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         // Workflow definitions require `queue_id` (FK to pgqrs_queues).
         let row = sqlx::query(
             r#"

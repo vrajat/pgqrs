@@ -20,7 +20,7 @@
 //! ```
 use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
-use pgqrs::types::{QueueInfo, QueueMessage};
+use pgqrs::types::{QueueMessage, QueueRecord};
 
 use std::fs::File;
 use std::process;
@@ -369,7 +369,7 @@ pub async fn handle_queue_commands(
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let queue_list: Vec<QueueInfo> = pgqrs::tables(store).queues().list().await?;
+            let queue_list: Vec<QueueRecord> = pgqrs::tables(store).queues().list().await?;
             writer.write_list(&queue_list, out)?;
         }
 

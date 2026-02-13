@@ -93,7 +93,7 @@ impl SqliteMessageTable {
 
 #[async_trait]
 impl crate::store::MessageTable for SqliteMessageTable {
-    async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
         let payload_str = data.payload.to_string();
         let enqueued_at_str = format_sqlite_timestamp(&data.enqueued_at);
         let vt_str = format_sqlite_timestamp(&data.vt);
@@ -461,7 +461,7 @@ mod tests {
     use super::*;
     use crate::store::sqlite::tables::queues::SqliteQueueTable;
     use crate::store::{MessageTable, QueueTable};
-    use crate::types::{BatchInsertParams, NewMessage, NewQueue};
+    use crate::types::{BatchInsertParams, NewQueueMessage, NewQueueRecord};
 
     async fn create_test_pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:")
@@ -511,7 +511,7 @@ mod tests {
         let msg_table = SqliteMessageTable::new(pool);
 
         let queue = queue_table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "test_queue".to_string(),
             })
             .await
@@ -521,7 +521,7 @@ mod tests {
         let payload = serde_json::json!({"test": "data"});
 
         let msg = msg_table
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload: payload.clone(),
                 read_ct: 0,
@@ -547,7 +547,7 @@ mod tests {
         let msg_table = SqliteMessageTable::new(pool);
 
         let queue = queue_table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "test_queue".to_string(),
             })
             .await
@@ -556,7 +556,7 @@ mod tests {
         let now = chrono::Utc::now();
 
         msg_table
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload: serde_json::json!({"msg": 1}),
                 read_ct: 0,
@@ -582,7 +582,7 @@ mod tests {
         let msg_table = SqliteMessageTable::new(pool);
 
         let queue = queue_table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "batch_queue".to_string(),
             })
             .await

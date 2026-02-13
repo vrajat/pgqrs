@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Run, Store, Worker as WorkerTrait, WorkerTable,
-    Workflow as WorkflowTrait, WorkflowRunTable, WorkflowStepTable, WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Run, RunRecordTable, StepRecordTable, Store,
+    Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
 };
 use crate::WorkflowRecord;
 use async_trait::async_trait;
@@ -18,10 +18,10 @@ use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
 use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
 use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
-use self::tables::pgqrs_workflow_runs::WorkflowRuns as PostgresWorkflowRunTable;
-use self::tables::pgqrs_workflow_steps::WorkflowSteps as PostgresWorkflowStepTable;
+use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
+use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
-use crate::types::{NewMessage, WorkflowRun};
+use crate::types::{NewQueueMessage, RunRecord};
 
 use self::worker::admin::Admin as PostgresAdmin;
 use self::worker::consumer::Consumer as PostgresConsumer;
@@ -38,8 +38,8 @@ pub struct PostgresStore {
     workers: Arc<PostgresWorkerTable>,
     archive: Arc<PostgresArchiveTable>,
     workflows: Arc<PostgresWorkflowTable>,
-    workflow_runs: Arc<PostgresWorkflowRunTable>,
-    workflow_steps: Arc<PostgresWorkflowStepTable>,
+    workflow_runs: Arc<PostgresRunRecordTable>,
+    workflow_steps: Arc<PostgresStepRecordTable>,
 }
 
 impl PostgresStore {
@@ -52,8 +52,8 @@ impl PostgresStore {
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
             archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
             workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
-            workflow_runs: Arc::new(PostgresWorkflowRunTable::new(pool.clone())),
-            workflow_steps: Arc::new(PostgresWorkflowStepTable::new(pool)),
+            workflow_runs: Arc::new(PostgresRunRecordTable::new(pool.clone())),
+            workflow_steps: Arc::new(PostgresStepRecordTable::new(pool)),
         }
     }
 
@@ -133,11 +133,11 @@ impl Store for PostgresStore {
         self.workflows.as_ref()
     }
 
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
         self.workflow_runs.as_ref()
     }
 
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
         self.workflow_steps.as_ref()
     }
 
@@ -186,7 +186,7 @@ impl Store for PostgresStore {
         if !queue_exists {
             let _queue = self
                 .queues
-                .insert(crate::types::NewQueue {
+                .insert(crate::types::NewQueueRecord {
                     queue_name: name.to_string(),
                 })
                 .await?;
@@ -197,7 +197,7 @@ impl Store for PostgresStore {
         // Create workflow definition (strict semantics).
         let workflow = self
             .workflows
-            .insert(crate::types::NewWorkflow {
+            .insert(crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
@@ -224,7 +224,7 @@ impl Store for PostgresStore {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<WorkflowRun> {
+    ) -> crate::error::Result<RunRecord> {
         // Strict semantics: triggering requires the workflow definition + queue to exist.
         let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
@@ -232,7 +232,7 @@ impl Store for PostgresStore {
         // Create run record.
         let run = self
             .workflow_runs()
-            .insert(crate::types::NewWorkflowRun {
+            .insert(crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 input,
             })
@@ -244,7 +244,7 @@ impl Store for PostgresStore {
 
         let _msg = self
             .messages
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload,
                 read_ct: 0,

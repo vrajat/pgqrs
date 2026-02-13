@@ -3,7 +3,7 @@ use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::WorkerTable;
-use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
+use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
@@ -53,8 +53,8 @@ const DELETE_MESSAGE_OWNED: &str = r#"
 
 pub struct SqliteConsumer {
     pub pool: SqlitePool,
-    queue_info: crate::types::QueueInfo,
-    worker_info: crate::types::WorkerInfo,
+    queue_info: QueueRecord,
+    worker_info: WorkerRecord,
     _config: crate::config::Config,
     workers: Arc<SqliteWorkerTable>,
     messages: Arc<SqliteMessageTable>,
@@ -63,7 +63,7 @@ pub struct SqliteConsumer {
 impl SqliteConsumer {
     pub async fn new(
         pool: SqlitePool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
@@ -87,7 +87,7 @@ impl SqliteConsumer {
 
     pub async fn new_ephemeral(
         pool: SqlitePool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));

@@ -33,7 +33,7 @@ use crate::error::Result;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::postgres::tables::Messages;
 use crate::store::WorkerTable;
-use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
+use crate::types::{QueueMessage, QueueRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -64,9 +64,9 @@ pub struct Producer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
     /// Queue information including ID and name
-    queue_info: QueueInfo,
+    queue_info: QueueRecord,
     /// Worker information for this producer
-    worker_info: crate::types::WorkerInfo,
+    worker_info: crate::types::WorkerRecord,
     /// Configuration for the queue including validation settings
     config: crate::config::Config,
     /// Payload validator for this queue
@@ -90,7 +90,7 @@ impl Producer {
     /// * `config` - Configuration including validation settings
     pub async fn new(
         pool: PgPool,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
@@ -124,7 +124,7 @@ impl Producer {
     /// Used by high-level API functions like `produce()`.
     pub async fn new_ephemeral(
         pool: PgPool,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
@@ -372,9 +372,9 @@ impl crate::store::Producer for Producer {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        use crate::types::NewMessage;
+        use crate::types::NewQueueMessage;
 
-        let new_message = NewMessage {
+        let new_message = NewQueueMessage {
             queue_id: self.queue_info.id,
             payload: payload.clone(),
             read_ct: 0,

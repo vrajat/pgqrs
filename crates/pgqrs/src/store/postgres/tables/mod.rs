@@ -15,6 +15,6 @@ pub use pgqrs_archive::Archive;
 pub use pgqrs_messages::Messages;
 pub use pgqrs_queues::Queues;
 pub use pgqrs_workers::Workers;
-pub use pgqrs_workflow_runs::WorkflowRuns;
-pub use pgqrs_workflow_steps::WorkflowSteps;
+pub use pgqrs_workflow_runs::RunRecords;
+pub use pgqrs_workflow_steps::StepRecords;
 pub use pgqrs_workflows::Workflows;

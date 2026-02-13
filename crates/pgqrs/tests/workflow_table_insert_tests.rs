@@ -13,7 +13,7 @@ async fn test_workflow_insert_requires_and_persists_queue_id() -> anyhow::Result
     // Arrange: create a backing queue and capture id
     let queue = pgqrs::tables(&store)
         .queues()
-        .insert(pgqrs::types::NewQueue {
+        .insert(pgqrs::types::NewQueueRecord {
             queue_name: "wf_insert_queue".to_string(),
         })
         .await?;
@@ -21,7 +21,7 @@ async fn test_workflow_insert_requires_and_persists_queue_id() -> anyhow::Result
     // Act: insert workflow definition via the generic table API
     let inserted = pgqrs::tables(&store)
         .workflows()
-        .insert(pgqrs::types::NewWorkflow {
+        .insert(pgqrs::types::NewWorkflowRecord {
             name: "wf_insert_workflow".to_string(),
             queue_id: queue.id,
         })

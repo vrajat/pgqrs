@@ -134,11 +134,11 @@ const DELETE_MESSAGE_OWNED: &str = r#"
 pub struct Consumer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
-    queue_info: crate::types::QueueInfo,
+    queue_info: crate::types::QueueRecord,
     /// Configuration for the queue
     _config: crate::config::Config,
     /// Worker information for this consumer
-    worker_info: crate::types::WorkerInfo,
+    worker_info: crate::types::WorkerRecord,
     /// Worker lifecycle manager (Workers repository handles this now)
     workers: Workers,
 }
@@ -146,7 +146,7 @@ pub struct Consumer {
 impl Consumer {
     pub async fn new(
         pool: PgPool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &crate::types::QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
@@ -178,7 +178,7 @@ impl Consumer {
     /// Used by high-level API functions like `consume()`.
     pub async fn new_ephemeral(
         pool: PgPool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &crate::types::QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());

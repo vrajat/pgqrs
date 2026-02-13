@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::parse_sqlite_timestamp;
-use crate::types::QueueInfo;
+use crate::types::QueueRecord;
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
 
@@ -52,13 +52,13 @@ impl SqliteQueueTable {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<QueueInfo> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<QueueRecord> {
         let id: i64 = row.try_get("id")?;
         let queue_name: String = row.try_get("queue_name")?;
         let created_at_str: String = row.try_get("created_at")?;
         let created_at = parse_sqlite_timestamp(&created_at_str)?;
 
-        Ok(QueueInfo {
+        Ok(QueueRecord {
             id,
             queue_name,
             created_at,
@@ -68,7 +68,7 @@ impl SqliteQueueTable {
 
 #[async_trait]
 impl crate::store::QueueTable for SqliteQueueTable {
-    async fn insert(&self, data: crate::types::NewQueue) -> Result<QueueInfo> {
+    async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
         let row = sqlx::query(INSERT_QUEUE)
             .bind(&data.queue_name)
             .fetch_one(&self.pool)
@@ -96,7 +96,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
         Self::map_row(row)
     }
 
-    async fn get(&self, id: i64) -> Result<QueueInfo> {
+    async fn get(&self, id: i64) -> Result<QueueRecord> {
         let row = sqlx::query(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -110,7 +110,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<QueueInfo>> {
+    async fn list(&self) -> Result<Vec<QueueRecord>> {
         let rows = sqlx::query(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
@@ -154,7 +154,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
         Ok(result.rows_affected())
     }
 
-    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
+    async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
         let row = sqlx::query(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_one(&self.pool)
@@ -206,7 +206,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
 mod tests {
     use super::*;
     use crate::store::QueueTable;
-    use crate::types::NewQueue;
+    use crate::types::NewQueueRecord;
 
     async fn create_test_pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:")
@@ -235,7 +235,7 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         let queue = table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "test_queue".to_string(),
             })
             .await
@@ -255,7 +255,7 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "named_queue".to_string(),
             })
             .await
@@ -274,13 +274,13 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "queue1".to_string(),
             })
             .await
             .expect("Failed to insert");
         table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "queue2".to_string(),
             })
             .await
@@ -299,7 +299,7 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "exists_test".to_string(),
             })
             .await
@@ -324,7 +324,7 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         let queue = table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "delete_test".to_string(),
             })
             .await
@@ -346,7 +346,7 @@ mod tests {
         let table = SqliteQueueTable::new(pool);
 
         table
-            .insert(NewQueue {
+            .insert(NewQueueRecord {
                 queue_name: "delete_by_name_test".to_string(),
             })
             .await

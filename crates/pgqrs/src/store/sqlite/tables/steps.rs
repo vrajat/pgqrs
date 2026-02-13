@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::{NewWorkflowStep, WorkflowStatus, WorkflowStep};
+use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
@@ -8,16 +8,16 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
-pub struct SqliteWorkflowStepTable {
+pub struct SqliteStepRecordTable {
     pool: SqlitePool,
 }
 
-impl SqliteWorkflowStepTable {
+impl SqliteStepRecordTable {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowStep> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRecord> {
         let id: i64 = row.try_get("id")?;
         let run_id: i64 = row.try_get("run_id")?;
         let step_id: String = row.try_get("step_id")?;
@@ -47,7 +47,7 @@ impl SqliteWorkflowStepTable {
         let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
         let updated_at = parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?;
 
-        Ok(WorkflowStep {
+        Ok(StepRecord {
             id,
             run_id,
             step_id,
@@ -62,8 +62,8 @@ impl SqliteWorkflowStepTable {
 }
 
 #[async_trait]
-impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
-    async fn insert(&self, data: NewWorkflowStep) -> Result<WorkflowStep> {
+impl crate::store::StepRecordTable for SqliteStepRecordTable {
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
         let input_str = data.input.map(|v| v.to_string());
@@ -90,7 +90,7 @@ impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
         Self::map_row(row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowStep> {
+    async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at
@@ -110,7 +110,7 @@ impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowStep>> {
+    async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at

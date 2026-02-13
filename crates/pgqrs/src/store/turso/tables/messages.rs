@@ -149,7 +149,7 @@ impl TursoMessageTable {
 
 #[async_trait]
 impl crate::store::MessageTable for TursoMessageTable {
-    async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
         let payload_str = data.payload.to_string();
         let enqueued_at_str = format_turso_timestamp(&data.enqueued_at);
         let vt_str = format_turso_timestamp(&data.vt);

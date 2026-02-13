@@ -2,10 +2,10 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::{
     Admin, ArchiveTable, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable, Run,
-    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable, WorkflowStepTable,
+    RunRecordTable, StepRecordTable, StepResult, Store, Worker, WorkerTable, Workflow,
     WorkflowTable,
 };
-use crate::types::{WorkflowRecord, WorkflowRun};
+use crate::types::{RunRecord, WorkflowRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
@@ -19,8 +19,8 @@ pub mod workflow;
 use self::tables::archive::SqliteArchiveTable;
 use self::tables::messages::SqliteMessageTable;
 use self::tables::queues::SqliteQueueTable;
-use self::tables::runs::SqliteWorkflowRunTable;
-use self::tables::steps::SqliteWorkflowStepTable;
+use self::tables::runs::SqliteRunRecordTable;
+use self::tables::steps::SqliteStepRecordTable;
 use self::tables::workers::SqliteWorkerTable;
 use self::tables::workflows::SqliteWorkflowTable;
 
@@ -33,8 +33,8 @@ pub struct SqliteStore {
     workers: Arc<SqliteWorkerTable>,
     archive: Arc<SqliteArchiveTable>,
     workflows: Arc<SqliteWorkflowTable>,
-    workflow_runs: Arc<SqliteWorkflowRunTable>,
-    workflow_steps: Arc<SqliteWorkflowStepTable>,
+    workflow_runs: Arc<SqliteRunRecordTable>,
+    workflow_steps: Arc<SqliteStepRecordTable>,
 }
 
 impl SqliteStore {
@@ -73,8 +73,8 @@ impl SqliteStore {
             workers: Arc::new(SqliteWorkerTable::new(pool.clone())),
             archive: Arc::new(SqliteArchiveTable::new(pool.clone())),
             workflows: Arc::new(SqliteWorkflowTable::new(pool.clone())),
-            workflow_runs: Arc::new(SqliteWorkflowRunTable::new(pool.clone())),
-            workflow_steps: Arc::new(SqliteWorkflowStepTable::new(pool)),
+            workflow_runs: Arc::new(SqliteRunRecordTable::new(pool.clone())),
+            workflow_steps: Arc::new(SqliteStepRecordTable::new(pool)),
         })
     }
 }
@@ -197,11 +197,11 @@ impl Store for SqliteStore {
         self.workflows.as_ref()
     }
 
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
         self.workflow_runs.as_ref()
     }
 
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
         self.workflow_steps.as_ref()
     }
 
@@ -267,7 +267,7 @@ impl Store for SqliteStore {
         if !queue_exists {
             let _queue = self
                 .queues
-                .insert(crate::types::NewQueue {
+                .insert(crate::types::NewQueueRecord {
                     queue_name: name.to_string(),
                 })
                 .await?;
@@ -278,7 +278,7 @@ impl Store for SqliteStore {
         // Create workflow definition. This is strict: it errors if the workflow already exists.
         let workflow = self
             .workflows
-            .insert(crate::types::NewWorkflow {
+            .insert(crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
@@ -306,15 +306,15 @@ impl Store for SqliteStore {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> Result<WorkflowRun> {
-        use crate::types::NewMessage;
+    ) -> Result<RunRecord> {
+        use crate::types::NewQueueMessage;
 
         let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
 
         let run = self
             .workflow_runs
-            .insert(crate::types::NewWorkflowRun {
+            .insert(crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 input,
             })
@@ -326,7 +326,7 @@ impl Store for SqliteStore {
 
         let _msg = self
             .messages
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload,
                 read_ct: 0,

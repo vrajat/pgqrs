@@ -5,12 +5,10 @@
 
 use crate::rate_limit::RateLimitStatus;
 use crate::types::{
-    ArchivedMessage, NewArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus,
+    ArchivedMessage, NewArchivedMessage, NewRunRecord, NewStepRecord, QueueMessage, QueueRecord,
+    RunRecord, StepRecord, WorkerRecord, WorkerStatus,
 };
-use crate::types::{
-    NewQueue, NewWorkflow, NewWorkflowRun, NewWorkflowStep, WorkflowRecord, WorkflowRun,
-    WorkflowStep,
-};
+use crate::types::{NewQueueRecord, NewWorkflowRecord, WorkflowRecord};
 use crate::validation::ValidationConfig;
 use crate::Config;
 use async_trait::async_trait;
@@ -72,7 +70,8 @@ pub trait Admin: Worker {
     async fn verify(&self) -> crate::error::Result<()>;
 
     /// Register this admin worker (internal use).
-    async fn register(&mut self, hostname: String, port: i32) -> crate::error::Result<WorkerInfo>;
+    async fn register(&mut self, hostname: String, port: i32)
+        -> crate::error::Result<WorkerRecord>;
 
     // ===== Queue Operations =====
 
@@ -80,15 +79,15 @@ pub trait Admin: Worker {
     ///
     /// # Arguments
     /// * `name` - Unique name for the queue
-    async fn create_queue(&self, name: &str) -> crate::error::Result<QueueInfo>;
+    async fn create_queue(&self, name: &str) -> crate::error::Result<QueueRecord>;
 
     /// Get queue information by name.
-    async fn get_queue(&self, name: &str) -> crate::error::Result<QueueInfo>;
+    async fn get_queue(&self, name: &str) -> crate::error::Result<QueueRecord>;
 
     /// Delete a queue.
     ///
     /// The queue must be empty (no messages or workers) before deletion.
-    async fn delete_queue(&self, queue_info: &QueueInfo) -> crate::error::Result<()>;
+    async fn delete_queue(&self, queue_info: &QueueRecord) -> crate::error::Result<()>;
 
     /// Purge all messages and workers from a queue.
     ///
@@ -106,15 +105,15 @@ pub trait Admin: Worker {
     /// Get metrics for a specific queue.
     ///
     /// Returns counts of total, pending, locked, and archived messages.
-    async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::types::QueueMetrics>;
+    async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::stats::QueueMetrics>;
 
     /// Get metrics for all queues.
-    async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::types::QueueMetrics>>;
+    async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::stats::QueueMetrics>>;
 
     /// Get system-wide statistics.
     ///
     /// Returns aggregate statistics across all queues, workers, and messages.
-    async fn system_stats(&self) -> crate::error::Result<crate::types::SystemStats>;
+    async fn system_stats(&self) -> crate::error::Result<crate::stats::SystemStats>;
 
     /// Get worker health statistics.
     ///
@@ -125,7 +124,7 @@ pub trait Admin: Worker {
         &self,
         heartbeat_timeout: Duration,
         group_by_queue: bool,
-    ) -> crate::error::Result<Vec<crate::types::WorkerHealthStats>>;
+    ) -> crate::error::Result<Vec<crate::stats::WorkerHealthStats>>;
 
     /// Get worker statistics for a queue.
     ///
@@ -133,7 +132,7 @@ pub trait Admin: Worker {
     async fn worker_stats(
         &self,
         queue_name: &str,
-    ) -> crate::error::Result<crate::types::WorkerStats>;
+    ) -> crate::error::Result<crate::stats::WorkerStats>;
 
     // ===== Worker Management =====
 
@@ -143,7 +142,7 @@ pub trait Admin: Worker {
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
 
     /// List all workers across all queues.
-    async fn list_workers(&self) -> crate::error::Result<Vec<WorkerInfo>>;
+    async fn list_workers(&self) -> crate::error::Result<Vec<WorkerRecord>>;
 
     /// Get messages currently held by a worker.
     async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
@@ -433,9 +432,9 @@ pub trait Store: Send + Sync + 'static {
     /// Get access to the workflow repository.
     fn workflows(&self) -> &dyn WorkflowTable;
     /// Get access to the workflow run repository.
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable;
+    fn workflow_runs(&self) -> &dyn RunRecordTable;
     /// Get access to the workflow step repository.
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable;
+    fn workflow_steps(&self) -> &dyn StepRecordTable;
 
     /// Attempt to acquire a step lock.
     ///
@@ -483,7 +482,7 @@ pub trait Store: Send + Sync + 'static {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<WorkflowRun>;
+    ) -> crate::error::Result<RunRecord>;
 
     /// Create a local run handle from an existing run id.
     ///
@@ -580,14 +579,14 @@ impl BackendType {
 #[async_trait]
 pub trait QueueTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: NewQueue) -> crate::error::Result<QueueInfo>;
-    async fn get(&self, id: i64) -> crate::error::Result<QueueInfo>;
-    async fn list(&self) -> crate::error::Result<Vec<QueueInfo>>;
+    async fn insert(&self, data: NewQueueRecord) -> crate::error::Result<QueueRecord>;
+    async fn get(&self, id: i64) -> crate::error::Result<QueueRecord>;
+    async fn list(&self) -> crate::error::Result<Vec<QueueRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 
     // Queue-specific methods from src/tables/pgqrs_queues.rs
-    async fn get_by_name(&self, name: &str) -> crate::error::Result<QueueInfo>;
+    async fn get_by_name(&self, name: &str) -> crate::error::Result<QueueRecord>;
     async fn exists(&self, name: &str) -> crate::error::Result<bool>;
     async fn delete_by_name(&self, name: &str) -> crate::error::Result<u64>;
 }
@@ -596,7 +595,10 @@ pub trait QueueTable: Send + Sync {
 #[async_trait]
 pub trait MessageTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: crate::types::NewMessage) -> crate::error::Result<QueueMessage>;
+    async fn insert(
+        &self,
+        data: crate::types::NewQueueMessage,
+    ) -> crate::error::Result<QueueMessage>;
     async fn get(&self, id: i64) -> crate::error::Result<QueueMessage>;
     async fn list(&self) -> crate::error::Result<Vec<QueueMessage>>;
     async fn count(&self) -> crate::error::Result<i64>;
@@ -654,12 +656,15 @@ pub trait MessageTable: Send + Sync {
 #[async_trait]
 pub trait WorkerTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: crate::types::NewWorker) -> crate::error::Result<WorkerInfo>;
-    async fn get(&self, id: i64) -> crate::error::Result<WorkerInfo>;
-    async fn list(&self) -> crate::error::Result<Vec<WorkerInfo>>;
+    async fn insert(
+        &self,
+        data: crate::types::NewWorkerRecord,
+    ) -> crate::error::Result<WorkerRecord>;
+    async fn get(&self, id: i64) -> crate::error::Result<WorkerRecord>;
+    async fn list(&self) -> crate::error::Result<Vec<WorkerRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
-    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerInfo>>;
+    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerRecord>>;
 
     // Worker-specific methods from src/tables/pgqrs_workers.rs
     async fn count_for_queue(
@@ -678,13 +683,13 @@ pub trait WorkerTable: Send + Sync {
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
-    ) -> crate::error::Result<Vec<WorkerInfo>>;
+    ) -> crate::error::Result<Vec<WorkerRecord>>;
 
     async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
-    ) -> crate::error::Result<Vec<WorkerInfo>>;
+    ) -> crate::error::Result<Vec<WorkerRecord>>;
 
     /// Register a worker with state machine handling.
     ///
@@ -701,7 +706,7 @@ pub trait WorkerTable: Send + Sync {
         queue_id: Option<i64>,
         hostname: &str,
         port: i32,
-    ) -> crate::error::Result<WorkerInfo>;
+    ) -> crate::error::Result<WorkerRecord>;
 
     /// Register an ephemeral worker (one-off, short-lived).
     ///
@@ -709,7 +714,8 @@ pub trait WorkerTable: Send + Sync {
     ///
     /// # Arguments
     /// * `queue_id` - ID of the queue (None for admin workers)
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> crate::error::Result<WorkerInfo>;
+    async fn register_ephemeral(&self, queue_id: Option<i64>)
+        -> crate::error::Result<WorkerRecord>;
 }
 
 /// Repository for managing archived messages.
@@ -754,7 +760,7 @@ pub trait ArchiveTable: Send + Sync {
 #[async_trait]
 pub trait WorkflowTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: NewWorkflow) -> crate::error::Result<WorkflowRecord>;
+    async fn insert(&self, data: NewWorkflowRecord) -> crate::error::Result<WorkflowRecord>;
     async fn get(&self, id: i64) -> crate::error::Result<WorkflowRecord>;
     async fn list(&self) -> crate::error::Result<Vec<WorkflowRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
@@ -763,22 +769,22 @@ pub trait WorkflowTable: Send + Sync {
 
 /// Repository for managing workflow runs.
 #[async_trait]
-pub trait WorkflowRunTable: Send + Sync {
+pub trait RunRecordTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: NewWorkflowRun) -> crate::error::Result<WorkflowRun>;
-    async fn get(&self, id: i64) -> crate::error::Result<WorkflowRun>;
-    async fn list(&self) -> crate::error::Result<Vec<WorkflowRun>>;
+    async fn insert(&self, data: NewRunRecord) -> crate::error::Result<RunRecord>;
+    async fn get(&self, id: i64) -> crate::error::Result<RunRecord>;
+    async fn list(&self) -> crate::error::Result<Vec<RunRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 }
 
 /// Repository for managing workflow steps.
 #[async_trait]
-pub trait WorkflowStepTable: Send + Sync {
+pub trait StepRecordTable: Send + Sync {
     // Methods from Table
-    async fn insert(&self, data: NewWorkflowStep) -> crate::error::Result<WorkflowStep>;
-    async fn get(&self, id: i64) -> crate::error::Result<WorkflowStep>;
-    async fn list(&self) -> crate::error::Result<Vec<WorkflowStep>>;
+    async fn insert(&self, data: NewStepRecord) -> crate::error::Result<StepRecord>;
+    async fn get(&self, id: i64) -> crate::error::Result<StepRecord>;
+    async fn list(&self) -> crate::error::Result<Vec<StepRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 }

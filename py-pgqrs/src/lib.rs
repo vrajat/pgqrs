@@ -5,10 +5,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
-    BackoffStrategy as RustBackoffStrategy, QueueInfo as RustQueueInfo,
-    QueueMessage as RustQueueMessage, StepRetryPolicy as RustStepRetryPolicy,
-    WorkerInfo as RustWorkerInfo, WorkerStatus,
+    QueueMessage as RustQueueMessage, QueueRecord as RustQueueRecord,
+    WorkerRecord as RustWorkerInfo, WorkerStatus,
 };
+use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
 use rust_pgqrs::{Run, RunExt, StepGuard};
 
 use pyo3::pyasync::IterANextOutput;
@@ -1429,8 +1429,8 @@ struct QueueInfo {
     queue_name: String,
 }
 
-impl From<RustQueueInfo> for QueueInfo {
-    fn from(r: RustQueueInfo) -> Self {
+impl From<RustQueueRecord> for QueueInfo {
+    fn from(r: RustQueueRecord) -> Self {
         QueueInfo {
             id: r.id,
             queue_name: r.queue_name,

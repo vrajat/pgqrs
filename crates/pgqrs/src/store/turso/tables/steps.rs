@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::turso::parse_turso_timestamp;
-use crate::types::{NewWorkflowStep, WorkflowStatus, WorkflowStep};
+use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::str::FromStr;
@@ -8,16 +8,16 @@ use std::sync::Arc;
 use turso::Database;
 
 #[derive(Debug, Clone)]
-pub struct TursoWorkflowStepTable {
+pub struct TursoStepRecordTable {
     db: Arc<Database>,
 }
 
-impl TursoWorkflowStepTable {
+impl TursoStepRecordTable {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 
-    fn map_row(row: &turso::Row) -> Result<WorkflowStep> {
+    fn map_row(row: &turso::Row) -> Result<StepRecord> {
         let id: i64 = row.get(0)?;
         let run_id: i64 = row.get(1)?;
         let step_id: String = row.get(2)?;
@@ -47,7 +47,7 @@ impl TursoWorkflowStepTable {
         let created_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
         let updated_at = parse_turso_timestamp(&row.get::<String>(8)?)?;
 
-        Ok(WorkflowStep {
+        Ok(StepRecord {
             id,
             run_id,
             step_id,
@@ -62,8 +62,8 @@ impl TursoWorkflowStepTable {
 }
 
 #[async_trait]
-impl crate::store::WorkflowStepTable for TursoWorkflowStepTable {
-    async fn insert(&self, data: NewWorkflowStep) -> Result<WorkflowStep> {
+impl crate::store::StepRecordTable for TursoStepRecordTable {
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
         let input_str = data.input.map(|v| v.to_string());
 
         let row = crate::store::turso::query(
@@ -108,7 +108,7 @@ impl crate::store::WorkflowStepTable for TursoWorkflowStepTable {
         let created_at = parse_turso_timestamp(&row.get::<String>(6)?)?;
         let updated_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
 
-        Ok(WorkflowStep {
+        Ok(StepRecord {
             id: 0,
             run_id,
             step_id,
@@ -121,7 +121,7 @@ impl crate::store::WorkflowStepTable for TursoWorkflowStepTable {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowStep> {
+    async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = crate::store::turso::query(
             r#"
             SELECT 0 as id, run_id, step_id, status, input, output, error, created_at, updated_at
@@ -138,7 +138,7 @@ impl crate::store::WorkflowStepTable for TursoWorkflowStepTable {
         Self::map_row(&row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowStep>> {
+    async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = crate::store::turso::query(
             r#"
             SELECT 0 as id, run_id, step_id, status, input, output, error, created_at, updated_at

@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::{Run, StepResult, Store};
-use crate::types::{WorkflowRecord, WorkflowRun};
+use crate::types::{RunRecord, WorkflowRecord};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -63,7 +63,7 @@ pub struct WorkflowTriggerBuilder {
 }
 
 impl WorkflowTriggerBuilder {
-    pub async fn execute<S: Store>(self, store: &S) -> Result<WorkflowRun> {
+    pub async fn execute<S: Store>(self, store: &S) -> Result<RunRecord> {
         store.trigger_workflow(&self.name, self.input).await
     }
 

@@ -253,7 +253,7 @@ impl Store for AnyStore {
         }
     }
 
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workflow_runs(),
@@ -264,7 +264,7 @@ impl Store for AnyStore {
         }
     }
 
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workflow_steps(),
@@ -346,7 +346,7 @@ impl Store for AnyStore {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<WorkflowRun> {
+    ) -> crate::error::Result<RunRecord> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.trigger_workflow(name, input).await,

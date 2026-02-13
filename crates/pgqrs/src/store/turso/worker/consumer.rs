@@ -4,7 +4,7 @@ use crate::store::turso::format_turso_timestamp;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::{Consumer, MessageTable, Worker};
-use crate::types::{ArchivedMessage, QueueInfo, QueueMessage, WorkerInfo, WorkerStatus};
+use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use std::sync::Arc;
@@ -30,8 +30,8 @@ const DELETE_MESSAGE_AFTER_ARCHIVE: &str = r#"
 
 pub struct TursoConsumer {
     db: Arc<Database>,
-    worker_info: WorkerInfo,
-    queue_info: QueueInfo,
+    worker_info: WorkerRecord,
+    queue_info: QueueRecord,
     _config: Config,
     workers: Arc<TursoWorkerTable>,
     messages: Arc<TursoMessageTable>,
@@ -40,7 +40,7 @@ pub struct TursoConsumer {
 impl TursoConsumer {
     pub async fn new(
         db: Arc<Database>,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: Config,
@@ -65,7 +65,7 @@ impl TursoConsumer {
 
     pub async fn new_ephemeral(
         db: Arc<Database>,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = Arc::new(TursoWorkerTable::new(db.clone()));
