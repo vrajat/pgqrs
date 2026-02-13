@@ -66,6 +66,13 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
     WHERE id = ?
 "#;
 
+const GET_WORKER_MESSAGES: &str = r#"
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    FROM pgqrs_messages
+    WHERE consumer_worker_id = ?
+    ORDER BY id
+"#;
+
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
