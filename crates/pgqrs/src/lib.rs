@@ -133,8 +133,10 @@ pub mod policy;
 mod rate_limit;
 pub mod stats;
 pub mod store;
+pub mod tables;
 pub mod types;
-mod validation;
+pub mod validation;
+pub mod workers;
 
 // Tier 1: High-level API (builders module)
 pub mod builders;
@@ -147,9 +149,13 @@ pub use builders::{
 
 // Re-export worker types and modules at crate root for convenience
 
-pub use crate::store::{
-    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, Run, RunExt, StepGuard,
-    StepGuardExt, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
+pub use crate::store::Store;
+pub use crate::tables::{
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
+    WorkflowTable,
+};
+pub use crate::workers::{
+    Admin, Consumer, Producer, Run, RunExt, StepGuard, StepGuardExt, StepResult, Worker, Workflow,
 };
 
 pub use crate::config::Config;

@@ -81,6 +81,7 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
     // Install schema based on backend:
     // - Postgres: Uses global setup (setup_test_schemas binary), skip install
     // - SQLite/Turso: No global setup, install per-test
+    #[allow(unreachable_patterns)]
     match current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => {
