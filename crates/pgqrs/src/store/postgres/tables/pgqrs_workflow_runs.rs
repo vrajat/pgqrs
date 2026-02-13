@@ -21,13 +21,13 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
             r#"
             INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
             VALUES (
-              (SELECT workflow_id FROM pgqrs_workflows WHERE name = $1),
+              $1,
               'PENDING'::pgqrs_workflow_status,
               $2
             )
             RETURNING
-              run_id as id,
-              (SELECT name FROM pgqrs_workflows WHERE workflow_id = pgqrs_workflow_runs.workflow_id) as workflow_name,
+              id,
+              workflow_id,
               status,
               input,
               output,
@@ -36,14 +36,14 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
               created_at as updated_at
             "#,
         )
-        .bind(&data.workflow_name)
+        .bind(data.workflow_id)
         .bind(data.input)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW_RUN".into(),
             source: Box::new(e),
-            context: format!("Failed to insert workflow run for '{}'", data.workflow_name),
+            context: format!("Failed to insert workflow run for '{}'", data.workflow_id),
         })?;
 
         Ok(row)
@@ -53,17 +53,16 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
         let row = sqlx::query_as::<_, WorkflowRun>(
             r#"
             SELECT
-              r.run_id as id,
-              w.name as workflow_name,
-              r.status,
-              r.input,
-              r.output,
-              r.error,
-              r.created_at,
-              r.created_at as updated_at
-            FROM pgqrs_workflow_runs r
-            JOIN pgqrs_workflows w ON w.workflow_id = r.workflow_id
-            WHERE r.run_id = $1
+              id,
+              workflow_id,
+              status,
+              input,
+              output,
+              error,
+              created_at,
+              created_at as updated_at
+            FROM pgqrs_workflow_runs
+            WHERE id = $1
             "#,
         )
         .bind(id)
@@ -82,17 +81,16 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
         let rows = sqlx::query_as::<_, WorkflowRun>(
             r#"
             SELECT
-              r.run_id as id,
-              w.name as workflow_name,
-              r.status,
-              r.input,
-              r.output,
-              r.error,
-              r.created_at,
-              r.created_at as updated_at
-            FROM pgqrs_workflow_runs r
-            JOIN pgqrs_workflows w ON w.workflow_id = r.workflow_id
-            ORDER BY r.created_at DESC
+              id,
+              workflow_id,
+              status,
+              input,
+              output,
+              error,
+              created_at,
+              created_at as updated_at
+            FROM pgqrs_workflow_runs
+            ORDER BY created_at DESC
             "#,
         )
         .fetch_all(&self.pool)
@@ -120,7 +118,7 @@ impl crate::store::WorkflowRunTable for WorkflowRuns {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE run_id = $1")
+        let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await

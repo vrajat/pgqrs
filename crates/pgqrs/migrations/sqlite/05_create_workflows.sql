@@ -1,6 +1,6 @@
 -- Workflow definitions (templates)
 CREATE TABLE IF NOT EXISTS pgqrs_workflows (
-    workflow_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     queue_id INTEGER NOT NULL REFERENCES pgqrs_queues(id),
     created_at TEXT DEFAULT (datetime('now')) NOT NULL
@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflows (
 
 -- Workflow runs (executions)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
-    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    workflow_name TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id INTEGER NOT NULL REFERENCES pgqrs_workflows(id),
     status TEXT NOT NULL,
     input TEXT,
     output TEXT,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
 
 -- Step state (for crash recovery)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
-    run_id INTEGER NOT NULL REFERENCES pgqrs_workflow_runs(run_id),
+    run_id INTEGER NOT NULL REFERENCES pgqrs_workflow_runs(id),
     step_id TEXT NOT NULL,
     status TEXT NOT NULL,
     input TEXT,
@@ -42,5 +42,4 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
 
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON pgqrs_workflow_runs(status);
-CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_name ON pgqrs_workflow_runs(workflow_name);
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_status ON pgqrs_workflow_steps(status);

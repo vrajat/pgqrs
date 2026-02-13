@@ -5,7 +5,7 @@ use crate::store::{
     QueueTable, Run, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable,
     WorkflowStepTable, WorkflowTable,
 };
-use crate::types::{NewMessage, NewQueue, WorkflowStatus};
+use crate::types::{NewMessage, NewQueue, WorkflowRecord, WorkflowRun, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
@@ -542,12 +542,6 @@ pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
     }
 }
 
-const SQL_TURSO_INSERT_RUN: &str = r#"
-INSERT INTO pgqrs_workflow_runs (workflow_name, status, input)
-VALUES ($1, $2, $3)
-RETURNING run_id;
-"#;
-
 #[derive(Debug, Clone)]
 pub struct TursoRun {
     id: i64,
@@ -563,7 +557,7 @@ impl TursoRun {
 const SQL_TURSO_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING', updated_at = datetime('now'), started_at = COALESCE(started_at, datetime('now'))
-WHERE run_id = $1 AND status = 'PENDING'
+WHERE id = $1 AND status = 'PENDING'
 RETURNING status, error;
 "#;
 
@@ -581,7 +575,7 @@ impl crate::store::Run for TursoRun {
 
         if result.is_none() {
             let status_str: Option<String> =
-                query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE run_id = $1")
+                query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE id = $1")
                     .bind(self.id)
                     .fetch_optional(&self.db)
                     .await?;
@@ -601,7 +595,7 @@ impl crate::store::Run for TursoRun {
     async fn complete(&mut self, output: serde_json::Value) -> Result<()> {
         let output_str = output.to_string();
         let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'SUCCESS', output = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE run_id = $1",
+            "UPDATE pgqrs_workflow_runs SET status = 'SUCCESS', output = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
         )
         .bind(self.id)
         .bind(output_str)
@@ -613,7 +607,7 @@ impl crate::store::Run for TursoRun {
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
         let error_str = error.to_string();
         let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'ERROR', error = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE run_id = $1",
+            "UPDATE pgqrs_workflow_runs SET status = 'ERROR', error = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
         )
         .bind(self.id)
         .bind(error_str)
@@ -766,7 +760,7 @@ impl Store for TursoStore {
         Ok(Box::new(TursoWorkflow::new(self.db.clone(), name)))
     }
 
-    async fn create_workflow(&self, name: &str) -> Result<()> {
+    async fn create_workflow(&self, name: &str) -> Result<WorkflowRecord> {
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -788,7 +782,7 @@ impl Store for TursoStore {
             .await;
 
         match insert_res {
-            Ok(_) => Ok(()),
+            Ok(record) => Ok(record),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
@@ -806,22 +800,25 @@ impl Store for TursoStore {
         }
     }
 
-    async fn trigger_workflow(&self, name: &str, input: Option<serde_json::Value>) -> Result<i64> {
+    async fn trigger_workflow(
+        &self,
+        name: &str,
+        input: Option<serde_json::Value>,
+    ) -> Result<WorkflowRun> {
         // Strict semantics: queue/workflow must already exist.
         let queue = self.queues.get_by_name(name).await?;
+        let workflow = self.workflows.get_by_name(name).await?;
 
-        let input_str = input.map(|v| v.to_string());
-        let status = WorkflowStatus::Pending.to_string();
-
-        let run_id: i64 = query_scalar(SQL_TURSO_INSERT_RUN)
-            .bind(name)
-            .bind(status)
-            .bind(input_str)
-            .fetch_one_once(&self.db)
+        let run = self
+            .workflow_runs
+            .insert(crate::types::NewWorkflowRun {
+                workflow_id: workflow.id,
+                input,
+            })
             .await?;
 
         let now = Utc::now();
-        let payload = serde_json::json!({ "run_id": run_id });
+        let payload = serde_json::json!({ "run_id": run.id });
 
         let _msg = self
             .messages
@@ -836,7 +833,7 @@ impl Store for TursoStore {
             })
             .await?;
 
-        Ok(run_id)
+        Ok(run)
     }
 
     async fn run(&self, run_id: i64) -> Result<Box<dyn Run>> {

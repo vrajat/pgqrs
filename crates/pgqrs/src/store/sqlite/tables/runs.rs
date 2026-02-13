@@ -18,8 +18,8 @@ impl SqliteWorkflowRunTable {
     }
 
     fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRun> {
-        let id: i64 = row.try_get("run_id")?;
-        let workflow_name: String = row.try_get("workflow_name")?;
+        let id: i64 = row.try_get("id")?;
+        let workflow_id: i64 = row.try_get("workflow_id")?;
 
         let status_str: String = row.try_get("status")?;
         let status = WorkflowStatus::from_str(&status_str)
@@ -48,7 +48,7 @@ impl SqliteWorkflowRunTable {
 
         Ok(WorkflowRun {
             id,
-            workflow_name,
+            workflow_id,
             status,
             input,
             output,
@@ -71,7 +71,7 @@ impl SqliteWorkflowRunTable {
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'SUCCESS', output = $2, updated_at = $3
-            WHERE run_id = $1
+            WHERE id = $1
             "#,
         )
         .bind(id)
@@ -100,7 +100,7 @@ impl SqliteWorkflowRunTable {
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'ERROR', error = $2, updated_at = $3
-            WHERE run_id = $1
+            WHERE id = $1
             "#,
         )
         .bind(id)
@@ -126,12 +126,12 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_name, status, input, created_at, updated_at)
+            INSERT INTO pgqrs_workflow_runs (workflow_id, status, input, created_at, updated_at)
             VALUES ($1, 'PENDING', $2, $3, $3)
-            RETURNING run_id, workflow_name, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
             "#,
         )
-        .bind(&data.workflow_name)
+        .bind(data.workflow_id)
         .bind(input_str)
         .bind(now_str)
         .fetch_one(&self.pool)
@@ -139,7 +139,7 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW_RUN".into(),
             source: Box::new(e),
-            context: format!("Failed to insert workflow run for '{}'", data.workflow_name),
+            context: format!("Failed to insert workflow run for '{}'", data.workflow_id),
         })?;
 
         Self::map_row(row)
@@ -148,9 +148,9 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
     async fn get(&self, id: i64) -> Result<WorkflowRun> {
         let row = sqlx::query(
             r#"
-            SELECT run_id, workflow_name, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
-            WHERE run_id = $1
+            WHERE id = $1
             "#,
         )
         .bind(id)
@@ -168,7 +168,7 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
     async fn list(&self) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
             r#"
-            SELECT run_id, workflow_name, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             ORDER BY created_at DESC
             "#,
@@ -201,7 +201,7 @@ impl crate::store::WorkflowRunTable for SqliteWorkflowRunTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE run_id = $1")
+        let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await

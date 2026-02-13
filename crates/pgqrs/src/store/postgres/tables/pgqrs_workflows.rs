@@ -17,7 +17,7 @@ impl Workflows {
     pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
-            SELECT workflow_id, name, queue_id, created_at
+            SELECT id, name, queue_id, created_at
             FROM pgqrs_workflows
             WHERE name = $1
             "#,
@@ -35,13 +35,13 @@ impl Workflows {
     }
 
     fn map_row(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
-        let workflow_id: i64 = row.try_get("workflow_id")?;
+        let workflow_id: i64 = row.try_get("id")?;
         let name: String = row.try_get("name")?;
         let queue_id: i64 = row.try_get("queue_id")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
 
         Ok(WorkflowRecord {
-            workflow_id,
+            id: workflow_id,
             name,
             queue_id,
             created_at,
@@ -57,7 +57,7 @@ impl crate::store::WorkflowTable for Workflows {
             r#"
             INSERT INTO pgqrs_workflows (name, queue_id)
             VALUES ($1, $2)
-            RETURNING workflow_id, name, queue_id, created_at
+            RETURNING id, name, queue_id, created_at
             "#,
         )
         .bind(&data.name)
@@ -76,9 +76,9 @@ impl crate::store::WorkflowTable for Workflows {
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
-            SELECT workflow_id, name, queue_id, created_at
+            SELECT id, name, queue_id, created_at
             FROM pgqrs_workflows
-            WHERE workflow_id = $1
+            WHERE id = $1
             "#,
         )
         .bind(id)
@@ -96,7 +96,7 @@ impl crate::store::WorkflowTable for Workflows {
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT workflow_id, name, queue_id, created_at
+            SELECT id, name, queue_id, created_at
             FROM pgqrs_workflows
             ORDER BY created_at DESC
             "#,
@@ -125,7 +125,7 @@ impl crate::store::WorkflowTable for Workflows {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflows WHERE workflow_id = $1")
+        let result = sqlx::query("DELETE FROM pgqrs_workflows WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await

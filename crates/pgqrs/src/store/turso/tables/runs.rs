@@ -19,7 +19,7 @@ impl TursoWorkflowRunTable {
 
     fn map_row(row: &turso::Row) -> Result<WorkflowRun> {
         let id: i64 = row.get(0)?;
-        let workflow_name: String = row.get(1)?;
+        let workflow_id: i64 = row.get(1)?;
 
         let status_str: String = row.get(2)?;
         let status = WorkflowStatus::from_str(&status_str)
@@ -48,7 +48,7 @@ impl TursoWorkflowRunTable {
 
         Ok(WorkflowRun {
             id,
-            workflow_name,
+            workflow_id,
             status,
             input,
             output,
@@ -66,12 +66,12 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
 
         let row = crate::store::turso::query(
             r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_name, status, input)
+            INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
             VALUES (?, 'PENDING', ?)
-            RETURNING run_id, workflow_name, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
             "#,
         )
-        .bind(data.workflow_name.as_str())
+        .bind(data.workflow_id)
         .bind(input_str)
         .fetch_one_once(&self.db)
         .await?;
@@ -82,9 +82,9 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
     async fn get(&self, id: i64) -> Result<WorkflowRun> {
         let row = crate::store::turso::query(
             r#"
-            SELECT run_id, workflow_name, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
-            WHERE run_id = ?
+            WHERE id = ?
             "#,
         )
         .bind(id)
@@ -97,7 +97,7 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
     async fn list(&self) -> Result<Vec<WorkflowRun>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT run_id, workflow_name, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             ORDER BY created_at DESC
             "#,
@@ -122,7 +122,7 @@ impl crate::store::WorkflowRunTable for TursoWorkflowRunTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count = crate::store::turso::query("DELETE FROM pgqrs_workflow_runs WHERE run_id = ?")
+        let count = crate::store::turso::query("DELETE FROM pgqrs_workflow_runs WHERE id = ?")
             .bind(id)
             .execute_once(&self.db)
             .await?;

@@ -8,7 +8,7 @@ END $$;
 
 -- Workflow definitions (templates)
 CREATE TABLE IF NOT EXISTS pgqrs_workflows (
-    workflow_id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE,
     queue_id BIGINT NOT NULL REFERENCES pgqrs_queues(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflows (
 
 -- Workflow runs (executions)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
-    run_id BIGSERIAL PRIMARY KEY,
-    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(id) ON DELETE CASCADE,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
     output JSONB,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
 
 -- Step state (for crash recovery)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
-    run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(run_id) ON DELETE CASCADE,
+    run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(id) ON DELETE CASCADE,
     step_id VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
@@ -50,7 +50,6 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflows_name ON pgqrs_workflows(name);
-CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_workflow_id ON pgqrs_workflow_runs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;

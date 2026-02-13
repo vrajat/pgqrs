@@ -5,6 +5,7 @@ use crate::store::{
     StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable, WorkflowStepTable,
     WorkflowTable,
 };
+use crate::types::{WorkflowRecord, WorkflowRun};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
@@ -259,7 +260,7 @@ impl Store for SqliteStore {
         Ok(Box::new(SqliteWorkflow::new(name)))
     }
 
-    async fn create_workflow(&self, name: &str) -> Result<()> {
+    async fn create_workflow(&self, name: &str) -> Result<WorkflowRecord> {
         // Ensure backing queue exists (name is the queue name for now).
         // We avoid relying on backend-specific upsert SQL by doing: exists -> insert.
         let queue_exists = self.queues.exists(name).await?;
@@ -275,14 +276,13 @@ impl Store for SqliteStore {
         let queue = self.queues.get_by_name(name).await?;
 
         // Create workflow definition. This is strict: it errors if the workflow already exists.
-        let _workflow = self
+        let workflow = self
             .workflows
             .insert(crate::types::NewWorkflow {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
             .await
-            .map(|_| ())
             .map_err(|e| {
                 // SQLite unique constraint violation code is 2067 (SQLITE_CONSTRAINT_UNIQUE)
                 if let crate::error::Error::QueryFailed { source, .. } = &e {
@@ -299,21 +299,23 @@ impl Store for SqliteStore {
                 e
             })?;
 
-        Ok(())
+        Ok(workflow)
     }
 
-    async fn trigger_workflow(&self, name: &str, input: Option<serde_json::Value>) -> Result<i64> {
+    async fn trigger_workflow(
+        &self,
+        name: &str,
+        input: Option<serde_json::Value>,
+    ) -> Result<WorkflowRun> {
         use crate::types::NewMessage;
 
-        // Strict semantics: triggering requires the workflow definition (and queue) to exist.
-        // Callers must create the workflow definition explicitly.
+        let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
 
-        // Create run record.
         let run = self
             .workflow_runs
             .insert(crate::types::NewWorkflowRun {
-                workflow_name: name.to_string(),
+                workflow_id: workflow.id,
                 input,
             })
             .await?;
@@ -335,7 +337,7 @@ impl Store for SqliteStore {
             })
             .await?;
 
-        Ok(run.id)
+        Ok(run)
     }
 
     async fn run(&self, run_id: i64) -> Result<Box<dyn Run>> {

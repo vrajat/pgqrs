@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::store::{Run, StepResult, Store};
+use crate::types::{WorkflowRecord, WorkflowRun};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -23,7 +24,7 @@ impl WorkflowBuilder {
     }
 
     /// Create/ensure the workflow definition using the provided store.
-    pub async fn create<S: Store>(self, store: &S) -> Result<()> {
+    pub async fn create<S: Store>(self, store: &S) -> Result<WorkflowRecord> {
         let name = self
             .name
             .ok_or_else(|| crate::error::Error::ValidationFailed {
@@ -62,14 +63,14 @@ pub struct WorkflowTriggerBuilder {
 }
 
 impl WorkflowTriggerBuilder {
-    pub async fn execute<S: Store>(self, store: &S) -> Result<i64> {
+    pub async fn execute<S: Store>(self, store: &S) -> Result<WorkflowRun> {
         store.trigger_workflow(&self.name, self.input).await
     }
 
     /// Create a local run handle for in-process execution.
     pub async fn run<S: Store>(self, store: &S) -> Result<Box<dyn Run>> {
-        let run_id = self.execute(store).await?;
-        store.run(run_id).await
+        let run = self.execute(store).await?;
+        store.run(run.id).await
     }
 }
 

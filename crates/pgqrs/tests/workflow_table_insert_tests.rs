@@ -31,11 +31,8 @@ async fn test_workflow_insert_requires_and_persists_queue_id() -> anyhow::Result
     assert_eq!(inserted.name, "wf_insert_workflow");
     assert_eq!(inserted.queue_id, queue.id);
 
-    let fetched = pgqrs::tables(&store)
-        .workflows()
-        .get(inserted.workflow_id)
-        .await?;
-    assert_eq!(fetched.workflow_id, inserted.workflow_id);
+    let fetched = pgqrs::tables(&store).workflows().get(inserted.id).await?;
+    assert_eq!(fetched.name, inserted.name);
     assert_eq!(fetched.queue_id, queue.id);
 
     Ok(())

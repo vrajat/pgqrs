@@ -16,14 +16,29 @@ impl TursoWorkflowTable {
         Self { db }
     }
 
+    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+        let row = crate::store::turso::query(
+            r#"
+            SELECT id, name, queue_id, created_at
+            FROM pgqrs_workflows
+            WHERE name = $1
+            "#,
+        )
+        .bind(name)
+        .fetch_one(&self.db)
+        .await?;
+
+        Self::map_row(&row)
+    }
+
     fn map_row(row: &turso::Row) -> Result<WorkflowRecord> {
-        let workflow_id: i64 = row.get(0)?;
+        let id: i64 = row.get(0)?;
         let name: String = row.get(1)?;
         let queue_id: i64 = row.get(2)?;
         let created_at = parse_turso_timestamp(&row.get::<String>(3)?)?;
 
         Ok(WorkflowRecord {
-            workflow_id,
+            id,
             name,
             queue_id,
             created_at,
@@ -39,7 +54,7 @@ impl TursoWorkflowTable {
             r#"
             UPDATE pgqrs_workflows
             SET output = ?, updated_at = ?
-            WHERE workflow_id = ?
+            WHERE id = ?
             "#,
         )
         .bind(output_str)
@@ -60,7 +75,7 @@ impl TursoWorkflowTable {
             r#"
             UPDATE pgqrs_workflows
             SET error = ?, updated_at = ?
-            WHERE workflow_id = ?
+            WHERE id = ?
             "#,
         )
         .bind(error_str)
@@ -83,7 +98,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
             r#"
             INSERT INTO pgqrs_workflows (name, queue_id, created_at)
             VALUES (?, ?, ?)
-            RETURNING workflow_id, name, queue_id, created_at
+            RETURNING id, name, queue_id, created_at
             "#,
         )
         .bind(data.name.as_str())
@@ -98,9 +113,9 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
         let row = crate::store::turso::query(
             r#"
-            SELECT workflow_id, name, queue_id, created_at
+            SELECT id, name, queue_id, created_at
             FROM pgqrs_workflows
-            WHERE workflow_id = ?
+            WHERE id = ?
             "#,
         )
         .bind(id)
@@ -113,7 +128,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT workflow_id, name, queue_id, created_at
+            SELECT id, name, queue_id, created_at
             FROM pgqrs_workflows
             ORDER BY created_at DESC
             "#,
@@ -136,7 +151,7 @@ impl crate::store::WorkflowTable for TursoWorkflowTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count = crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE workflow_id = ?")
+        let count = crate::store::turso::query("DELETE FROM pgqrs_workflows WHERE id = ?")
             .bind(id)
             .execute_once(&self.db)
             .await?;

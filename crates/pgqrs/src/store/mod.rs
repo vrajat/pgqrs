@@ -256,7 +256,6 @@ pub trait Consumer: Worker {
 /// Interface for a workflow definition.
 #[async_trait]
 pub trait Workflow: Send + Sync {
-    /// Get the workflow name.
     fn name(&self) -> &str;
 }
 
@@ -475,7 +474,7 @@ pub trait Store: Send + Sync + 'static {
     /// Create a workflow definition (template) idempotently.
     ///
     /// This should ensure the backing queue exists and create the workflow record if missing.
-    async fn create_workflow(&self, name: &str) -> crate::error::Result<()>;
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord>;
 
     /// Trigger a workflow run.
     ///
@@ -484,7 +483,7 @@ pub trait Store: Send + Sync + 'static {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<i64>;
+    ) -> crate::error::Result<WorkflowRun>;
 
     /// Create a local run handle from an existing run id.
     ///

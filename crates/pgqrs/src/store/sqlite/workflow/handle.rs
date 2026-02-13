@@ -9,7 +9,7 @@ use std::str::FromStr;
 const SQL_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING', updated_at = datetime('now')
-WHERE run_id = $1 AND status = 'PENDING'
+WHERE id = $1 AND status = 'PENDING'
 RETURNING status, error
 "#;
 
@@ -66,7 +66,7 @@ impl crate::store::Run for SqliteRun {
         // If no row update, check current status
         if result.is_none() {
             let status_str: Option<String> =
-                sqlx::query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE run_id = $1")
+                sqlx::query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE id = $1")
                     .bind(self.id)
                     .fetch_optional(&self.pool)
                     .await

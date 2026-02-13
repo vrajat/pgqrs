@@ -519,7 +519,7 @@ impl std::str::FromStr for WorkflowStatus {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkflowRecord {
-    pub workflow_id: i64,
+    pub id: i64,
     pub name: String,
     pub queue_id: i64,
     pub created_at: DateTime<Utc>,
@@ -711,7 +711,7 @@ pub struct WorkflowConfig {
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkflowRun {
     pub id: i64,
-    pub workflow_name: String,
+    pub workflow_id: i64,
     pub status: WorkflowStatus,
     pub input: Option<serde_json::Value>,
     pub output: Option<serde_json::Value>,
@@ -723,7 +723,7 @@ pub struct WorkflowRun {
 /// Input data for creating a new workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorkflowRun {
-    pub workflow_name: String,
+    pub workflow_id: i64,
     pub input: Option<serde_json::Value>,
 }
 

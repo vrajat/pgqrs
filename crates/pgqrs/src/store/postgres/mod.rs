@@ -5,6 +5,7 @@ use crate::store::{
     Producer as ProducerTrait, QueueTable, Run, Store, Worker as WorkerTrait, WorkerTable,
     Workflow as WorkflowTrait, WorkflowRunTable, WorkflowStepTable, WorkflowTable,
 };
+use crate::WorkflowRecord;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
 use self::tables::pgqrs_workflow_runs::WorkflowRuns as PostgresWorkflowRunTable;
 use self::tables::pgqrs_workflow_steps::WorkflowSteps as PostgresWorkflowStepTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
-use crate::types::NewMessage;
+use crate::types::{NewMessage, WorkflowRun};
 
 use self::worker::admin::Admin as PostgresAdmin;
 use self::worker::consumer::Consumer as PostgresConsumer;
@@ -178,7 +179,7 @@ impl Store for PostgresStore {
         )))
     }
 
-    async fn create_workflow(&self, name: &str) -> crate::error::Result<()> {
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord> {
         // Ensure backing queue exists.
         // NOTE: Postgres queues table uses column `queue_name`.
         let queue_exists = self.queues.exists(name).await?;
@@ -194,14 +195,13 @@ impl Store for PostgresStore {
         let queue = self.queues.get_by_name(name).await?;
 
         // Create workflow definition (strict semantics).
-        let _workflow = self
+        let workflow = self
             .workflows
             .insert(crate::types::NewWorkflow {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
             .await
-            .map(|_| ())
             .map_err(|e| {
                 if let crate::error::Error::QueryFailed { source, .. } = &e {
                     if let Some(sqlx::Error::Database(db_err)) =
@@ -217,23 +217,23 @@ impl Store for PostgresStore {
                 e
             })?;
 
-        Ok(())
+        Ok(workflow)
     }
 
     async fn trigger_workflow(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<i64> {
+    ) -> crate::error::Result<WorkflowRun> {
         // Strict semantics: triggering requires the workflow definition + queue to exist.
-        let _workflow = self.workflows.get_by_name(name).await?;
+        let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
 
         // Create run record.
         let run = self
             .workflow_runs()
             .insert(crate::types::NewWorkflowRun {
-                workflow_name: name.to_string(),
+                workflow_id: workflow.id,
                 input,
             })
             .await?;
@@ -255,7 +255,7 @@ impl Store for PostgresStore {
             })
             .await?;
 
-        Ok(run.id)
+        Ok(run)
     }
 
     async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>> {

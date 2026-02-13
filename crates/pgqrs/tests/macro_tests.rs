@@ -89,15 +89,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             msg: "pending_check".to_string(),
         };
         pgqrs::workflow().name("pending_wf").create(&store).await?;
-        let workflow = pgqrs::workflow()
+        let run = pgqrs::workflow()
             .name("pending_wf")
             .trigger(&input)?
             .run(&store)
             .await?;
-        let run_id = workflow.id();
 
         // Verify status is PENDING immediately after creation
-        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
+        let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
         assert_eq!(
             record.status,
             pgqrs::WorkflowStatus::Pending,
@@ -111,18 +110,20 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             msg: "start".to_string(),
         };
         pgqrs::workflow().name("my_workflow").create(&store).await?;
-        let mut workflow = pgqrs::workflow()
+        let mut my_wf_run = pgqrs::workflow()
             .name("my_workflow")
             .trigger(&input)?
             .run(&store)
             .await?;
-        let run_id = workflow.id();
 
-        let res = my_workflow(&mut workflow, &input).await?;
+        let res = my_workflow(&mut my_wf_run, &input).await?;
         assert_eq!(res.msg, "start, step1_done, multi: arg");
 
         // Verify persisting SUCCESS
-        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
+        let record = pgqrs::tables(&store)
+            .workflow_runs()
+            .get(my_wf_run.id())
+            .await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Success);
         let db_output: TestData = serde_json::from_value(record.output.unwrap())?;
         assert_eq!(db_output.msg, "start, step1_done, multi: arg");
@@ -138,15 +139,14 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .name("idempotency_wf")
             .create(&store)
             .await?;
-        let mut workflow = pgqrs::workflow()
+        let mut idem_wf_run = pgqrs::workflow()
             .name("idempotency_wf")
             .trigger(&input)?
             .run(&store)
             .await?;
-        let run_id = workflow.id();
 
         // 2. Run step first time -> Success
-        let res1 = step_side_effect(&mut workflow, "run1").await?;
+        let res1 = step_side_effect(&mut idem_wf_run, "run1").await?;
         assert_eq!(res1.msg, "original_value");
 
         // 3. Manually TAMPER with the step output in the database
@@ -156,12 +156,12 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         let step_col = "step_id";
         let update_sql = format!(
             "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE run_id = {} AND {} = 'step_side_effect'",
-            tampered_json_sql, run_id, step_col
+            tampered_json_sql, idem_wf_run.id(), step_col
         );
         store.execute_raw(&update_sql).await?;
 
         // 4. Run step second time -> Should return TAMPERED value
-        let res2 = step_side_effect(&mut workflow, "run2").await?;
+        let res2 = step_side_effect(&mut idem_wf_run, "run2").await?;
         assert_eq!(
             res2.msg, "tampered_value",
             "Step should have returned cached (tampered) result from DB"
@@ -177,19 +177,21 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .name("workflow_with_failing_step")
             .create(&store)
             .await?;
-        let mut workflow = pgqrs::workflow()
+        let mut wf_failing_step_run = pgqrs::workflow()
             .name("workflow_with_failing_step")
             .trigger(&input)?
             .run(&store)
             .await?;
-        let run_id = workflow.id();
 
-        let res = workflow_with_failing_step(&mut workflow, &input).await;
+        let res = workflow_with_failing_step(&mut wf_failing_step_run, &input).await;
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
         // Verify persistence
-        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
+        let record = pgqrs::tables(&store)
+            .workflow_runs()
+            .get(wf_failing_step_run.id())
+            .await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");
@@ -205,14 +207,13 @@ async fn test_macro_suite() -> anyhow::Result<()> {
             .name("workflow_fail_at_end")
             .create(&store)
             .await?;
-        let mut workflow = pgqrs::workflow()
+        let mut wf_fail_run = pgqrs::workflow()
             .name("workflow_fail_at_end")
             .trigger(&input)?
             .run(&store)
             .await?;
-        let run_id = workflow.id();
 
-        let res = workflow_fail_at_end(&mut workflow, &input).await;
+        let res = workflow_fail_at_end(&mut wf_fail_run, &input).await;
         assert!(res.is_err());
         assert_eq!(
             res.unwrap_err().to_string(),
@@ -220,7 +221,10 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         );
 
         // Verify persistence
-        let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
+        let record = pgqrs::tables(&store)
+            .workflow_runs()
+            .get(wf_fail_run.id())
+            .await?;
         assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
         let error_val = record.error.expect("Should have error");
         let error_str = error_val.as_str().expect("Error should be string");

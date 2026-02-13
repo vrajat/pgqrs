@@ -19,7 +19,7 @@ async fn test_create_workflow_creates_workflow_and_queue() -> anyhow::Result<()>
     let workflow_name = "test_create_workflow_basic";
 
     // Create workflow definition via builder (new API)
-    pgqrs::workflow().name(workflow_name).create(&store).await?;
+    let workflow = pgqrs::workflow().name(workflow_name).create(&store).await?;
 
     // Trigger a run
     let input = TestParams {
@@ -27,18 +27,14 @@ async fn test_create_workflow_creates_workflow_and_queue() -> anyhow::Result<()>
         count: 1,
     };
 
-    let run_id = pgqrs::workflow()
+    let run = pgqrs::workflow()
         .name(workflow_name)
         .trigger(&input)?
         .execute(&store)
         .await?;
-    assert!(run_id > 0, "run_id should be positive");
+    assert!(run.id > 0, "run_id should be positive");
 
-    // Verify workflow run record exists and matches name
-    let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
-    assert_eq!(record.id, run_id);
-    assert_eq!(record.workflow_name, workflow_name);
-
+    assert_eq!(run.workflow_id, workflow.id);
     Ok(())
 }
 
@@ -85,9 +81,9 @@ async fn test_create_multiple_workflows() -> anyhow::Result<()> {
         count: 1,
     };
 
-    pgqrs::workflow().name("test_wf_1").create(&store).await?;
-    pgqrs::workflow().name("test_wf_2").create(&store).await?;
-    pgqrs::workflow().name("test_wf_3").create(&store).await?;
+    let wf_1 = pgqrs::workflow().name("test_wf_1").create(&store).await?;
+    let wf_2 = pgqrs::workflow().name("test_wf_2").create(&store).await?;
+    let wf_3 = pgqrs::workflow().name("test_wf_3").create(&store).await?;
 
     let run_1 = pgqrs::workflow()
         .name("test_wf_1")
@@ -105,17 +101,17 @@ async fn test_create_multiple_workflows() -> anyhow::Result<()> {
         .execute(&store)
         .await?;
 
-    assert_ne!(run_1, run_2);
-    assert_ne!(run_2, run_3);
-    assert_ne!(run_1, run_3);
+    assert_ne!(run_1.id, run_2.id);
+    assert_ne!(run_2.id, run_3.id);
+    assert_ne!(run_1.id, run_3.id);
 
-    let rec1 = pgqrs::tables(&store).workflow_runs().get(run_1).await?;
-    let rec2 = pgqrs::tables(&store).workflow_runs().get(run_2).await?;
-    let rec3 = pgqrs::tables(&store).workflow_runs().get(run_3).await?;
+    let rec1 = pgqrs::tables(&store).workflow_runs().get(run_1.id).await?;
+    let rec2 = pgqrs::tables(&store).workflow_runs().get(run_2.id).await?;
+    let rec3 = pgqrs::tables(&store).workflow_runs().get(run_3.id).await?;
 
-    assert_eq!(rec1.workflow_name, "test_wf_1");
-    assert_eq!(rec2.workflow_name, "test_wf_2");
-    assert_eq!(rec3.workflow_name, "test_wf_3");
+    assert_eq!(rec1.workflow_id, wf_1.id);
+    assert_eq!(rec2.workflow_id, wf_2.id);
+    assert_eq!(rec3.workflow_id, wf_3.id);
 
     Ok(())
 }
@@ -125,21 +121,21 @@ async fn test_workflow_with_unicode_name() -> anyhow::Result<()> {
     let store = create_store().await;
     let workflow_name = "テストワークフロー_🎉";
 
-    pgqrs::workflow().name(workflow_name).create(&store).await?;
+    let wf = pgqrs::workflow().name(workflow_name).create(&store).await?;
 
     let input = TestParams {
         message: "hello".to_string(),
         count: 1,
     };
 
-    let run_id = pgqrs::workflow()
+    let run = pgqrs::workflow()
         .name(workflow_name)
         .trigger(&input)?
         .execute(&store)
         .await?;
 
-    let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
-    assert_eq!(record.workflow_name, workflow_name);
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id).await?;
+    assert_eq!(record.workflow_id, wf.id);
 
     Ok(())
 }
@@ -150,7 +146,7 @@ async fn test_workflow_with_long_name() -> anyhow::Result<()> {
     // Create a name close to the 255 char limit
     let workflow_name = "a".repeat(250);
 
-    pgqrs::workflow()
+    let wf = pgqrs::workflow()
         .name(&workflow_name)
         .create(&store)
         .await?;
@@ -160,14 +156,14 @@ async fn test_workflow_with_long_name() -> anyhow::Result<()> {
         count: 1,
     };
 
-    let run_id = pgqrs::workflow()
+    let run = pgqrs::workflow()
         .name(&workflow_name)
         .trigger(&input)?
         .execute(&store)
         .await?;
 
-    let record = pgqrs::tables(&store).workflow_runs().get(run_id).await?;
-    assert_eq!(record.workflow_name, workflow_name);
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id).await?;
+    assert_eq!(record.workflow_id, wf.id);
 
     Ok(())
 }

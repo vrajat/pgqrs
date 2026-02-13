@@ -331,7 +331,7 @@ impl Store for AnyStore {
         }
     }
 
-    async fn create_workflow(&self, name: &str) -> crate::error::Result<()> {
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.create_workflow(name).await,
@@ -346,7 +346,7 @@ impl Store for AnyStore {
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> crate::error::Result<i64> {
+    ) -> crate::error::Result<WorkflowRun> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.trigger_workflow(name, input).await,
