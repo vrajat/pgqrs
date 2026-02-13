@@ -39,7 +39,7 @@ use async_trait::async_trait;
 use sqlx::migrate::Migrator;
 use sqlx::PgPool;
 
-pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+pub static MIGRATOR: Migrator = sqlx::migrate!("migrations/postgres");
 
 // Verification queries
 const CHECK_TABLE_EXISTS: &str = r#"
