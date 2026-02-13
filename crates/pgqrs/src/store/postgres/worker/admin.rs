@@ -36,11 +36,12 @@ use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::types::{QueueRecord, WorkerRecord, WorkerStatus};
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 use async_trait::async_trait;
+use chrono::Utc;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 // Verification queries
 const CHECK_TABLE_EXISTS: &str = r#"
@@ -245,53 +246,57 @@ pub struct Admin {
     pub messages: Messages,
     pub archive: Archive,
     pub workers: Workers,
-    /// Worker info for this Admin instance (set after calling register())
-    worker_info: Option<WorkerRecord>,
+    /// Worker record for this Admin instance
+    worker_record: WorkerRecord,
 }
 
 impl Admin {
     /// Create a new admin interface for managing pgqrs infrastructure.
     ///
-    /// Call `register()` after `install()` to register this Admin as a worker.
-    ///
     /// # Arguments
+    /// * `pool` - Database connection pool
+    /// * `hostname` - Hostname for the worker
+    /// * `port` - Port for the worker
     /// * `config` - Configuration for database connection and queue options
     ///
     /// # Returns
     /// A new `Admin` instance.
-    pub async fn new(config: &Config) -> Result<Self> {
-        // Create the search_path setting
-        let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
-
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .after_connect(move |conn, _meta| {
-                let sql = search_path_sql.clone();
-                Box::pin(async move {
-                    sqlx::query(&sql).execute(conn).await?;
-                    Ok(())
-                })
-            })
-            .connect(&config.dsn)
-            .await
-            .map_err(|e| crate::error::Error::ConnectionFailed {
-                source: Box::new(e),
-                context: "Failed to connect to postgres".into(),
-            })?;
-
+    pub async fn new(pool: PgPool, hostname: &str, port: i32, config: Config) -> Result<Self> {
         let workers = Workers::new(pool.clone());
         let queues = Queues::new(pool.clone());
         let messages = Messages::new(pool.clone());
         let archive = Archive::new(pool.clone());
 
+        let worker_record = workers.register(None, hostname, port).await?;
+
         Ok(Self {
             pool,
-            config: config.clone(),
+            config,
             queues,
             messages,
             archive,
             workers,
-            worker_info: None,
+            worker_record,
+        })
+    }
+
+    /// Create an ephemeral admin interface.
+    pub async fn new_ephemeral(pool: PgPool, config: Config) -> Result<Self> {
+        let workers = Workers::new(pool.clone());
+        let queues = Queues::new(pool.clone());
+        let messages = Messages::new(pool.clone());
+        let archive = Archive::new(pool.clone());
+
+        let worker_record = workers.register_ephemeral(None).await?;
+
+        Ok(Self {
+            pool,
+            config,
+            queues,
+            messages,
+            archive,
+            workers,
+            worker_record,
         })
     }
 
@@ -378,78 +383,45 @@ impl Admin {
 
         self.workers.delete(worker_id).await
     }
-
-    /// Get the worker ID, returning an error if not registered.
-    /// Use this in async methods that can propagate errors.
-    fn try_worker_id(&self) -> Result<i64> {
-        self.worker_info.as_ref().map(|w| w.id).ok_or_else(|| {
-            crate::error::Error::WorkerNotRegistered {
-                message:
-                    "Admin must be registered before using Worker methods. Call register() first."
-                        .to_string(),
-            }
-        })
-    }
 }
 
 #[async_trait]
 impl crate::store::Worker for Admin {
-    fn worker_id(&self) -> i64 {
-        // Return -1 as sentinel value if not registered.
-        // Async methods should use try_worker_id() which returns Result.
-        self.worker_info.as_ref().map(|w| w.id).unwrap_or(-1)
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.heartbeat(worker_id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.is_healthy(worker_id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.get_status(worker_id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.suspend(worker_id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.resume(worker_id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.shutdown(worker_id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
 #[async_trait]
 impl crate::store::Admin for Admin {
-    /// Install pgqrs schema and infrastructure in the database.
-    ///
-    /// **Important**: The schema must be created before running install.
-    /// Use your preferred method to create the schema, for example:
-    /// ```sql
-    /// CREATE SCHEMA IF NOT EXISTS my_schema;
-    /// ```
-    ///
-    /// # Returns
-    /// Ok if installation (or validation) succeeds, error otherwise.
-    async fn install(&self) -> Result<()> {
-        // Run migrations using sqlx
-        MIGRATOR.run(&self.pool).await?;
-        Ok(())
-    }
-
     /// Verify that pgqrs installation is valid and healthy.
+
     ///
     /// This method checks that all required infrastructure is in place:
     /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)
@@ -769,27 +741,6 @@ impl crate::store::Admin for Admin {
         Ok(result.rows_affected())
     }
 
-    /// Register this Admin instance as a worker.
-    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerRecord> {
-        if let Some(ref worker_info) = self.worker_info {
-            return Ok(worker_info.clone());
-        }
-
-        // Use WorkerTable::register (via Workers struct methods) to handle state machine
-        let worker_info = self.workers.register(None, &hostname, port).await?;
-
-        tracing::debug!(
-            "Registered Admin as worker {} (hostname: {}, port: {})",
-            worker_info.id,
-            hostname,
-            port
-        );
-
-        self.worker_info = Some(worker_info.clone());
-        Ok(worker_info)
-    }
-
-    /// Create a new queue in the database.
     async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
         // Create new queue data
         use crate::types::NewQueueRecord;

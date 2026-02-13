@@ -215,9 +215,23 @@ impl Store for SqliteStore {
         SqliteStepGuard::acquire(&self.pool, run_id, step_id, current_time).await
     }
 
-    async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
+    async fn bootstrap(&self) -> Result<()> {
+        sqlx::migrate!("migrations/sqlite")
+            .run(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Database(e.into()))?;
+        Ok(())
+    }
+
+    async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
         use self::worker::admin::SqliteAdmin;
-        let admin = SqliteAdmin::new(self.pool.clone(), config.clone());
+        let admin = SqliteAdmin::new(self.pool.clone(), hostname, port, config.clone()).await?;
+        Ok(Box::new(admin))
+    }
+
+    async fn admin_ephemeral(&self, config: &Config) -> Result<Box<dyn Admin>> {
+        use self::worker::admin::SqliteAdmin;
+        let admin = SqliteAdmin::new_ephemeral(self.pool.clone(), config.clone()).await?;
         Ok(Box::new(admin))
     }
 
@@ -345,9 +359,13 @@ impl Store for SqliteStore {
         Ok(Box::new(SqliteRun::new(self.pool.clone(), run_id)))
     }
 
-    fn worker(&self, id: i64) -> Box<dyn Worker> {
+    async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
         use self::worker::SqliteWorkerHandle;
-        Box::new(SqliteWorkerHandle::new(self.pool.clone(), id))
+        let worker_record = self.workers.get(id).await?;
+        Ok(Box::new(SqliteWorkerHandle::new(
+            self.pool.clone(),
+            worker_record,
+        )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {

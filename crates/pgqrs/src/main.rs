@@ -311,9 +311,9 @@ pub async fn handle_admin_commands(
 ) -> anyhow::Result<()> {
     match command {
         AdminCommands::Install => {
-            tracing::info!("Installing pgqrs schema ...");
-            pgqrs::admin(store).install().await?;
-            tracing::info!("Installation completed successfully");
+            tracing::info!("Initializing pgqrs schema ...");
+            store.bootstrap().await?;
+            tracing::info!("Initialization completed successfully");
         }
 
         AdminCommands::Verify => {

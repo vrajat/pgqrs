@@ -99,7 +99,7 @@ use sqlx::PgPool;
 /// ```
 #[derive(Debug, Clone)]
 pub struct WorkerHandle {
-    worker_id: i64,
+    worker_record: crate::types::WorkerRecord,
     workers: Workers,
 }
 
@@ -108,13 +108,13 @@ impl WorkerHandle {
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
-    /// * `worker_id` - ID of the worker to manage
+    /// * `worker_record` - Identity of the worker to manage
     ///
     /// # Returns
     /// A new `WorkerHandle` instance
-    pub fn new(pool: PgPool, worker_id: i64) -> Self {
+    pub fn new(pool: PgPool, worker_record: crate::types::WorkerRecord) -> Self {
         Self {
-            worker_id,
+            worker_record,
             workers: Workers::new(pool),
         }
     }
@@ -122,31 +122,33 @@ impl WorkerHandle {
 
 #[async_trait]
 impl Worker for WorkerHandle {
-    fn worker_id(&self) -> i64 {
-        self.worker_id
+    fn worker_record(&self) -> &crate::types::WorkerRecord {
+        &self.worker_record
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.workers.shutdown(self.worker_id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }

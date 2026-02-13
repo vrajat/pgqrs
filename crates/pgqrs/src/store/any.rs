@@ -275,62 +275,6 @@ impl Store for AnyStore {
         }
     }
 
-    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.admin(config).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.admin(config).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.admin(config).await,
-        }
-    }
-
-    async fn producer(
-        &self,
-        queue: &str,
-        hostname: &str,
-        port: i32,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
-        }
-    }
-
-    async fn consumer(
-        &self,
-        queue: &str,
-        hostname: &str,
-        port: i32,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
-        }
-    }
-
-    fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.workflow(name),
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.workflow(name),
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.workflow(name),
-        }
-    }
-
     async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord> {
         match self {
             #[cfg(feature = "postgres")]
@@ -368,14 +312,14 @@ impl Store for AnyStore {
         }
     }
 
-    fn worker(&self, id: i64) -> Box<dyn Worker> {
+    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.worker(id),
+            AnyStore::Postgres(s) => s.worker(id).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.worker(id),
+            AnyStore::Sqlite(s) => s.worker(id).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.worker(id),
+            AnyStore::Turso(s) => s.worker(id).await,
         }
     }
 
@@ -392,6 +336,55 @@ impl Store for AnyStore {
             AnyStore::Sqlite(s) => s.acquire_step(run_id, step_id, current_time).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.acquire_step(run_id, step_id, current_time).await,
+        }
+    }
+
+    async fn bootstrap(&self) -> crate::error::Result<()> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.bootstrap().await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.bootstrap().await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.bootstrap().await,
+        }
+    }
+
+    async fn admin(
+        &self,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Admin>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.admin(hostname, port, config).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.admin(hostname, port, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.admin(hostname, port, config).await,
+        }
+    }
+
+    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.admin_ephemeral(config).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.admin_ephemeral(config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.admin_ephemeral(config).await,
+        }
+    }
+
+    fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.workflow(name),
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.workflow(name),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.workflow(name),
         }
     }
 
@@ -444,6 +437,40 @@ impl Store for AnyStore {
             AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.consumer_ephemeral(queue, config).await,
+        }
+    }
+
+    async fn producer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Producer>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
+        }
+    }
+
+    async fn consumer(
+        &self,
+        queue: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Consumer>> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
         }
     }
 }

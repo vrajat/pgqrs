@@ -565,7 +565,7 @@ impl Admin {
     fn install<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            rust_pgqrs::admin(&store).install().await.map_err(to_py_err)
+            store.bootstrap().await.map_err(to_py_err)
         })
     }
 
@@ -1485,6 +1485,8 @@ struct WorkerInfo {
     hostname: String,
     #[pyo3(get)]
     status: String,
+    #[pyo3(get)]
+    queue_id: Option<i64>,
 }
 
 impl From<RustWorkerInfo> for WorkerInfo {
@@ -1493,6 +1495,7 @@ impl From<RustWorkerInfo> for WorkerInfo {
             id: r.id,
             hostname: r.hostname,
             status: r.status.to_string(),
+            queue_id: r.queue_id,
         }
     }
 }

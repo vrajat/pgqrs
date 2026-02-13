@@ -618,7 +618,12 @@ async def test_consume_stream_iterator(test_dsn, schema):
 
     # Check workers
     workers = await (await admin.get_workers()).list()
-    ephemeral_workers = [w for w in workers if w.hostname.startswith("__ephemeral__")]
+    # Filter ephemeral workers that were consumers/producers (have queue_id)
+    ephemeral_workers = [
+        w
+        for w in workers
+        if w.hostname.startswith("__ephemeral__") and w.queue_id is not None
+    ]
 
     # Verify that any ephemeral worker found is in 'stopped' status
     for w in ephemeral_workers:

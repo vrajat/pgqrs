@@ -8,5 +8,5 @@ pub async fn worker_handle<S: Store>(
     store: &S,
     worker_id: i64,
 ) -> crate::error::Result<Box<dyn crate::Worker>> {
-    Ok(store.worker(worker_id))
+    store.worker(worker_id).await
 }

@@ -14,7 +14,7 @@ use turso::Database;
 pub struct TursoProducer {
     pub db: Arc<Database>,
     queue_info: QueueRecord,
-    worker_info: WorkerRecord,
+    worker_record: WorkerRecord,
     config: crate::config::Config,
     validator: PayloadValidator,
     messages: Arc<TursoMessageTable>,
@@ -32,13 +32,13 @@ impl TursoProducer {
     ) -> Result<Self> {
         let workers_arc = Arc::new(TursoWorkerTable::new(db.clone()));
 
-        let worker_info = workers_arc
+        let worker_record = workers_arc
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
         tracing::debug!(
             "Registered producer worker {} ({}:{}) for queue '{}'",
-            worker_info.id,
+            worker_record.id,
             hostname,
             port,
             queue_info.queue_name
@@ -49,7 +49,7 @@ impl TursoProducer {
         Ok(Self {
             db: db.clone(),
             queue_info: queue_info.clone(),
-            worker_info: worker_info.clone(),
+            worker_record,
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             workers: workers_arc,
@@ -64,7 +64,7 @@ impl TursoProducer {
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers_arc = Arc::new(TursoWorkerTable::new(db.clone()));
-        let worker_info = workers_arc.register_ephemeral(Some(queue_info.id)).await?;
+        let worker_record = workers_arc.register_ephemeral(Some(queue_info.id)).await?;
 
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
         let archive = Arc::new(TursoArchiveTable::new(db.clone()));
@@ -72,7 +72,7 @@ impl TursoProducer {
         Ok(Self {
             db,
             queue_info: queue_info.clone(),
-            worker_info: worker_info.clone(),
+            worker_record,
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             workers: workers_arc,
@@ -88,32 +88,34 @@ impl TursoProducer {
 
 #[async_trait]
 impl crate::store::Worker for TursoProducer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_info.id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.workers.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
@@ -166,7 +168,7 @@ impl crate::store::Producer for TursoProducer {
                     read_ct: 0,
                     enqueued_at: now,
                     vt,
-                    producer_worker_id: Some(self.worker_info.id),
+                    producer_worker_id: Some(self.worker_record.id),
                     consumer_worker_id: None,
                 },
             )
@@ -212,7 +214,7 @@ impl crate::store::Producer for TursoProducer {
                     read_ct: 0,
                     enqueued_at: now,
                     vt,
-                    producer_worker_id: Some(self.worker_info.id),
+                    producer_worker_id: Some(self.worker_record.id),
                     consumer_worker_id: None,
                 },
             )
@@ -237,7 +239,7 @@ impl crate::store::Producer for TursoProducer {
             read_ct: 0,
             enqueued_at: now,
             vt,
-            producer_worker_id: Some(self.worker_info.id),
+            producer_worker_id: Some(self.worker_record.id),
             consumer_worker_id: None,
         };
 
@@ -263,9 +265,9 @@ impl crate::store::Producer for TursoProducer {
 // Auto-cleanup for ephemeral workers
 impl Drop for TursoProducer {
     fn drop(&mut self) {
-        if self.worker_info.hostname.starts_with("__ephemeral__") {
+        if self.worker_record.hostname.starts_with("__ephemeral__") {
             let workers = self.workers.clone();
-            let worker_id = self.worker_info.id;
+            let worker_id = self.worker_record.id;
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
                     let _ = workers.suspend(worker_id).await;

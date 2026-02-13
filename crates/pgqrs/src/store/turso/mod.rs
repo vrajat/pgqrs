@@ -699,9 +699,67 @@ impl Store for TursoStore {
         TursoStepGuard::acquire(&self.db, run_id, step_id, current_time).await
     }
 
-    async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
+    async fn bootstrap(&self) -> Result<()> {
+        let conn = connect_db(&self.db).await?;
+        let scripts = [
+            (
+                "00_create_schema_version",
+                include_str!("../../../migrations/turso/00_create_schema_version.sql"),
+            ),
+            (
+                "01_create_queues",
+                include_str!("../../../migrations/turso/01_create_queues.sql"),
+            ),
+            (
+                "02_create_workers",
+                include_str!("../../../migrations/turso/02_create_workers.sql"),
+            ),
+            (
+                "03_create_messages",
+                include_str!("../../../migrations/turso/03_create_messages.sql"),
+            ),
+            (
+                "04_create_archive",
+                include_str!("../../../migrations/turso/04_create_archive.sql"),
+            ),
+            (
+                "05_create_workflows",
+                include_str!("../../../migrations/turso/05_create_workflows.sql"),
+            ),
+        ];
+
+        for (name, script) in scripts {
+            for statement in script.split(';') {
+                let s = statement.trim();
+                if !s.is_empty() {
+                    conn.execute(s, ())
+                        .await
+                        .map_err(|e| crate::error::Error::Internal {
+                            message: format!("Bootstrap failed on {}: {}", name, e),
+                        })?;
+                }
+            }
+            if name != "00_create_schema_version" {
+                let sql = "INSERT OR IGNORE INTO pgqrs_schema_version (version, applied_at, description) VALUES (?, datetime('now'), ?)";
+                conn.execute(sql, (name, format!("Applied {}", name)))
+                    .await
+                    .map_err(|e| crate::error::Error::Internal {
+                        message: format!("Failed to record migration {}: {}", name, e),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
         use self::worker::admin::TursoAdmin;
-        let admin = TursoAdmin::new(self.db.clone(), 0, config.clone());
+        let admin = TursoAdmin::new(self.db.clone(), hostname, port, config.clone()).await?;
+        Ok(Box::new(admin))
+    }
+
+    async fn admin_ephemeral(&self, config: &Config) -> Result<Box<dyn Admin>> {
+        use self::worker::admin::TursoAdmin;
+        let admin = TursoAdmin::new_ephemeral(self.db.clone(), config.clone()).await?;
         Ok(Box::new(admin))
     }
 
@@ -840,9 +898,13 @@ impl Store for TursoStore {
         Ok(Box::new(TursoRun::new(self.db.clone(), run_id)))
     }
 
-    fn worker(&self, id: i64) -> Box<dyn Worker> {
+    async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
         use self::worker::TursoWorkerHandle;
-        Box::new(TursoWorkerHandle::new(self.db.clone(), id))
+        let worker_record = self.workers.get(id).await?;
+        Ok(Box::new(TursoWorkerHandle::new(
+            self.db.clone(),
+            worker_record,
+        )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {

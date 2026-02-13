@@ -187,7 +187,7 @@ async fn test_anystore_admin_operations() {
 
     // Test admin operations through AnyStore
     let admin = store
-        .admin(&store.config().clone())
+        .admin_ephemeral(&store.config().clone())
         .await
         .expect("Failed to get admin");
 

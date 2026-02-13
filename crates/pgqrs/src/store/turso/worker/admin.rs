@@ -165,37 +165,51 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
 
 #[derive(Debug, Clone)]
 pub struct TursoAdmin {
-    _worker_id: i64,
     db: Arc<Database>,
     config: Config,
     queues: Arc<TursoQueueTable>,
     messages: Arc<TursoMessageTable>,
     workers: Arc<TursoWorkerTable>,
     archive: Arc<TursoArchiveTable>,
-    worker_info: Option<WorkerRecord>,
+    worker_record: WorkerRecord,
 }
 
 impl TursoAdmin {
-    pub fn new(db: Arc<Database>, worker_id: i64, config: Config) -> Self {
-        Self {
-            _worker_id: worker_id,
-            db: db.clone(),
+    pub async fn new(db: Arc<Database>, hostname: &str, port: i32, config: Config) -> Result<Self> {
+        let queues = Arc::new(TursoQueueTable::new(db.clone()));
+        let messages = Arc::new(TursoMessageTable::new(db.clone()));
+        let workers = Arc::new(TursoWorkerTable::new(db.clone()));
+        let archive = Arc::new(TursoArchiveTable::new(db.clone()));
+
+        let worker_record = workers.register(None, hostname, port).await?;
+
+        Ok(Self {
+            db,
             config,
-            queues: Arc::new(TursoQueueTable::new(db.clone())),
-            messages: Arc::new(TursoMessageTable::new(db.clone())),
-            workers: Arc::new(TursoWorkerTable::new(db.clone())),
-            archive: Arc::new(TursoArchiveTable::new(db.clone())),
-            worker_info: None,
-        }
+            queues,
+            messages,
+            workers,
+            archive,
+            worker_record,
+        })
     }
 
-    fn try_worker_id(&self) -> Result<i64> {
-        self.worker_info.as_ref().map(|w| w.id).ok_or_else(|| {
-            crate::error::Error::WorkerNotRegistered {
-                message:
-                    "Admin must be registered before using Worker methods. Call register() first."
-                        .to_string(),
-            }
+    pub async fn new_ephemeral(db: Arc<Database>, config: Config) -> Result<Self> {
+        let queues = Arc::new(TursoQueueTable::new(db.clone()));
+        let messages = Arc::new(TursoMessageTable::new(db.clone()));
+        let workers = Arc::new(TursoWorkerTable::new(db.clone()));
+        let archive = Arc::new(TursoArchiveTable::new(db.clone()));
+
+        let worker_record = workers.register_ephemeral(None).await?;
+
+        Ok(Self {
+            db,
+            config,
+            queues,
+            messages,
+            workers,
+            archive,
+            worker_record,
         })
     }
 
@@ -259,141 +273,39 @@ impl TursoAdmin {
 // ... Implement Worker trait ...
 #[async_trait]
 impl Worker for TursoAdmin {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.as_ref().map(|w| w.id).unwrap_or(-1)
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.get_status(worker_id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.suspend(worker_id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.resume(worker_id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.shutdown(worker_id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.heartbeat(worker_id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.is_healthy(worker_id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 }
 
 #[async_trait]
 impl Admin for TursoAdmin {
-    async fn install(&self) -> Result<()> {
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS pgqrs_schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL,
-                description TEXT
-            );",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::Error::Internal {
-            message: format!("Failed to create schema version table: {}", e),
-        })?;
-
-        // Migration list: (version, description, sql)
-        // NOTE: Turso migrations live under `crates/pgqrs/migrations/turso/`.
-        const Q1: &str = include_str!("../../../../migrations/turso/01_create_queues.sql");
-        const Q2: &str = include_str!("../../../../migrations/turso/02_create_workers.sql");
-        const Q3: &str = include_str!("../../../../migrations/turso/03_create_messages.sql");
-        const Q4: &str = include_str!("../../../../migrations/turso/04_create_archive.sql");
-        const Q5: &str = include_str!("../../../../migrations/turso/05_create_workflows.sql");
-
-        let migrations = vec![
-            (1, "01_create_queues.sql", Q1),
-            (2, "02_create_workers.sql", Q2),
-            (3, "03_create_messages.sql", Q3),
-            (4, "04_create_archive.sql", Q4),
-            (5, "05_create_workflows.sql", Q5),
-        ];
-
-        for (version, description, sql) in migrations {
-            // Check if already applied
-            // We use query_row logic manually since turso crate might not have query_scalar/optional easily accessible here
-            let mut rows = conn
-                .query(
-                    "SELECT version FROM pgqrs_schema_version WHERE version = ?",
-                    (version,),
-                )
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to query migration {}: {}", version, e),
-                })?;
-
-            if rows
-                .next()
-                .await
-                .map_err(|e| crate::error::Error::Internal {
-                    message: format!("Failed to fetch migration row {}: {}", version, e),
-                })?
-                .is_some()
-            {
-                continue;
-            }
-
-            tracing::info!("Applying migration {}: {}", version, description);
-
-            // Turso/libSQL does not reliably support executing multiple statements in a single
-            // `execute()` call. Our migration files commonly contain multiple CREATE TABLE/INDEX
-            // statements, so we split and execute each statement individually.
-            //
-            // NOTE: This split is naive (not a real SQL parser). It's good enough for our current
-            // migrations which only contain simple DDL with no semicolons in strings/comments.
-            let statements = sql
-                .split(';')
-                .map(str::trim)
-                .filter(|stmt| !stmt.is_empty());
-
-            for stmt in statements {
-                conn.execute(stmt, ())
-                    .await
-                    .map_err(|e| crate::error::Error::Internal {
-                        message: format!(
-                            "Failed to run migration {} ({}): {}",
-                            version, description, e
-                        ),
-                    })?;
-            }
-
-            // Record success
-            conn.execute(
-                "INSERT INTO pgqrs_schema_version (version, applied_at, description) VALUES (?, datetime('now'), ?)",
-                (version, description),
-            )
-            .await
-            .map_err(|e| crate::error::Error::Internal {
-                message: format!("Failed to record migration {}: {}", version, e),
-            })?;
-        }
-        Ok(())
-    }
-
     async fn verify(&self) -> Result<()> {
         // Table existence check
         let required_tables = [
@@ -454,15 +366,6 @@ impl Admin for TursoAdmin {
         }
 
         Ok(())
-    }
-
-    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerRecord> {
-        if let Some(ref info) = self.worker_info {
-            return Ok(info.clone());
-        }
-        let info = self.workers.register(None, &hostname, port).await?;
-        self.worker_info = Some(info.clone());
-        Ok(info)
     }
 
     async fn create_queue(&self, name: &str) -> Result<QueueRecord> {

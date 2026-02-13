@@ -5,7 +5,6 @@ use crate::store::{
     Producer as ProducerTrait, QueueTable, Run, RunRecordTable, StepRecordTable, Store,
     Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
 };
-use crate::WorkflowRecord;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -21,7 +20,7 @@ use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
 use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
 use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
-use crate::types::{NewQueueMessage, RunRecord};
+use crate::types::{NewQueueMessage, RunRecord, WorkflowRecord};
 
 use self::worker::admin::Admin as PostgresAdmin;
 use self::worker::consumer::Consumer as PostgresConsumer;
@@ -141,8 +140,34 @@ impl Store for PostgresStore {
         self.workflow_steps.as_ref()
     }
 
-    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
-        let admin = PostgresAdmin::new(config).await?;
+    async fn acquire_step(
+        &self,
+        run_id: i64,
+        step_id: &str,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
+        use self::workflow::guard::StepGuard;
+        StepGuard::acquire::<serde_json::Value>(&self.pool, run_id, step_id, current_time).await
+    }
+
+    async fn bootstrap(&self) -> crate::error::Result<()> {
+        use self::worker::admin::MIGRATOR;
+        MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
+
+    async fn admin(
+        &self,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn AdminTrait>> {
+        let admin = PostgresAdmin::new(self.pool.clone(), hostname, port, config.clone()).await?;
+        Ok(Box::new(admin))
+    }
+
+    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
+        let admin = PostgresAdmin::new_ephemeral(self.pool.clone(), config.clone()).await?;
         Ok(Box::new(admin))
     }
 
@@ -263,18 +288,12 @@ impl Store for PostgresStore {
         Ok(Box::new(PostgresRun::new(self.pool.clone(), run_id)))
     }
 
-    fn worker(&self, id: i64) -> Box<dyn WorkerTrait> {
-        Box::new(self::worker::WorkerHandle::new(self.pool.clone(), id))
-    }
-
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_id: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
-        use self::workflow::guard::StepGuard;
-        StepGuard::acquire::<serde_json::Value>(&self.pool, run_id, step_id, current_time).await
+    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn WorkerTrait>> {
+        let worker_record = self.workers.get(id).await?;
+        Ok(Box::new(self::worker::WorkerHandle::new(
+            self.pool.clone(),
+            worker_record,
+        )))
     }
 
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {

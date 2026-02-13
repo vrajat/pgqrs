@@ -38,7 +38,13 @@ pub use any::AnyStore;
 #[async_trait]
 pub trait Worker: Send + Sync {
     /// Get the unique identifier for this worker.
-    fn worker_id(&self) -> i64;
+    fn worker_record(&self) -> &WorkerRecord;
+
+    /// Get the unique identifier for this worker.
+    fn worker_id(&self) -> i64 {
+        self.worker_record().id
+    }
+
     async fn status(&self) -> crate::error::Result<WorkerStatus>;
     async fn suspend(&self) -> crate::error::Result<()>;
     async fn resume(&self) -> crate::error::Result<()>;
@@ -51,7 +57,7 @@ pub trait Worker: Send + Sync {
 ///
 /// This trait provides a unified interface for all administrative operations.
 /// Methods are organized into logical groups:
-/// - **Schema management**: `install()`, `verify()`
+/// - **Schema management**: `verify()`
 /// - **Queue operations**: `create_queue()`, `get_queue()`, `delete_queue()`, `purge_queue()`, `dlq()`
 /// - **Worker management**: `delete_worker()`, `list_workers()`, `release_worker_messages()`, `purge_old_workers()`
 /// - **Metrics**: `queue_metrics()`, `all_queues_metrics()`, `system_stats()`, `worker_stats()`, `worker_health_stats()`
@@ -59,19 +65,10 @@ pub trait Worker: Send + Sync {
 pub trait Admin: Worker {
     // ===== Schema Management =====
 
-    /// Install the pgqrs schema in the database.
-    ///
-    /// This creates all necessary tables, indexes, and functions required for pgqrs to operate.
-    async fn install(&self) -> crate::error::Result<()>;
-
     /// Verify the pgqrs schema is correctly installed.
     ///
     /// Checks that all required tables, indexes, and constraints exist and are valid.
     async fn verify(&self) -> crate::error::Result<()>;
-
-    /// Register this admin worker (internal use).
-    async fn register(&mut self, hostname: String, port: i32)
-        -> crate::error::Result<WorkerRecord>;
 
     // ===== Queue Operations =====
 
@@ -446,8 +443,21 @@ pub trait Store: Send + Sync + 'static {
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<StepResult<serde_json::Value>>;
 
+    /// Initialize the pgqrs schema in the database.
+    ///
+    /// This creates all necessary tables, indexes, and functions required for pgqrs to operate.
+    async fn bootstrap(&self) -> crate::error::Result<()>;
+
     /// Get an admin worker interface.
-    async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>>;
+    async fn admin(
+        &self,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn Admin>>;
+
+    /// Get an ephemeral admin worker interface.
+    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>>;
 
     /// Get a producer interface for a specific queue with worker identity.
     async fn producer(
@@ -490,7 +500,7 @@ pub trait Store: Send + Sync + 'static {
     async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>>;
 
     /// Get a generic worker handle by ID.
-    fn worker(&self, id: i64) -> Box<dyn Worker>;
+    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>>;
 
     /// Returns the concurrency model supported by this backend.
     fn concurrency_model(&self) -> ConcurrencyModel;

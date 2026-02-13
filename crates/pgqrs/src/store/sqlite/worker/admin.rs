@@ -182,20 +182,46 @@ pub struct SqliteAdmin {
     pub messages: Arc<SqliteMessageTable>,
     pub workers: Arc<SqliteWorkerTable>,
     pub archive: Arc<SqliteArchiveTable>,
-    worker_info: Option<WorkerRecord>,
+    worker_record: WorkerRecord,
 }
 
 impl SqliteAdmin {
-    pub fn new(pool: SqlitePool, config: Config) -> Self {
-        Self {
-            pool: pool.clone(),
+    pub async fn new(pool: SqlitePool, hostname: &str, port: i32, config: Config) -> Result<Self> {
+        let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
+        let queues = Arc::new(SqliteQueueTable::new(pool.clone()));
+        let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
+        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
+
+        let worker_record = workers.register(None, hostname, port).await?;
+
+        Ok(Self {
+            pool,
             config,
-            queues: Arc::new(SqliteQueueTable::new(pool.clone())),
-            messages: Arc::new(SqliteMessageTable::new(pool.clone())),
-            workers: Arc::new(SqliteWorkerTable::new(pool.clone())),
-            archive: Arc::new(SqliteArchiveTable::new(pool.clone())),
-            worker_info: None,
-        }
+            queues,
+            messages,
+            workers,
+            archive,
+            worker_record,
+        })
+    }
+
+    pub async fn new_ephemeral(pool: SqlitePool, config: Config) -> Result<Self> {
+        let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
+        let queues = Arc::new(SqliteQueueTable::new(pool.clone()));
+        let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
+        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
+
+        let worker_record = workers.register_ephemeral(None).await?;
+
+        Ok(Self {
+            pool,
+            config,
+            queues,
+            messages,
+            workers,
+            archive,
+            worker_record,
+        })
     }
 
     async fn check_worker_references(&self, worker_id: i64) -> Result<i64> {
@@ -210,119 +236,97 @@ impl SqliteAdmin {
             })?;
         Ok(count)
     }
+}
 
-    fn try_worker_id(&self) -> Result<i64> {
-        self.worker_info.as_ref().map(|w| w.id).ok_or_else(|| {
-            crate::error::Error::WorkerNotRegistered {
-                message:
-                    "Admin must be registered before using Worker methods. Call register() first."
-                        .to_string(),
-            }
-        })
-    }
+fn map_queue_metrics_row(row: SqliteRow) -> Result<QueueMetrics> {
+    let name: String = row.try_get("name")?;
+    let total_messages: i64 = row.try_get("total_messages")?;
+    let pending_messages: i64 = row.try_get("pending_messages")?; // SUM returns generic number, possibly i64 or f64, but generic map helps
+    let locked_messages: i64 = row.try_get("locked_messages")?;
+    let archived_messages: i64 = row.try_get("archived_messages")?;
 
-    fn map_queue_metrics_row(row: SqliteRow) -> Result<QueueMetrics> {
-        let name: String = row.try_get("name")?;
-        let total_messages: i64 = row.try_get("total_messages")?;
-        let pending_messages: i64 = row.try_get("pending_messages")?; // SUM returns generic number, possibly i64 or f64, but generic map helps
-        let locked_messages: i64 = row.try_get("locked_messages")?;
-        let archived_messages: i64 = row.try_get("archived_messages")?;
+    let oldest_pending_str: Option<String> = row.try_get("oldest_pending_message")?;
+    let oldest_pending_message = match oldest_pending_str {
+        Some(s) => Some(parse_sqlite_timestamp(&s)?),
+        None => None,
+    };
 
-        let oldest_pending_str: Option<String> = row.try_get("oldest_pending_message")?;
-        let oldest_pending_message = match oldest_pending_str {
-            Some(s) => Some(parse_sqlite_timestamp(&s)?),
-            None => None,
-        };
+    let newest_message_str: Option<String> = row.try_get("newest_message")?;
+    let newest_message = match newest_message_str {
+        Some(s) => Some(parse_sqlite_timestamp(&s)?),
+        None => None,
+    };
 
-        let newest_message_str: Option<String> = row.try_get("newest_message")?;
-        let newest_message = match newest_message_str {
-            Some(s) => Some(parse_sqlite_timestamp(&s)?),
-            None => None,
-        };
+    Ok(QueueMetrics {
+        name,
+        total_messages,
+        pending_messages,
+        locked_messages,
+        archived_messages,
+        oldest_pending_message,
+        newest_message,
+    })
+}
 
-        Ok(QueueMetrics {
-            name,
-            total_messages,
-            pending_messages,
-            locked_messages,
-            archived_messages,
-            oldest_pending_message,
-            newest_message,
-        })
-    }
+fn map_system_stats_row(row: SqliteRow) -> Result<SystemStats> {
+    Ok(SystemStats {
+        total_queues: row.try_get("total_queues")?,
+        total_workers: row.try_get("total_workers")?,
+        active_workers: row.try_get("active_workers")?,
+        total_messages: row.try_get("total_messages")?,
+        pending_messages: row.try_get("pending_messages")?,
+        locked_messages: row.try_get("locked_messages")?,
+        archived_messages: row.try_get("archived_messages")?,
+        schema_version: row.try_get("schema_version")?,
+    })
+}
 
-    fn map_system_stats_row(row: SqliteRow) -> Result<SystemStats> {
-        Ok(SystemStats {
-            total_queues: row.try_get("total_queues")?,
-            total_workers: row.try_get("total_workers")?,
-            active_workers: row.try_get("active_workers")?,
-            total_messages: row.try_get("total_messages")?,
-            pending_messages: row.try_get("pending_messages")?,
-            locked_messages: row.try_get("locked_messages")?,
-            archived_messages: row.try_get("archived_messages")?,
-            schema_version: row.try_get("schema_version")?,
-        })
-    }
-
-    fn map_worker_health_row(row: SqliteRow) -> Result<WorkerHealthStats> {
-        Ok(WorkerHealthStats {
-            queue_name: row.try_get("queue_name")?,
-            total_workers: row.try_get("total_workers")?,
-            ready_workers: row.try_get("ready_workers")?,
-            suspended_workers: row.try_get("suspended_workers")?,
-            stopped_workers: row.try_get("stopped_workers")?,
-            stale_workers: row.try_get("stale_workers")?,
-        })
-    }
+fn map_worker_health_row(row: SqliteRow) -> Result<WorkerHealthStats> {
+    Ok(WorkerHealthStats {
+        queue_name: row.try_get("queue_name")?,
+        total_workers: row.try_get("total_workers")?,
+        ready_workers: row.try_get("ready_workers")?,
+        suspended_workers: row.try_get("suspended_workers")?,
+        stopped_workers: row.try_get("stopped_workers")?,
+        stale_workers: row.try_get("stale_workers")?,
+    })
 }
 
 #[async_trait]
 impl crate::store::Worker for SqliteAdmin {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.as_ref().map(|w| w.id).unwrap_or(-1)
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.heartbeat(worker_id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.is_healthy(worker_id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.get_status(worker_id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.suspend(worker_id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.resume(worker_id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        let worker_id = self.try_worker_id()?;
-        self.workers.shutdown(worker_id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
 #[async_trait]
 impl crate::store::Admin for SqliteAdmin {
-    async fn install(&self) -> Result<()> {
-        sqlx::migrate!("migrations/sqlite")
-            .run(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::Database(e.into()))?;
-        Ok(())
-    }
-
     async fn verify(&self) -> Result<()> {
         let required_tables = [
             ("pgqrs_queues", "Queue repository table"),
@@ -407,15 +411,6 @@ impl crate::store::Admin for SqliteAdmin {
         }
 
         Ok(())
-    }
-
-    async fn register(&mut self, hostname: String, port: i32) -> Result<WorkerRecord> {
-        if let Some(ref info) = self.worker_info {
-            return Ok(info.clone());
-        }
-        let info = self.workers.register(None, &hostname, port).await?;
-        self.worker_info = Some(info.clone());
-        Ok(info)
     }
 
     async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
@@ -592,7 +587,7 @@ impl crate::store::Admin for SqliteAdmin {
                 source: Box::new(e),
                 context: "Queue metrics".into(),
             })?;
-        Self::map_queue_metrics_row(row)
+        map_queue_metrics_row(row)
     }
 
     async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
@@ -607,7 +602,7 @@ impl crate::store::Admin for SqliteAdmin {
 
         let mut metrics = Vec::new();
         for row in rows {
-            metrics.push(Self::map_queue_metrics_row(row)?);
+            metrics.push(map_queue_metrics_row(row)?);
         }
         Ok(metrics)
     }
@@ -621,7 +616,7 @@ impl crate::store::Admin for SqliteAdmin {
                 source: Box::new(e),
                 context: "System stats".into(),
             })?;
-        Self::map_system_stats_row(row)
+        map_system_stats_row(row)
     }
 
     async fn worker_health_stats(
@@ -650,7 +645,7 @@ impl crate::store::Admin for SqliteAdmin {
 
         let mut stats = Vec::new();
         for row in rows {
-            stats.push(Self::map_worker_health_row(row)?);
+            stats.push(map_worker_health_row(row)?);
         }
         Ok(stats)
     }

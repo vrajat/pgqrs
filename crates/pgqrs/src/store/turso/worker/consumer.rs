@@ -30,7 +30,7 @@ const DELETE_MESSAGE_AFTER_ARCHIVE: &str = r#"
 
 pub struct TursoConsumer {
     db: Arc<Database>,
-    worker_info: WorkerRecord,
+    worker_record: WorkerRecord,
     queue_info: QueueRecord,
     _config: Config,
     workers: Arc<TursoWorkerTable>,
@@ -47,7 +47,7 @@ impl TursoConsumer {
     ) -> Result<Self> {
         let workers = Arc::new(TursoWorkerTable::new(db.clone()));
         // Register worker
-        let worker_info =
+        let worker_record =
             crate::store::WorkerTable::register(&*workers, Some(queue_info.id), hostname, port)
                 .await?;
 
@@ -55,7 +55,7 @@ impl TursoConsumer {
 
         Ok(Self {
             db,
-            worker_info,
+            worker_record,
             queue_info: queue_info.clone(),
             _config: config,
             workers,
@@ -69,13 +69,13 @@ impl TursoConsumer {
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = Arc::new(TursoWorkerTable::new(db.clone()));
-        let worker_info =
+        let worker_record =
             crate::store::WorkerTable::register_ephemeral(&*workers, Some(queue_info.id)).await?;
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
 
         Ok(Self {
             db,
-            worker_info,
+            worker_record,
             queue_info: queue_info.clone(),
             _config: config.clone(),
             workers,
@@ -86,32 +86,34 @@ impl TursoConsumer {
 
 #[async_trait]
 impl Worker for TursoConsumer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.workers.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_info.id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 }
 
@@ -200,7 +202,7 @@ impl Consumer for TursoConsumer {
 
         for id in &grabbed_ids {
             let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = ? WHERE id = ?")
-                .bind(self.worker_info.id)
+                .bind(self.worker_record.id)
                 .bind(new_vt_str.clone())
                 .bind(now_str.clone())
                 .bind(*id)
@@ -228,7 +230,7 @@ impl Consumer for TursoConsumer {
     async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
         let count = self
             .messages
-            .extend_visibility(message_id, self.worker_info.id, additional_seconds)
+            .extend_visibility(message_id, self.worker_record.id, additional_seconds)
             .await?;
         Ok(count > 0)
     }
@@ -236,14 +238,14 @@ impl Consumer for TursoConsumer {
     async fn delete(&self, message_id: i64) -> Result<bool> {
         let count = self
             .messages
-            .delete_owned(message_id, self.worker_info.id)
+            .delete_owned(message_id, self.worker_record.id)
             .await?;
         Ok(count > 0)
     }
 
     async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         self.messages
-            .delete_many_owned(&message_ids, self.worker_info.id)
+            .delete_many_owned(&message_ids, self.worker_record.id)
             .await
     }
 
@@ -262,7 +264,7 @@ impl Consumer for TursoConsumer {
         // 2. Fetch message (ensure ownership)
         let row_opt_res = crate::store::turso::query(SELECT_MESSAGE_FOR_ARCHIVE)
             .bind(msg_id)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .fetch_optional_on_connection(&conn)
             .await;
 
@@ -334,7 +336,7 @@ impl Consumer for TursoConsumer {
         // 4. Delete from messages (checking ownership again for safety, though transaction helps)
         let delete_res = crate::store::turso::query(DELETE_MESSAGE_AFTER_ARCHIVE)
             .bind(msg_id)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .execute_once_on_connection(&conn)
             .await;
 
@@ -368,7 +370,7 @@ impl Consumer for TursoConsumer {
     async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
         let res = self
             .messages
-            .release_messages_by_ids(message_ids, self.worker_info.id)
+            .release_messages_by_ids(message_ids, self.worker_record.id)
             .await?;
         Ok(res.iter().filter(|&&x| x).count() as u64)
     }
@@ -376,9 +378,9 @@ impl Consumer for TursoConsumer {
 
 impl Drop for TursoConsumer {
     fn drop(&mut self) {
-        if self.worker_info.hostname.starts_with("__ephemeral__") {
+        if self.worker_record.hostname.starts_with("__ephemeral__") {
             let workers = self.workers.clone();
-            let worker_id = self.worker_info.id;
+            let worker_id = self.worker_record.id;
             // Best effort spawn
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {

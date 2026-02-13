@@ -137,8 +137,8 @@ pub struct Consumer {
     queue_info: crate::types::QueueRecord,
     /// Configuration for the queue
     _config: crate::config::Config,
-    /// Worker information for this consumer
-    worker_info: crate::types::WorkerRecord,
+    /// Worker record for this consumer
+    worker_record: crate::types::WorkerRecord,
     /// Worker lifecycle manager (Workers repository handles this now)
     workers: Workers,
 }
@@ -152,13 +152,13 @@ impl Consumer {
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
-        let worker_info = workers
+        let worker_record = workers
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
         tracing::debug!(
             "Registered consumer worker {} ({}:{}) for queue '{}'",
-            worker_info.id,
+            worker_record.id,
             hostname,
             port,
             queue_info.queue_name
@@ -167,7 +167,7 @@ impl Consumer {
         Ok(Self {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
-            worker_info,
+            worker_record,
             _config: config.clone(),
             workers,
         })
@@ -182,18 +182,18 @@ impl Consumer {
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
-        let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
+        let worker_record = workers.register_ephemeral(Some(queue_info.id)).await?;
 
         tracing::debug!(
             "Registered ephemeral consumer worker {} for queue '{}'",
-            worker_info.id,
+            worker_record.id,
             queue_info.queue_name
         );
 
         Ok(Self {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
-            worker_info,
+            worker_record,
             _config: config.clone(),
             workers,
         })
@@ -202,30 +202,32 @@ impl Consumer {
 
 #[async_trait]
 impl crate::store::Worker for Consumer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
+    fn worker_record(&self) -> &crate::types::WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_info.id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     /// Suspend this consumer (transition from Ready to Suspended).
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     /// Resume this consumer (transition from Suspended to Ready).
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     /// Gracefully shutdown this consumer.
@@ -234,7 +236,7 @@ impl crate::store::Worker for Consumer {
         // Use count_pending_filtered from Messages for cleaner abstraction
         let messages = Messages::new(self.pool.clone());
         let pending_count = messages
-            .count_pending_filtered(self.queue_info.id, Some(self.worker_info.id))
+            .count_pending_filtered(self.queue_info.id, Some(self.worker_record.id))
             .await?;
 
         if pending_count > 0 {
@@ -244,7 +246,7 @@ impl crate::store::Worker for Consumer {
             });
         }
 
-        self.workers.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
@@ -270,7 +272,7 @@ impl crate::store::Consumer for Consumer {
             .bind(self.queue_info.id) // $1 - queue_id
             .bind(limit as i64) // $2 - limit
             .bind(vt as i32) // $3 - vt (visibility timeout)
-            .bind(self.worker_info.id) // $4 - worker_id
+            .bind(self.worker_record.id) // $4 - worker_id
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -278,7 +280,7 @@ impl crate::store::Consumer for Consumer {
                 source: Box::new(e),
                 context: format!(
                     "Failed to dequeue messages for worker {}",
-                    self.worker_info.id
+                    self.worker_record.id
                 ),
             })?;
 
@@ -296,7 +298,7 @@ impl crate::store::Consumer for Consumer {
             .bind(self.queue_info.id) // $1 - queue_id
             .bind(limit as i64) // $2 - limit
             .bind(vt as i32) // $3 - vt (visibility timeout)
-            .bind(self.worker_info.id) // $4 - worker_id
+            .bind(self.worker_record.id) // $4 - worker_id
             .bind(now) // $5 - now (reference time)
             .fetch_all(&self.pool)
             .await
@@ -312,7 +314,7 @@ impl crate::store::Consumer for Consumer {
     async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
         let messages = Messages::new(self.pool.clone());
         let rows_affected = messages
-            .extend_visibility(message_id, self.worker_info.id, additional_seconds)
+            .extend_visibility(message_id, self.worker_record.id, additional_seconds)
             .await?;
         Ok(rows_affected > 0)
     }
@@ -320,7 +322,7 @@ impl crate::store::Consumer for Consumer {
     async fn delete(&self, message_id: i64) -> Result<bool> {
         let rows_affected = sqlx::query(DELETE_MESSAGE_OWNED)
             .bind(message_id)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -336,7 +338,7 @@ impl crate::store::Consumer for Consumer {
     async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
             .bind(&message_ids)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -357,7 +359,7 @@ impl crate::store::Consumer for Consumer {
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
         let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -376,7 +378,7 @@ impl crate::store::Consumer for Consumer {
 
         let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
             .bind(&msg_ids)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -397,7 +399,7 @@ impl crate::store::Consumer for Consumer {
     async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
         let messages = Messages::new(self.pool.clone());
         let results = messages
-            .release_messages_by_ids(message_ids, self.worker_info.id)
+            .release_messages_by_ids(message_ids, self.worker_record.id)
             .await?;
         // Count how many were successfully released
         Ok(results.into_iter().filter(|&released| released).count() as u64)
@@ -408,10 +410,10 @@ impl crate::store::Consumer for Consumer {
 impl Drop for Consumer {
     fn drop(&mut self) {
         // Check if this is an ephemeral worker by hostname prefix
-        if self.worker_info.hostname.starts_with("__ephemeral__") {
+        if self.worker_record.hostname.starts_with("__ephemeral__") {
             // Spawn a task to properly shutdown the worker
             let workers = self.workers.clone();
-            let worker_id = self.worker_info.id;
+            let worker_id = self.worker_record.id;
 
             // Best-effort shutdown - check if we are in a runtime context
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
