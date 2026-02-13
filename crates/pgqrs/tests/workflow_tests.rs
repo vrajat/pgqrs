@@ -9,13 +9,13 @@ struct TestData {
     msg: String,
 }
 
-async fn create_store() -> AnyStore {
-    common::create_store("pgqrs_workflow_test").await
+async fn create_store(schema: &str) -> AnyStore {
+    common::create_store(schema).await
 }
 
 #[tokio::test]
-async fn test_workflow_lifecycle() -> anyhow::Result<()> {
-    let store = create_store().await;
+async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
+    let store = create_store("workflow_test_success").await;
 
     // Create definition
     pgqrs::workflow()
@@ -44,8 +44,12 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     workflow.start().await?;
 
     // Step 1: Run
-    let step1_id = "step1";
-    let step_rec = pgqrs::step().run(&*workflow).id(step1_id).execute().await?;
+    let step1_name = "step1";
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step1_name)
+        .execute()
+        .await?;
 
     assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
 
@@ -53,18 +57,26 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         msg: "step1_done".to_string(),
     };
     let val = serde_json::to_value(&output)?;
-    workflow.complete_step(step1_id, val).await?;
+    workflow.complete_step(step1_name, val).await?;
 
     // Step 1: Rerun (should skip)
-    let step_rec = pgqrs::step().run(&*workflow).id(step1_id).execute().await?;
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step1_name)
+        .execute()
+        .await?;
 
     assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
     let val: TestData = serde_json::from_value(step_rec.output.unwrap())?;
     assert_eq!(val.msg, "step1_done");
 
     // Step 2: Acquire
-    let step2_id = "step2";
-    let _step_rec = pgqrs::step().run(&*workflow).id(step2_id).execute().await?;
+    let step2_name = "step2";
+    let _step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step2_name)
+        .execute()
+        .await?;
 
     // Finish Workflow
     workflow
@@ -75,6 +87,13 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
 
     // Restart Workflow (should adhere to SUCCESS terminal state)
     workflow.start().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
+    let store = create_store("workflow_test_failure").await;
 
     // Verify Workflow Failure Logic using new workflow
     let input_fail = TestData {
