@@ -9,7 +9,7 @@ use rust_pgqrs::types::{
     QueueMessage as RustQueueMessage, StepRetryPolicy as RustStepRetryPolicy,
     WorkerInfo as RustWorkerInfo, WorkerStatus,
 };
-use rust_pgqrs::{StepGuard, Workflow, WorkflowExt};
+use rust_pgqrs::{Run, RunExt, StepGuard};
 
 use pyo3::pyasync::IterANextOutput;
 use std::future::Future;
@@ -628,18 +628,24 @@ impl Admin {
         let json_arg = py_to_json(arg.as_ref(py))?;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
+            rust_pgqrs::workflow()
+                .name(&name)
+                .create(&store)
+                .await
+                .map_err(to_py_err)?;
+
             let workflow = rust_pgqrs::workflow()
                 .name(&name)
-                .arg(&json_arg)
+                .trigger(&json_arg)
                 .map_err(to_py_err)?
-                .create(&store)
+                .run(&store)
                 .await
                 .map_err(to_py_err)?;
 
             // Cache the workflow id to avoid blocking reads later
             let workflow_id = workflow.id();
 
-            Ok(PyWorkflow {
+            Ok(PyRun {
                 inner: Arc::new(tokio::sync::Mutex::new(workflow)),
                 store,
                 workflow_id,
@@ -1200,15 +1206,15 @@ impl From<rust_pgqrs::types::ArchivedMessage> for ArchivedMessage {
 }
 
 #[pyclass]
-struct PyWorkflow {
+struct PyRun {
     #[allow(dead_code)]
-    inner: Arc<tokio::sync::Mutex<Box<dyn Workflow>>>,
+    inner: Arc<tokio::sync::Mutex<Box<dyn Run>>>,
     store: AnyStore,
     workflow_id: i64,
 }
 
 #[pymethods]
-impl PyWorkflow {
+impl PyRun {
     fn id(&self) -> PyResult<i64> {
         Ok(self.workflow_id)
     }
@@ -1504,7 +1510,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStore>()?;
     m.add_class::<QueueMessage>()?;
     m.add_class::<QueueInfo>()?;
-    m.add_class::<PyWorkflow>()?;
+    m.add_class::<PyRun>()?;
     m.add_class::<PyStepResult>()?;
     m.add_class::<PyStepGuard>()?;
     m.add_class::<ArchivedMessage>()?;

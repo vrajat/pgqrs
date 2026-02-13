@@ -1,5 +1,5 @@
 import functools
-from ._pgqrs import PyWorkflow
+from ._pgqrs import PyRun
 import pgqrs
 
 
@@ -7,7 +7,7 @@ def workflow(func):
     """
     Decorator to mark a function as a durable workflow entry point.
 
-    The decorated function must accept a `PyWorkflow` instance as its first argument.
+    The decorated function must accept a `PyRun` instance as its first argument.
     The decorator handles:
     1. Starting the workflow (transitioning to RUNNING state).
     2. Executing the function body.
@@ -16,9 +16,9 @@ def workflow(func):
 
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
-        if not isinstance(ctx, PyWorkflow):
+        if not isinstance(ctx, PyRun):
             raise TypeError(
-                f"First argument to a workflow must be a PyWorkflow instance, got {type(ctx)}"
+                f"First argument to a workflow must be a PyRun instance, got {type(ctx)}"
             )
 
         # Start workflow
@@ -48,7 +48,7 @@ def step(func):
     """
     Decorator to mark a function as a durable workflow step.
 
-    The decorated function must accept a `PyWorkflow` instance as its first argument.
+    The decorated function must accept a `PyRun` instance as its first argument.
     The decorator handles:
     1. Checking if the step has already completed (idempotency).
     2. If completed, returning the cached result immediately (skipping execution).
@@ -58,9 +58,9 @@ def step(func):
 
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
-        if not isinstance(ctx, PyWorkflow):
+        if not isinstance(ctx, PyRun):
             raise TypeError(
-                f"First argument to a step must be a PyWorkflow instance, got {type(ctx)}"
+                f"First argument to a step must be a PyRun instance, got {type(ctx)}"
             )
 
         step_id = func.__name__

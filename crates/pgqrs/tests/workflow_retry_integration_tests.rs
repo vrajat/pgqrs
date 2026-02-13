@@ -21,14 +21,19 @@ async fn create_store(schema: &str) -> AnyStore {
 async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_not_ready").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("not_ready_test_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("not_ready_test_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -78,14 +83,19 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
 async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_becomes_ready").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("becomes_ready_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("becomes_ready_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -157,14 +167,19 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 async fn test_step_exhausts_retries() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_exhaust").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("exhaust_retry_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("exhaust_retry_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -302,14 +317,19 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_non_transient").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("non_transient_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("non_transient_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -362,14 +382,19 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
 async fn test_retry_at_scheduled_in_future() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_at_future").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("retry_at_future_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("retry_at_future_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -438,14 +463,19 @@ async fn test_retry_at_scheduled_in_future() -> anyhow::Result<()> {
 async fn test_retry_count_persisted() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_count").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("retry_count_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("retry_count_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -495,14 +525,19 @@ async fn test_retry_count_persisted() -> anyhow::Result<()> {
 async fn test_custom_retry_after_delay() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_custom_delay").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("custom_delay_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("custom_delay_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -557,14 +592,19 @@ async fn test_custom_retry_after_delay() -> anyhow::Result<()> {
 async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_running_state").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("running_state_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("running_state_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -612,14 +652,19 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
 async fn test_error_wrapping_non_transient() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_wrapping").await;
 
-    // Create workflow
+    // Create definition + trigger run
+    pgqrs::workflow()
+        .name("wrapping_test_wf")
+        .create(&store)
+        .await?;
+
     let input = TestData {
         msg: "test".to_string(),
     };
     let mut workflow = pgqrs::workflow()
         .name("wrapping_test_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
     workflow.start().await?;
     let workflow_id = workflow.id();
@@ -687,11 +732,14 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
             let input = TestData {
                 msg: format!("test_{}", i),
             };
+            let name = format!("concurrent_wf_{}", i);
+            pgqrs::workflow().name(&name).create(&store).await.unwrap();
+
             let mut workflow = pgqrs::workflow()
-                .name(&format!("concurrent_wf_{}", i))
-                .arg(&input)
+                .name(&name)
+                .trigger(&input)
                 .unwrap()
-                .create(&store)
+                .run(&store)
                 .await
                 .unwrap();
             workflow.start().await.unwrap();

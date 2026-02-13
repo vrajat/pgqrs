@@ -1,35 +1,37 @@
-CREATE TYPE pgqrs_workflow_status AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'ERROR');
+-- Create enum type
+DO $$
+BEGIN
+    CREATE TYPE pgqrs_workflow_status AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'ERROR', 'PAUSED');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
-CREATE TABLE pgqrs_workflows (
-    workflow_id BIGSERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
+-- Workflow definitions (templates)
+CREATE TABLE IF NOT EXISTS pgqrs_workflows (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    queue_id BIGINT NOT NULL REFERENCES pgqrs_queues(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Workflow runs (executions)
+CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
+    id BIGSERIAL PRIMARY KEY,
+    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(id) ON DELETE CASCADE,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
     output JSONB,
     error JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    executor_id VARCHAR(255)
+    started_at TIMESTAMPTZ,
+    paused_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    worker_id BIGINT REFERENCES pgqrs_workers(id)
 );
 
--- Indexes for pgqrs_workflows
-CREATE INDEX idx_pgqrs_workflows_status ON pgqrs_workflows(status);
-CREATE INDEX idx_pgqrs_workflows_created_at ON pgqrs_workflows(created_at);
-CREATE INDEX idx_pgqrs_workflows_name ON pgqrs_workflows(name);
-
--- Comments for pgqrs_workflows
-COMMENT ON TABLE pgqrs_workflows IS 'Stores execution state of durable workflows.';
-COMMENT ON COLUMN pgqrs_workflows.workflow_id IS 'Unique identifier for the workflow execution.';
-COMMENT ON COLUMN pgqrs_workflows.name IS 'Name of the workflow type.';
-COMMENT ON COLUMN pgqrs_workflows.status IS 'Current status of the workflow execution.';
-COMMENT ON COLUMN pgqrs_workflows.input IS 'Initial input payload for the workflow.';
-COMMENT ON COLUMN pgqrs_workflows.output IS 'Final output of the workflow if successful.';
-COMMENT ON COLUMN pgqrs_workflows.error IS 'Error details if the workflow failed.';
-COMMENT ON COLUMN pgqrs_workflows.executor_id IS 'ID of the worker currently executing this workflow (if locked).';
-
-
-CREATE TABLE pgqrs_workflow_steps (
-    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id) ON DELETE CASCADE,
+-- Step state (for crash recovery)
+CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
+    run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(id) ON DELETE CASCADE,
     step_id VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
@@ -37,18 +39,22 @@ CREATE TABLE pgqrs_workflow_steps (
     error JSONB,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-    PRIMARY KEY (workflow_id, step_id)
+
+    -- Retry scheduling
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    retry_at TIMESTAMPTZ,
+    last_retry_at TIMESTAMPTZ,
+
+    PRIMARY KEY (run_id, step_id)
 );
 
--- Indexes for pgqrs_workflow_steps
-CREATE INDEX idx_pgqrs_workflow_steps_workflow_id ON pgqrs_workflow_steps(workflow_id);
-CREATE INDEX idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflows_name ON pgqrs_workflows(name);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;
 
--- Comments for pgqrs_workflow_steps
-COMMENT ON TABLE pgqrs_workflow_steps IS 'Stores state of individual steps within a workflow.';
-COMMENT ON COLUMN pgqrs_workflow_steps.workflow_id IS 'Reference to the parent workflow.';
-COMMENT ON COLUMN pgqrs_workflow_steps.step_id IS 'Unique identifier for the step within the workflow.';
-COMMENT ON COLUMN pgqrs_workflow_steps.status IS 'Current status of the step.';
-COMMENT ON COLUMN pgqrs_workflow_steps.input IS 'Input provided to the step.';
-COMMENT ON COLUMN pgqrs_workflow_steps.output IS 'Output produced by the step if successful.';
-COMMENT ON COLUMN pgqrs_workflow_steps.error IS 'Error details if the step failed.';
+-- Comments
+COMMENT ON TABLE pgqrs_workflows IS 'Workflow definitions (templates)';
+COMMENT ON TABLE pgqrs_workflow_runs IS 'Workflow execution instances';
+COMMENT ON TABLE pgqrs_workflow_steps IS 'Workflow step state for crash recovery';

@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_archive (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     original_msg_id INTEGER NOT NULL,
     queue_id INTEGER NOT NULL REFERENCES pgqrs_queues(id),
-    payload TEXT NOT NULL,
+    payload TEXT NOT NULL,  -- JSON stored as TEXT
     enqueued_at TEXT NOT NULL,
     vt TEXT NOT NULL,
     read_ct INTEGER NOT NULL,

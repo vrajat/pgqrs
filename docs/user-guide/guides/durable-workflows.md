@@ -109,11 +109,11 @@ Steps are the atomic units of your workflow:
 
     ```python
     import asyncio
-    from pgqrs import Admin, PyWorkflow
+    from pgqrs import Admin, PyRun
     from pgqrs.decorators import workflow, step
 
     @step
-    async def fetch_data(ctx: PyWorkflow, url: str) -> dict:
+    async def fetch_data(ctx: PyRun, url: str) -> dict:
         """Fetch data from an external source."""
         print(f"[fetch_data] Fetching from {url}")
 
@@ -128,7 +128,7 @@ Steps are the atomic units of your workflow:
         }
 
     @step
-    async def transform_data(ctx: PyWorkflow, data: dict) -> dict:
+    async def transform_data(ctx: PyRun, data: dict) -> dict:
         """Transform the fetched data."""
         print(f"[transform_data] Processing {len(data['records'])} records")
 
@@ -143,7 +143,7 @@ Steps are the atomic units of your workflow:
         return {"records": transformed, "count": len(transformed)}
 
     @step
-    async def save_results(ctx: PyWorkflow, results: dict) -> str:
+    async def save_results(ctx: PyRun, results: dict) -> str:
         """Save the processed results."""
         print(f"[save_results] Saving {results['count']} records")
 
@@ -184,7 +184,7 @@ The workflow orchestrates the steps:
 
     ```python
     @workflow
-    async def data_pipeline(ctx: PyWorkflow, url: str):
+    async def data_pipeline(ctx: PyRun, url: str):
         """A durable data processing pipeline."""
         print(f"[workflow] Starting pipeline for {url}")
 
@@ -353,19 +353,19 @@ Let's simulate a crash and demonstrate recovery:
 
     ```python
     import asyncio
-    from pgqrs import Admin, PyWorkflow
+    from pgqrs import Admin, PyRun
     from pgqrs.decorators import workflow, step
 
     # Simulate a crash on first run
     SIMULATE_CRASH = True
 
     @step
-    async def step_one(ctx: PyWorkflow, data: str) -> str:
+    async def step_one(ctx: PyRun, data: str) -> str:
         print("[step_one] Executing")
         return f"processed_{data}"
 
     @step
-    async def step_two(ctx: PyWorkflow, data: str) -> str:
+    async def step_two(ctx: PyRun, data: str) -> str:
         global SIMULATE_CRASH
 
         print("[step_two] Executing")
@@ -378,7 +378,7 @@ Let's simulate a crash and demonstrate recovery:
         return f"step2_{data}"
 
     @workflow
-    async def crash_demo(ctx: PyWorkflow, input_data: str):
+    async def crash_demo(ctx: PyRun, input_data: str):
         result1 = await step_one(ctx, input_data)
         print(f"After step_one: {result1}")
 
@@ -468,12 +468,12 @@ Step IDs should clearly describe the operation:
     ```python
     # Good - descriptive function name
     @step
-    async def fetch_user_profile(ctx: PyWorkflow, user_id: str) -> dict:
+    async def fetch_user_profile(ctx: PyRun, user_id: str) -> dict:
         ...
 
     # Bad - ambiguous name
     @step
-    async def step1(ctx: PyWorkflow, data: str) -> str:
+    async def step1(ctx: PyRun, data: str) -> str:
         ...
     ```
 
@@ -503,7 +503,7 @@ For external side effects, use idempotency keys:
 
     ```python
     @step
-    async def send_email(ctx: PyWorkflow, user_id: str, template: str) -> str:
+    async def send_email(ctx: PyRun, user_id: str, template: str) -> str:
         # Use workflow ID + step for idempotency
         idempotency_key = f"email-{ctx.id()}-{user_id}"
 
@@ -555,7 +555,7 @@ Decide whether errors should be terminal or recoverable:
 
     ```python
     @step
-    async def risky_call(ctx: PyWorkflow, data: dict) -> dict:
+    async def risky_call(ctx: PyRun, data: dict) -> dict:
         for attempt in range(3):
             try:
                 return await external_api.call(data)
@@ -595,7 +595,7 @@ Balance between durability and performance:
     ```python
     # Good: Logical unit of work
     @step
-    async def process_batch(ctx: PyWorkflow, batch: list) -> dict:
+    async def process_batch(ctx: PyRun, batch: list) -> dict:
         results = []
         for item in batch:
             results.append(transform(item))
@@ -603,7 +603,7 @@ Balance between durability and performance:
 
     # Too granular: One step per item creates overhead
     @step
-    async def process_one(ctx: PyWorkflow, item: dict) -> dict:
+    async def process_one(ctx: PyRun, item: dict) -> dict:
         return transform(item)  # Called 1000 times = 1000 DB writes
     ```
 

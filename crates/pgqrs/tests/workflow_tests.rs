@@ -1,5 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{StepGuardExt, StepResult, WorkflowExt};
+use pgqrs::{RunExt, StepGuardExt, StepResult};
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -17,16 +17,19 @@ async fn create_store() -> AnyStore {
 async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
 
-    // Start workflow
+    // Create definition + trigger run
+    pgqrs::workflow().name("test_wf").create(&store).await?;
+
     let input = TestData {
         msg: "start".to_string(),
     };
-    // Use create to get valid ID
+
     let mut workflow = pgqrs::workflow()
         .name("test_wf")
-        .arg(&input)?
-        .create(&store)
+        .trigger(&input)?
+        .run(&store)
         .await?;
+
     let workflow_id = workflow.id();
 
     workflow.start().await?;
@@ -99,10 +102,12 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     let input_fail = TestData {
         msg: "fail".to_string(),
     };
+    pgqrs::workflow().name("fail_wf").create(&store).await?;
+
     let mut wf_fail = pgqrs::workflow()
         .name("fail_wf")
-        .arg(&input_fail)?
-        .create(&store)
+        .trigger(&input_fail)?
+        .run(&store)
         .await?;
     wf_fail.start().await?;
     wf_fail

@@ -2,9 +2,10 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Store, Worker as WorkerTrait, WorkerTable,
-    Workflow as WorkflowTrait, WorkflowTable,
+    Producer as ProducerTrait, QueueTable, Run, Store, Worker as WorkerTrait, WorkerTable,
+    Workflow as WorkflowTrait, WorkflowRunTable, WorkflowStepTable, WorkflowTable,
 };
+use crate::WorkflowRecord;
 use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -17,13 +18,14 @@ use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
 use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
 use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
+use self::tables::pgqrs_workflow_runs::WorkflowRuns as PostgresWorkflowRunTable;
+use self::tables::pgqrs_workflow_steps::WorkflowSteps as PostgresWorkflowStepTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
+use crate::types::{NewMessage, WorkflowRun};
 
 use self::worker::admin::Admin as PostgresAdmin;
 use self::worker::consumer::Consumer as PostgresConsumer;
 use self::worker::producer::Producer as PostgresProducer;
-use self::workflow::guard::StepGuard as PostgresStepGuard;
-use self::workflow::handle::Workflow as PostgresWorkflow;
 
 use crate::config::Config;
 
@@ -36,6 +38,8 @@ pub struct PostgresStore {
     workers: Arc<PostgresWorkerTable>,
     archive: Arc<PostgresArchiveTable>,
     workflows: Arc<PostgresWorkflowTable>,
+    workflow_runs: Arc<PostgresWorkflowRunTable>,
+    workflow_steps: Arc<PostgresWorkflowStepTable>,
 }
 
 impl PostgresStore {
@@ -47,7 +51,9 @@ impl PostgresStore {
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
             archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
-            workflows: Arc::new(PostgresWorkflowTable::new(pool)),
+            workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
+            workflow_runs: Arc::new(PostgresWorkflowRunTable::new(pool.clone())),
+            workflow_steps: Arc::new(PostgresWorkflowStepTable::new(pool)),
         }
     }
 
@@ -127,6 +133,14 @@ impl Store for PostgresStore {
         self.workflows.as_ref()
     }
 
+    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+        self.workflow_runs.as_ref()
+    }
+
+    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+        self.workflow_steps.as_ref()
+    }
+
     async fn admin(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
         let admin = PostgresAdmin::new(config).await?;
         Ok(Box::new(admin))
@@ -158,8 +172,95 @@ impl Store for PostgresStore {
         Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, id: i64) -> Box<dyn WorkflowTrait> {
-        Box::new(PostgresWorkflow::new(self.pool.clone(), id))
+    fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+        Ok(Box::new(self::workflow::handle::Workflow::new(
+            self.pool.clone(),
+            name,
+        )))
+    }
+
+    async fn create_workflow(&self, name: &str) -> crate::error::Result<WorkflowRecord> {
+        // Ensure backing queue exists.
+        // NOTE: Postgres queues table uses column `queue_name`.
+        let queue_exists = self.queues.exists(name).await?;
+        if !queue_exists {
+            let _queue = self
+                .queues
+                .insert(crate::types::NewQueue {
+                    queue_name: name.to_string(),
+                })
+                .await?;
+        }
+
+        let queue = self.queues.get_by_name(name).await?;
+
+        // Create workflow definition (strict semantics).
+        let workflow = self
+            .workflows
+            .insert(crate::types::NewWorkflow {
+                name: name.to_string(),
+                queue_id: queue.id,
+            })
+            .await
+            .map_err(|e| {
+                if let crate::error::Error::QueryFailed { source, .. } = &e {
+                    if let Some(sqlx::Error::Database(db_err)) =
+                        source.downcast_ref::<sqlx::Error>()
+                    {
+                        if db_err.code().as_deref() == Some("23505") {
+                            return crate::error::Error::WorkflowAlreadyExists {
+                                name: name.to_string(),
+                            };
+                        }
+                    }
+                }
+                e
+            })?;
+
+        Ok(workflow)
+    }
+
+    async fn trigger_workflow(
+        &self,
+        name: &str,
+        input: Option<serde_json::Value>,
+    ) -> crate::error::Result<WorkflowRun> {
+        // Strict semantics: triggering requires the workflow definition + queue to exist.
+        let workflow = self.workflows.get_by_name(name).await?;
+        let queue = self.queues.get_by_name(name).await?;
+
+        // Create run record.
+        let run = self
+            .workflow_runs()
+            .insert(crate::types::NewWorkflowRun {
+                workflow_id: workflow.id,
+                input,
+            })
+            .await?;
+
+        // Enqueue message with only run_id.
+        let now = chrono::Utc::now();
+        let payload = serde_json::json!({ "run_id": run.id });
+
+        let _msg = self
+            .messages
+            .insert(NewMessage {
+                queue_id: queue.id,
+                payload,
+                read_ct: 0,
+                enqueued_at: now,
+                vt: now,
+                producer_worker_id: None,
+                consumer_worker_id: None,
+            })
+            .await?;
+
+        Ok(run)
+    }
+
+    async fn run(&self, run_id: i64) -> crate::error::Result<Box<dyn Run>> {
+        use self::workflow::run::PostgresRun;
+        Ok(Box::new(PostgresRun::new(self.pool.clone(), run_id)))
     }
 
     fn worker(&self, id: i64) -> Box<dyn WorkerTrait> {
@@ -168,27 +269,12 @@ impl Store for PostgresStore {
 
     async fn acquire_step(
         &self,
-        workflow_id: i64,
+        run_id: i64,
         step_id: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::store::StepResult<serde_json::Value>> {
-        let result = PostgresStepGuard::acquire::<serde_json::Value>(
-            &self.pool,
-            workflow_id,
-            step_id,
-            current_time,
-        )
-        .await?;
-        Ok(result)
-    }
-
-    async fn create_workflow<T: serde::Serialize + Send + Sync>(
-        &self,
-        name: &str,
-        input: &T,
-    ) -> crate::error::Result<Box<dyn WorkflowTrait>> {
-        let workflow = PostgresWorkflow::create(self.pool.clone(), name, input).await?;
-        Ok(Box::new(workflow))
+        use self::workflow::guard::StepGuard;
+        StepGuard::acquire::<serde_json::Value>(&self.pool, run_id, step_id, current_time).await
     }
 
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {

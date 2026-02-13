@@ -111,10 +111,12 @@
 //!
 //! let url = "https://example.com/data";
 
+//! pgqrs::workflow().name("data_pipeline").create(&store).await?;
+//!
 //! let mut workflow = pgqrs::workflow()
 //!     .name("data_pipeline")
-//!     .arg(&url)?
-//!     .create(&store)
+//!     .trigger(&url)?
+//!     .run(&store)
 //!     .await?;
 //!
 //! let result = data_pipeline(workflow.as_mut(), url).await?;
@@ -144,8 +146,8 @@ pub use builders::{
 // Re-export worker types and modules at crate root for convenience
 
 pub use crate::store::{
-    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, StepGuard, StepGuardExt,
-    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowExt, WorkflowTable,
+    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, Run, RunExt, StepGuard,
+    StepGuardExt, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
 };
 
 pub use crate::config::Config;

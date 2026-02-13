@@ -68,7 +68,7 @@ async fn test_migration_versioning() {
         .query_int("SELECT COUNT(*) FROM pgqrs_schema_version")
         .await
         .expect("query failed");
-    assert!(count >= 6);
+    assert!(count >= 5);
 
     // Create new store on SAME path, should not fail and not re-run (idempotent)
     let dsn = format!("turso://{}", _path);

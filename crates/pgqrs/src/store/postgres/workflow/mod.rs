@@ -1,5 +1,6 @@
 pub mod guard;
 pub mod handle;
+pub mod run;
 
 pub use guard::StepGuard;
 pub use handle::Workflow;

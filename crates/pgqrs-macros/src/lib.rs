@@ -9,7 +9,7 @@ use syn::{parse_macro_input, ItemFn};
 /// `#[pgqrs_step]` wraps a step function so that it:
 ///
 /// - Derives a **step ID** from the function name.
-/// - Uses [`pgqrs::workflow::StepGuard`] to:
+/// - Uses [`pgqrs::Run`] to:
 ///   - Skip execution if the step has already completed successfully.
 ///   - Run the step body when needed.
 ///   - Persist the step result as **success** or **failure**.
@@ -26,10 +26,8 @@ use syn::{parse_macro_input, ItemFn};
 ///    - The function must take **at least one argument**.
 ///    - The first argument must be a **named** pattern, e.g. `ctx` or `workflow`.
 ///    - That context is used to construct the step guard via:
-///      `StepGuard::acquire(ctx.pool(), ctx.id(), step_id).await?`.
-///    - Concretely, the context type is expected to expose:
-///      - A `pool()` method returning `&PgPool`.
-///      - An `id()` method returning `i64`.
+///      `ctx.acquire_step(step_id, current_time).await?`.
+///    - Concretely, the context type is expected to implement `pgqrs::Run`.
 ///
 ///    If the first argument is missing or is not a simple identifier pattern,
 ///    compilation will fail with a descriptive error.
@@ -45,7 +43,7 @@ use syn::{parse_macro_input, ItemFn};
 ///    function returns a `Result`-like value it can pattern-match as `Ok` / `Err`.
 ///
 /// 3. **Async usage**
-///    - The generated wrapper uses `.await` on `StepGuard::acquire` and on the
+///    - The generated wrapper uses `.await` on `acquire_step` and on the
 ///      `success` / `fail` methods, so the annotated function is typically
 ///      declared as `async fn`.
 ///
@@ -68,8 +66,8 @@ use syn::{parse_macro_input, ItemFn};
 /// At runtime, the generated wrapper:
 ///
 /// 1. Constructs a step guard:
-///    `StepGuard::acquire(ctx.pool(), ctx.id(), step_id).await?`.
-/// 2. Examines the returned [`pgqrs::workflow::StepResult`]:
+///    `ctx.acquire_step(step_id).await?`.
+/// 2. Examines the returned [`pgqrs::store::StepResult`]:
 ///    - `StepResult::Skipped(val)` — the step has already completed; the stored
 ///      value is returned immediately as `Ok(val)` without re-running the body.
 ///    - `StepResult::Execute(guard)` — the step body should be executed now.
@@ -87,24 +85,21 @@ use syn::{parse_macro_input, ItemFn};
 /// A minimal workflow context type might look like:
 ///
 /// ```rust,ignore
-/// use pgqrs::Workflow;
+/// use pgqrs::Run;
 ///
-/// // Workflow struct provided by pgqrs already has pool() and id() methods.
-/// // pub struct Workflow {
-/// //     pool: PgPool,
-/// //     id: i64,
-/// // }
+/// // Workflow struct provided by pgqrs already implements Run.
+/// // pub struct Workflow { ... }
 /// ```
 ///
 /// A typical step function:
 ///
 /// ```rust,ignore
 /// use pgqrs_macros::pgqrs_step;
-/// use pgqrs::Workflow;
+/// use pgqrs::Run;
 ///
 /// #[pgqrs_step]
 /// pub async fn charge_customer(
-///     ctx: &Workflow,
+///     ctx: &mut (impl Run + ?Sized),
 ///     amount_cents: i64,
 /// ) -> Result<(), anyhow::Error> {
 ///     // This body is wrapped with StepGuard logic:
@@ -131,7 +126,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named parameter of type &Workflow (e.g., ctx: &Workflow)",
+                "First argument must be a named parameter of type &mut (impl Run + ?Sized) (e.g., ctx: &mut (impl Run + ?Sized))",
             )
             .to_compile_error()
             .into();
@@ -188,7 +183,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
         #(#attrs)*
         #visibility #sig {
             // Import trait for extension methods
-            use pgqrs::StepGuardExt as _;
+            use pgqrs::RunExt as _;
 
             let step_id = #step_id;
 
@@ -234,7 +229,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// 1. **First argument is a workflow handle**
 ///    - The function must take at least one argument.
-///    - The first argument must be a named pattern typed as `&pgqrs::Workflow` (or similar context).
+///    - The first argument must be a named pattern typed as `&mut (impl pgqrs::Run + ?Sized)` (or similar context).
 ///    - This handle is used to call `.start()`, `.success()`, and `.fail()`.
 ///
 /// 2. **Return type must be a `Result`**
@@ -253,18 +248,18 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Example
 ///
 /// ```rust,ignore
-/// use pgqrs::Workflow;
+/// use pgqrs::Run;
 /// use pgqrs_macros::pgqrs_workflow;
 ///
 /// #[pgqrs_workflow]
-/// async fn process_order(workflow: &Workflow, order_id: i32) -> Result<String, anyhow::Error> {
+/// async fn process_order(workflow: &mut (impl Run + ?Sized), order_id: i32) -> Result<String, anyhow::Error> {
 ///     // Workflow logic here...
 ///     Ok("Order processed".to_string())
 /// }
 ///
 /// // Usage:
 /// // let workflow = Workflow::create(pool, "process_order", &order_id).await?;
-/// // process_order(&workflow, order_id).await?;
+/// // process_order(&mut workflow, order_id).await?;
 /// ```
 #[proc_macro_attribute]
 pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -279,7 +274,7 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named parameter of type &Workflow (e.g., workflow: &Workflow)",
+                "First argument must be a named parameter of type &mut (impl Run + ?Sized) (e.g., workflow: &mut (impl Run + ?Sized))",
             )
             .to_compile_error()
             .into();
@@ -335,7 +330,7 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
         #(#attrs)*
         #visibility #sig {
             // Import trait for extension methods
-            use pgqrs::WorkflowExt as _;
+            use pgqrs::RunExt as _;
 
             // Start workflow
             #first_arg_name.start().await?;

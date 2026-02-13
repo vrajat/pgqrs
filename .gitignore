@@ -1,4 +1,5 @@
 /target
+crates/pgqrs/target/
 docs/api
 .cache
 .idea
