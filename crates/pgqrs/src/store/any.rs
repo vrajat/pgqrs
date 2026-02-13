@@ -315,16 +315,16 @@ impl Store for AnyStore {
     async fn acquire_step(
         &self,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.acquire_step(run_id, step_id, current_time).await,
+            AnyStore::Postgres(s) => s.acquire_step(run_id, step_name, current_time).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.acquire_step(run_id, step_id, current_time).await,
+            AnyStore::Sqlite(s) => s.acquire_step(run_id, step_name, current_time).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.acquire_step(run_id, step_id, current_time).await,
+            AnyStore::Turso(s) => s.acquire_step(run_id, step_name, current_time).await,
         }
     }
 
@@ -339,14 +339,14 @@ impl Store for AnyStore {
         }
     }
 
-    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard> {
+    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.step_guard(run_id, step_id),
+            AnyStore::Postgres(s) => s.step_guard(id),
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.step_guard(run_id, step_id),
+            AnyStore::Sqlite(s) => s.step_guard(id),
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.step_guard(run_id, step_id),
+            AnyStore::Turso(s) => s.step_guard(id),
         }
     }
 

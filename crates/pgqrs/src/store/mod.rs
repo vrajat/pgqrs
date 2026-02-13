@@ -93,7 +93,7 @@ pub trait Store: Send + Sync + 'static {
     async fn acquire_step(
         &self,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord>;
 
@@ -101,7 +101,7 @@ pub trait Store: Send + Sync + 'static {
     async fn bootstrap(&self) -> crate::error::Result<()>;
 
     /// Create a step guard for manual management.
-    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard>;
+    fn step_guard(&self, id: i64) -> Box<dyn StepGuard>;
 
     /// Get an admin worker interface.
     async fn admin(

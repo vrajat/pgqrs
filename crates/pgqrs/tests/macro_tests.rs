@@ -185,7 +185,7 @@ async fn test_macro_suite() -> anyhow::Result<()> {
         // This proves that the next call reads from DB instead of running function logic
         let tampered_json = serde_json::json!({ "msg": "tampered_value" });
         let tampered_json_sql = tampered_json.to_string().replace('\'', "''");
-        let step_col = "step_id";
+        let step_col = "step_name";
         let update_sql = format!(
             "UPDATE pgqrs_workflow_steps SET output = '{}' WHERE run_id = {} AND {} = 'step_side_effect'",
             tampered_json_sql, idem_wf_run.id(), step_col

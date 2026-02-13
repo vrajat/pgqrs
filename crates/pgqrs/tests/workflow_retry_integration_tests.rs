@@ -44,8 +44,12 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
     workflow.start().await?;
 
     // Step 1: Fail with transient error
-    let step_id = "transient_step";
-    let step_rec = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let step_name = "transient_step";
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
 
     assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
 
@@ -55,10 +59,14 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         "code": "NETWORK_TIMEOUT",
         "message": "Connection timeout",
     });
-    workflow.fail_step(step_id, error, Utc::now()).await?;
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Try to acquire again - should return StepNotReady immediately
-    let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await;
 
     // Should get StepNotReady error
     match step_res {
@@ -105,10 +113,14 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .await?;
     workflow.start().await?;
 
-    let step_id = "delayed_step";
+    let step_name = "delayed_step";
 
     // Fail with transient error
-    let step_rec = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
     assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
 
     let error = serde_json::json!({
@@ -116,10 +128,14 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         "code": "TIMEOUT",
         "message": "Initial failure",
     });
-    workflow.fail_step(step_id, error, Utc::now()).await?;
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Get the retry_at timestamp
-    let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await;
 
     let retry_at = match step_res {
         Err(Error::StepNotReady { retry_at, .. }) => retry_at,
@@ -132,7 +148,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     // Now should be able to acquire for execution
     let step_rec = pgqrs::step()
         .run(&*workflow)
-        .id(step_id)
+        .name(step_name)
         .with_time(simulated_time)
         .execute()
         .await?;
@@ -144,11 +160,15 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         msg: "success_after_retry".to_string(),
     };
     workflow
-        .complete_step(step_id, serde_json::to_value(&output)?)
+        .complete_step(step_name, serde_json::to_value(&output)?)
         .await?;
 
     // Verify step now succeeds on next acquire
-    let step_rec = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
 
     assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
     let data: TestData = serde_json::from_value(step_rec.output.unwrap())?;
@@ -186,21 +206,29 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         .await?;
     workflow.start().await?;
 
-    let step_id = "exhausting_step";
+    let step_name = "exhausting_step";
 
     // Initial execution (attempt 0)
-    let _ = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
 
     let error = serde_json::json!({
         "is_transient": true,
         "code": "TIMEOUT",
         "message": "Initial failure",
     });
-    workflow.fail_step(step_id, error, Utc::now()).await?;
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Retry 1
     {
-        let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
+            .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 1"),
@@ -209,7 +237,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
             .run(&*workflow)
-            .id(step_id)
+            .name(step_name)
             .with_time(simulated_time)
             .execute()
             .await?;
@@ -219,12 +247,16 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             "code": "TIMEOUT",
             "message": "Retry 1",
         });
-        workflow.fail_step(step_id, error, simulated_time).await?;
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
     // Retry 2
     {
-        let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
+            .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 2"),
@@ -233,7 +265,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
             .run(&*workflow)
-            .id(step_id)
+            .name(step_name)
             .with_time(simulated_time)
             .execute()
             .await?;
@@ -243,12 +275,16 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             "code": "TIMEOUT",
             "message": "Retry 2",
         });
-        workflow.fail_step(step_id, error, simulated_time).await?;
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
     // Retry 3
     {
-        let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
+            .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 3"),
@@ -257,7 +293,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
             .run(&*workflow)
-            .id(step_id)
+            .name(step_name)
             .with_time(simulated_time)
             .execute()
             .await?;
@@ -267,11 +303,15 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
             "code": "TIMEOUT",
             "message": "Retry 3",
         });
-        workflow.fail_step(step_id, error, simulated_time).await?;
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
     // Now should fail with RetriesExhausted
-    let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await;
 
     match step_res {
         Err(Error::RetriesExhausted { attempts, .. }) => {
@@ -311,19 +351,27 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
         .await?;
     workflow.start().await?;
 
-    let step_id = "non_transient_step";
+    let step_name = "non_transient_step";
 
-    let _ = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
 
     let error = serde_json::json!({
         "is_transient": false,
         "code": "VALIDATION_ERROR",
         "message": "Invalid input",
     });
-    workflow.fail_step(step_id, error, Utc::now()).await?;
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Should immediately fail with RetriesExhausted
-    let step_res = pgqrs::step().run(&*workflow).id(step_id).execute().await;
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await;
 
     match step_res {
         Err(Error::RetriesExhausted { attempts, .. }) => {
@@ -362,22 +410,26 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
         .await?;
     workflow.start().await?;
 
-    let step_id = "running_step";
+    let step_name = "running_step";
 
-    let _ = pgqrs::step().run(&*workflow).id(step_id).execute().await?;
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
+        .await?;
 
     let error = serde_json::json!({
         "is_transient": true,
         "code": "TIMEOUT",
         "message": "Timeout",
     });
-    workflow.fail_step(step_id, error, Utc::now()).await?;
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Workflow should still be in RUNNING state
-    let other_step_id = "other_step";
+    let other_step_name = "other_step";
     let step_rec = pgqrs::step()
         .run(&*workflow)
-        .id(other_step_id)
+        .name(other_step_name)
         .execute()
         .await?;
 
@@ -424,11 +476,11 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .unwrap();
             workflow.start().await.unwrap();
 
-            let step_id = "concurrent_step";
+            let step_name = "concurrent_step";
 
             let _ = pgqrs::step()
                 .run(&*workflow)
-                .id(step_id)
+                .name(step_name)
                 .execute()
                 .await
                 .unwrap();
@@ -439,11 +491,16 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 "message": format!("Timeout {}", i),
             });
             workflow
-                .fail_step(step_id, error, Utc::now())
+                .fail_step(step_name, error, Utc::now())
                 .await
                 .unwrap();
 
-            let retry_at = match pgqrs::step().run(&*workflow).id(step_id).execute().await {
+            let retry_at = match pgqrs::step()
+                .run(&*workflow)
+                .name(step_name)
+                .execute()
+                .await
+            {
                 Err(Error::StepNotReady { retry_at, .. }) => retry_at,
                 _ => panic!("Expected StepNotReady"),
             };
@@ -452,7 +509,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
 
             let step_rec = pgqrs::step()
                 .run(&*workflow)
-                .id(step_id)
+                .name(step_name)
                 .with_time(simulated_time)
                 .execute()
                 .await
@@ -460,7 +517,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
 
             assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
             workflow
-                .complete_step(step_id, serde_json::json!({"msg": format!("done_{}", i)}))
+                .complete_step(step_name, serde_json::json!({"msg": format!("done_{}", i)}))
                 .await
                 .unwrap();
         });

@@ -8,9 +8,9 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 const SQL_ACQUIRE_STEP: &str = r#"
-INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, started_at, retry_count)
+INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
 VALUES ($1, $2, 'RUNNING', datetime('now'), 0)
-ON CONFLICT (run_id, step_id) DO UPDATE
+ON CONFLICT (run_id, step_name) DO UPDATE
 SET status = CASE
     WHEN status = 'SUCCESS' THEN 'SUCCESS'
     WHEN status = 'ERROR' THEN 'ERROR'
@@ -20,46 +20,44 @@ started_at = CASE
     WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
     ELSE datetime('now')
 END
-RETURNING run_id, step_id, status, input, output, error, retry_count, retry_at, created_at, updated_at
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
 UPDATE pgqrs_workflow_steps
 SET retry_count = $1, retry_at = $2, last_retry_at = datetime('now')
-WHERE run_id = $3 AND step_id = $4
+WHERE id = $3
 "#;
 
 const SQL_CLEAR_RETRY: &str = r#"
 UPDATE pgqrs_workflow_steps
 SET status = 'RUNNING', retry_at = NULL, error = NULL
-WHERE run_id = $1 AND step_id = $2
+WHERE id = $1
 "#;
 
 const SQL_STEP_SUCCESS: &str = r#"
 UPDATE pgqrs_workflow_steps
-SET status = 'SUCCESS', output = $3, completed_at = datetime('now')
-WHERE run_id = $1 AND step_id = $2
+SET status = 'SUCCESS', output = $2, completed_at = datetime('now')
+WHERE id = $1
 "#;
 
 const SQL_STEP_FAIL: &str = r#"
 UPDATE pgqrs_workflow_steps
-SET status = 'ERROR', error = $3, completed_at = datetime('now')
-WHERE run_id = $1 AND step_id = $2
+SET status = 'ERROR', error = $2, completed_at = datetime('now')
+WHERE id = $1
 "#;
 
 pub struct SqliteStepGuard {
     pool: SqlitePool,
-    run_id: i64,
-    step_id: String,
+    id: i64,
     completed: bool,
 }
 
 impl SqliteStepGuard {
-    pub fn new(pool: SqlitePool, run_id: i64, step_id: &str) -> Self {
+    pub fn new(pool: SqlitePool, id: i64) -> Self {
         Self {
             pool,
-            run_id,
-            step_id: step_id.to_string(),
+            id,
             completed: false,
         }
     }
@@ -67,14 +65,14 @@ impl SqliteStepGuard {
     pub async fn acquire_record(
         pool: &SqlitePool,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: DateTime<Utc>,
     ) -> Result<StepRecord> {
-        let step_id_string = step_id.to_string();
+        let step_name_string = step_name.to_string();
 
         let row = sqlx::query(SQL_ACQUIRE_STEP)
             .bind(run_id)
-            .bind(&step_id_string)
+            .bind(&step_name_string)
             .fetch_one(pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -82,12 +80,12 @@ impl SqliteStepGuard {
                 source: Box::new(e),
                 context: format!(
                     "Failed to acquire step {} for run {}",
-                    step_id_string, run_id
+                    step_name_string, run_id
                 ),
             })?;
 
-        let status_str: String = row.try_get("status")?;
-        let mut status = WorkflowStatus::from_str(&status_str)
+        let id: i64 = row.try_get("id")?;
+        let mut status = WorkflowStatus::from_str(&row.try_get::<String, _>("status")?)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
         let retry_count: i32 = row.try_get("retry_count")?;
@@ -105,14 +103,13 @@ impl SqliteStepGuard {
 
                 // time to retry: clear retry fields and proceed
                 sqlx::query(SQL_CLEAR_RETRY)
-                    .bind(run_id)
-                    .bind(&step_id_string)
+                    .bind(id)
                     .execute(pool)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "SQL_CLEAR_RETRY".into(),
                         source: Box::new(e),
-                        context: format!("Failed to clear retry_at for step {}", step_id_string),
+                        context: format!("Failed to clear retry_at for step {}", id),
                     })?;
 
                 status = WorkflowStatus::Running;
@@ -139,9 +136,9 @@ impl SqliteStepGuard {
         let error_str: Option<String> = row.try_get("error")?;
 
         Ok(StepRecord {
-            id: 0,
+            id,
             run_id: row.try_get("run_id")?,
-            step_id: row.try_get("step_id")?,
+            step_name: row.try_get("step_name")?,
             status,
             input: input_str.and_then(|s| serde_json::from_str(&s).ok()),
             output: output_str.and_then(|s| serde_json::from_str(&s).ok()),
@@ -156,8 +153,7 @@ impl Drop for SqliteStepGuard {
     fn drop(&mut self) {
         if !self.completed {
             let pool = self.pool.clone();
-            let run_id = self.run_id;
-            let step_id = self.step_id.clone();
+            let id = self.id;
 
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
@@ -169,8 +165,7 @@ impl Drop for SqliteStepGuard {
                     .to_string();
 
                     let _ = sqlx::query(SQL_STEP_FAIL)
-                        .bind(run_id)
-                        .bind(step_id)
+                        .bind(id)
                         .bind(error_json)
                         .execute(&pool)
                         .await;
@@ -185,15 +180,14 @@ impl crate::store::StepGuard for SqliteStepGuard {
     async fn complete(&mut self, output: serde_json::Value) -> Result<()> {
         let output_str = output.to_string();
         sqlx::query(SQL_STEP_SUCCESS)
-            .bind(self.run_id)
-            .bind(&self.step_id)
+            .bind(self.id)
             .bind(output_str)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("SQL_STEP_SUCCESS ({})", self.step_id),
+                query: format!("SQL_STEP_SUCCESS ({})", self.id),
                 source: Box::new(e),
-                context: format!("Failed to complete step {}", self.step_id),
+                context: format!("Failed to complete step {}", self.id),
             })?;
 
         self.completed = true;
@@ -221,18 +215,15 @@ impl crate::store::StepGuard for SqliteStepGuard {
             .unwrap_or(false);
 
         if is_transient {
-            let row = sqlx::query(
-                "SELECT retry_count FROM pgqrs_workflow_steps WHERE run_id = $1 AND step_id = $2",
-            )
-            .bind(self.run_id)
-            .bind(&self.step_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SELECT retry_count".into(),
-                source: Box::new(e),
-                context: format!("Failed to get retry_count for step {}", self.step_id),
-            })?;
+            let row = sqlx::query("SELECT retry_count FROM pgqrs_workflow_steps WHERE id = $1")
+                .bind(self.id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "SELECT retry_count".into(),
+                    source: Box::new(e),
+                    context: format!("Failed to get retry_count for step {}", self.id),
+                })?;
 
             let retry_count: i32 = row.try_get("retry_count")?;
 
@@ -240,15 +231,14 @@ impl crate::store::StepGuard for SqliteStepGuard {
             if !policy.should_retry(retry_count as u32) {
                 let error_str = error_record.to_string();
                 sqlx::query(SQL_STEP_FAIL)
-                    .bind(self.run_id)
-                    .bind(&self.step_id)
+                    .bind(self.id)
                     .bind(error_str)
                     .execute(&self.pool)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
-                        query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                        query: format!("SQL_STEP_FAIL ({})", self.id),
                         source: Box::new(e),
-                        context: format!("Failed to fail step {}", self.step_id),
+                        context: format!("Failed to fail step {}", self.id),
                     })?;
                 self.completed = true;
                 return Ok(());
@@ -280,41 +270,38 @@ impl crate::store::StepGuard for SqliteStepGuard {
 
             let error_str = error_record.to_string();
             sqlx::query(SQL_STEP_FAIL)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .bind(error_str)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                    query: format!("SQL_STEP_FAIL ({})", self.id),
                     source: Box::new(e),
-                    context: format!("Failed to fail step {}", self.step_id),
+                    context: format!("Failed to fail step {}", self.id),
                 })?;
 
             sqlx::query(SQL_SCHEDULE_RETRY)
                 .bind(new_retry_count)
                 .bind(&retry_at_str)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "SQL_SCHEDULE_RETRY".into(),
                     source: Box::new(e),
-                    context: format!("Failed to schedule retry for step {}", self.step_id),
+                    context: format!("Failed to schedule retry for step {}", self.id),
                 })?;
         } else {
             let error_str = error_record.to_string();
             sqlx::query(SQL_STEP_FAIL)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .bind(error_str)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                    query: format!("SQL_STEP_FAIL ({})", self.id),
                     source: Box::new(e),
-                    context: format!("Failed to fail step {}", self.step_id),
+                    context: format!("Failed to fail step {}", self.id),
                 })?;
         }
 

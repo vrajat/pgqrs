@@ -1283,24 +1283,24 @@ impl PyRun {
     fn complete_step<'a>(
         &self,
         py: Python<'a>,
-        step_id: String,
+        step_name: String,
         output: PyObject,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let json_output = py_to_json(py, output.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let run = inner.lock().await;
-            run.complete_step(&step_id, json_output)
+            run.complete_step(&step_name, json_output)
                 .await
                 .map_err(to_py_err)
         })
     }
 
-    #[pyo3(signature = (step_id, error, current_time=None))]
+    #[pyo3(signature = (step_name, error, current_time=None))]
     fn fail_step<'a>(
         &self,
         py: Python<'a>,
-        step_id: String,
+        step_name: String,
         error: PyObject,
         current_time: Option<String>,
     ) -> PyResult<&'a PyAny> {
@@ -1321,24 +1321,24 @@ impl PyRun {
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let run = inner.lock().await;
-            run.fail_step(&step_id, json_error, time)
+            run.fail_step(&step_name, json_error, time)
                 .await
                 .map_err(to_py_err)
         })
     }
 
-    #[pyo3(signature = (step_id, current_time=None))]
+    #[pyo3(signature = (step_name, current_time=None))]
     fn acquire_step<'a>(
         &self,
         py: Python<'a>,
-        step_id: String,
+        step_name: String,
         current_time: Option<String>,
     ) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let store = self.store.clone();
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let (run_id, time) = {
+            let (_run_id, time) = {
                 let run_handle = inner.lock().await;
                 let id = run_handle.id();
 
@@ -1362,12 +1362,14 @@ impl PyRun {
                 rust_pgqrs::step()
                     .store(&store)
                     .run(&**run_handle)
-                    .id(&step_id)
+                    .name(&step_name)
                     .with_time(time)
                     .execute()
                     .await
                     .map_err(to_py_err)?
             };
+
+            let step_record_id = res.id;
 
             Python::with_gil(|py| {
                 if res.status == rust_pgqrs::WorkflowStatus::Success {
@@ -1379,7 +1381,7 @@ impl PyRun {
                     }
                     .into_py(py))
                 } else {
-                    let py_guard = PyStepGuard::new(store, run_id, step_id, time);
+                    let py_guard = PyStepGuard::new(store, step_record_id, time);
                     Ok(PyStepResult {
                         status: "EXECUTE".to_string(),
                         value: py.None(),
@@ -1474,13 +1476,8 @@ impl PyStepGuard {
 }
 
 impl PyStepGuard {
-    fn new(
-        store: AnyStore,
-        run_id: i64,
-        step_id: String,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        let guard = store.step_guard(run_id, &step_id);
+    fn new(store: AnyStore, id: i64, current_time: chrono::DateTime<chrono::Utc>) -> Self {
+        let guard = store.step_guard(id);
         Self {
             inner: Arc::new(tokio::sync::Mutex::new(guard)),
             current_time,
@@ -1730,7 +1727,7 @@ impl PyRunBuilder {
 #[derive(Default)]
 struct PyStepBuilder {
     run: Option<Py<PyRun>>,
-    id: Option<String>,
+    name: Option<String>,
     current_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -1746,8 +1743,13 @@ impl PyStepBuilder {
         slf
     }
 
+    fn name(mut slf: PyRefMut<'_, Self>, name: String) -> PyRefMut<'_, Self> {
+        slf.name = Some(name);
+        slf
+    }
+
     fn id(mut slf: PyRefMut<'_, Self>, id: String) -> PyRefMut<'_, Self> {
-        slf.id = Some(id);
+        slf.name = Some(id);
         slf
     }
 
@@ -1764,10 +1766,10 @@ impl PyStepBuilder {
             .run
             .clone()
             .ok_or_else(|| PgqrsError::new_err("Run is required"))?;
-        let step_id = self
-            .id
+        let step_name = self
+            .name
             .clone()
-            .ok_or_else(|| PgqrsError::new_err("Step ID is required"))?;
+            .ok_or_else(|| PgqrsError::new_err("Step name is required"))?;
         let current_time = self.current_time;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -1776,21 +1778,20 @@ impl PyStepBuilder {
                 (run_borrow.inner.clone(), run_borrow.store.clone())
             });
 
-            let (run_id, res) = {
+            let (step_record_id, res) = {
                 let run_handle = inner.lock().await;
-                let run_id = run_handle.id();
 
                 let time = current_time.unwrap_or_else(chrono::Utc::now);
 
                 let res = rust_pgqrs::step()
                     .run(&**run_handle)
-                    .id(&step_id)
+                    .name(&step_name)
                     .with_time(time)
                     .execute()
                     .await
                     .map_err(to_py_err)?;
 
-                (run_id, res)
+                (res.id, res)
             };
 
             Python::with_gil(|py| {
@@ -1804,7 +1805,7 @@ impl PyStepBuilder {
                     .into_py(py))
                 } else {
                     let time = current_time.unwrap_or_else(chrono::Utc::now);
-                    let py_guard = PyStepGuard::new(store, run_id, step_id, time);
+                    let py_guard = PyStepGuard::new(store, step_record_id, time);
                     Ok(PyStepResult {
                         status: "EXECUTE".to_string(),
                         value: py.None(),

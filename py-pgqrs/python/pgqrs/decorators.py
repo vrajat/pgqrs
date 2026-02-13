@@ -63,10 +63,10 @@ def step(func):
                 f"First argument to a step must be a PyRun instance, got {type(ctx)}"
             )
 
-        step_id = func.__name__
+        step_name = func.__name__
 
         # Acquire step (uses system time by default, or current_time parameter in tests)
-        step_result = await ctx.acquire_step(step_id)
+        step_result = await ctx.acquire_step(step_name)
 
         if step_result.status == "SKIPPED":
             return step_result.value

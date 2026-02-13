@@ -5,7 +5,7 @@ use crate::types::StepRecord;
 /// Builder for acquiring and managing workflow steps.
 pub struct StepBuilder<'a> {
     run: Option<&'a dyn Run>,
-    id: Option<String>,
+    name: Option<String>,
     current_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -13,7 +13,7 @@ impl<'a> StepBuilder<'a> {
     pub fn new() -> Self {
         Self {
             run: None,
-            id: None,
+            name: None,
             current_time: None,
         }
     }
@@ -24,10 +24,15 @@ impl<'a> StepBuilder<'a> {
         self
     }
 
-    /// Set the step ID.
-    pub fn id(mut self, id: &str) -> Self {
-        self.id = Some(id.to_string());
+    /// Set the step name.
+    pub fn name(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
         self
+    }
+
+    /// Set the step ID (alias for name for backward compatibility).
+    pub fn id(self, id: &str) -> Self {
+        self.name(id)
     }
 
     /// Set a custom current time for testing.
@@ -48,14 +53,14 @@ impl<'a> StepBuilder<'a> {
             .ok_or_else(|| crate::error::Error::ValidationFailed {
                 reason: "Run handle is required for StepBuilder::execute".to_string(),
             })?;
-        let id = self
-            .id
+        let name = self
+            .name
             .ok_or_else(|| crate::error::Error::ValidationFailed {
-                reason: "Step ID is required for StepBuilder::execute".to_string(),
+                reason: "Step name is required for StepBuilder::execute".to_string(),
             })?;
         let current_time = self.current_time.unwrap_or_else(chrono::Utc::now);
 
-        run.acquire_step(&id, current_time).await
+        run.acquire_step(&name, current_time).await
     }
 }
 

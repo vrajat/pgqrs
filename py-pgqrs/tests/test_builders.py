@@ -32,8 +32,8 @@ async def test_builder_api(test_dsn, schema):
     assert run.id() > 0
 
     # 4. Test StepBuilder
-    step_id = "step_1"
-    step_res = await pgqrs.step().run(run).id(step_id).execute()
+    step_name = "step_1"
+    step_res = await pgqrs.step().run(run).name(step_name).execute()
     assert step_res.status == "EXECUTE"
     assert step_res.guard is not None
 
@@ -41,18 +41,18 @@ async def test_builder_api(test_dsn, schema):
     await step_res.guard.success({"result": "ok"})
 
     # Verify idempotency (should be SKIPPED now)
-    step_res_retry = await pgqrs.step().run(run).id(step_id).execute()
+    step_res_retry = await pgqrs.step().run(run).name(step_name).execute()
     assert step_res_retry.status == "SKIPPED"
     assert step_res_retry.value == {"result": "ok"}
 
     # 5. Test manual step completion on Run
-    step_2_id = "step_2"
-    step_res_2 = await pgqrs.step().run(run).id(step_2_id).execute()
+    step_2_name = "step_2"
+    step_res_2 = await pgqrs.step().run(run).name(step_2_name).execute()
     assert step_res_2.status == "EXECUTE"
 
-    await run.complete_step(step_2_id, {"manual": "ok"})
+    await run.complete_step(step_2_name, {"manual": "ok"})
 
-    step_res_2_retry = await pgqrs.step().run(run).id(step_2_id).execute()
+    step_res_2_retry = await pgqrs.step().run(run).name(step_2_name).execute()
     assert step_res_2_retry.status == "SKIPPED"
     assert step_res_2_retry.value == {"manual": "ok"}
 

@@ -365,7 +365,7 @@ pub struct NewRunRecord {
 pub struct StepRecord {
     pub id: i64,
     pub run_id: i64,
-    pub step_id: String,
+    pub step_name: String,
     pub status: WorkflowStatus,
     pub input: Option<serde_json::Value>,
     pub output: Option<serde_json::Value>,
@@ -378,6 +378,6 @@ pub struct StepRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewStepRecord {
     pub run_id: i64,
-    pub step_id: String,
+    pub step_name: String,
     pub input: Option<serde_json::Value>,
 }

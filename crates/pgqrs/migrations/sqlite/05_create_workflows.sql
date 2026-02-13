@@ -24,8 +24,9 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
 
 -- Step state (for crash recovery)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL REFERENCES pgqrs_workflow_runs(id),
-    step_id TEXT NOT NULL,
+    step_name TEXT NOT NULL,
     status TEXT NOT NULL,
     input TEXT,
     output TEXT,
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
     retry_count INTEGER NOT NULL DEFAULT 0,
     retry_at TEXT,
     last_retry_at TEXT,
-    PRIMARY KEY (run_id, step_id)
+    UNIQUE (run_id, step_name)
 );
 
 -- Indices

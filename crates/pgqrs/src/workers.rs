@@ -188,19 +188,19 @@ pub trait Run: Send + Sync {
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
     async fn acquire_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord>;
 
     async fn complete_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()>;
 
     async fn fail_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()>;
@@ -247,27 +247,27 @@ impl<T: ?Sized + Run> Run for Box<T> {
 
     async fn acquire_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord> {
-        (**self).acquire_step(step_id, current_time).await
+        (**self).acquire_step(step_name, current_time).await
     }
 
     async fn complete_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
-        (**self).complete_step(step_id, output).await
+        (**self).complete_step(step_name, output).await
     }
 
     async fn fail_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        (**self).fail_step(step_id, error, current_time).await
+        (**self).fail_step(step_name, error, current_time).await
     }
 }
 

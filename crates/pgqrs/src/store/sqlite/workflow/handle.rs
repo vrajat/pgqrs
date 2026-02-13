@@ -106,28 +106,30 @@ impl crate::store::Run for SqliteRun {
 
     async fn acquire_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::types::StepRecord> {
-        SqliteStepGuard::acquire_record(&self.pool, self.id, step_id, current_time).await
+        SqliteStepGuard::acquire_record(&self.pool, self.id, step_name, current_time).await
     }
 
     async fn complete_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
-        let mut guard = SqliteStepGuard::new(self.pool.clone(), self.id, step_id);
+        let step = self.acquire_step(step_name, chrono::Utc::now()).await?;
+        let mut guard = SqliteStepGuard::new(self.pool.clone(), step.id);
         crate::store::StepGuard::complete(&mut guard, output).await
     }
 
     async fn fail_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        let mut guard = SqliteStepGuard::new(self.pool.clone(), self.id, step_id);
+        let step = self.acquire_step(step_name, current_time).await?;
+        let mut guard = SqliteStepGuard::new(self.pool.clone(), step.id);
         crate::store::StepGuard::fail_with_json(&mut guard, error, current_time).await
     }
 }

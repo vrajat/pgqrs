@@ -250,13 +250,13 @@ class PyRun:
     async def fail(self, error: str) -> None: ...
     async def success(self, result: Any) -> None: ...
     async def acquire_step(
-        self, step_id: str, current_time: Optional[str] = None
+        self, step_name: str, current_time: Optional[str] = None
     ) -> "PyStepResult":
         """
         Acquire a step for execution.
 
         Args:
-            step_id: Unique identifier for the step
+            step_name: Unique identifier for the step
             current_time: Optional ISO 8601 timestamp for deterministic testing (e.g., "2024-01-15T10:30:00Z")
 
         Returns:

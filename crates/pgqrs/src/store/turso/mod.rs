@@ -609,28 +609,30 @@ impl crate::store::Run for TursoRun {
 
     async fn acquire_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         current_time: DateTime<Utc>,
     ) -> Result<crate::types::StepRecord> {
-        TursoStepGuard::acquire_record(&self.db, self.id, step_id, current_time).await
+        TursoStepGuard::acquire_record(&self.db, self.id, step_name, current_time).await
     }
 
     async fn complete_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
-        let mut guard = TursoStepGuard::new(self.db.clone(), self.id, step_id);
+        let step = self.acquire_step(step_name, chrono::Utc::now()).await?;
+        let mut guard = TursoStepGuard::new(self.db.clone(), step.id);
         crate::store::StepGuard::complete(&mut guard, output).await
     }
 
     async fn fail_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        let mut guard = TursoStepGuard::new(self.db.clone(), self.id, step_id);
+        let step = self.acquire_step(step_name, current_time).await?;
+        let mut guard = TursoStepGuard::new(self.db.clone(), step.id);
         crate::store::StepGuard::fail_with_json(&mut guard, error, current_time).await
     }
 }
@@ -703,10 +705,10 @@ impl Store for TursoStore {
     async fn acquire_step(
         &self,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: DateTime<Utc>,
     ) -> Result<crate::types::StepRecord> {
-        TursoStepGuard::acquire_record(&self.db, run_id, step_id, current_time).await
+        TursoStepGuard::acquire_record(&self.db, run_id, step_name, current_time).await
     }
 
     async fn bootstrap(&self) -> Result<()> {
@@ -761,8 +763,8 @@ impl Store for TursoStore {
         Ok(())
     }
 
-    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard> {
-        Box::new(TursoStepGuard::new(self.db.clone(), run_id, step_id))
+    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
+        Box::new(TursoStepGuard::new(self.db.clone(), id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {

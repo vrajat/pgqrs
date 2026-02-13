@@ -20,7 +20,7 @@ impl SqliteStepRecordTable {
     fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRecord> {
         let id: i64 = row.try_get("id")?;
         let run_id: i64 = row.try_get("run_id")?;
-        let step_id: String = row.try_get("step_id")?;
+        let step_name: String = row.try_get("step_name")?;
 
         let status_str: String = row.try_get("status")?;
         let status = WorkflowStatus::from_str(&status_str)
@@ -50,7 +50,7 @@ impl SqliteStepRecordTable {
         Ok(StepRecord {
             id,
             run_id,
-            step_id,
+            step_name,
             status,
             input,
             output,
@@ -70,13 +70,13 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, input, created_at, updated_at)
+            INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input, created_at, updated_at)
             VALUES ($1, $2, 'PENDING', $3, $4, $4)
-            RETURNING id, run_id, step_id, status, input, output, error, created_at, updated_at
+            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(data.run_id)
-        .bind(&data.step_id)
+        .bind(&data.step_name)
         .bind(input_str)
         .bind(now_str)
         .fetch_one(&self.pool)
@@ -84,7 +84,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW_STEP".into(),
             source: Box::new(e),
-            context: format!("Failed to insert workflow step '{}' for run {}", data.step_id, data.run_id),
+            context: format!("Failed to insert workflow step '{}' for run {}", data.step_name, data.run_id),
         })?;
 
         Self::map_row(row)
@@ -93,7 +93,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
     async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = sqlx::query(
             r#"
-            SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_steps
             WHERE id = $1
             "#,
@@ -113,7 +113,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
     async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_steps
             ORDER BY created_at DESC
             "#,

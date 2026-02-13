@@ -156,11 +156,11 @@ impl Store for SqliteStore {
     async fn acquire_step(
         &self,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::types::StepRecord> {
         use self::workflow::guard::SqliteStepGuard;
-        SqliteStepGuard::acquire_record(&self.pool, run_id, step_id, current_time).await
+        SqliteStepGuard::acquire_record(&self.pool, run_id, step_name, current_time).await
     }
 
     async fn bootstrap(&self) -> Result<()> {
@@ -171,9 +171,9 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    fn step_guard(&self, run_id: i64, step_id: &str) -> Box<dyn StepGuard> {
+    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
         use self::workflow::guard::SqliteStepGuard;
-        Box::new(SqliteStepGuard::new(self.pool.clone(), run_id, step_id))
+        Box::new(SqliteStepGuard::new(self.pool.clone(), id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
