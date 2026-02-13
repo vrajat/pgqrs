@@ -20,7 +20,6 @@
 //! let config = Config::from_dsn("postgresql://user:pass@localhost/db");
 //! let store = pgqrs::connect_with_config(&config).await?;
 //! pgqrs::admin(&store).install().await?;
-//! pgqrs::admin(&store).create_queue("jobs").await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -108,14 +107,6 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
     SET status = 'stopped',
         shutdown_at = NOW()
     WHERE id = $1
-"#;
-
-/// Get messages assigned to a specific worker
-const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
-    FROM pgqrs_messages
-    WHERE consumer_worker_id = $1
-    ORDER BY id;
 "#;
 
 /// Release messages assigned to a worker (set worker_id to NULL and reset vt)
@@ -298,46 +289,6 @@ impl Admin {
         })
     }
 
-    /// Get messages currently being processed by a worker
-    ///
-    /// Only valid for queue workers (producers/consumers), not admin workers.
-    ///
-    /// # Arguments
-    /// * `worker_id` - ID of the worker
-    ///
-    /// # Returns
-    /// Vector of messages being processed by the worker
-    ///
-    /// # Errors
-    /// Returns `crate::error::Error::InvalidWorkerType` if called on an admin worker
-    pub async fn get_worker_messages(
-        &self,
-        worker_id: i64,
-    ) -> Result<Vec<crate::types::QueueMessage>> {
-        // First validate the worker is not an admin (admin workers have queue_id = None)
-        let worker = self.workers.get(worker_id).await?;
-        if worker.queue_id.is_none() {
-            return Err(crate::error::Error::InvalidWorkerType {
-                message: format!(
-                    "Cannot get messages for admin worker {}. Admin workers do not process messages.",
-                    worker_id
-                ),
-            });
-        }
-
-        let messages = sqlx::query_as::<_, crate::types::QueueMessage>(GET_WORKER_MESSAGES)
-            .bind(worker_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "GET_WORKER_MESSAGES".into(),
-                source: Box::new(e),
-                context: format!("Failed to get messages for worker {}", worker_id),
-            })?;
-
-        Ok(messages)
-    }
-
     /// Check if a worker has any associated messages or archives
     ///
     /// # Arguments
@@ -357,29 +308,6 @@ impl Admin {
             })?;
 
         Ok(row)
-    }
-
-    /// Delete a specific worker if it has no associated messages or archives
-    ///
-    /// # Arguments
-    /// * `worker_id` - ID of the worker to delete
-    ///
-    /// # Returns
-    /// Error if worker has references, otherwise number of workers deleted (0 or 1)
-    pub async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
-        // First check if worker has any references
-        let reference_count = self.check_worker_references(worker_id).await?;
-
-        if reference_count > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!(
-                    "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
-                    worker_id, reference_count
-                ),
-            });
-        }
-
-        self.workers.delete(worker_id).await
     }
 }
 
@@ -738,21 +666,20 @@ impl crate::store::Admin for Admin {
         Ok(result.rows_affected())
     }
 
-    async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
-        // Create new queue data
-        use crate::types::NewQueueRecord;
-        let new_queue = NewQueueRecord {
-            queue_name: name.to_string(),
-        };
+    async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
+        // First check if worker has any references
+        let reference_count = self.check_worker_references(worker_id).await?;
 
-        // Use the queues table insert function
-        self.queues.insert(new_queue).await
-    }
+        if reference_count > 0 {
+            return Err(crate::error::Error::SchemaValidation {
+                message: format!(
+                    "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
+                    worker_id, reference_count
+                ),
+            });
+        }
 
-    /// Get a [`QueueRecord`] instance for a given queue name.
-    async fn get_queue(&self, name: &str) -> Result<QueueRecord> {
-        // Get queue info to get the queue_id
-        self.queues.get_by_name(name).await
+        self.workers.delete(worker_id).await
     }
 
     /// Delete a queue from the database.
@@ -957,27 +884,6 @@ impl crate::store::Admin for Admin {
             source: Box::new(e),
             context: "Failed to get worker health stats".into(),
         })
-    }
-
-    async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
-        // First check if worker has any references
-        let reference_count = self.check_worker_references(worker_id).await?;
-
-        if reference_count > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!(
-                    "Cannot delete worker {}: worker has {} associated messages/archives. Purge messages first.",
-                    worker_id, reference_count
-                ),
-            });
-        }
-
-        self.workers.delete(worker_id).await
-    }
-
-    async fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
-        // Delegate to the workers table
-        self.workers.list().await
     }
 
     async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {

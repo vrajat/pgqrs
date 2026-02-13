@@ -66,13 +66,6 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
     WHERE id = ?
 "#;
 
-const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
-    FROM pgqrs_messages
-    WHERE consumer_worker_id = ?
-    ORDER BY id
-"#;
-
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
@@ -368,19 +361,6 @@ impl Admin for TursoAdmin {
         Ok(())
     }
 
-    async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
-        use crate::types::NewQueueRecord;
-        self.queues
-            .insert(NewQueueRecord {
-                queue_name: name.to_string(),
-            })
-            .await
-    }
-
-    async fn get_queue(&self, name: &str) -> Result<QueueRecord> {
-        self.queues.get_by_name(name).await
-    }
-
     async fn delete_queue(&self, queue_info: &QueueRecord) -> Result<()> {
         // Check active workers
         let ready = self
@@ -586,6 +566,7 @@ impl Admin for TursoAdmin {
         Ok(moved_ids)
     }
 
+    /// Get metrics for a specific queue.
     async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
         let queue = self.queues.get_by_name(name).await?;
         let row = crate::store::turso::query(GET_QUEUE_METRICS)
@@ -595,6 +576,7 @@ impl Admin for TursoAdmin {
         Self::map_queue_metrics_row(&row)
     }
 
+    /// Get metrics for all queues managed by pgqrs.
     async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         let rows = crate::store::turso::query(GET_ALL_QUEUES_METRICS)
             .fetch_all(&self.db)
@@ -607,6 +589,7 @@ impl Admin for TursoAdmin {
         Ok(metrics)
     }
 
+    /// Get system-wide statistics.
     async fn system_stats(&self) -> Result<SystemStats> {
         let row = crate::store::turso::query(GET_SYSTEM_STATS)
             .fetch_one(&self.db)
@@ -717,10 +700,6 @@ impl Admin for TursoAdmin {
             });
         }
         self.workers.delete(worker_id).await
-    }
-
-    async fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
-        self.workers.list().await
     }
 
     async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {

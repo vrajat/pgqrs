@@ -1,3 +1,4 @@
+use pgqrs::Store;
 use serde_json::json;
 
 mod common;
@@ -443,7 +444,7 @@ async fn test_dequeue_with_handlers() {
 async fn test_enqueue_empty_messages_error() {
     let store = create_store().await;
     let queue_name = "test_empty_messages";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
     let producer = pgqrs::producer("host", 9999, queue_name)
         .create(&store)
         .await
@@ -479,7 +480,7 @@ async fn test_enqueue_empty_messages_error() {
 async fn test_builder_delay_behavior() {
     let store = create_store().await;
     let queue_name = "test_builder_delay_behavior";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let payload = json!({"delayed": true});
 
@@ -526,7 +527,7 @@ async fn test_builder_delay_behavior() {
 async fn test_builder_vt_offset_behavior() {
     let store = create_store().await;
     let queue_name = "test_builder_vt_offset_behavior";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let payload = json!({"reappearing": true});
     pgqrs::enqueue()
@@ -576,7 +577,7 @@ async fn test_builder_vt_offset_behavior() {
 async fn test_builder_batch_enqueue_advanced() {
     let store = create_store().await;
     let queue_name = "test_batch_advanced";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let payloads: Vec<_> = (0..10).map(|i| json!({"batch_idx": i})).collect();
 

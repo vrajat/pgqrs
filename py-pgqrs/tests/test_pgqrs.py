@@ -25,16 +25,16 @@ async def test_basic_workflow(test_dsn, schema):
     await admin.verify()
 
     queue_name = "test_queue_1"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
-    queues = await admin.get_queues()
+    queues = await store.get_queues()
     assert await queues.count() == 1
 
     payload = {"data": "test_payload", "id": 123}
     msg_id = await pgqrs.produce(store, queue_name, payload)
     assert msg_id > 0
 
-    messages = await admin.get_messages()
+    messages = await store.get_messages()
     assert await messages.count() == 1
 
     consumer = await store.consumer(queue_name)
@@ -53,7 +53,7 @@ async def test_basic_workflow(test_dsn, schema):
 
     await pgqrs.archive(consumer, msg)
 
-    archive_msgs = await admin.get_archive()
+    archive_msgs = await store.get_archive()
     assert await archive_msgs.count() == 1
     assert await messages.count() == 0
 
@@ -65,7 +65,7 @@ async def test_consumer_archive(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delete_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     producer = await store.producer(queue_name)
     consumer = await store.consumer(queue_name)
@@ -79,7 +79,7 @@ async def test_consumer_archive(test_dsn, schema):
     assert msg.id == msg_id
 
     await pgqrs.archive(consumer, msg)
-    assert await (await admin.get_messages()).count() == 0
+    assert await (await store.get_messages()).count() == 0
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_batch_operations(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "batch_ops_test"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     producer = await store.producer(queue_name)
     consumer = await store.consumer(queue_name)
@@ -98,7 +98,7 @@ async def test_batch_operations(test_dsn, schema):
     msg_ids = await pgqrs.enqueue_batch(producer, payloads)
     assert len(msg_ids) == 5
 
-    count = await (await admin.get_messages()).count()
+    count = await (await store.get_messages()).count()
     assert count == 5
 
     batch = await pgqrs.dequeue(consumer, 3)
@@ -106,10 +106,10 @@ async def test_batch_operations(test_dsn, schema):
 
     await pgqrs.archive_batch(consumer, batch)
 
-    count_after = await (await admin.get_messages()).count()
+    count_after = await (await store.get_messages()).count()
     assert count_after == 2
 
-    arch_count = await (await admin.get_archive()).count()
+    arch_count = await (await store.get_archive()).count()
     assert arch_count == 3
 
 
@@ -153,7 +153,7 @@ async def test_enqueue_delayed(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delayed_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     producer = await store.producer(queue_name)
     consumer = await store.consumer(queue_name)
@@ -177,12 +177,12 @@ async def test_enqueue_delayed(test_dsn, schema):
 async def test_worker_list_status(test_dsn, schema):
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "worker_test_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     _ = await store.producer(queue_name)
     _ = await store.consumer(queue_name)
 
-    workers_handle = await admin.get_workers()
+    workers_handle = await store.get_workers()
     worker_list = await workers_handle.list()
     assert len(worker_list) >= 2
     # Check status of first worker (should be ready or similar)
@@ -196,7 +196,7 @@ async def test_consumer_delete(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_delete_logic_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     producer = await store.producer(queue_name)
     consumer = await store.consumer(queue_name)
@@ -213,7 +213,7 @@ async def test_consumer_delete(test_dsn, schema):
     assert deleted is True, f"Delete failed for message {msg.id}"
 
     # Verify it's gone from active messages
-    active_count = await (await admin.get_messages()).count()
+    active_count = await (await store.get_messages()).count()
     assert active_count == 0
 
     # Test deleting non-existent message
@@ -233,14 +233,14 @@ async def test_consumer_delete(test_dsn, schema):
 async def test_archive_advanced_methods(test_dsn, schema):
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "archive_api_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     await pgqrs.produce(store, queue_name, {"foo": "bar"})
     consumer = await store.consumer(queue_name)
     msgs = await pgqrs.dequeue(consumer, 1)
     await pgqrs.archive(consumer, msgs[0])
 
-    archive = await admin.get_archive()
+    archive = await store.get_archive()
     assert await archive.count() == 1
 
     # 1. Test get()
@@ -279,7 +279,7 @@ async def test_api_redesign_high_level(test_dsn, schema):
     await admin.install()
     await admin.verify()
     queue = "high_level_q"
-    await admin.create_queue(queue)
+    await store.queue(queue)
 
     payload = {"foo": "bar"}
     msg_id = await pgqrs.produce(store, queue, payload)
@@ -306,7 +306,7 @@ async def test_api_redesign_low_level(test_dsn, schema):
     admin = pgqrs.admin(store)
     await admin.install()
     queue = "low_level_q"
-    await admin.create_queue(queue)
+    await store.queue(queue)
 
     producer = await store.producer(queue)
     consumer = await store.consumer(queue)
@@ -322,8 +322,8 @@ async def test_api_redesign_low_level(test_dsn, schema):
     # Use msg.id for archive? No, the archive pyfunction takes Quantitative message object
     await pgqrs.archive(consumer, msgs[0])
 
-    assert await (await admin.get_messages()).count() == 0
-    assert await (await admin.get_archive()).count() == 1
+    assert await (await store.get_messages()).count() == 0
+    assert await (await store.get_archive()).count() == 1
 
 
 # --- Durable Workflow Tests ---
@@ -364,7 +364,7 @@ async def test_extend_visibility(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "test_extend_vt_queue"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     producer = await store.producer(queue_name)
     consumer = await store.consumer(queue_name)
@@ -431,14 +431,14 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_success_q"
-    await admin.create_queue(queue)
+    await store.queue(queue)
 
     payload = {"data": "test_success"}
     await pgqrs.produce(store, queue, payload)
 
     # Capture counts before consume
-    msgs_before = await (await admin.get_messages()).count()
-    archive_before = await (await admin.get_archive()).count()
+    msgs_before = await (await store.get_messages()).count()
+    archive_before = await (await store.get_archive()).count()
 
     consumed_event = asyncio.Event()
 
@@ -458,8 +458,8 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     )
 
     # Verify message was archived
-    msgs_after = await (await admin.get_messages()).count()
-    archive_after = await (await admin.get_archive()).count()
+    msgs_after = await (await store.get_messages()).count()
+    archive_after = await (await store.get_archive()).count()
     assert msgs_after == msgs_before - 1, (
         "Message should be removed from active messages after successful consume"
     )
@@ -475,14 +475,14 @@ async def test_ephemeral_consume_failure(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_fail_q"
-    await admin.create_queue(queue)
+    await store.queue(queue)
 
     payload = {"data": "test_fail"}
     await pgqrs.produce(store, queue, payload)
 
     # Capture counts before consume attempt
-    msgs_before = await (await admin.get_messages()).count()
-    archive_before = await (await admin.get_archive()).count()
+    msgs_before = await (await store.get_messages()).count()
+    archive_before = await (await store.get_archive()).count()
 
     async def handler(msg):
         raise ValueError("Simulated failure")
@@ -491,8 +491,8 @@ async def test_ephemeral_consume_failure(test_dsn, schema):
         await pgqrs.consume(store, queue, handler)
 
     # Verify message count unchanged (not archived)
-    msgs_after = await (await admin.get_messages()).count()
-    archive_after = await (await admin.get_archive()).count()
+    msgs_after = await (await store.get_messages()).count()
+    archive_after = await (await store.get_archive()).count()
     assert msgs_after == msgs_before, (
         "Message count should be unchanged after failed consume"
     )
@@ -508,10 +508,10 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_success_q"
-    await admin.create_queue(queue)
+    await store.queue(queue)
 
     # Capture initial counts
-    archive_before = await (await admin.get_archive()).count()
+    archive_before = await (await store.get_archive()).count()
 
     # Produce 3 messages using produce_batch to avoid multiple ephemeral workers
     payloads = [{"i": i} for i in range(3)]
@@ -535,7 +535,7 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     )
 
     # Verify messages were archived
-    archive_after = await (await admin.get_archive()).count()
+    archive_after = await (await store.get_archive()).count()
     assert archive_after == archive_before + 3, (
         f"Expected 3 messages archived, but archive count increased by {archive_after - archive_before}"
     )
@@ -548,14 +548,14 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_fail_q"
-    q_info = await admin.create_queue(queue)
+    q_info = await store.queue(queue)
 
     payloads = [{"i": i} for i in range(3)]
     await pgqrs.produce_batch(store, queue, payloads)
 
     # Capture counts before consume attempt
-    msgs_before = await (await admin.get_messages()).count()
-    archive_before = await (await admin.get_archive()).count()
+    msgs_before = await (await store.get_messages()).count()
+    archive_before = await (await store.get_archive()).count()
 
     async def batch_handler(msgs):
         raise ValueError("Simulated batch failure")
@@ -564,8 +564,8 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
         await pgqrs.consume_batch(store, queue, 10, batch_handler)
 
     # Verify message count unchanged (not archived)
-    msgs_after = await (await admin.get_messages()).count()
-    archive_after = await (await admin.get_archive()).count()
+    msgs_after = await (await store.get_messages()).count()
+    archive_after = await (await store.get_archive()).count()
     assert msgs_after == msgs_before, (
         "Message count should be unchanged after failed batch consume"
     )
@@ -581,7 +581,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "stream_test_q"
-    await admin.create_queue(queue_name)
+    await store.queue(queue_name)
 
     received_count = 0
 
@@ -607,7 +607,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
     assert received_count == 5
 
     # Verify messages are archived
-    archive_count = await (await admin.get_archive()).count()
+    archive_count = await (await store.get_archive()).count()
     assert archive_count == 5
 
     # Verify ephemeral consumer cleanup
@@ -617,7 +617,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
     await asyncio.sleep(0.5)
 
     # Check workers
-    workers = await (await admin.get_workers()).list()
+    workers = await (await store.get_workers()).list()
     # Filter ephemeral workers that were consumers/producers (have queue_id)
     ephemeral_workers = [
         w
@@ -663,6 +663,6 @@ async def test_exceptions(test_dsn, schema):
 
     # Test create_queue on existing queue
     q2 = "existing_queue"
-    await admin.create_queue(q2)
+    await store.queue(q2)
     with pytest.raises(pgqrs.QueueAlreadyExistsError):
-        await admin.create_queue(q2)
+        await store.queue(q2)

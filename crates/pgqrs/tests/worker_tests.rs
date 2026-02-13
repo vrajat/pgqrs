@@ -315,7 +315,7 @@ async fn test_worker_deletion_with_references() {
 
     // Create a test queue and register producer/consumer
     let queue_name = "test_worker_deletion_with_references";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let producer = pgqrs::producer("deletion-producer-host", 8080, &queue_info.queue_name)
         .create(&store)
@@ -420,7 +420,7 @@ async fn test_worker_deletion_with_archived_references() {
 
     // Create a test queue and register producer/consumer
     let queue_name = "test_worker_deletion_with_archived_references";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let producer = pgqrs::producer("archive-producer-host", 8080, &queue_info.queue_name)
         .create(&store)
@@ -479,7 +479,7 @@ async fn test_purge_old_workers() {
 
     // Create a test queue
     let queue_name = "test_purge_old_workers";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     // Create two producers to be purged
     let producer1 = pgqrs::producer("purge-producer1", 8081, queue_name)

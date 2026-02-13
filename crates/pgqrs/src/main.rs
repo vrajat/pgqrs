@@ -363,7 +363,7 @@ pub async fn handle_queue_commands(
     match command {
         QueueCommands::Create { name } => {
             tracing::info!("Creating queue '{}' ...", &name);
-            let queue = pgqrs::admin(store).create_queue(&name).await?;
+            let queue = store.queue(&name).await?;
             writer.write_item(&queue, out)?;
         }
 
@@ -375,13 +375,13 @@ pub async fn handle_queue_commands(
 
         QueueCommands::Get { name } => {
             tracing::info!("Getting queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             writer.write_item(&queue_info, out)?;
         }
 
         QueueCommands::Messages { name } => {
             tracing::info!("Listing messages for queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             let messages_list: Vec<QueueMessage> = pgqrs::tables(store)
                 .messages()
                 .filter_by_fk(queue_info.id)
@@ -398,7 +398,7 @@ pub async fn handle_queue_commands(
 
         QueueCommands::Delete { name } => {
             tracing::info!("Deleting queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             pgqrs::admin(store).delete_queue(&queue_info).await?;
             tracing::info!("Queue '{}' deleted successfully", name);
         }

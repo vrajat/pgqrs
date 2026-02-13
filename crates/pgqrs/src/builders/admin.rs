@@ -2,13 +2,13 @@
 
 use crate::error::Result;
 use crate::store::Store;
-use crate::types::{QueueRecord, WorkerRecord};
+use crate::types::QueueRecord;
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 /// Builder for admin operations.
 ///
 /// Provides a fluent API for administrative tasks:
-/// - Queue management: create_queue, delete_queue, purge_queue
+/// - Queue management: delete_queue, purge_queue
 /// - Worker management: delete_worker
 /// - System operations: install, verify
 pub struct AdminBuilder<'a, S: Store> {
@@ -70,8 +70,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 
     /// Create a new queue
     pub async fn create_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
-        let admin = self.get_admin().await?;
-        admin.create_queue(name).await
+        self.store.queue(name).await
     }
 
     pub async fn get_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
@@ -104,9 +103,8 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// List all workers
-    pub async fn list_workers(self) -> Result<Vec<WorkerRecord>> {
-        let admin = self.get_admin().await?;
-        admin.list_workers().await
+    pub async fn list_workers(self) -> Result<Vec<crate::types::WorkerRecord>> {
+        self.store.workers().list().await
     }
 
     /// Move messages to dead letter queue
@@ -190,9 +188,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 /// # use pgqrs::store::AnyStore;
 /// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
 /// // Create a queue
-/// let queue = pgqrs::admin(&store)
-///     .create_queue("my_queue")
-///     .await?;
+/// let queue = store.queue("my_queue").await?;
 ///
 /// // Purge a queue
 /// pgqrs::admin(&store)

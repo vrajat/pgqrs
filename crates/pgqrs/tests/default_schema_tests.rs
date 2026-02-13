@@ -1,3 +1,5 @@
+use pgqrs::Store;
+
 mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
@@ -86,7 +88,7 @@ async fn test_default_schema_backward_compatibility() {
 
     // Test basic queue operations in default schema
     let queue_name = "test_default_schema_queue".to_string();
-    let queue_result = pgqrs::admin(&store).create_queue(&queue_name).await;
+    let queue_result = store.queue(&queue_name).await;
     assert!(
         queue_result.is_ok(),
         "Should create queue in default schema"

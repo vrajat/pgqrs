@@ -13,7 +13,7 @@ async fn test_queue_metrics() {
     let queue_name = "test_metrics_queue";
 
     // Create queue
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
     let producer = pgqrs::producer("test_metrics_producer", 3200, queue_name)
         .create(&store)
         .await
@@ -126,7 +126,7 @@ async fn test_system_stats() {
     let queue_name = "test_system_stats_queue";
 
     // Setup: Create queue, producer, consumer, and messages
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
     let producer = pgqrs::producer("test_system_stats_producer", 3202, queue_name)
         .create(&store)
         .await
@@ -184,7 +184,7 @@ async fn test_worker_health_stats() {
     let queue_name = "test_worker_health_queue";
 
     // Setup: Create queue
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     // Insert a stale worker manually
     let sql = match common::current_backend() {
@@ -254,7 +254,7 @@ async fn test_worker_stats() {
     let queue_name = "test_worker_stats_queue";
 
     // Setup: Create queue
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     // Create 1 producer and 1 consumer
     let producer = pgqrs::producer("test_worker_stats_producer", 3204, queue_name)

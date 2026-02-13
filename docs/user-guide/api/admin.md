@@ -13,7 +13,7 @@ The Admin API provides queue management, schema administration, and monitoring c
 
     // Use admin builder for operations
     pgqrs::admin(&store).install().await?;
-    pgqrs::admin(&store).create_queue("tasks").await?;
+    store.queue("tasks").await?;
     ```
 
 === "Python"
@@ -26,7 +26,7 @@ The Admin API provides queue management, schema administration, and monitoring c
 
     # Use admin methods
     await admin.install()
-    await admin.create_queue("tasks")
+    await store.queue("tasks")
     ```
 
 ## Schema Management
@@ -95,14 +95,14 @@ Create a new queue.
 === "Rust"
 
     ```rust
-    let queue = admin.create_queue("email-notifications").await?;
+    let queue = store.queue("email-notifications").await?;
     println!("Created queue: {} (ID: {})", queue.queue_name, queue.id);
     ```
 
 === "Python"
 
     ```python
-    queue = await admin.create_queue("email-notifications")
+    queue = await store.queue("email-notifications")
     print(f"Created queue: {queue.queue_name} (ID: {queue.id})")
     ```
 

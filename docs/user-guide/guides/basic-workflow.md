@@ -34,7 +34,7 @@ First, install the schema and create a queue.
         println!("✓ Schema installed");
 
         // Create queue
-        let queue = pgqrs::admin(&store).create_queue("tasks").await?;
+        let queue = store.queue("tasks").await?;
         println!("✓ Created queue: {} (id: {})", queue.queue_name, queue.id);
 
         Ok(())
@@ -56,7 +56,7 @@ First, install the schema and create a queue.
         print("✓ Schema installed")
 
         # Create queue
-        queue = await admin.create_queue("tasks")
+        queue = await store.queue("tasks")
         print(f"✓ Created queue: {queue.queue_name} (id: {queue.id})")
 
     asyncio.run(setup())
@@ -312,7 +312,7 @@ Here's everything in one file for easy testing:
 
         // Setup
         pgqrs::admin(&store).install().await?;
-        pgqrs::admin(&store).create_queue("demo").await?;
+        store.queue("demo").await?;
         println!("✓ Setup complete\n");
 
         // Create producer
@@ -376,7 +376,7 @@ Here's everything in one file for easy testing:
 
         # Setup
         await admin.install()
-        await admin.create_queue("demo")
+        await store.queue("demo")
         print("✓ Setup complete\n")
 
         # Create managed workers

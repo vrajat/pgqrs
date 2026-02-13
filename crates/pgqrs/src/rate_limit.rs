@@ -25,7 +25,7 @@
 //!
 //! let store = pgqrs::connect_with_config(&config).await?;
 //! pgqrs::admin(&store).install().await?;
-//! pgqrs::admin(&store).create_queue("my_queue").await?;
+//! store.queue("my_queue").await?;
 //!
 //! let producer = pgqrs::producer("localhost", 8080, "my_queue")
 //!     .create(&store)

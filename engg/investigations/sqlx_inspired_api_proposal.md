@@ -595,7 +595,7 @@ The Python bindings should follow the same two-level pattern as Rust.
 # Current: Requires Admin to create Producer/Consumer
 admin = pgqrs.Admin(dsn, schema=schema)
 await admin.install()
-await admin.create_queue("orders")
+await store.queue("orders")
 
 # Producer/Consumer take Admin as first argument (unusual)
 producer = pgqrs.Producer(admin, "orders", "hostname", 8100)
@@ -669,7 +669,7 @@ await consumer.shutdown()
 admin = pgqrs.admin(store)
 await admin.install()
 await admin.verify()
-await admin.create_queue("orders")
+await store.queue("orders")
 await admin.delete_queue("old-queue")
 ```
 
@@ -699,7 +699,7 @@ async def main():
     # Setup (one-time)
     admin = pgqrs.admin(store)
     await admin.install()
-    await admin.create_queue("orders")
+    await store.queue("orders")
 
     # === Simple case: High-level API ===
 

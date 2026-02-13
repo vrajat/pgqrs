@@ -15,6 +15,7 @@
 //! cargo run --example basic_usage
 //! ```
 
+use pgqrs::Store;
 use serde_json::json;
 
 #[tokio::main]
@@ -40,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create queues
     println!("Creating queues...");
-    let email_queue = pgqrs::admin(&store).create_queue("email").await?;
-    let task_queue = pgqrs::admin(&store).create_queue("task").await?;
+    let email_queue = store.queue("email").await?;
+    let task_queue = store.queue("task").await?;
 
     // Send some messages
     println!("Sending messages...");

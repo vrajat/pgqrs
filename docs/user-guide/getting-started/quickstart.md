@@ -20,7 +20,7 @@ This guide will walk you through creating your first queue, sending messages, an
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Create a queue named "tasks"
-        let queue = pgqrs::admin(&store).create_queue("tasks").await?;
+        let queue = store.queue("tasks").await?;
         println!("Created queue: {} (id: {})", queue.queue_name, queue.id);
 
         Ok(())
@@ -38,7 +38,7 @@ This guide will walk you through creating your first queue, sending messages, an
         admin = pgqrs.admin(store)
 
         # Create a queue named "tasks"
-        queue = await admin.create_queue("tasks")
+        queue = await store.queue("tasks")
         print(f"Created queue: {queue.queue_name} (id: {queue.id})")
 
     asyncio.run(main())
@@ -201,7 +201,7 @@ Here's a complete example showing a producer and consumer working together:
 
         // Setup
         pgqrs::admin(&store).install().await?;
-        pgqrs::admin(&store).create_queue("demo").await?;
+        store.queue("demo").await?;
 
         // Producer - send messages
         for i in 0..5 {
@@ -253,7 +253,7 @@ Here's a complete example showing a producer and consumer working together:
 
         # Setup
         await admin.install()
-        await admin.create_queue("demo")
+        await store.queue("demo")
 
         # Producer - send messages
         for i in range(5):

@@ -35,12 +35,6 @@ pub trait Admin: Worker {
     /// Verify the pgqrs schema is correctly installed.
     async fn verify(&self) -> crate::error::Result<()>;
 
-    /// Create a new queue.
-    async fn create_queue(&self, name: &str) -> crate::error::Result<QueueRecord>;
-
-    /// Get queue information by name.
-    async fn get_queue(&self, name: &str) -> crate::error::Result<QueueRecord>;
-
     /// Delete a queue.
     async fn delete_queue(&self, queue_info: &QueueRecord) -> crate::error::Result<()>;
 
@@ -74,9 +68,6 @@ pub trait Admin: Worker {
 
     /// Delete a worker by ID.
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
-
-    /// List all workers across all queues.
-    async fn list_workers(&self) -> crate::error::Result<Vec<WorkerRecord>>;
 
     /// Get messages currently held by a worker.
     async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;

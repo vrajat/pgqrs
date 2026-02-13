@@ -413,19 +413,6 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(())
     }
 
-    async fn create_queue(&self, name: &str) -> Result<QueueRecord> {
-        use crate::types::NewQueueRecord;
-        self.queues
-            .insert(NewQueueRecord {
-                queue_name: name.to_string(),
-            })
-            .await
-    }
-
-    async fn get_queue(&self, name: &str) -> Result<QueueRecord> {
-        self.queues.get_by_name(name).await
-    }
-
     async fn delete_queue(&self, queue_info: &QueueRecord) -> Result<()> {
         // SQLite doesn't strictly need the complexity of FOR UPDATE locking since access is serialized.
         // We can just check and delete in a transaction.
@@ -576,6 +563,7 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(moved_ids)
     }
 
+    /// Get metrics for a specific queue.
     async fn queue_metrics(&self, name: &str) -> Result<QueueMetrics> {
         let queue = self.queues.get_by_name(name).await?;
         let row = sqlx::query(GET_QUEUE_METRICS)
@@ -590,6 +578,7 @@ impl crate::store::Admin for SqliteAdmin {
         map_queue_metrics_row(row)
     }
 
+    /// Get metrics for all queues managed by pgqrs.
     async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         let rows = sqlx::query(GET_ALL_QUEUES_METRICS)
             .fetch_all(&self.pool)
@@ -607,6 +596,7 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(metrics)
     }
 
+    /// Get system-wide statistics.
     async fn system_stats(&self) -> Result<SystemStats> {
         let row = sqlx::query(GET_SYSTEM_STATS)
             .fetch_one(&self.pool)
@@ -716,10 +706,6 @@ impl crate::store::Admin for SqliteAdmin {
         self.workers.delete(worker_id).await
     }
 
-    async fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
-        self.workers.list().await
-    }
-
     async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
         let worker = self.workers.get(worker_id).await?;
         if worker.queue_id.is_none() {
@@ -741,14 +727,6 @@ impl crate::store::Admin for SqliteAdmin {
 
         let mut msgs = Vec::new();
         for row in rows {
-            // We can use SqliteMessageTable::map_row if we expose it or copy logic.
-            // map_row is private. But SqliteMessageTable is available.
-            // Actually, MessageTable::map_row is specific to the struct.
-            // We'll duplicate the mapping logic briefly here or refactor.
-            // Since SqliteMessageTable has it private, I'll copy the mapping logic which is safe.
-            // Wait, I can't call private methods.
-            // The query GET_WORKER_MESSAGES returns columns matching what map_row expects.
-            // I'll define a local map function re-using what I wrote for MessageTable.
             msgs.push(SqliteMessageTable::map_row(row)?);
         }
         Ok(msgs)
@@ -766,11 +744,6 @@ impl crate::store::Admin for SqliteAdmin {
             .begin()
             .await
             .map_err(crate::error::Error::Database)?;
-
-        // This is tricky. list_zombies_for_queue takes self (pool).
-        // I need to use the transaction.
-        // SqliteWorkerTable doesn't expose transactional methods yet.
-        // I will implement the zombie check manually here using the query string.
 
         let seconds = timeout.num_seconds();
         let zombies_query = r#"

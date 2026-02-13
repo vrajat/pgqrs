@@ -147,7 +147,7 @@ cargo clippy
 /// # Example
 ///
 /// ```
-/// let queue = admin.create_queue("emails").await?;
+/// let queue = store.queue("emails").await?;
 /// ```
 pub async fn create_queue(&self, name: &str) -> Result<QueueInfo> {
     // Implementation
@@ -207,7 +207,7 @@ async fn test_create_queue() {
     let admin = pgqrs::connect(dsn).await.unwrap();
 
     admin.install().await.unwrap();
-    let queue = admin.create_queue("test_queue").await.unwrap();
+    let queue = store.queue("test_queue").await.unwrap();
 
     assert_eq!(queue.queue_name, "test_queue");
 }

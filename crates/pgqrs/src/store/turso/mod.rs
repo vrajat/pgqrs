@@ -808,6 +808,21 @@ impl Store for TursoStore {
         Ok(Box::new(consumer))
     }
 
+    async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
+        let queue_exists = self.queues.exists(name).await?;
+        if queue_exists {
+            return Err(crate::error::Error::QueueAlreadyExists {
+                name: name.to_string(),
+            });
+        }
+
+        self.queues
+            .insert(NewQueueRecord {
+                queue_name: name.to_string(),
+            })
+            .await
+    }
+
     async fn producer_ephemeral(
         &self,
         queue_name: &str,

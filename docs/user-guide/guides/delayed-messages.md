@@ -647,7 +647,7 @@ To cancel a scheduled message, delete it before it becomes visible:
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         pgqrs::admin(&store).install().await?;
-        pgqrs::admin(&store).create_queue("scheduled").await?;
+        store.queue("scheduled").await?;
 
         let producer = pgqrs::producer()
             .queue("scheduled")
@@ -709,7 +709,7 @@ To cancel a scheduled message, delete it before it becomes visible:
         await admin.install()
 
         queue_name = "scheduled"
-        await admin.create_queue(queue_name)
+        await store.queue(queue_name)
 
         # Create managed workers
         producer = await store.producer("scheduled")
@@ -749,7 +749,7 @@ To cancel a scheduled message, delete it before it becomes visible:
 
         store = await pgqrs.connect("postgresql://localhost/mydb")
         admin = pgqrs.admin(store)
-        await admin.create_queue("advanced_scheduling")
+        await store.queue("advanced_scheduling")
 
         producer = await store.producer("advanced_scheduling")
 

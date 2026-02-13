@@ -473,4 +473,15 @@ impl Store for AnyStore {
             AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
         }
     }
+
+    async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.queue(name).await,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.queue(name).await,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.queue(name).await,
+        }
+    }
 }

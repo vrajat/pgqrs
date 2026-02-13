@@ -527,6 +527,34 @@ impl PyStore {
     fn consume_iter(&self, queue: String, poll_interval_ms: Option<u64>) -> ConsumerIterator {
         ConsumerIterator::new(self.inner.clone(), queue, poll_interval_ms.unwrap_or(50))
     }
+
+    fn queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let q = store.queue(&name).await.map_err(to_py_err)?;
+            Ok(QueueInfo::from(q))
+        })
+    }
+
+    fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Workers { store }) })
+    }
+
+    fn get_queues<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Queues { store }) })
+    }
+
+    fn get_messages<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Messages { store }) })
+    }
+
+    fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Archive { store }) })
+    }
 }
 
 #[pyfunction]
@@ -576,17 +604,6 @@ impl Admin {
         })
     }
 
-    fn create_queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let q = rust_pgqrs::admin(&store)
-                .create_queue(&name)
-                .await
-                .map_err(to_py_err)?;
-            Ok(QueueInfo::from(q))
-        })
-    }
-
     fn delete_queue<'a>(&self, py: Python<'a>, name: String) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -596,26 +613,6 @@ impl Admin {
                 .map_err(to_py_err)?;
             Ok(true)
         })
-    }
-
-    fn get_workers<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Workers { store }) })
-    }
-
-    fn get_queues<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Queues { store }) })
-    }
-
-    fn get_messages<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Messages { store }) })
-    }
-
-    fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(Archive { store }) })
     }
 
     #[pyo3(signature = (name, arg=None))]

@@ -571,7 +571,7 @@ async fn test_turso_enqueue_dequeue() {
     let admin = store.admin(&store.config()).await.unwrap();
 
     admin.install().await.unwrap();
-    admin.create_queue("tasks").await.unwrap();
+    store.queue("tasks").await.unwrap();
 
     let producer = store.producer("tasks", "localhost", 0, &store.config()).await.unwrap();
     producer.enqueue(&json!({"task": "hello"})).await.unwrap();
@@ -624,7 +624,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use normally
     let admin = store.admin(&config).await?;
     admin.install().await?;
-    admin.create_queue("tasks").await?;
+    store.queue("tasks").await?;
 
     let producer = store.producer("tasks", "localhost", 0, &config).await?;
     producer.enqueue(&serde_json::json!({"job": "process_data"})).await?;

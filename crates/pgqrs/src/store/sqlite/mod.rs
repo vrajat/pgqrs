@@ -216,6 +216,21 @@ impl Store for SqliteStore {
         Ok(Box::new(consumer))
     }
 
+    async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
+        let queue_exists = self.queues.exists(name).await?;
+        if queue_exists {
+            return Err(crate::error::Error::QueueAlreadyExists {
+                name: name.to_string(),
+            });
+        }
+
+        self.queues
+            .insert(crate::types::NewQueueRecord {
+                queue_name: name.to_string(),
+            })
+            .await
+    }
+
     async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
         use self::workflow::handle::SqliteWorkflow;
 
