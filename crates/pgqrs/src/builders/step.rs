@@ -58,3 +58,9 @@ impl<'a> StepBuilder<'a> {
         run.acquire_step(&id, current_time).await
     }
 }
+
+impl<'a> Default for StepBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -45,3 +45,9 @@ impl<'a, S: Store> RunBuilder<'a, S> {
         store.run(message).await
     }
 }
+
+impl<'a, S: Store> Default for RunBuilder<'a, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}

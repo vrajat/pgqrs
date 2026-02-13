@@ -70,6 +70,12 @@ impl<'a, S: Store> WorkflowBuilder<'a, S> {
     }
 }
 
+impl<'a, S: Store> Default for WorkflowBuilder<'a, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Builder for triggering workflow runs.
 pub struct WorkflowTriggerBuilder<'a, S: Store> {
     store: Option<&'a S>,

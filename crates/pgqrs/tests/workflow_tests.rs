@@ -40,7 +40,6 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
         .store(&store)
         .execute()
         .await?;
-    let workflow_id = workflow.id();
 
     workflow.start().await?;
 

@@ -147,20 +147,22 @@ impl Drop for StepGuard {
             let run_id = self.run_id;
             let step_id = self.step_id.clone();
 
-            tokio::spawn(async move {
-                let error_json = serde_json::json!({
-                    "is_transient": false,
-                    "code": "GUARD_DROPPED",
-                    "message": "Step execution interrupted (dropped without completion)",
-                });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let error_json = serde_json::json!({
+                        "is_transient": false,
+                        "code": "GUARD_DROPPED",
+                        "message": "Step execution interrupted (dropped without completion)",
+                    });
 
-                let _ = sqlx::query(SQL_STEP_FAIL)
-                    .bind(run_id)
-                    .bind(step_id)
-                    .bind(error_json)
-                    .execute(&pool)
-                    .await;
-            });
+                    let _ = sqlx::query(SQL_STEP_FAIL)
+                        .bind(run_id)
+                        .bind(step_id)
+                        .bind(error_json)
+                        .execute(&pool)
+                        .await;
+                });
+            }
         }
     }
 }

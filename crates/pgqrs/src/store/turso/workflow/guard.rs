@@ -71,7 +71,7 @@ impl TursoStepGuard {
         let status_str: String = row.get(0).map_err(|e| crate::error::Error::Internal {
             message: e.to_string(),
         })?;
-        let mut status = WorkflowStatus::from_str(&status_str)
+        let status = WorkflowStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
         let error_str: Option<String> = row.get(2).map_err(|e| crate::error::Error::Internal {
@@ -100,8 +100,6 @@ impl TursoStepGuard {
                     .bind(step_id)
                     .execute_once(db)
                     .await?;
-
-                status = WorkflowStatus::Running;
             } else {
                 let error_val: serde_json::Value = if let Some(s) = error_str {
                     serde_json::from_str(&s)?
@@ -270,21 +268,23 @@ impl Drop for TursoStepGuard {
             let run_id = self.run_id;
             let step_id = self.step_id.clone();
 
-            tokio::spawn(async move {
-                let error = serde_json::json!({
-                    "is_transient": false,
-                    "code": "GUARD_DROPPED",
-                    "message": "Step dropped without completion",
-                });
-                let error_str = error.to_string();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let error = serde_json::json!({
+                        "is_transient": false,
+                        "code": "GUARD_DROPPED",
+                        "message": "Step dropped without completion",
+                    });
+                    let error_str = error.to_string();
 
-                let _ = crate::store::turso::query(SQL_STEP_FAIL)
-                    .bind(error_str)
-                    .bind(run_id)
-                    .bind(step_id)
-                    .execute_once(&db)
-                    .await;
-            });
+                    let _ = crate::store::turso::query(SQL_STEP_FAIL)
+                        .bind(error_str)
+                        .bind(run_id)
+                        .bind(step_id)
+                        .execute_once(&db)
+                        .await;
+                });
+            }
         }
     }
 }
