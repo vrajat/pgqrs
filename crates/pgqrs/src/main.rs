@@ -20,7 +20,7 @@
 //! ```
 use clap::{Parser, Subcommand};
 use pgqrs::config::Config;
-use pgqrs::types::{QueueInfo, QueueMessage};
+use pgqrs::types::{QueueMessage, QueueRecord};
 
 use std::fs::File;
 use std::process;
@@ -311,9 +311,9 @@ pub async fn handle_admin_commands(
 ) -> anyhow::Result<()> {
     match command {
         AdminCommands::Install => {
-            tracing::info!("Installing pgqrs schema ...");
-            pgqrs::admin(store).install().await?;
-            tracing::info!("Installation completed successfully");
+            tracing::info!("Initializing pgqrs schema ...");
+            store.bootstrap().await?;
+            tracing::info!("Initialization completed successfully");
         }
 
         AdminCommands::Verify => {
@@ -363,25 +363,25 @@ pub async fn handle_queue_commands(
     match command {
         QueueCommands::Create { name } => {
             tracing::info!("Creating queue '{}' ...", &name);
-            let queue = pgqrs::admin(store).create_queue(&name).await?;
+            let queue = store.queue(&name).await?;
             writer.write_item(&queue, out)?;
         }
 
         QueueCommands::List => {
             tracing::info!("Listing all queues...");
-            let queue_list: Vec<QueueInfo> = pgqrs::tables(store).queues().list().await?;
+            let queue_list: Vec<QueueRecord> = pgqrs::tables(store).queues().list().await?;
             writer.write_list(&queue_list, out)?;
         }
 
         QueueCommands::Get { name } => {
             tracing::info!("Getting queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             writer.write_item(&queue_info, out)?;
         }
 
         QueueCommands::Messages { name } => {
             tracing::info!("Listing messages for queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             let messages_list: Vec<QueueMessage> = pgqrs::tables(store)
                 .messages()
                 .filter_by_fk(queue_info.id)
@@ -398,7 +398,7 @@ pub async fn handle_queue_commands(
 
         QueueCommands::Delete { name } => {
             tracing::info!("Deleting queue '{}'...", name);
-            let queue_info = pgqrs::admin(store).get_queue(&name).await?;
+            let queue_info = store.queues().get_by_name(&name).await?;
             pgqrs::admin(store).delete_queue(&queue_info).await?;
             tracing::info!("Queue '{}' deleted successfully", name);
         }
@@ -491,7 +491,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Suspend { id } => {
             tracing::info!("Suspending worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.suspend().await?;
             tracing::info!("Worker {} suspended", id);
             writeln!(out, "Worker {} suspended", id)?;
@@ -499,7 +499,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Resume { id } => {
             tracing::info!("Resuming worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.resume().await?;
             tracing::info!("Worker {} resumed", id);
             writeln!(out, "Worker {} resumed", id)?;
@@ -507,7 +507,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Shutdown { id } => {
             tracing::info!("Shutting down worker {}...", id);
-            let worker_handler = pgqrs::worker_handle(store, id).await?;
+            let worker_handler = store.worker(id).await?;
             worker_handler.shutdown().await?;
             tracing::info!("Worker {} shut down successfully", id);
             writeln!(out, "Worker {} shut down successfully", id)?;
@@ -515,7 +515,7 @@ pub async fn handle_worker_commands(
 
         WorkerCommands::Heartbeat { id } => {
             tracing::info!("Updating heartbeat for worker {}...", id);
-            let worker = pgqrs::worker_handle(store, id).await?;
+            let worker = store.worker(id).await?;
             worker.heartbeat().await?;
             tracing::info!("Heartbeat updated for worker {}", id);
             writeln!(out, "Heartbeat updated for worker {}", id)?;

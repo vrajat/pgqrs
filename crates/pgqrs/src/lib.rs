@@ -1,167 +1,84 @@
-//! # pgqrs
-//!
-//! **pgqrs** is a durable workflow engine and job queue that works with **PostgreSQL, SQLite, and Turso**.
-//! Written in Rust with Python bindings.
-//!
-//! Use PostgreSQL for production scale. Use SQLite or Turso for CLI tools, testing, and embedded apps.
-//!
-//! ## Supported Backends
-//!
-//! - **PostgreSQL** (default): Production-ready with unlimited concurrent workers
-//! - **SQLite**: Zero-config embedded option for single-process applications
-//! - **Turso**: SQLite-compatible with enhanced features for local storage
-//!
-//! ```rust,no_run
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // PostgreSQL
-//! let pg_store = pgqrs::connect("postgresql://localhost/mydb").await?;
-//!
-//! // SQLite (requires `sqlite` feature)
-//! let sqlite_store = pgqrs::connect("sqlite:///path/to/db.sqlite").await?;
-//!
-//! // Turso (requires `turso` feature)
-//! let turso_store = pgqrs::connect("turso:///path/to/db.db").await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Features
-//!
-//! ### Core
-//! - **Library-only**: No servers to operate. Use directly in your Rust or Python applications.
-//! - **Connection Pooler Compatible**: Works with [pgBouncer](https://www.pgbouncer.org) and [pgcat](https://github.com/postgresml/pgcat) for connection scaling (PostgreSQL).
-//!
-//! ### Job Queue
-//! - **Efficient**: Uses `SKIP LOCKED` (PostgreSQL) for concurrent job fetching.
-//! - **Exactly-once Delivery**: Guarantees within visibility timeout window.
-//! - **Message Archiving**: Built-in audit trails and historical data retention.
-//!
-//! ### Durable Workflows
-//! - **Crash Recovery**: Resume from the last completed step after failures.
-//! - **Exactly-once Steps**: Completed steps are never re-executed.
-//! - **Persistent State**: All workflow progress stored durably.
-//!
-//! ## Quick Start
-//!
-//! ### Job Queue
-//!
-//! Simple, reliable message queue for background processing:
-//!
-//! ```rust
-//! use pgqrs;
-//! use serde_json::json;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Connect to PostgreSQL
-//! let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-//!
-//! // Setup (run once)
-//! pgqrs::admin(&store).install().await?;
-//! pgqrs::admin(&store).create_queue("tasks").await?;
-//!
-//! // Producer: enqueue a job
-//! let ids = pgqrs::enqueue()
-//!     .message(&json!({"task": "send_email", "to": "user@example.com"}))
-//!     .to("tasks")
-//!     .execute(&store)
-//!     .await?;
-//!
-//! // Consumer: process jobs
-//! pgqrs::dequeue()
-//!     .from("tasks")
-//!     .handle(|msg| async move {
-//!         println!("Processing: {:?}", msg.payload);
-//!         Ok(())
-//!     })
-//!     .execute(&store)
-//!     .await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Durable Workflows
-//!
-//! Orchestrate multi-step processes that survive crashes:
-//!
-//! ```rust
-//! use pgqrs;
-//! use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
-//!
-//! #[pgqrs_step]
-//! async fn fetch_data(ctx: &mut (impl pgqrs::Workflow + ?Sized), url: &str) -> Result<String, anyhow::Error> {
-//!     // Fetch data - only executes once per workflow run
-//!     Ok("data".to_string())
-//! }
-//!
-//! #[pgqrs_step]
-//! async fn process_data(ctx: &mut (impl pgqrs::Workflow + ?Sized), data: String) -> Result<i32, anyhow::Error> {
-//!     Ok(data.len() as i32)
-//! }
-//!
-//! #[pgqrs_workflow]
-//! async fn data_pipeline(ctx: &mut (impl pgqrs::Workflow + ?Sized), url: &str) -> Result<String, anyhow::Error> {
-//!     let data = fetch_data(ctx, url).await?;
-//!     let count = process_data(ctx, data).await?;
-//!     Ok(format!("Processed {} bytes", count))
-//! }
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-//! pgqrs::admin(&store).install().await?;
-//!
-//! let url = "https://example.com/data";
-
-//! pgqrs::workflow().name("data_pipeline").create(&store).await?;
-//!
-//! let mut workflow = pgqrs::workflow()
-//!     .name("data_pipeline")
-//!     .trigger(&url)?
-//!     .run(&store)
-//!     .await?;
-//!
-//! let result = data_pipeline(workflow.as_mut(), url).await?;
-//! println!("Result: {}", result);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! For more details, see the [documentation](https://vrajat.github.io/pgqrs/) and [examples](https://github.com/vrajat/pgqrs/tree/main/crates/pgqrs/examples).
-
 pub mod config;
 pub mod error;
+pub mod policy;
 mod rate_limit;
+pub mod stats;
 pub mod store;
+pub mod tables;
 pub mod types;
-mod validation;
+pub mod validation;
+pub mod workers;
 
-// Tier 1: High-level API (builders module)
-pub mod builders;
+pub mod builders {
+    pub mod admin;
+    pub mod consumer;
+    pub mod dequeue;
+    pub mod enqueue;
+    pub mod producer;
+    pub mod run;
+    pub mod step;
+    pub mod tables;
+    pub mod workflow;
+}
 
-// Re-export Tier 1 high-level functions at crate root
-pub use builders::{
-    admin, connect, connect_with_config, consumer, dequeue, enqueue, producer, tables,
-    worker_handle,
+pub use crate::builders::admin::admin;
+pub use crate::builders::consumer::consumer;
+pub use crate::builders::dequeue::dequeue;
+pub use crate::builders::enqueue::enqueue;
+pub use crate::builders::producer::producer;
+pub use crate::builders::tables::tables;
+
+pub use crate::store::Store;
+pub use crate::tables::{
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
+    WorkflowTable,
 };
-
-// Re-export worker types and modules at crate root for convenience
-
-pub use crate::store::{
-    Admin, ArchiveTable, Consumer, MessageTable, Producer, QueueTable, Run, RunExt, StepGuard,
-    StepGuardExt, StepResult, Store, Worker, WorkerTable, Workflow, WorkflowTable,
+pub use crate::workers::{
+    Admin, Consumer, Producer, Run, RunExt, StepGuard, StepGuardExt, Worker, Workflow,
 };
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result, TransientStepError};
+pub use crate::policy::{BackoffStrategy, StepRetryPolicy, WorkflowConfig};
 pub use crate::rate_limit::RateLimitStatus;
+pub use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 pub use crate::types::{
-    ArchivedMessage, BackoffStrategy, NewArchivedMessage, NewMessage, NewQueue, NewWorker,
-    NewWorkflow, QueueInfo, QueueMessage, QueueMetrics, StepRetryPolicy, SystemStats,
-    WorkerHealthStats, WorkerInfo, WorkerStats, WorkerStatus, WorkflowConfig, WorkflowRecord,
-    WorkflowStatus,
+    ArchivedMessage, NewArchivedMessage, NewQueueMessage, NewQueueRecord, NewRunRecord,
+    NewStepRecord, NewWorkerRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord,
+    StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord, WorkflowStatus,
 };
 
 pub use crate::validation::ValidationConfig;
 pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};
 
-pub use builders::workflow::{step, workflow};
+pub use crate::builders::run::RunBuilder;
+pub use crate::builders::step::StepBuilder;
+pub use crate::builders::workflow::WorkflowBuilder;
+
+/// Entry point for creating or getting a workflow.
+pub fn workflow() -> WorkflowBuilder<'static, crate::store::AnyStore> {
+    WorkflowBuilder::new()
+}
+
+/// Entry point for creating a run handle from a message.
+pub fn run() -> RunBuilder<'static, crate::store::AnyStore> {
+    RunBuilder::new()
+}
+
+/// Entry point for acquiring a step.
+pub fn step() -> StepBuilder<'static> {
+    StepBuilder::new()
+}
+
+/// Connect to a database using a DSN string.
+pub async fn connect(dsn: &str) -> crate::error::Result<crate::store::AnyStore> {
+    crate::store::any::AnyStore::connect_with_dsn(dsn).await
+}
+
+/// Connect to a database using a custom configuration.
+pub async fn connect_with_config(
+    config: &crate::config::Config,
+) -> crate::error::Result<crate::store::AnyStore> {
+    crate::store::any::AnyStore::connect(config).await
+}

@@ -65,7 +65,7 @@ impl<'a, S: Store> TablesBuilder<'a, S> {
     }
 
     /// Access workflow run table operations
-    pub fn workflow_runs(self) -> &'a dyn crate::store::WorkflowRunTable {
+    pub fn workflow_runs(self) -> &'a dyn crate::store::RunRecordTable {
         self.store.workflow_runs()
     }
 }

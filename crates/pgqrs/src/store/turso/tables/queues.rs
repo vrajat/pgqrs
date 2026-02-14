@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::turso::parse_turso_timestamp;
-use crate::types::QueueInfo;
+use crate::types::QueueRecord;
 use async_trait::async_trait;
 use std::sync::Arc;
 use turso::Database;
@@ -53,13 +53,13 @@ impl TursoQueueTable {
         Self { db }
     }
 
-    fn map_row(row: &turso::Row) -> Result<QueueInfo> {
+    fn map_row(row: &turso::Row) -> Result<QueueRecord> {
         let id: i64 = row.get(0)?;
         let queue_name: String = row.get(1)?;
         let created_at_str: String = row.get(2)?;
         let created_at = parse_turso_timestamp(&created_at_str)?;
 
-        Ok(QueueInfo {
+        Ok(QueueRecord {
             id,
             queue_name,
             created_at,
@@ -69,7 +69,7 @@ impl TursoQueueTable {
 
 #[async_trait]
 impl crate::store::QueueTable for TursoQueueTable {
-    async fn insert(&self, data: crate::types::NewQueue) -> Result<QueueInfo> {
+    async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
         let row_res = crate::store::turso::query(INSERT_QUEUE)
             .bind(data.queue_name.as_str())
             .fetch_one_once(&self.db)
@@ -94,7 +94,7 @@ impl crate::store::QueueTable for TursoQueueTable {
         }
     }
 
-    async fn get(&self, id: i64) -> Result<QueueInfo> {
+    async fn get(&self, id: i64) -> Result<QueueRecord> {
         let row = crate::store::turso::query(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.db)
@@ -102,7 +102,7 @@ impl crate::store::QueueTable for TursoQueueTable {
         Self::map_row(&row)
     }
 
-    async fn list(&self) -> Result<Vec<QueueInfo>> {
+    async fn list(&self) -> Result<Vec<QueueRecord>> {
         let rows = crate::store::turso::query(LIST_ALL_QUEUES)
             .fetch_all(&self.db)
             .await?;
@@ -130,7 +130,7 @@ impl crate::store::QueueTable for TursoQueueTable {
         Ok(count)
     }
 
-    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
+    async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
         let row = crate::store::turso::query(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_optional(&self.db)

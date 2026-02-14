@@ -1,15 +1,14 @@
-use super::WorkflowStatus;
 use crate::error::Result;
-use crate::types::StepRetryPolicy;
+use crate::types::{StepRecord, WorkflowStatus};
+use crate::StepRetryPolicy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::de::DeserializeOwned;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 const SQL_ACQUIRE_STEP: &str = r#"
-INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, started_at, retry_count)
+INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
 VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, NOW(), 0)
-ON CONFLICT (run_id, step_id) DO UPDATE
+ON CONFLICT (run_id, step_name) DO UPDATE
 SET status = CASE
     WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'::pgqrs_workflow_status
     WHEN pgqrs_workflow_steps.status = 'ERROR' THEN 'ERROR'::pgqrs_workflow_status
@@ -19,61 +18,60 @@ started_at = CASE
     WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
     ELSE NOW()
 END
-RETURNING status, output, error, retry_count, retry_at
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
 UPDATE pgqrs_workflow_steps
 SET retry_count = $1, retry_at = $2, last_retry_at = NOW()
-WHERE run_id = $3 AND step_id = $4
+WHERE id = $3
 "#;
 
 const SQL_CLEAR_RETRY: &str = r#"
 UPDATE pgqrs_workflow_steps
 SET status = 'RUNNING'::pgqrs_workflow_status, retry_at = NULL, error = NULL
-WHERE run_id = $1 AND step_id = $2
+WHERE id = $1
 "#;
 
 const SQL_STEP_SUCCESS: &str = r#"
 UPDATE pgqrs_workflow_steps
-SET status = 'SUCCESS'::pgqrs_workflow_status, output = $3, completed_at = NOW()
-WHERE run_id = $1 AND step_id = $2
+SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW()
+WHERE id = $1
 "#;
 
 const SQL_STEP_FAIL: &str = r#"
 UPDATE pgqrs_workflow_steps
-SET status = 'ERROR'::pgqrs_workflow_status, error = $3, completed_at = NOW()
-WHERE run_id = $1 AND step_id = $2
+SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW()
+WHERE id = $1
 "#;
 
 /// RAII guard for a workflow step execution.
-///
-/// Ensures exactly-once logical execution of steps by persisting state to the database.
 pub struct StepGuard {
     pool: PgPool,
-    run_id: i64,
-    step_id: String,
+    id: i64,
     completed: bool,
 }
 
 impl StepGuard {
-    pub async fn acquire<T: DeserializeOwned + 'static>(
+    pub fn new(pool: PgPool, id: i64) -> Self {
+        Self {
+            pool,
+            id,
+            completed: false,
+        }
+    }
+
+    pub async fn acquire_record(
         pool: &PgPool,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<crate::store::StepResult<T>> {
-        let step_id_string = step_id.to_string();
+    ) -> Result<StepRecord> {
+        let step_name_string = step_name.to_string();
 
-        let row: (
-            WorkflowStatus,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            i32,
-            Option<DateTime<Utc>>,
-        ) = sqlx::query_as(SQL_ACQUIRE_STEP)
+        let row = sqlx::query(SQL_ACQUIRE_STEP)
             .bind(run_id)
-            .bind(&step_id_string)
+            .bind(&step_name_string)
             .fetch_one(pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -81,18 +79,14 @@ impl StepGuard {
                 source: Box::new(e),
                 context: format!(
                     "Failed to acquire step {} for run {}",
-                    step_id_string, run_id
+                    step_name_string, run_id
                 ),
             })?;
 
-        let (status, output, error, retry_count, retry_at) = row;
-
-        if status == WorkflowStatus::Success {
-            let output_val = output.unwrap_or(serde_json::Value::Null);
-            let result: T =
-                serde_json::from_value(output_val).map_err(crate::error::Error::Serialization)?;
-            return Ok(crate::store::StepResult::Skipped(result));
-        }
+        let id: i64 = row.try_get("id")?;
+        let mut status: WorkflowStatus = row.try_get("status")?;
+        let retry_count: i32 = row.try_get("retry_count")?;
+        let retry_at: Option<DateTime<Utc>> = row.try_get("retry_at")?;
 
         if status == WorkflowStatus::Error {
             if let Some(retry_at) = retry_at {
@@ -104,43 +98,43 @@ impl StepGuard {
                 }
 
                 sqlx::query(SQL_CLEAR_RETRY)
-                    .bind(run_id)
-                    .bind(&step_id_string)
+                    .bind(id)
                     .execute(pool)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "SQL_CLEAR_RETRY".into(),
                         source: Box::new(e),
-                        context: format!("Failed to clear retry_at for step {}", step_id_string),
+                        context: format!("Failed to clear retry_at for step {}", id),
                     })?;
 
-                return Ok(crate::store::StepResult::Execute(Box::new(Self {
-                    pool: pool.clone(),
-                    run_id,
-                    step_id: step_id_string,
-                    completed: false,
-                })));
+                status = WorkflowStatus::Running;
+            } else {
+                let error: Option<serde_json::Value> = row.try_get("error")?;
+                let error_val = error.unwrap_or_else(|| {
+                    serde_json::json!({
+                        "is_transient": false,
+                        "message": "Unknown error"
+                    })
+                });
+
+                return Err(crate::error::Error::RetriesExhausted {
+                    error: error_val,
+                    attempts: retry_count as u32,
+                });
             }
-
-            let error_val = error.unwrap_or_else(|| {
-                serde_json::json!({
-                    "is_transient": false,
-                    "message": "Unknown error"
-                })
-            });
-
-            return Err(crate::error::Error::RetriesExhausted {
-                error: error_val,
-                attempts: retry_count as u32,
-            });
         }
 
-        Ok(crate::store::StepResult::Execute(Box::new(Self {
-            pool: pool.clone(),
-            run_id,
-            step_id: step_id_string,
-            completed: false,
-        })))
+        Ok(StepRecord {
+            id,
+            run_id: row.try_get("run_id")?,
+            step_name: row.try_get("step_name")?,
+            status,
+            input: row.try_get("input")?,
+            output: row.try_get("output")?,
+            error: row.try_get("error")?,
+            created_at: Utc::now(), // Placeholder
+            updated_at: Utc::now(), // Placeholder
+        })
     }
 }
 
@@ -148,26 +142,23 @@ impl Drop for StepGuard {
     fn drop(&mut self) {
         if !self.completed {
             let pool = self.pool.clone();
-            let run_id = self.run_id;
-            let step_id = self.step_id.clone();
+            let id = self.id;
 
-            // Best-effort attempt to mark as error if dropped unexpectedly.
-            // We use tokio::spawn to run this asynchronously.
-            // Note: This relies on a tokio runtime being available.
-            tokio::spawn(async move {
-                let error_json = serde_json::json!({
-                    "is_transient": false,
-                    "code": "GUARD_DROPPED",
-                    "message": "Step execution interrupted (dropped without completion)",
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let error_json = serde_json::json!({
+                        "is_transient": false,
+                        "code": "GUARD_DROPPED",
+                        "message": "Step execution interrupted (dropped without completion)",
+                    });
+
+                    let _ = sqlx::query(SQL_STEP_FAIL)
+                        .bind(id)
+                        .bind(error_json)
+                        .execute(&pool)
+                        .await;
                 });
-
-                let _ = sqlx::query(SQL_STEP_FAIL)
-                    .bind(run_id)
-                    .bind(step_id)
-                    .bind(error_json)
-                    .execute(&pool)
-                    .await;
-            });
+            }
         }
     }
 }
@@ -177,15 +168,14 @@ impl crate::store::StepGuard for StepGuard {
     /// Mark the step as successfully completed and persist the output.
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
         sqlx::query(SQL_STEP_SUCCESS)
-            .bind(self.run_id)
-            .bind(&self.step_id)
+            .bind(self.id)
             .bind(output)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("SQL_STEP_SUCCESS ({})", self.step_id),
+                query: format!("SQL_STEP_SUCCESS ({})", self.id),
                 source: Box::new(e),
-                context: format!("Failed to complete step {}", self.step_id),
+                context: format!("Failed to complete step {}", self.id),
             })?;
 
         self.completed = true;
@@ -213,33 +203,30 @@ impl crate::store::StepGuard for StepGuard {
             .unwrap_or(false);
 
         if is_transient {
-            let row: (i32,) = sqlx::query_as(
-                "SELECT retry_count FROM pgqrs_workflow_steps WHERE run_id = $1 AND step_id = $2",
-            )
-            .bind(self.run_id)
-            .bind(&self.step_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SELECT retry_count".into(),
-                source: Box::new(e),
-                context: format!("Failed to get retry_count for step {}", self.step_id),
-            })?;
+            let row: (i32,) =
+                sqlx::query_as("SELECT retry_count FROM pgqrs_workflow_steps WHERE id = $1")
+                    .bind(self.id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "SELECT retry_count".into(),
+                        source: Box::new(e),
+                        context: format!("Failed to get retry_count for step {}", self.id),
+                    })?;
 
             let retry_count = row.0;
 
             let policy = StepRetryPolicy::default();
             if !policy.should_retry(retry_count as u32) {
                 sqlx::query(SQL_STEP_FAIL)
-                    .bind(self.run_id)
-                    .bind(&self.step_id)
+                    .bind(self.id)
                     .bind(error_record)
                     .execute(&self.pool)
                     .await
                     .map_err(|e| crate::error::Error::QueryFailed {
-                        query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                        query: format!("SQL_STEP_FAIL ({})", self.id),
                         source: Box::new(e),
-                        context: format!("Failed to fail step {}", self.step_id),
+                        context: format!("Failed to fail step {}", self.id),
                     })?;
 
                 self.completed = true;
@@ -270,40 +257,37 @@ impl crate::store::StepGuard for StepGuard {
             let new_retry_count = retry_count + 1;
 
             sqlx::query(SQL_STEP_FAIL)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .bind(error_record)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                    query: format!("SQL_STEP_FAIL ({})", self.id),
                     source: Box::new(e),
-                    context: format!("Failed to fail step {}", self.step_id),
+                    context: format!("Failed to fail step {}", self.id),
                 })?;
 
             sqlx::query(SQL_SCHEDULE_RETRY)
                 .bind(new_retry_count)
                 .bind(retry_at)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
                     query: "SQL_SCHEDULE_RETRY".into(),
                     source: Box::new(e),
-                    context: format!("Failed to schedule retry for step {}", self.step_id),
+                    context: format!("Failed to schedule retry for step {}", self.id),
                 })?;
         } else {
             sqlx::query(SQL_STEP_FAIL)
-                .bind(self.run_id)
-                .bind(&self.step_id)
+                .bind(self.id)
                 .bind(error_record)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("SQL_STEP_FAIL ({})", self.step_id),
+                    query: format!("SQL_STEP_FAIL ({})", self.id),
                     source: Box::new(e),
-                    context: format!("Failed to fail step {}", self.step_id),
+                    context: format!("Failed to fail step {}", self.id),
                 })?;
         }
 

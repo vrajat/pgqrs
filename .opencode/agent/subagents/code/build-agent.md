@@ -7,7 +7,7 @@ type: subagent
 version: 2.0.0
 author: opencode
 mode: subagent
-model: github-copilot/gpt-5.2
+model: google/gemini-3-flash-preview
 temperature: 0.1
 
 # Project-specific context

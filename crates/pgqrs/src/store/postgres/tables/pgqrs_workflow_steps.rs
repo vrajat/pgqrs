@@ -1,30 +1,30 @@
 use crate::error::Result;
-use crate::types::{NewWorkflowStep, WorkflowStatus, WorkflowStep};
+use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
-pub struct WorkflowSteps {
+pub struct StepRecords {
     pool: PgPool,
 }
 
-impl WorkflowSteps {
+impl StepRecords {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
 
 #[async_trait]
-impl crate::store::WorkflowStepTable for WorkflowSteps {
-    async fn insert(&self, data: NewWorkflowStep) -> Result<WorkflowStep> {
-        let row = sqlx::query_as::<_, WorkflowStep>(
+impl crate::store::StepRecordTable for StepRecords {
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
+        let row = sqlx::query_as::<_, StepRecord>(
             r#"
-            INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, input, started_at)
+            INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input, started_at)
             VALUES ($1, $2, 'PENDING'::pgqrs_workflow_status, $3, NOW())
             RETURNING
-              0 as id,
+              id,
               run_id,
-              step_id,
+              step_name,
               status,
               input,
               output,
@@ -34,34 +34,26 @@ impl crate::store::WorkflowStepTable for WorkflowSteps {
             "#,
         )
         .bind(data.run_id)
-        .bind(&data.step_id)
+        .bind(&data.step_name)
         .bind(data.input)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW_STEP".into(),
             source: Box::new(e),
-            context: format!("Failed to insert workflow step '{}'", data.step_id),
+            context: format!("Failed to insert workflow step '{}'", data.step_name),
         })?;
 
         Ok(row)
     }
 
-    async fn get(&self, _id: i64) -> Result<WorkflowStep> {
-        Err(crate::error::Error::ValidationFailed {
-            reason:
-                "Postgres workflow steps are keyed by (run_id, step_id); get(id) is unsupported"
-                    .into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<WorkflowStep>> {
-        let rows = sqlx::query_as::<_, WorkflowStep>(
+    async fn get(&self, id: i64) -> Result<StepRecord> {
+        let row = sqlx::query_as::<_, StepRecord>(
             r#"
             SELECT
-              0 as id,
+              id,
               run_id,
-              step_id,
+              step_name,
               status,
               input,
               output,
@@ -69,7 +61,36 @@ impl crate::store::WorkflowStepTable for WorkflowSteps {
               COALESCE(started_at, NOW()) as created_at,
               COALESCE(started_at, NOW()) as updated_at
             FROM pgqrs_workflow_steps
-            ORDER BY run_id, step_id
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "GET_WORKFLOW_STEP".into(),
+            source: Box::new(e),
+            context: format!("Failed to get workflow step {}", id),
+        })?;
+
+        Ok(row)
+    }
+
+    async fn list(&self) -> Result<Vec<StepRecord>> {
+        let rows = sqlx::query_as::<_, StepRecord>(
+            r#"
+            SELECT
+              id,
+              run_id,
+              step_name,
+              status,
+              input,
+              output,
+              error,
+              COALESCE(started_at, NOW()) as created_at,
+              COALESCE(started_at, NOW()) as updated_at
+            FROM pgqrs_workflow_steps
+            ORDER BY id
             "#,
         )
         .fetch_all(&self.pool)
@@ -96,12 +117,18 @@ impl crate::store::WorkflowStepTable for WorkflowSteps {
         Ok(count)
     }
 
-    async fn delete(&self, _id: i64) -> Result<u64> {
-        Err(crate::error::Error::ValidationFailed {
-            reason:
-                "Postgres workflow steps are keyed by (run_id, step_id); delete(id) is unsupported"
-                    .into(),
-        })
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let res = sqlx::query("DELETE FROM pgqrs_workflow_steps WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_WORKFLOW_STEP".into(),
+                source: Box::new(e),
+                context: format!("Failed to delete workflow step {}", id),
+            })?;
+
+        Ok(res.rows_affected())
     }
 }
 

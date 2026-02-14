@@ -3,7 +3,7 @@
 //! Tests the `StepRetryPolicy` and `BackoffStrategy` types to ensure
 //! correct retry behavior and backoff calculations.
 
-use pgqrs::types::{BackoffStrategy, StepRetryPolicy};
+use pgqrs::{BackoffStrategy, StepRetryPolicy};
 
 #[test]
 fn test_fixed_backoff() {

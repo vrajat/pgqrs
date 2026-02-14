@@ -49,7 +49,7 @@ Simple, reliable message queue for background processing:
 
         // Setup (run once)
         pgqrs::admin(&store).install().await?;
-        pgqrs::admin(&store).create_queue("tasks").await?;
+        store.queue("tasks").await?;
 
         // Producer: enqueue a job
         let ids = pgqrs::enqueue()
@@ -85,7 +85,7 @@ Simple, reliable message queue for background processing:
         # Setup (run once)
         admin = pgqrs.admin(store)
         await admin.install()
-        await admin.create_queue("tasks")
+        await store.queue("tasks")
 
         # Producer: enqueue a job
         msg_id = await pgqrs.produce(store, "tasks", {

@@ -33,7 +33,7 @@ use crate::error::Result;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::postgres::tables::Messages;
 use crate::store::WorkerTable;
-use crate::types::{QueueInfo, QueueMessage, WorkerStatus};
+use crate::types::{QueueMessage, QueueRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -64,9 +64,9 @@ pub struct Producer {
     /// Connection pool for PostgreSQL
     pub pool: PgPool,
     /// Queue information including ID and name
-    queue_info: QueueInfo,
-    /// Worker information for this producer
-    worker_info: crate::types::WorkerInfo,
+    queue_info: QueueRecord,
+    /// Worker record for this producer
+    worker_record: crate::types::WorkerRecord,
     /// Configuration for the queue including validation settings
     config: crate::config::Config,
     /// Payload validator for this queue
@@ -86,23 +86,24 @@ impl Producer {
     /// # Arguments
     /// * `pool` - Database connection pool
     /// * `queue_info` - Queue information including ID and name
-    /// * `worker_info` - Worker information for this producer
+    /// * `hostname` - Hostname of the worker
+    /// * `port` - Port of the worker
     /// * `config` - Configuration including validation settings
     pub async fn new(
         pool: PgPool,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
-        let worker_info = workers
+        let worker_record = workers
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
         tracing::debug!(
             "Registered producer worker {} ({}:{}) for queue '{}'",
-            worker_info.id,
+            worker_record.id,
             hostname,
             port,
             queue_info.queue_name
@@ -111,7 +112,7 @@ impl Producer {
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
-            worker_info: worker_info.clone(),
+            worker_record,
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             workers,
@@ -124,17 +125,17 @@ impl Producer {
     /// Used by high-level API functions like `produce()`.
     pub async fn new_ephemeral(
         pool: PgPool,
-        queue_info: &QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = crate::store::postgres::tables::Workers::new(pool.clone());
-        let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
+        let worker_record = workers.register_ephemeral(Some(queue_info.id)).await?;
 
         let messages = Messages::new(pool.clone());
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
-            worker_info: worker_info.clone(),
+            worker_record,
             validator: PayloadValidator::new(config.validation_config.clone()),
             config: config.clone(),
             workers,
@@ -149,32 +150,34 @@ impl Producer {
 
 #[async_trait]
 impl crate::store::Worker for Producer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
+    fn worker_record(&self) -> &crate::types::WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_info.id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.workers.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
@@ -289,7 +292,7 @@ impl crate::store::Producer for Producer {
                     read_ct: 0,
                     enqueued_at: now,
                     vt,
-                    producer_worker_id: Some(self.worker_info.id),
+                    producer_worker_id: Some(self.worker_record.id),
                     consumer_worker_id: None,
                 },
             )
@@ -345,7 +348,7 @@ impl crate::store::Producer for Producer {
                     read_ct: 0,
                     enqueued_at: now,
                     vt,
-                    producer_worker_id: Some(self.worker_info.id),
+                    producer_worker_id: Some(self.worker_record.id),
                     consumer_worker_id: None,
                 },
             )
@@ -372,15 +375,15 @@ impl crate::store::Producer for Producer {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        use crate::types::NewMessage;
+        use crate::types::NewQueueMessage;
 
-        let new_message = NewMessage {
+        let new_message = NewQueueMessage {
             queue_id: self.queue_info.id,
             payload: payload.clone(),
             read_ct: 0,
             enqueued_at: now,
             vt,
-            producer_worker_id: Some(self.worker_info.id),
+            producer_worker_id: Some(self.worker_record.id),
             consumer_worker_id: None,
         };
 
@@ -418,10 +421,10 @@ impl crate::store::Producer for Producer {
 impl Drop for Producer {
     fn drop(&mut self) {
         // Check if this is an ephemeral worker by hostname prefix
-        if self.worker_info.hostname.starts_with("__ephemeral__") {
+        if self.worker_record.hostname.starts_with("__ephemeral__") {
             // Spawn a task to properly shutdown the worker
             let workers = self.workers.clone();
-            let worker_id = self.worker_info.id;
+            let worker_id = self.worker_record.id;
 
             // Best-effort shutdown - ignore errors since we're in Drop
             tokio::task::spawn(async move {

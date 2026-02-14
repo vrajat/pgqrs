@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::{NewWorkflow, WorkflowRecord};
+use crate::types::{NewWorkflowRecord, WorkflowRecord};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
@@ -52,7 +52,7 @@ impl SqliteWorkflowTable {
 
 #[async_trait]
 impl crate::store::WorkflowTable for SqliteWorkflowTable {
-    async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
+    async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
 

@@ -1,152 +1,166 @@
 use crate::error::Result;
-use crate::store::{StepGuard, StepResult};
-use crate::types::StepRetryPolicy;
+use crate::policy::StepRetryPolicy;
+use crate::store::StepGuard;
+use crate::types::{StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use std::str::FromStr;
 use std::sync::Arc;
 use turso::Database;
 
 pub struct TursoStepGuard {
     db: Arc<Database>,
-    run_id: i64,
-    step_id: String,
+    id: i64,
     completed: bool,
 }
 
 const SQL_ACQUIRE_STEP: &str = r#"
-    INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, started_at, retry_count)
+    INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
     VALUES (?, ?, 'RUNNING', datetime('now'), 0)
-    ON CONFLICT (run_id, step_id) DO UPDATE SET run_id=run_id
-    RETURNING status, output, error, retry_count, retry_at
+    ON CONFLICT (run_id, step_name) DO UPDATE
+    SET status = CASE
+        WHEN status = 'SUCCESS' THEN 'SUCCESS'
+        WHEN status = 'ERROR' THEN 'ERROR'
+        ELSE 'RUNNING'
+    END,
+    started_at = CASE
+        WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
+        ELSE datetime('now')
+    END
+    RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET retry_count = ?, retry_at = ?, last_retry_at = datetime('now')
-    WHERE run_id = ? AND step_id = ?
+    WHERE id = ?
 "#;
 
 const SQL_CLEAR_RETRY: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'RUNNING', retry_at = NULL, error = NULL
-    WHERE run_id = ? AND step_id = ?
+    WHERE id = ?
 "#;
 
 const SQL_STEP_SUCCESS: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'SUCCESS', output = ?, completed_at = datetime('now')
-    WHERE run_id = ? AND step_id = ?
+    WHERE id = ?
 "#;
 
 const SQL_STEP_FAIL: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'ERROR', error = ?, completed_at = datetime('now')
-    WHERE run_id = ? AND step_id = ?
+    WHERE id = ?
 "#;
 
 impl TursoStepGuard {
-    pub async fn acquire(
+    pub fn new(db: Arc<Database>, id: i64) -> Self {
+        Self {
+            db,
+            id,
+            completed: false,
+        }
+    }
+
+    pub async fn acquire_record(
         db: &Arc<Database>,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: DateTime<Utc>,
-    ) -> Result<StepResult<serde_json::Value>> {
+    ) -> Result<StepRecord> {
         let row = crate::store::turso::query(SQL_ACQUIRE_STEP)
             .bind(run_id)
-            .bind(step_id)
+            .bind(step_name)
             .fetch_one_once(db)
             .await?;
 
-        let status: String = row.get(0).map_err(|e| crate::error::Error::Internal {
+        let id: i64 = row.get(0).map_err(|e| crate::error::Error::Internal {
             message: e.to_string(),
         })?;
+        let status_str: String = row.get(3).map_err(|e| crate::error::Error::Internal {
+            message: e.to_string(),
+        })?;
+        let mut status = WorkflowStatus::from_str(&status_str)
+            .map_err(|e| crate::error::Error::Internal { message: e })?;
 
-        if status == "SUCCESS" {
-            let output_str: Option<String> =
-                row.get(1).map_err(|e| crate::error::Error::Internal {
-                    message: e.to_string(),
-                })?;
-            let output = if let Some(s) = output_str {
-                serde_json::from_str(&s)?
-            } else {
-                serde_json::Value::Null
-            };
-            return Ok(StepResult::Skipped(output));
-        }
-
-        if status == "ERROR" {
-            let error_str: Option<String> =
-                row.get(2).map_err(|e| crate::error::Error::Internal {
-                    message: e.to_string(),
-                })?;
-            let retry_count: i32 = row.get(3).map_err(|e| crate::error::Error::Internal {
+        let retry_count: i32 = row.get(7).map_err(|e| crate::error::Error::Internal {
+            message: e.to_string(),
+        })?;
+        let retry_at_str: Option<String> =
+            row.get(8).map_err(|e| crate::error::Error::Internal {
                 message: e.to_string(),
             })?;
-            let retry_at_str: Option<String> =
-                row.get(4).map_err(|e| crate::error::Error::Internal {
-                    message: e.to_string(),
-                })?;
 
-            // Check if retry is scheduled
-            if let Some(retry_at_s) = retry_at_str {
-                let retry_at = crate::store::turso::parse_turso_timestamp(&retry_at_s)?;
+        if status == WorkflowStatus::Error {
+            if let Some(ref retry_at_s) = retry_at_str {
+                let retry_at = crate::store::turso::parse_turso_timestamp(retry_at_s)?;
                 if current_time < retry_at {
-                    // Not ready yet
                     return Err(crate::error::Error::StepNotReady {
                         retry_at,
                         retry_count: retry_count as u32,
                     });
                 }
-                // WARNING: KNOWN RACE CONDITION - If two workers poll simultaneously when retry_at
-                // is ready, both may receive Execute guards. This requires SELECT FOR UPDATE or
-                // optimistic locking to fix properly. Accepted by design - requires larger redesign.
 
-                // Time to retry! Clear retry_at and proceed
                 crate::store::turso::query(SQL_CLEAR_RETRY)
-                    .bind(run_id)
-                    .bind(step_id)
+                    .bind(id)
                     .execute_once(db)
                     .await?;
 
-                tracing::info!(
-                    "Step {} (run {}) ready for retry (attempt {}, scheduled at {})",
-                    step_id,
-                    run_id,
-                    retry_count + 1,
-                    retry_at
-                );
-
-                return Ok(StepResult::Execute(Box::new(Self {
-                    db: db.clone(),
-                    run_id,
-                    step_id: step_id.to_string(),
-                    completed: false,
-                })));
-            }
-
-            // No retry scheduled - this is a permanent error
-            let error_json: serde_json::Value = if let Some(s) = &error_str {
-                serde_json::from_str(s)?
+                status = WorkflowStatus::Running;
             } else {
-                serde_json::json!({
-                    "is_transient": false,
-                    "message": "Unknown error"
-                })
-            };
+                let error_str: Option<String> =
+                    row.get(6).map_err(|e| crate::error::Error::Internal {
+                        message: e.to_string(),
+                    })?;
+                let error_val: serde_json::Value = if let Some(s) = error_str {
+                    serde_json::from_str(&s)?
+                } else {
+                    serde_json::json!({
+                        "is_transient": false,
+                        "message": "Unknown error"
+                    })
+                };
 
-            return Err(crate::error::Error::RetriesExhausted {
-                error: error_json,
-                attempts: retry_count as u32,
-            });
+                return Err(crate::error::Error::RetriesExhausted {
+                    error: error_val,
+                    attempts: retry_count as u32,
+                });
+            }
         }
 
-        // Step is RUNNING or in other state, proceed with execution
-        Ok(StepResult::Execute(Box::new(Self {
-            db: db.clone(),
-            run_id,
-            step_id: step_id.to_string(),
-            completed: false,
-        })))
+        // If we updated the status, we should ideally return the updated record.
+        let row = if status == WorkflowStatus::Running && retry_at_str.is_some() {
+            crate::store::turso::query("SELECT id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at FROM pgqrs_workflow_steps WHERE id = ?")
+                .bind(id)
+                .fetch_one_once(db)
+                .await?
+        } else {
+            row
+        };
+
+        Ok(StepRecord {
+            id: row.get(0).unwrap(),
+            run_id: row.get(1).unwrap(),
+            step_name: row.get(2).unwrap(),
+            status: WorkflowStatus::from_str(&row.get::<String>(3).unwrap()).unwrap(),
+            input: row
+                .get::<Option<String>>(4)
+                .unwrap()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            output: row
+                .get::<Option<String>>(5)
+                .unwrap()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            error: row
+                .get::<Option<String>>(6)
+                .unwrap()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            created_at: crate::store::turso::parse_turso_timestamp(&row.get::<String>(9).unwrap())?,
+            updated_at: crate::store::turso::parse_turso_timestamp(
+                &row.get::<String>(10).unwrap(),
+            )?,
+        })
     }
 }
 
@@ -157,8 +171,7 @@ impl StepGuard for TursoStepGuard {
         let output_str = output.to_string();
         crate::store::turso::query(SQL_STEP_SUCCESS)
             .bind(output_str)
-            .bind(self.run_id)
-            .bind(self.step_id.as_str())
+            .bind(self.id)
             .execute_once(&self.db)
             .await?;
         Ok(())
@@ -169,12 +182,9 @@ impl StepGuard for TursoStepGuard {
         error: serde_json::Value,
         current_time: DateTime<Utc>,
     ) -> Result<()> {
-        // Ensure error has is_transient field
         let error_record = if error.get("is_transient").is_some() {
-            // Error already has is_transient field (from TransientStepError)
             error
         } else {
-            // Wrap as non-transient error
             serde_json::json!({
                 "is_transient": false,
                 "code": "NON_RETRYABLE",
@@ -182,19 +192,16 @@ impl StepGuard for TursoStepGuard {
             })
         };
 
-        // Check if error is transient
         let is_transient = error_record
             .get("is_transient")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
         if is_transient {
-            // Get current retry count from DB
             let row = crate::store::turso::query(
-                "SELECT retry_count FROM pgqrs_workflow_steps WHERE run_id = ? AND step_id = ?",
+                "SELECT retry_count FROM pgqrs_workflow_steps WHERE id = ?",
             )
-            .bind(self.run_id)
-            .bind(self.step_id.as_str())
+            .bind(self.id)
             .fetch_one_once(&self.db)
             .await?;
 
@@ -202,25 +209,19 @@ impl StepGuard for TursoStepGuard {
                 message: e.to_string(),
             })?;
 
-            // Check retry policy
             let policy = StepRetryPolicy::default();
             if !policy.should_retry(retry_count as u32) {
-                // Retries exhausted - mark as permanent error
                 let error_str = error_record.to_string();
                 crate::store::turso::query(SQL_STEP_FAIL)
                     .bind(error_str)
-                    .bind(self.run_id)
-                    .bind(self.step_id.as_str())
+                    .bind(self.id)
                     .execute_once(&self.db)
                     .await?;
                 self.completed = true;
                 return Ok(());
             }
 
-            // Calculate retry delay
             let delay_seconds = policy.extract_retry_delay(&error_record, retry_count);
-
-            // Validate delay_seconds fits within i64::MAX to prevent overflow
             let delay_i64 =
                 delay_seconds
                     .try_into()
@@ -232,8 +233,6 @@ impl StepGuard for TursoStepGuard {
                     })?;
 
             let retry_at = current_time + chrono::Duration::seconds(delay_i64);
-
-            // Validate retry_at is not in the past (allow immediate retry when delay is 0)
             if retry_at < current_time {
                 return Err(crate::error::Error::ValidationFailed {
                     reason: format!(
@@ -246,39 +245,24 @@ impl StepGuard for TursoStepGuard {
             let retry_at_str = crate::store::turso::format_turso_timestamp(&retry_at);
             let new_retry_count = retry_count + 1;
 
-            // Mark as ERROR with retry scheduled
             let error_str = error_record.to_string();
             crate::store::turso::query(SQL_STEP_FAIL)
                 .bind(error_str)
-                .bind(self.run_id)
-                .bind(self.step_id.as_str())
+                .bind(self.id)
                 .execute_once(&self.db)
                 .await?;
 
-            // Schedule retry
             crate::store::turso::query(SQL_SCHEDULE_RETRY)
                 .bind(new_retry_count)
                 .bind(retry_at_str)
-                .bind(self.run_id)
-                .bind(self.step_id.as_str())
+                .bind(self.id)
                 .execute_once(&self.db)
                 .await?;
-
-            tracing::info!(
-                "Step {} (run {}) scheduled for retry at {} ({} previous failures, delay {}s)",
-                self.step_id,
-                self.run_id,
-                retry_at,
-                retry_count,
-                delay_seconds
-            );
         } else {
-            // Non-transient error - just mark as failed
             let error_str = error_record.to_string();
             crate::store::turso::query(SQL_STEP_FAIL)
                 .bind(error_str)
-                .bind(self.run_id)
-                .bind(self.step_id.as_str())
+                .bind(self.id)
                 .execute_once(&self.db)
                 .await?;
         }
@@ -292,25 +276,24 @@ impl Drop for TursoStepGuard {
     fn drop(&mut self) {
         if !self.completed {
             let db = self.db.clone();
-            let run_id = self.run_id;
-            let step_id = self.step_id.clone();
+            let id = self.id;
 
-            tokio::spawn(async move {
-                // Wrap drop error as non-transient
-                let error = serde_json::json!({
-                    "is_transient": false,
-                    "code": "GUARD_DROPPED",
-                    "message": "Step dropped without completion",
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let error = serde_json::json!({
+                        "is_transient": false,
+                        "code": "GUARD_DROPPED",
+                        "message": "Step dropped without completion",
+                    });
+                    let error_str = error.to_string();
+
+                    let _ = crate::store::turso::query(SQL_STEP_FAIL)
+                        .bind(error_str)
+                        .bind(id)
+                        .execute_once(&db)
+                        .await;
                 });
-                let error_str = error.to_string();
-
-                let _ = crate::store::turso::query(SQL_STEP_FAIL)
-                    .bind(error_str)
-                    .bind(run_id)
-                    .bind(step_id)
-                    .execute_once(&db)
-                    .await;
-            });
+            }
         }
     }
 }

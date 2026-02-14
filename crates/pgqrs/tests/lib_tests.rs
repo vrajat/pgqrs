@@ -599,7 +599,7 @@ async fn test_interval_parameter_syntax() {
     let queue_name = "test_interval_queue";
 
     // Create queue
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let producer = pgqrs::producer("test_interval_parameter_syntax", 3005, queue_name)
         .create(&store)
@@ -671,7 +671,7 @@ async fn test_referential_integrity_checks() {
     let queue_name = "test_integrity_queue";
 
     // Create queue and get queue_id
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     // Normal state: verify should pass
     let verify_result = pgqrs::admin(&store).verify().await;
@@ -736,11 +736,11 @@ async fn test_create_duplicate_queue_error() {
     let queue_name = "test_duplicate_queue";
 
     // Create queue first time - should succeed
-    let first_result = pgqrs::admin(&store).create_queue(queue_name).await;
+    let first_result = store.queue(queue_name).await;
     assert!(first_result.is_ok(), "First queue creation should succeed");
 
     // Try to create the same queue again - should fail with QueueAlreadyExists error
-    let second_result = pgqrs::admin(&store).create_queue(queue_name).await;
+    let second_result = store.queue(queue_name).await;
     assert!(second_result.is_err(), "Second queue creation should fail");
 
     match second_result {
@@ -772,7 +772,7 @@ async fn test_queue_deletion_with_references() {
     let queue_name = "test_deletion_refs";
 
     // Create queue and add a message
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let producer = pgqrs::producer("test_queue_deletion_with_references", 3006, queue_name)
         .create(&store)
@@ -1732,8 +1732,8 @@ async fn test_archive_count_for_queue() {
     let q1_name = "test_archive_count_q1";
     let q2_name = "test_archive_count_q2";
 
-    let q1 = pgqrs::admin(&store).create_queue(q1_name).await.unwrap();
-    let q2 = pgqrs::admin(&store).create_queue(q2_name).await.unwrap();
+    let q1 = store.queue(q1_name).await.unwrap();
+    let q2 = store.queue(q2_name).await.unwrap();
 
     let consumer1 = pgqrs::consumer("host", 4000, q1_name)
         .create(&store)
@@ -1802,7 +1802,7 @@ async fn test_archive_count_for_queue() {
 async fn test_consumer_extend_visibility_behavior() {
     let store = create_store().await;
     let queue_name = "test_extend_visibility_behavior";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let payload = json!({"extend": true});
     pgqrs::enqueue()
@@ -1860,7 +1860,7 @@ async fn test_consumer_extend_visibility_behavior() {
 async fn test_worker_health_and_heartbeat() {
     let store = create_store().await;
     let queue_name = "test_worker_health";
-    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let _queue_info = store.queue(queue_name).await.unwrap();
 
     let consumer = pgqrs::consumer("host", 5000, queue_name)
         .create(&store)
@@ -1911,10 +1911,10 @@ async fn test_worker_health_and_heartbeat() {
 async fn test_admin_worker_management() {
     let store = create_store().await;
     let queue_name = "test_admin_mgmt";
-    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let _queue_info = store.queue(queue_name).await.unwrap();
 
     // Initial workers
-    // let initial_workers = pgqrs::admin(&store).list_workers().await.unwrap();
+    // let initial_workers = store.workers().list().await.unwrap();
 
     // Create 2 temporary workers
     let c1 = pgqrs::consumer("host1", 6000, queue_name)
@@ -1926,7 +1926,7 @@ async fn test_admin_worker_management() {
         .await
         .unwrap();
 
-    let workers = pgqrs::admin(&store).list_workers().await.unwrap();
+    let workers = store.workers().list().await.unwrap();
     // assert!(workers.len() >= initial_workers.len() + 2); // Flaky due to parallel tests
     assert!(workers.iter().any(|w| w.id == c1.worker_id()));
     assert!(workers.iter().any(|w| w.id == c2.worker_id()));
@@ -1939,7 +1939,7 @@ async fn test_admin_worker_management() {
     let deleted = pgqrs::admin(&store).delete_worker(w1_id).await.unwrap();
     assert_eq!(deleted, 1);
 
-    let workers_final = pgqrs::admin(&store).list_workers().await.unwrap();
+    let workers_final = store.workers().list().await.unwrap();
     assert!(!workers_final.iter().any(|w| w.id == w1_id));
 
     // Cleanup
@@ -1956,7 +1956,7 @@ async fn test_admin_worker_management() {
 async fn test_archive_replay_and_recovery() {
     let store = create_store().await;
     let queue_name = "test_replay";
-    let queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let queue_info = store.queue(queue_name).await.unwrap();
 
     let producer = pgqrs::producer("host", 7000, queue_name)
         .create(&store)
@@ -2031,7 +2031,7 @@ async fn test_archive_replay_and_recovery() {
 async fn test_batch_management_ops() {
     let store = create_store().await;
     let queue_name = "test_batch_ops";
-    let _queue_info = pgqrs::admin(&store).create_queue(queue_name).await.unwrap();
+    let _queue_info = store.queue(queue_name).await.unwrap();
 
     let payloads: Vec<_> = (0..5).map(|i| json!({"batch": i})).collect();
     let ids = pgqrs::enqueue()

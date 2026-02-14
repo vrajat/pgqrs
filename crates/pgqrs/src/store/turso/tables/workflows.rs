@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
-use crate::types::{NewWorkflow, WorkflowRecord};
+use crate::types::{NewWorkflowRecord, WorkflowRecord};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::Arc;
@@ -90,7 +90,7 @@ impl TursoWorkflowTable {
 
 #[async_trait]
 impl crate::store::WorkflowTable for TursoWorkflowTable {
-    async fn insert(&self, data: NewWorkflow) -> Result<WorkflowRecord> {
+    async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 

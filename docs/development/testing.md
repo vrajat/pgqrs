@@ -144,7 +144,7 @@ async fn test_create_queue() {
     admin.install().await.unwrap();
 
     // Test
-    let queue = admin.create_queue("test_queue").await.unwrap();
+    let queue = store.queue("test_queue").await.unwrap();
     assert_eq!(queue.queue_name, "test_queue");
 
     // Cleanup
@@ -173,7 +173,7 @@ impl TestFixture {
         admin.install().await.unwrap();
 
         let queue_name = format!("test_{}", uuid::Uuid::new_v4());
-        admin.create_queue(&queue_name).await.unwrap();
+        store.queue(&queue_name).await.unwrap();
 
         Self { admin, queue_name }
     }
@@ -262,7 +262,7 @@ async def admin():
 
 @pytest_asyncio.fixture
 async def queue(admin):
-    queue = await admin.create_queue("test_queue")
+    queue = await store.queue("test_queue")
     yield queue
     await admin.delete_queue("test_queue")
 

@@ -94,7 +94,7 @@ async def admin_tasks():
 
     # Setup
     await admin.install()
-    await admin.create_queue("my_queue")
+    await store.queue("my_queue")
 
     # Monitoring
     queues = await admin.get_queues()

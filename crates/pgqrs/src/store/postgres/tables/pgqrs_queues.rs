@@ -4,7 +4,7 @@
 //! Complex operations like referential integrity checks and transaction management remain in admin.rs.
 
 use crate::error::Result;
-use crate::types::QueueInfo;
+use crate::types::QueueRecord;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -97,8 +97,8 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The created queue with generated ID and timestamp
-    async fn insert(&self, data: crate::types::NewQueue) -> Result<QueueInfo> {
-        let queue = sqlx::query_as::<_, QueueInfo>(INSERT_QUEUE)
+    async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
+        let queue = sqlx::query_as::<_, QueueRecord>(INSERT_QUEUE)
             .bind(&data.queue_name)
             .fetch_one(&self.pool)
             .await
@@ -129,8 +129,8 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The queue record
-    async fn get(&self, id: i64) -> Result<QueueInfo> {
-        let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_ID)
+    async fn get(&self, id: i64) -> Result<QueueRecord> {
+        let queue = sqlx::query_as::<_, QueueRecord>(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
             .await
@@ -147,8 +147,8 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// List of all queue records
-    async fn list(&self) -> Result<Vec<QueueInfo>> {
-        let queues = sqlx::query_as::<_, QueueInfo>(LIST_ALL_QUEUES)
+    async fn list(&self) -> Result<Vec<QueueRecord>> {
+        let queues = sqlx::query_as::<_, QueueRecord>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -206,8 +206,8 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The queue record
-    async fn get_by_name(&self, name: &str) -> Result<QueueInfo> {
-        let queue = sqlx::query_as::<_, QueueInfo>(GET_QUEUE_BY_NAME)
+    async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
+        let queue = sqlx::query_as::<_, QueueRecord>(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_one(&self.pool)
             .await

@@ -2,12 +2,10 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::{
     Admin, ArchiveTable, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable, Run,
-    StepResult, Store, Worker, WorkerTable, Workflow, WorkflowRunTable, WorkflowStepTable,
+    RunRecordTable, StepGuard, StepRecordTable, Store, Worker, WorkerTable, Workflow,
     WorkflowTable,
 };
-use crate::types::{WorkflowRecord, WorkflowRun};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 use std::sync::Arc;
@@ -19,8 +17,8 @@ pub mod workflow;
 use self::tables::archive::SqliteArchiveTable;
 use self::tables::messages::SqliteMessageTable;
 use self::tables::queues::SqliteQueueTable;
-use self::tables::runs::SqliteWorkflowRunTable;
-use self::tables::steps::SqliteWorkflowStepTable;
+use self::tables::runs::SqliteRunRecordTable;
+use self::tables::steps::SqliteStepRecordTable;
 use self::tables::workers::SqliteWorkerTable;
 use self::tables::workflows::SqliteWorkflowTable;
 
@@ -33,17 +31,12 @@ pub struct SqliteStore {
     workers: Arc<SqliteWorkerTable>,
     archive: Arc<SqliteArchiveTable>,
     workflows: Arc<SqliteWorkflowTable>,
-    workflow_runs: Arc<SqliteWorkflowRunTable>,
-    workflow_steps: Arc<SqliteWorkflowStepTable>,
+    workflow_runs: Arc<SqliteRunRecordTable>,
+    workflow_steps: Arc<SqliteStepRecordTable>,
 }
 
 impl SqliteStore {
     /// Create a new SQLite store with default optimizations.
-    ///
-    /// This initializes the pool with:
-    /// - WAL mode enabled for concurrency
-    /// - 5s busy timeout
-    /// - Foreign Keys enforced
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
@@ -73,27 +66,14 @@ impl SqliteStore {
             workers: Arc::new(SqliteWorkerTable::new(pool.clone())),
             archive: Arc::new(SqliteArchiveTable::new(pool.clone())),
             workflows: Arc::new(SqliteWorkflowTable::new(pool.clone())),
-            workflow_runs: Arc::new(SqliteWorkflowRunTable::new(pool.clone())),
-            workflow_steps: Arc::new(SqliteWorkflowStepTable::new(pool)),
+            workflow_runs: Arc::new(SqliteRunRecordTable::new(pool.clone())),
+            workflow_steps: Arc::new(SqliteStepRecordTable::new(pool)),
         })
     }
 }
 
-/// Parse SQLite TEXT timestamp to DateTime<Utc>
-pub fn parse_sqlite_timestamp(s: &str) -> Result<DateTime<Utc>> {
-    // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" format
-    // We append +0000 to parse it as UTC
-    DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::Internal {
-            message: format!("Invalid timestamp: {}", e),
-        })
-}
-
-/// Format DateTime<Utc> for SQLite TEXT storage
-pub fn format_sqlite_timestamp(dt: &DateTime<Utc>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
+pub use crate::store::sqlite_utils::format_timestamp as format_sqlite_timestamp;
+pub use crate::store::sqlite_utils::parse_timestamp as parse_sqlite_timestamp;
 
 #[async_trait]
 impl Store for SqliteStore {
@@ -110,15 +90,7 @@ impl Store for SqliteStore {
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
-        sqlx::query(sql)
-            .bind(param)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| Error::QueryFailed {
-                query: sql.to_string(),
-                source: Box::new(e),
-                context: format!("Failed to execute raw SQL with param {}", param),
-            })?;
+        sqlx::query(sql).bind(param).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -127,50 +99,26 @@ impl Store for SqliteStore {
             .bind(param1)
             .bind(param2)
             .execute(&self.pool)
-            .await
-            .map_err(|e| Error::QueryFailed {
-                query: sql.to_string(),
-                source: Box::new(e),
-                context: format!(
-                    "Failed to execute raw SQL with params {}, {}",
-                    param1, param2
-                ),
-            })?;
+            .await?;
         Ok(())
     }
 
     async fn query_int(&self, sql: &str) -> Result<i64> {
-        sqlx::query_scalar(sql)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| Error::QueryFailed {
-                query: sql.to_string(),
-                source: Box::new(e),
-                context: "Failed to query int".into(),
-            })
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
     }
 
     async fn query_string(&self, sql: &str) -> Result<String> {
-        sqlx::query_scalar(sql)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| Error::QueryFailed {
-                query: sql.to_string(),
-                source: Box::new(e),
-                context: "Failed to query string".into(),
-            })
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
     }
 
     async fn query_bool(&self, sql: &str) -> Result<bool> {
-        let val: i64 = sqlx::query_scalar(sql)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| Error::QueryFailed {
-                query: sql.to_string(),
-                source: Box::new(e),
-                context: "Failed to query bool".into(),
-            })?;
-        Ok(val != 0)
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
     }
 
     fn config(&self) -> &Config {
@@ -197,27 +145,46 @@ impl Store for SqliteStore {
         self.workflows.as_ref()
     }
 
-    fn workflow_runs(&self) -> &dyn WorkflowRunTable {
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
         self.workflow_runs.as_ref()
     }
 
-    fn workflow_steps(&self) -> &dyn WorkflowStepTable {
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
         self.workflow_steps.as_ref()
     }
 
     async fn acquire_step(
         &self,
         run_id: i64,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> Result<StepResult<serde_json::Value>> {
+    ) -> Result<crate::types::StepRecord> {
         use self::workflow::guard::SqliteStepGuard;
-        SqliteStepGuard::acquire(&self.pool, run_id, step_id, current_time).await
+        SqliteStepGuard::acquire_record(&self.pool, run_id, step_name, current_time).await
     }
 
-    async fn admin(&self, config: &Config) -> Result<Box<dyn Admin>> {
+    async fn bootstrap(&self) -> Result<()> {
+        sqlx::migrate!("migrations/sqlite")
+            .run(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::Database(e.into()))?;
+        Ok(())
+    }
+
+    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
+        use self::workflow::guard::SqliteStepGuard;
+        Box::new(SqliteStepGuard::new(self.pool.clone(), id))
+    }
+
+    async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
         use self::worker::admin::SqliteAdmin;
-        let admin = SqliteAdmin::new(self.pool.clone(), config.clone());
+        let admin = SqliteAdmin::new(self.pool.clone(), hostname, port, config.clone()).await?;
+        Ok(Box::new(admin))
+    }
+
+    async fn admin_ephemeral(&self, config: &Config) -> Result<Box<dyn Admin>> {
+        use self::worker::admin::SqliteAdmin;
+        let admin = SqliteAdmin::new_ephemeral(self.pool.clone(), config.clone()).await?;
         Ok(Box::new(admin))
     }
 
@@ -229,12 +196,9 @@ impl Store for SqliteStore {
         config: &Config,
     ) -> Result<Box<dyn Producer>> {
         use self::worker::producer::SqliteProducer;
-
         let queue_info = self.queues.get_by_name(queue_name).await?;
-
         let producer =
             SqliteProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-
         Ok(Box::new(producer))
     }
 
@@ -246,28 +210,35 @@ impl Store for SqliteStore {
         config: &Config,
     ) -> Result<Box<dyn Consumer>> {
         use self::worker::consumer::SqliteConsumer;
-
         let queue_info = self.queues.get_by_name(queue_name).await?;
-
         let consumer =
             SqliteConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-
         Ok(Box::new(consumer))
     }
 
-    fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
-        use self::workflow::handle::SqliteWorkflow;
-        Ok(Box::new(SqliteWorkflow::new(name)))
+    async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
+        let queue_exists = self.queues.exists(name).await?;
+        if queue_exists {
+            return Err(crate::error::Error::QueueAlreadyExists {
+                name: name.to_string(),
+            });
+        }
+
+        self.queues
+            .insert(crate::types::NewQueueRecord {
+                queue_name: name.to_string(),
+            })
+            .await
     }
 
-    async fn create_workflow(&self, name: &str) -> Result<WorkflowRecord> {
-        // Ensure backing queue exists (name is the queue name for now).
-        // We avoid relying on backend-specific upsert SQL by doing: exists -> insert.
+    async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
+        use self::workflow::handle::SqliteWorkflow;
+
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
                 .queues
-                .insert(crate::types::NewQueue {
+                .insert(crate::types::NewQueueRecord {
                     queue_name: name.to_string(),
                 })
                 .await?;
@@ -275,16 +246,14 @@ impl Store for SqliteStore {
 
         let queue = self.queues.get_by_name(name).await?;
 
-        // Create workflow definition. This is strict: it errors if the workflow already exists.
-        let workflow = self
+        let workflow_record = self
             .workflows
-            .insert(crate::types::NewWorkflow {
+            .insert(crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
             })
             .await
             .map_err(|e| {
-                // SQLite unique constraint violation code is 2067 (SQLITE_CONSTRAINT_UNIQUE)
                 if let crate::error::Error::QueryFailed { source, .. } = &e {
                     if let Some(sqlx::Error::Database(db_err)) =
                         source.downcast_ref::<sqlx::Error>()
@@ -299,34 +268,28 @@ impl Store for SqliteStore {
                 e
             })?;
 
-        Ok(workflow)
+        Ok(Box::new(SqliteWorkflow::new(workflow_record)))
     }
 
-    async fn trigger_workflow(
+    async fn trigger(
         &self,
         name: &str,
         input: Option<serde_json::Value>,
-    ) -> Result<WorkflowRun> {
-        use crate::types::NewMessage;
+    ) -> Result<crate::types::QueueMessage> {
+        use crate::types::NewQueueMessage;
 
         let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
 
-        let run = self
-            .workflow_runs
-            .insert(crate::types::NewWorkflowRun {
-                workflow_id: workflow.id,
-                input,
-            })
-            .await?;
-
-        // Enqueue message with only run_id.
         let now = chrono::Utc::now();
-        let payload = serde_json::json!({ "run_id": run.id });
+        let payload = serde_json::json!({
+            "workflow_id": workflow.id,
+            "input": input
+        });
 
-        let _msg = self
+        let msg = self
             .messages
-            .insert(NewMessage {
+            .insert(NewQueueMessage {
                 queue_id: queue.id,
                 payload,
                 read_ct: 0,
@@ -337,17 +300,39 @@ impl Store for SqliteStore {
             })
             .await?;
 
-        Ok(run)
+        Ok(msg)
     }
 
-    async fn run(&self, run_id: i64) -> Result<Box<dyn Run>> {
+    async fn run(&self, message: crate::types::QueueMessage) -> Result<Box<dyn Run>> {
         use self::workflow::handle::SqliteRun;
+
+        let payload = &message.payload;
+
+        let run_id = if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
+            run_id
+        } else if let Some(workflow_id) = payload.get("workflow_id").and_then(|v| v.as_i64()) {
+            let input = payload.get("input").cloned();
+            let run = self
+                .workflow_runs
+                .insert(crate::types::NewRunRecord { workflow_id, input })
+                .await?;
+            run.id
+        } else {
+            return Err(crate::error::Error::Internal {
+                message: "Invalid workflow message payload".to_string(),
+            });
+        };
+
         Ok(Box::new(SqliteRun::new(self.pool.clone(), run_id)))
     }
 
-    fn worker(&self, id: i64) -> Box<dyn Worker> {
+    async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
         use self::worker::SqliteWorkerHandle;
-        Box::new(SqliteWorkerHandle::new(self.pool.clone(), id))
+        let worker_record = self.workers.get(id).await?;
+        Ok(Box::new(SqliteWorkerHandle::new(
+            self.pool.clone(),
+            worker_record,
+        )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {

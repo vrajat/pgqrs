@@ -671,7 +671,7 @@ impl Store for AnyStore {
 /// admin.install().await?;
 /// admin.verify().await?;
 ///
-/// let queue = admin.create_queue("jobs").await?;
+/// let queue = store.queue("jobs").await?;
 /// ```
 pub struct Admin {
     store: AnyStore,
@@ -1144,7 +1144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup
     let admin = Admin::new(&config).await?;
     admin.install().await?;
-    admin.create_queue("jobs").await?;
+    store.queue("jobs").await?;
 
     // Produce
     let producer = Producer::new(&config, "jobs", "localhost", 8080).await?;

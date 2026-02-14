@@ -31,8 +31,9 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
 
 -- Step state (for crash recovery)
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
+    id BIGSERIAL PRIMARY KEY,
     run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(id) ON DELETE CASCADE,
-    step_id VARCHAR(255) NOT NULL,
+    step_name VARCHAR(255) NOT NULL,
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
     output JSONB,
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
     retry_at TIMESTAMPTZ,
     last_retry_at TIMESTAMPTZ,
 
-    PRIMARY KEY (run_id, step_id)
+    UNIQUE (run_id, step_name)
 );
 
 -- Indexes

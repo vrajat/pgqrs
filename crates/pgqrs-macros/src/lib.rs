@@ -8,7 +8,7 @@ use syn::{parse_macro_input, ItemFn};
 ///
 /// `#[pgqrs_step]` wraps a step function so that it:
 ///
-/// - Derives a **step ID** from the function name.
+/// - Derives a **step name** from the function name.
 /// - Uses [`pgqrs::Run`] to:
 ///   - Skip execution if the step has already completed successfully.
 ///   - Run the step body when needed.
@@ -26,7 +26,7 @@ use syn::{parse_macro_input, ItemFn};
 ///    - The function must take **at least one argument**.
 ///    - The first argument must be a **named** pattern, e.g. `ctx` or `workflow`.
 ///    - That context is used to construct the step guard via:
-///      `ctx.acquire_step(step_id, current_time).await?`.
+///      `ctx.acquire_step(step_name, current_time).await?`.
 ///    - Concretely, the context type is expected to implement `pgqrs::Run`.
 ///
 ///    If the first argument is missing or is not a simple identifier pattern,
@@ -47,17 +47,17 @@ use syn::{parse_macro_input, ItemFn};
 ///      `success` / `fail` methods, so the annotated function is typically
 ///      declared as `async fn`.
 ///
-/// # Step ID derivation
+/// # Step name derivation
 ///
 /// The step identifier used by the workflow engine is derived from the function
 /// name:
 ///
 /// ```rust,ignore
 /// let fn_name = &input_fn.sig.ident;
-/// let step_id = fn_name.to_string(); // step ID is the function name
+/// let step_name = fn_name.to_string(); // step name is the function name
 /// ```
 ///
-/// This means that renaming a step function will also change its step ID, which
+/// This means that renaming a step function will also change its step name, which
 /// can affect how previously persisted step state is associated. Choose stable
 /// and descriptive names for step functions.
 ///
@@ -66,7 +66,7 @@ use syn::{parse_macro_input, ItemFn};
 /// At runtime, the generated wrapper:
 ///
 /// 1. Constructs a step guard:
-///    `ctx.acquire_step(step_id).await?`.
+///    `ctx.acquire_step(step_name).await?`.
 /// 2. Examines the returned [`pgqrs::store::StepResult`]:
 ///    - `StepResult::Skipped(val)` — the step has already completed; the stored
 ///      value is returned immediately as `Ok(val)` without re-running the body.
@@ -116,7 +116,7 @@ use syn::{parse_macro_input, ItemFn};
 pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     let fn_name = &input_fn.sig.ident;
-    let step_id = fn_name.to_string(); // Default to fn name
+    let step_name = fn_name.to_string(); // Default to fn name
     let attrs = &input_fn.attrs;
 
     // Identify the first argument name to use as context (e.g., ctx)
@@ -185,29 +185,34 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
             // Import trait for extension methods
             use pgqrs::RunExt as _;
 
-            let step_id = #step_id;
+            let step_name = #step_name;
 
             // Attempt to initialize the step via workflow context
             let current_time = chrono::Utc::now();
-            let guard_res = #first_arg_name.acquire_step(step_id, current_time).await?;
+            let step_rec = #first_arg_name.acquire_step(step_name, current_time).await?;
 
-            match guard_res {
-                pgqrs::store::StepResult::Skipped(val) => Ok(serde_json::from_value(val)?),
-                pgqrs::store::StepResult::Execute(mut guard) => {
-                    // Execute the original function body and capture the result
-                    let result: #output_type = async { #block }.await;
-
-                    match &result {
-                        Ok(val) => guard.success(val).await?,
-                        Err(e) => {
-                            // Pass the error string directly. guard.fail handles serialization.
-                            guard.fail(&e.to_string()).await?
-                        },
-                    }
-
-                    result
-                }
+            if step_rec.status == pgqrs::WorkflowStatus::Success {
+                return Ok(serde_json::from_value(step_rec.output.unwrap_or(serde_json::Value::Null))?);
             }
+
+            // Execute the original function body and capture the result
+            let result: #output_type = async { #block }.await;
+
+            match &result {
+                Ok(val) => {
+                    let output_val = serde_json::to_value(val)?;
+                    #first_arg_name.complete_step(step_name, output_val).await?;
+                }
+                Err(e) => {
+                    let error_val = serde_json::json!({
+                        "message": e.to_string(),
+                        "is_transient": false
+                    });
+                    #first_arg_name.fail_step(step_name, error_val, current_time).await?;
+                },
+            }
+
+            result
         }
     };
 
@@ -341,7 +346,13 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
             // Handle terminal state
             match &result {
                 Ok(val) => #first_arg_name.success(val).await?,
-                Err(e) => #first_arg_name.fail(&e.to_string()).await?,
+                Err(e) => {
+                    let error_val = serde_json::json!({
+                        "message": e.to_string(),
+                        "is_transient": false
+                    });
+                    #first_arg_name.fail_with_json(error_val).await?;
+                }
             }
 
             result

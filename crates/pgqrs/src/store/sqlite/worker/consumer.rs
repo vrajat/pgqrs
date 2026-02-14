@@ -3,7 +3,7 @@ use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::WorkerTable;
-use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
+use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
@@ -53,8 +53,8 @@ const DELETE_MESSAGE_OWNED: &str = r#"
 
 pub struct SqliteConsumer {
     pub pool: SqlitePool,
-    queue_info: crate::types::QueueInfo,
-    worker_info: crate::types::WorkerInfo,
+    queue_info: QueueRecord,
+    worker_record: WorkerRecord,
     _config: crate::config::Config,
     workers: Arc<SqliteWorkerTable>,
     messages: Arc<SqliteMessageTable>,
@@ -63,13 +63,13 @@ pub struct SqliteConsumer {
 impl SqliteConsumer {
     pub async fn new(
         pool: SqlitePool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &QueueRecord,
         hostname: &str,
         port: i32,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
-        let worker_info = workers
+        let worker_record = workers
             .register(Some(queue_info.id), hostname, port)
             .await?;
 
@@ -78,7 +78,7 @@ impl SqliteConsumer {
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
-            worker_info,
+            worker_record,
             _config: config.clone(),
             workers,
             messages,
@@ -87,17 +87,17 @@ impl SqliteConsumer {
 
     pub async fn new_ephemeral(
         pool: SqlitePool,
-        queue_info: &crate::types::QueueInfo,
+        queue_info: &QueueRecord,
         config: &crate::config::Config,
     ) -> Result<Self> {
         let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
-        let worker_info = workers.register_ephemeral(Some(queue_info.id)).await?;
+        let worker_record = workers.register_ephemeral(Some(queue_info.id)).await?;
         let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
 
         Ok(Self {
             pool,
             queue_info: queue_info.clone(),
-            worker_info,
+            worker_record,
             _config: config.clone(),
             workers,
             messages,
@@ -107,35 +107,37 @@ impl SqliteConsumer {
 
 #[async_trait]
 impl crate::store::Worker for SqliteConsumer {
-    fn worker_id(&self) -> i64 {
-        self.worker_info.id
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
     }
 
     async fn heartbeat(&self) -> Result<()> {
-        self.workers.heartbeat(self.worker_info.id).await
+        self.workers.heartbeat(self.worker_record.id).await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
-        self.workers.is_healthy(self.worker_info.id, max_age).await
+        self.workers
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 
     async fn status(&self) -> Result<WorkerStatus> {
-        self.workers.get_status(self.worker_info.id).await
+        self.workers.get_status(self.worker_record.id).await
     }
 
     async fn suspend(&self) -> Result<()> {
-        self.workers.suspend(self.worker_info.id).await
+        self.workers.suspend(self.worker_record.id).await
     }
 
     async fn resume(&self) -> Result<()> {
-        self.workers.resume(self.worker_info.id).await
+        self.workers.resume(self.worker_record.id).await
     }
 
     async fn shutdown(&self) -> Result<()> {
         use crate::store::MessageTable;
         let pending = self
             .messages
-            .count_pending_filtered(self.queue_info.id, Some(self.worker_info.id))
+            .count_pending_filtered(self.queue_info.id, Some(self.worker_record.id))
             .await?;
 
         if pending > 0 {
@@ -144,7 +146,7 @@ impl crate::store::Worker for SqliteConsumer {
                 reason: format!("Consumer has {} pending messages", pending),
             });
         }
-        self.workers.shutdown(self.worker_info.id).await
+        self.workers.shutdown(self.worker_record.id).await
     }
 }
 
@@ -167,7 +169,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .bind(self.queue_info.id)
             .bind(limit as i64)
             .bind(vt as i32)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -199,7 +201,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .bind(self.queue_info.id)
             .bind(limit as i64)
             .bind(vt as i32)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .bind(now_str)
             .fetch_all(&self.pool)
             .await
@@ -220,7 +222,7 @@ impl crate::store::Consumer for SqliteConsumer {
         use crate::store::MessageTable;
         let c = self
             .messages
-            .extend_visibility(message_id, self.worker_info.id, additional_seconds)
+            .extend_visibility(message_id, self.worker_record.id, additional_seconds)
             .await?;
         Ok(c > 0)
     }
@@ -228,7 +230,7 @@ impl crate::store::Consumer for SqliteConsumer {
     async fn delete(&self, message_id: i64) -> Result<bool> {
         let rows = sqlx::query(DELETE_MESSAGE_OWNED)
             .bind(message_id)
-            .bind(self.worker_info.id)
+            .bind(self.worker_record.id)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -248,7 +250,7 @@ impl crate::store::Consumer for SqliteConsumer {
         // Use QueryBuilder to construct "DELETE ... WHERE id IN (...) RETURNING id"
         let mut query_builder =
             sqlx::QueryBuilder::new("DELETE FROM pgqrs_messages WHERE consumer_worker_id = ");
-        query_builder.push_bind(self.worker_info.id);
+        query_builder.push_bind(self.worker_record.id);
         query_builder.push(" AND id IN (");
         let mut separated = query_builder.separated(", ");
         for id in &message_ids {
@@ -373,7 +375,7 @@ impl crate::store::Consumer for SqliteConsumer {
             }
         }
 
-        match perform_archive(&mut conn, msg_id, self.worker_info.id).await {
+        match perform_archive(&mut conn, msg_id, self.worker_record.id).await {
             Ok(res) => {
                 sqlx::query("COMMIT")
                     .execute(&mut *conn)
@@ -405,17 +407,19 @@ impl crate::store::Consumer for SqliteConsumer {
         use crate::store::MessageTable;
         let res = self
             .messages
-            .release_messages_by_ids(message_ids, self.worker_info.id)
+            .release_messages_by_ids(message_ids, self.worker_record.id)
             .await?;
         Ok(res.iter().filter(|&&b| b).count() as u64)
     }
 }
 
+// Auto-cleanup for ephemeral workers
 impl Drop for SqliteConsumer {
     fn drop(&mut self) {
-        if self.worker_info.hostname.starts_with("__ephemeral__") {
+        if self.worker_record.hostname.starts_with("__ephemeral__") {
             let workers = self.workers.clone();
-            let worker_id = self.worker_info.id;
+            let worker_id = self.worker_record.id;
+
             // Best effort spawn
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {

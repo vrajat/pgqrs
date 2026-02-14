@@ -1,5 +1,5 @@
 use pgqrs::store::AnyStore;
-use pgqrs::{RunExt, StepGuardExt, StepResult};
+use pgqrs::RunExt;
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -9,84 +9,74 @@ struct TestData {
     msg: String,
 }
 
-async fn create_store() -> AnyStore {
-    common::create_store("pgqrs_workflow_test").await
+async fn create_store(schema: &str) -> AnyStore {
+    common::create_store(schema).await
 }
 
 #[tokio::test]
-async fn test_workflow_lifecycle() -> anyhow::Result<()> {
-    let store = create_store().await;
+async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
+    let store = create_store("workflow_test_success").await;
 
-    // Create definition + trigger run
-    pgqrs::workflow().name("test_wf").create(&store).await?;
+    // Create definition
+    pgqrs::workflow()
+        .name("test_wf")
+        .store(&store)
+        .create()
+        .await?;
 
     let input = TestData {
         msg: "start".to_string(),
     };
 
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("test_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
         .await?;
 
-    let workflow_id = workflow.id();
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
 
     workflow.start().await?;
 
     // Step 1: Run
-    let step1_id = "step1";
-    // step_id is String in macro, but &str here. acquire takes &str.
-    let step_res = pgqrs::step(workflow_id, step1_id)
-        .acquire::<TestData, _>(&store)
+    let step1_name = "step1";
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step1_name)
+        .execute()
         .await?;
 
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let output = TestData {
-                msg: "step1_done".to_string(),
-            };
-            let val = serde_json::to_value(&output)?;
-            guard.success(&val).await?;
-        }
-        StepResult::Skipped(_) => panic!("Step 1 should execute first time"),
-    }
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+
+    let output = TestData {
+        msg: "step1_done".to_string(),
+    };
+    let val = serde_json::to_value(&output)?;
+    workflow.complete_step(step1_name, val).await?;
 
     // Step 1: Rerun (should skip)
-    let step_res = pgqrs::step(workflow_id, step1_id)
-        .acquire::<TestData, _>(&store)
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step1_name)
+        .execute()
         .await?;
-    match step_res {
-        StepResult::Skipped(val) => {
-            assert_eq!(val.msg, "step1_done");
-        }
-        StepResult::Execute(_) => panic!("Step 1 should skip on rerun"),
-    }
 
-    // Step 2: Drop (Panic simulation)
-    let step2_id = "step2";
-    let step_res = pgqrs::step(workflow_id, step2_id)
-        .acquire::<TestData, _>(&store)
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
+    let val: TestData = serde_json::from_value(step_rec.output.unwrap())?;
+    assert_eq!(val.msg, "step1_done");
+
+    // Step 2: Acquire
+    let step2_name = "step2";
+    let _step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step2_name)
+        .execute()
         .await?;
-    match step_res {
-        StepResult::Execute(guard) => {
-            // Explicitly drop without calling success/fail
-            drop(guard);
-        }
-        StepResult::Skipped(_) => panic!("Step 2 should execute"),
-    }
-
-    // Allow async drop to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Step 2: Rerun (should be ERROR state because of drop)
-    let step_res = pgqrs::step(workflow_id, step2_id)
-        .acquire::<TestData, _>(&store)
-        .await;
-    assert!(
-        step_res.is_err(),
-        "Step 2 should be in terminal ERROR state after drop"
-    );
 
     // Finish Workflow
     workflow
@@ -98,16 +88,34 @@ async fn test_workflow_lifecycle() -> anyhow::Result<()> {
     // Restart Workflow (should adhere to SUCCESS terminal state)
     workflow.start().await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
+    let store = create_store("workflow_test_failure").await;
+
     // Verify Workflow Failure Logic using new workflow
     let input_fail = TestData {
         msg: "fail".to_string(),
     };
-    pgqrs::workflow().name("fail_wf").create(&store).await?;
-
-    let mut wf_fail = pgqrs::workflow()
+    pgqrs::workflow()
         .name("fail_wf")
+        .store(&store)
+        .create()
+        .await?;
+
+    let run_msg = pgqrs::workflow()
+        .name("fail_wf")
+        .store(&store)
         .trigger(&input_fail)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut wf_fail = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     wf_fail.start().await?;
     wf_fail

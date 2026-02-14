@@ -68,28 +68,6 @@ const COUNT_MESSAGES_BY_QUEUE_TX: &str = r#"
     SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1
 "#;
 
-/// Input data for creating a new message
-#[derive(Debug)]
-pub struct NewMessage {
-    pub queue_id: i64,
-    pub payload: serde_json::Value,
-    pub read_ct: i32,
-    pub enqueued_at: DateTime<Utc>,
-    pub vt: DateTime<Utc>,
-    pub producer_worker_id: Option<i64>,
-    pub consumer_worker_id: Option<i64>,
-}
-
-/// Parameters for batch message insertion
-#[derive(Debug)]
-pub struct BatchInsertParams {
-    pub read_ct: i32,
-    pub enqueued_at: DateTime<Utc>,
-    pub vt: DateTime<Utc>,
-    pub producer_worker_id: Option<i64>,
-    pub consumer_worker_id: Option<i64>,
-}
-
 /// Messages table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_messages` table without business logic.
@@ -104,7 +82,7 @@ impl Messages {
         Self { pool }
     }
 
-    pub async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+    pub async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
         let message = sqlx::query_as::<_, QueueMessage>(INSERT_MESSAGE)
             .bind(data.queue_id)
             .bind(data.payload)
@@ -456,7 +434,7 @@ impl Messages {
 
 #[async_trait]
 impl crate::store::MessageTable for Messages {
-    async fn insert(&self, data: crate::types::NewMessage) -> Result<QueueMessage> {
+    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
         self.insert(data).await
     }
 

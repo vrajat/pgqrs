@@ -19,7 +19,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         pgqrs::admin(&store).install().await?;
 
         // 2. Create Queue
-        let queue = pgqrs::admin(&store).create_queue(queue_name).await?;
+        let queue = store.queue(queue_name).await?;
 
         // 3. Create Producer & Enqueue
         let producer = pgqrs::producer("producer-host", 1001, queue_name)

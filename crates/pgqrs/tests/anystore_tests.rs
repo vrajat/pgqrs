@@ -16,8 +16,8 @@ async fn test_anystore_delegates_to_backend() {
 
     // Create a queue
     let queue_name = "test_anystore_delegation";
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(queue_name)
+    let queue_info = store
+        .queue(queue_name)
         .await
         .expect("Failed to create queue via AnyStore");
 
@@ -187,7 +187,7 @@ async fn test_anystore_admin_operations() {
 
     // Test admin operations through AnyStore
     let admin = store
-        .admin(&store.config().clone())
+        .admin_ephemeral(&store.config().clone())
         .await
         .expect("Failed to get admin");
 
@@ -197,8 +197,8 @@ async fn test_anystore_admin_operations() {
 
     // Create and delete a queue
     let queue_name = "test_anystore_admin";
-    let queue_info = admin
-        .create_queue(queue_name)
+    let queue_info = store
+        .queue(queue_name)
         .await
         .expect("Failed to create queue");
 
@@ -214,8 +214,8 @@ async fn test_anystore_worker_creation() {
 
     // Create a test queue
     let queue_name = "test_anystore_workers";
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(queue_name)
+    let queue_info = store
+        .queue(queue_name)
         .await
         .expect("Failed to create queue");
 

@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::{WorkerInfo, WorkerStatus};
+use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{Row, SqlitePool};
@@ -52,7 +52,7 @@ impl SqliteWorkerTable {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkerInfo> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkerRecord> {
         let id: i64 = row.try_get("id")?;
         let hostname: String = row.try_get("hostname")?;
         let port: i32 = row.try_get("port")?;
@@ -74,7 +74,7 @@ impl SqliteWorkerTable {
         let status = WorkerStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
-        Ok(WorkerInfo {
+        Ok(WorkerRecord {
             id,
             hostname,
             port,
@@ -220,7 +220,7 @@ impl SqliteWorkerTable {
 
 #[async_trait]
 impl crate::store::WorkerTable for SqliteWorkerTable {
-    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+    async fn insert(&self, data: crate::types::NewWorkerRecord) -> Result<WorkerRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
         let status_str = WorkerStatus::Ready.to_string();
@@ -240,7 +240,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                 context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
             })?;
 
-        Ok(WorkerInfo {
+        Ok(WorkerRecord {
             id,
             hostname: data.hostname,
             port: data.port,
@@ -252,7 +252,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
+    async fn get(&self, id: i64) -> Result<WorkerRecord> {
         let row = sqlx::query(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -266,7 +266,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
+    async fn list(&self) -> Result<Vec<WorkerRecord>> {
         let rows = sqlx::query(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
@@ -308,7 +308,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(result.rows_affected())
     }
 
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
         let rows = sqlx::query(LIST_WORKERS_BY_QUEUE)
             .bind(queue_id)
             .fetch_all(&self.pool)
@@ -372,7 +372,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
+    ) -> Result<Vec<WorkerRecord>> {
         let state_str = state.to_string();
         let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status = $2 ORDER BY started_at DESC")
             .bind(queue_id)
@@ -396,7 +396,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
-    ) -> Result<Vec<WorkerInfo>> {
+    ) -> Result<Vec<WorkerRecord>> {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
@@ -423,7 +423,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         queue_id: Option<i64>,
         hostname: &str,
         port: i32,
-    ) -> Result<WorkerInfo> {
+    ) -> Result<WorkerRecord> {
         let existing = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = $1 AND port = $2")
             .bind(hostname)
             .bind(port)
@@ -471,7 +471,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
             }
         } else {
             // Create new
-            self.insert(crate::types::NewWorker {
+            self.insert(crate::types::NewWorkerRecord {
                 hostname: hostname.to_string(),
                 port,
                 queue_id,
@@ -480,7 +480,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         }
     }
 
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
         let row = sqlx::query(INSERT_EPHEMERAL_WORKER)

@@ -1,7 +1,7 @@
 use crate::error::Result;
-use crate::store::sqlite::tables::runs::SqliteWorkflowRunTable;
+use crate::store::sqlite::tables::runs::SqliteRunRecordTable;
 use crate::store::sqlite::workflow::guard::SqliteStepGuard;
-use crate::types::WorkflowStatus;
+use crate::types::{WorkflowRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 use std::str::FromStr;
@@ -15,21 +15,19 @@ RETURNING status, error
 
 #[derive(Debug, Clone)]
 pub struct SqliteWorkflow {
-    name: String,
+    record: WorkflowRecord,
 }
 
 impl SqliteWorkflow {
-    pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
+    pub fn new(record: WorkflowRecord) -> Self {
+        Self { record }
     }
 }
 
 #[async_trait]
 impl crate::store::Workflow for SqliteWorkflow {
-    fn name(&self) -> &str {
-        &self.name
+    fn workflow_record(&self) -> &WorkflowRecord {
+        &self.record
     }
 }
 
@@ -94,7 +92,7 @@ impl crate::store::Run for SqliteRun {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowRunTable::complete_run(&mut conn, self.id, output).await
+        SqliteRunRecordTable::complete_run(&mut conn, self.id, output).await
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
@@ -103,15 +101,35 @@ impl crate::store::Run for SqliteRun {
             .acquire()
             .await
             .map_err(crate::error::Error::Database)?;
-        SqliteWorkflowRunTable::fail_run(&mut conn, self.id, error).await
+        SqliteRunRecordTable::fail_run(&mut conn, self.id, error).await
     }
 
     async fn acquire_step(
         &self,
-        step_id: &str,
+        step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> Result<crate::store::StepResult<serde_json::Value>> {
-        SqliteStepGuard::acquire::<serde_json::Value>(&self.pool, self.id, step_id, current_time)
-            .await
+    ) -> Result<crate::types::StepRecord> {
+        SqliteStepGuard::acquire_record(&self.pool, self.id, step_name, current_time).await
+    }
+
+    async fn complete_step(
+        &self,
+        step_name: &str,
+        output: serde_json::Value,
+    ) -> crate::error::Result<()> {
+        let step = self.acquire_step(step_name, chrono::Utc::now()).await?;
+        let mut guard = SqliteStepGuard::new(self.pool.clone(), step.id);
+        crate::store::StepGuard::complete(&mut guard, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        step_name: &str,
+        error: serde_json::Value,
+        current_time: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<()> {
+        let step = self.acquire_step(step_name, current_time).await?;
+        let mut guard = SqliteStepGuard::new(self.pool.clone(), step.id);
+        crate::store::StepGuard::fail_with_json(&mut guard, error, current_time).await
     }
 }

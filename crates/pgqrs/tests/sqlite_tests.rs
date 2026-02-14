@@ -32,7 +32,7 @@ async fn test_sqlite_connect() {
 
     let queue = store
         .queues()
-        .insert(pgqrs::types::NewQueue {
+        .insert(pgqrs::types::NewQueueRecord {
             queue_name: queue_name.to_string(),
         })
         .await
@@ -52,7 +52,7 @@ async fn test_sqlite_connect() {
     let now = chrono::Utc::now();
     let msg = store
         .messages()
-        .insert(pgqrs::types::NewMessage {
+        .insert(pgqrs::types::NewQueueMessage {
             queue_id: queue.id,
             payload: payload.clone(),
             read_ct: 0,

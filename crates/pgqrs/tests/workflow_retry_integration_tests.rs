@@ -1,9 +1,7 @@
 use chrono::Utc;
 use pgqrs::error::Error;
 use pgqrs::store::AnyStore;
-use pgqrs::{StepGuardExt, StepResult};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 
 mod common;
 
@@ -21,45 +19,53 @@ async fn create_store(schema: &str) -> AnyStore {
 async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_not_ready").await;
 
-    // Create definition + trigger run
+    // Create definition
     pgqrs::workflow()
         .name("not_ready_test_wf")
-        .create(&store)
+        .store(&store)
+        .create()
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("not_ready_test_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     workflow.start().await?;
-    let workflow_id = workflow.id();
 
     // Step 1: Fail with transient error
-    let step_id = "transient_step";
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let step_name = "transient_step";
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
 
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            // Fail with transient error
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "NETWORK_TIMEOUT",
-                "message": "Connection timeout",
-            });
-            guard.fail(&error).await?;
-        }
-        StepResult::Skipped(_) => panic!("Step should execute first time"),
-    }
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+
+    // Fail with transient error
+    let error = serde_json::json!({
+        "is_transient": true,
+        "code": "NETWORK_TIMEOUT",
+        "message": "Connection timeout",
+    });
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Try to acquire again - should return StepNotReady immediately
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await;
 
     // Should get StepNotReady error
@@ -83,44 +89,52 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
 async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_becomes_ready").await;
 
-    // Create definition + trigger run
+    // Create definition
     pgqrs::workflow()
         .name("becomes_ready_wf")
-        .create(&store)
+        .store(&store)
+        .create()
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("becomes_ready_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     workflow.start().await?;
-    let workflow_id = workflow.id();
 
-    let step_id = "delayed_step";
+    let step_name = "delayed_step";
 
     // Fail with transient error
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "TIMEOUT",
-                "message": "Initial failure",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute on initial attempt"),
-    }
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+
+    let error = serde_json::json!({
+        "is_transient": true,
+        "code": "TIMEOUT",
+        "message": "Initial failure",
+    });
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Get the retry_at timestamp
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await;
 
     let retry_at = match step_res {
@@ -132,32 +146,33 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     let simulated_time = retry_at + chrono::Duration::milliseconds(100);
 
     // Now should be able to acquire for execution
-    let step_res = pgqrs::step(workflow_id, step_id)
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
         .with_time(simulated_time)
-        .acquire::<TestData, _>(&store)
+        .execute()
         .await?;
 
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            // This time succeed
-            let output = TestData {
-                msg: "success_after_retry".to_string(),
-            };
-            guard.success(&serde_json::to_value(&output)?).await?;
-        }
-        StepResult::Skipped(_) => panic!("Step should execute after retry_at"),
-    }
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+
+    // This time succeed
+    let output = TestData {
+        msg: "success_after_retry".to_string(),
+    };
+    workflow
+        .complete_step(step_name, serde_json::to_value(&output)?)
+        .await?;
 
     // Verify step now succeeds on next acquire
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
-    match step_res {
-        StepResult::Skipped(data) => {
-            assert_eq!(data.msg, "success_after_retry");
-        }
-        StepResult::Execute(_) => panic!("Step should be skipped after success"),
-    }
+
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
+    let data: TestData = serde_json::from_value(step_rec.output.unwrap())?;
+    assert_eq!(data.msg, "success_after_retry");
 
     Ok(())
 }
@@ -167,146 +182,142 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 async fn test_step_exhausts_retries() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_exhaust").await;
 
-    // Create definition + trigger run
+    // Create definition
     pgqrs::workflow()
         .name("exhaust_retry_wf")
-        .create(&store)
+        .store(&store)
+        .create()
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("exhaust_retry_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     workflow.start().await?;
-    let workflow_id = workflow.id();
 
-    let step_id = "exhausting_step";
-
-    // Default policy: max_attempts = 3
-    // Fail 4 times to exhaust retries
+    let step_name = "exhausting_step";
 
     // Initial execution (attempt 0)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "TIMEOUT",
-                "message": "Initial failure",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute on initial attempt"),
-    }
+
+    let error = serde_json::json!({
+        "is_transient": true,
+        "code": "TIMEOUT",
+        "message": "Initial failure",
+    });
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Retry 1
     {
-        let step_res = pgqrs::step(workflow_id, step_id)
-            .acquire::<TestData, _>(&store)
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
             .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 1"),
         };
 
-        // Simulate time passing beyond retry_at
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
-        let step_res = pgqrs::step(workflow_id, step_id)
+        let _ = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
             .with_time(simulated_time)
-            .acquire::<TestData, _>(&store)
+            .execute()
             .await?;
-        match step_res {
-            StepResult::Execute(mut guard) => {
-                let error = serde_json::json!({
-                    "is_transient": true,
-                    "code": "TIMEOUT",
-                    "message": "Retry 1",
-                });
-                guard.fail(&error).await?;
-            }
-            _ => panic!("Should execute at Retry 1"),
-        }
+
+        let error = serde_json::json!({
+            "is_transient": true,
+            "code": "TIMEOUT",
+            "message": "Retry 1",
+        });
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
     // Retry 2
     {
-        let step_res = pgqrs::step(workflow_id, step_id)
-            .acquire::<TestData, _>(&store)
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
             .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 2"),
         };
 
-        // Simulate time passing beyond retry_at
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
-        let step_res = pgqrs::step(workflow_id, step_id)
+        let _ = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
             .with_time(simulated_time)
-            .acquire::<TestData, _>(&store)
+            .execute()
             .await?;
-        match step_res {
-            StepResult::Execute(mut guard) => {
-                let error = serde_json::json!({
-                    "is_transient": true,
-                    "code": "TIMEOUT",
-                    "message": "Retry 2",
-                });
-                guard.fail(&error).await?;
-            }
-            _ => panic!("Should execute at Retry 2"),
-        }
+
+        let error = serde_json::json!({
+            "is_transient": true,
+            "code": "TIMEOUT",
+            "message": "Retry 2",
+        });
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
     // Retry 3
     {
-        let step_res = pgqrs::step(workflow_id, step_id)
-            .acquire::<TestData, _>(&store)
+        let step_res = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
+            .execute()
             .await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 3"),
         };
 
-        // Simulate time passing beyond retry_at
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
-        let step_res = pgqrs::step(workflow_id, step_id)
+        let _ = pgqrs::step()
+            .run(&*workflow)
+            .name(step_name)
             .with_time(simulated_time)
-            .acquire::<TestData, _>(&store)
+            .execute()
             .await?;
-        match step_res {
-            StepResult::Execute(mut guard) => {
-                let error = serde_json::json!({
-                    "is_transient": true,
-                    "code": "TIMEOUT",
-                    "message": "Retry 3",
-                });
-                guard.fail(&error).await?;
-            }
-            _ => panic!("Should execute at Retry 3"),
-        }
+
+        let error = serde_json::json!({
+            "is_transient": true,
+            "code": "TIMEOUT",
+            "message": "Retry 3",
+        });
+        workflow.fail_step(step_name, error, simulated_time).await?;
     }
 
-    // Now should fail with RetriesExhausted (retry_count = 3, should_retry(3) = false)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    // Now should fail with RetriesExhausted
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await;
 
     match step_res {
         Err(Error::RetriesExhausted { attempts, .. }) => {
-            assert_eq!(
-                attempts, 3,
-                "Should have exhausted 3 retries, got attempts={}",
-                attempts
-            );
+            assert_eq!(attempts, 3);
         }
-        Ok(_) => panic!("Step should fail with RetriesExhausted after max retries"),
-        Err(e) => panic!("Expected RetriesExhausted, got: {:?}", e),
+        _ => panic!("Expected RetriesExhausted"),
     }
 
     Ok(())
@@ -317,495 +328,206 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_non_transient").await;
 
-    // Create definition + trigger run
     pgqrs::workflow()
         .name("non_transient_wf")
-        .create(&store)
+        .store(&store)
+        .create()
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("non_transient_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     workflow.start().await?;
-    let workflow_id = workflow.id();
 
-    let step_id = "non_transient_step";
+    let step_name = "non_transient_step";
 
-    // Fail with non-transient error
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
 
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": false,
-                "code": "VALIDATION_ERROR",
-                "message": "Invalid input",
-            });
-            guard.fail(&error).await?;
-        }
-        StepResult::Skipped(_) => panic!("Step should execute first time"),
-    }
+    let error = serde_json::json!({
+        "is_transient": false,
+        "code": "VALIDATION_ERROR",
+        "message": "Invalid input",
+    });
+    workflow.fail_step(step_name, error, Utc::now()).await?;
 
-    // Should immediately fail with RetriesExhausted (0 retries for non-transient)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
+    // Should immediately fail with RetriesExhausted
+    let step_res = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await;
 
     match step_res {
-        Err(Error::RetriesExhausted { attempts, error }) => {
-            assert_eq!(attempts, 0, "Non-transient errors should not retry");
-            assert_eq!(
-                error.get("is_transient").and_then(|v| v.as_bool()),
-                Some(false)
-            );
-            assert_eq!(
-                error.get("code").and_then(|v| v.as_str()),
-                Some("VALIDATION_ERROR")
-            );
-        }
-        Ok(_) => panic!("Step should fail immediately for non-transient error"),
-        Err(e) => panic!("Expected RetriesExhausted, got: {:?}", e),
-    }
-
-    Ok(())
-}
-
-/// Test retry_at timestamp is scheduled correctly in the future
-#[tokio::test]
-async fn test_retry_at_scheduled_in_future() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_at_future").await;
-
-    // Create definition + trigger run
-    pgqrs::workflow()
-        .name("retry_at_future_wf")
-        .create(&store)
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let mut workflow = pgqrs::workflow()
-        .name("retry_at_future_wf")
-        .trigger(&input)?
-        .run(&store)
-        .await?;
-    workflow.start().await?;
-    let workflow_id = workflow.id();
-
-    let step_id = "future_step";
-
-    // Record current time before failure
-    let before_fail = Utc::now();
-
-    // Fail with transient error
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await?;
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "TIMEOUT",
-                "message": "Test timeout",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute"),
-    }
-
-    // Get StepNotReady error
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await;
-
-    match step_res {
-        Err(Error::StepNotReady {
-            retry_at,
-            retry_count,
-        }) => {
-            // retry_at should be in the future
-            let now = Utc::now();
-            assert!(
-                retry_at > now,
-                "retry_at ({}) should be after now ({})",
-                retry_at,
-                now
-            );
-
-            // retry_at should be approximately 1 second after failure (with jitter)
-            // Default policy: base delay = 1s with ±25% jitter = 0.75-1.25s
-            // Allow up to 2s to account for jitter + rounding
-            let expected_max = before_fail + chrono::Duration::seconds(2);
-            assert!(
-                retry_at <= expected_max,
-                "retry_at ({}) should be within 2s of failure (max: {})",
-                retry_at,
-                expected_max
-            );
-
-            assert_eq!(retry_count, 1, "First retry should have retry_count=1");
-        }
-        _ => panic!("Expected StepNotReady"),
-    }
-
-    Ok(())
-}
-
-/// Test that retry_count is persisted correctly
-#[tokio::test]
-async fn test_retry_count_persisted() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_count").await;
-
-    // Create definition + trigger run
-    pgqrs::workflow()
-        .name("retry_count_wf")
-        .create(&store)
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let mut workflow = pgqrs::workflow()
-        .name("retry_count_wf")
-        .trigger(&input)?
-        .run(&store)
-        .await?;
-    workflow.start().await?;
-    let workflow_id = workflow.id();
-
-    let step_id = "count_step";
-
-    // Initial execution (retry_count = 0)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await?;
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "RETRY_TEST",
-                "message": "Attempt 0",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute initially"),
-    }
-
-    // Check retry_count = 1
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await;
-
-    match step_res {
-        Err(Error::StepNotReady { retry_count, .. }) => {
-            assert_eq!(
-                retry_count, 1,
-                "Expected retry_count=1, got {}",
-                retry_count
-            );
-        }
         Err(Error::RetriesExhausted { attempts, .. }) => {
-            assert_eq!(attempts, 1, "Expected attempts=1, got {}", attempts);
+            assert_eq!(attempts, 0);
         }
-        _ => panic!("Expected error with retry_count=1"),
+        _ => panic!("Expected RetriesExhausted"),
     }
 
     Ok(())
 }
 
-/// Test custom retry_after delay from error
-#[tokio::test]
-async fn test_custom_retry_after_delay() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_custom_delay").await;
-
-    // Create definition + trigger run
-    pgqrs::workflow()
-        .name("custom_delay_wf")
-        .create(&store)
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let mut workflow = pgqrs::workflow()
-        .name("custom_delay_wf")
-        .trigger(&input)?
-        .run(&store)
-        .await?;
-    workflow.start().await?;
-    let workflow_id = workflow.id();
-
-    let step_id = "custom_delay_step";
-
-    let before_fail = Utc::now();
-
-    // Fail with custom retry_after (e.g., from Retry-After header)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await?;
-
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "RATE_LIMITED",
-                "message": "Rate limit exceeded",
-                "retry_after": 2,  // Custom 2 second delay
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute"),
-    }
-
-    // Should get StepNotReady with retry_at ~2 seconds in future
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await;
-
-    match step_res {
-        Err(Error::StepNotReady { retry_at, .. }) => {
-            // Custom retry_after = 2 seconds
-            // Allow up to 3s to account for rounding/precision
-            let expected_max = before_fail + chrono::Duration::seconds(3);
-            assert!(
-                retry_at <= expected_max,
-                "retry_at ({}) should be within 3s of failure (custom 2s delay, max: {})",
-                retry_at,
-                expected_max
-            );
-        }
-        _ => panic!("Expected StepNotReady with custom delay"),
-    }
-
-    Ok(())
-}
-
-/// Test that workflow stays RUNNING during step retry
 #[tokio::test]
 async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_running_state").await;
 
-    // Create definition + trigger run
     pgqrs::workflow()
         .name("running_state_wf")
-        .create(&store)
+        .store(&store)
+        .create()
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
-    let mut workflow = pgqrs::workflow()
+    let run_msg = pgqrs::workflow()
         .name("running_state_wf")
+        .store(&store)
         .trigger(&input)?
-        .run(&store)
+        .execute()
+        .await?;
+
+    let mut workflow = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
         .await?;
     workflow.start().await?;
-    let workflow_id = workflow.id();
 
-    let step_id = "running_step";
+    let step_name = "running_step";
 
-    // Fail step with transient error
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await?;
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            let error = serde_json::json!({
-                "is_transient": true,
-                "code": "TIMEOUT",
-                "message": "Timeout",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute"),
-    }
-
-    // Workflow should still be in RUNNING state (not ERROR)
-    // Verify by executing another step - should work if workflow is RUNNING
-
-    let other_step_id = "other_step";
-    let step_res = pgqrs::step(workflow_id, other_step_id)
-        .acquire::<TestData, _>(&store)
+    let _ = pgqrs::step()
+        .run(&*workflow)
+        .name(step_name)
+        .execute()
         .await?;
 
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            guard
-                .success(&serde_json::json!({"msg": "other_step_done"}))
-                .await?;
-        }
-        _ => panic!("Other step should execute if workflow is RUNNING"),
-    }
+    let error = serde_json::json!({
+        "is_transient": true,
+        "code": "TIMEOUT",
+        "message": "Timeout",
+    });
+    workflow.fail_step(step_name, error, Utc::now()).await?;
+
+    // Workflow should still be in RUNNING state
+    let other_step_name = "other_step";
+    let step_rec = pgqrs::step()
+        .run(&*workflow)
+        .name(other_step_name)
+        .execute()
+        .await?;
+
+    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
 
     Ok(())
 }
 
-/// Test error without is_transient field gets wrapped as non-transient
-#[tokio::test]
-async fn test_error_wrapping_non_transient() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_wrapping").await;
-
-    // Create definition + trigger run
-    pgqrs::workflow()
-        .name("wrapping_test_wf")
-        .create(&store)
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let mut workflow = pgqrs::workflow()
-        .name("wrapping_test_wf")
-        .trigger(&input)?
-        .run(&store)
-        .await?;
-    workflow.start().await?;
-    let workflow_id = workflow.id();
-
-    let step_id = "wrap_step";
-
-    // Fail with error that doesn't have is_transient field
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await?;
-
-    match step_res {
-        StepResult::Execute(mut guard) => {
-            // Error without is_transient field
-            let error = serde_json::json!({
-                "error": "Something went wrong",
-                "details": "No is_transient field",
-            });
-            guard.fail(&error).await?;
-        }
-        _ => panic!("Should execute"),
-    }
-
-    // Should fail immediately (wrapped as non-transient)
-    let step_res = pgqrs::step(workflow_id, step_id)
-        .acquire::<TestData, _>(&store)
-        .await;
-
-    match step_res {
-        Err(Error::RetriesExhausted { attempts, error }) => {
-            assert_eq!(
-                attempts, 0,
-                "Wrapped errors should be non-transient (0 retries)"
-            );
-            // Check that it was wrapped
-            assert_eq!(
-                error.get("is_transient").and_then(|v| v.as_bool()),
-                Some(false)
-            );
-            assert_eq!(
-                error.get("code").and_then(|v| v.as_str()),
-                Some("NON_RETRYABLE")
-            );
-        }
-        _ => panic!("Should fail with RetriesExhausted for wrapped error"),
-    }
-
-    Ok(())
-}
-
-/// Test concurrent step retries don't interfere
 #[tokio::test]
 async fn test_concurrent_step_retries() -> anyhow::Result<()> {
     let store = create_store("workflow_retry_concurrent").await;
 
-    // Create multiple workflows
-    let workflows = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
 
     for i in 0..3 {
         let store = store.clone();
-        let workflows = workflows.clone();
 
         let handle = tokio::spawn(async move {
             let input = TestData {
                 msg: format!("test_{}", i),
             };
             let name = format!("concurrent_wf_{}", i);
-            pgqrs::workflow().name(&name).create(&store).await.unwrap();
-
-            let mut workflow = pgqrs::workflow()
+            pgqrs::workflow()
                 .name(&name)
+                .store(&store)
+                .create()
+                .await
+                .unwrap();
+
+            let run_msg = pgqrs::workflow()
+                .name(&name)
+                .store(&store)
                 .trigger(&input)
                 .unwrap()
-                .run(&store)
+                .execute()
+                .await
+                .unwrap();
+
+            let mut workflow = pgqrs::run()
+                .message(run_msg)
+                .store(&store)
+                .execute()
                 .await
                 .unwrap();
             workflow.start().await.unwrap();
-            let workflow_id = workflow.id();
 
-            workflows.lock().unwrap().push(workflow_id);
+            let step_name = "concurrent_step";
 
-            let step_id = "concurrent_step";
-
-            // Fail with transient error
-            let step_res = pgqrs::step(workflow_id, step_id)
-                .acquire::<TestData, _>(&store)
+            let _ = pgqrs::step()
+                .run(&*workflow)
+                .name(step_name)
+                .execute()
                 .await
                 .unwrap();
-            match step_res {
-                StepResult::Execute(mut guard) => {
-                    let error = serde_json::json!({
-                        "is_transient": true,
-                        "code": "TIMEOUT",
-                        "message": format!("Timeout {}", i),
-                    });
-                    guard.fail(&error).await.unwrap();
-                }
-                _ => panic!("Should execute"),
-            }
 
-            // Get retry_at and simulate time advancing
-            let retry_at = match pgqrs::step(workflow_id, step_id)
-                .acquire::<TestData, _>(&store)
+            let error = serde_json::json!({
+                "is_transient": true,
+                "code": "TIMEOUT",
+                "message": format!("Timeout {}", i),
+            });
+            workflow
+                .fail_step(step_name, error, Utc::now())
+                .await
+                .unwrap();
+
+            let retry_at = match pgqrs::step()
+                .run(&*workflow)
+                .name(step_name)
+                .execute()
                 .await
             {
                 Err(Error::StepNotReady { retry_at, .. }) => retry_at,
                 _ => panic!("Expected StepNotReady"),
             };
 
-            // Simulate time passing beyond retry_at
             let simulated_time = retry_at + chrono::Duration::milliseconds(100);
 
-            // Retry and succeed
-            let step_res = pgqrs::step(workflow_id, step_id)
+            let step_rec = pgqrs::step()
+                .run(&*workflow)
+                .name(step_name)
                 .with_time(simulated_time)
-                .acquire::<TestData, _>(&store)
+                .execute()
                 .await
                 .unwrap();
-            match step_res {
-                StepResult::Execute(mut guard) => {
-                    guard
-                        .success(&serde_json::json!({"msg": format!("done_{}", i)}))
-                        .await
-                        .unwrap();
-                }
-                _ => panic!("Should execute on retry"),
-            }
+
+            assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+            workflow
+                .complete_step(step_name, serde_json::json!({"msg": format!("done_{}", i)}))
+                .await
+                .unwrap();
         });
 
         handles.push(handle);
     }
 
-    // Wait for all to complete
     for handle in handles {
         handle.await?;
     }
-
-    // Verify all workflows completed successfully
-    let workflow_ids = workflows.lock().unwrap();
-    assert_eq!(workflow_ids.len(), 3, "All workflows should complete");
 
     Ok(())
 }

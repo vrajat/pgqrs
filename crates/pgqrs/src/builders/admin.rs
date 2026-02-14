@@ -2,22 +2,41 @@
 
 use crate::error::Result;
 use crate::store::Store;
-use crate::types::WorkerInfo;
+use crate::types::QueueRecord;
+use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 /// Builder for admin operations.
 ///
 /// Provides a fluent API for administrative tasks:
-/// - Queue management: create_queue, delete_queue, purge_queue
+/// - Queue management: delete_queue, purge_queue
 /// - Worker management: delete_worker
 /// - System operations: install, verify
 pub struct AdminBuilder<'a, S: Store> {
     store: &'a S,
+    hostname: Option<String>,
+    port: Option<i32>,
 }
 
 impl<'a, S: Store> AdminBuilder<'a, S> {
     /// Create a new AdminBuilder with the given store
     pub fn new(store: &'a S) -> Self {
-        Self { store }
+        Self {
+            store,
+            hostname: None,
+            port: None,
+        }
+    }
+
+    /// Set the hostname for the admin worker
+    pub fn hostname(mut self, hostname: &str) -> Self {
+        self.hostname = Some(hostname.to_string());
+        self
+    }
+
+    /// Set the port for the admin worker
+    pub fn port(mut self, port: i32) -> Self {
+        self.port = Some(port);
+        self
     }
 
     /// Get access to the underlying store
@@ -25,35 +44,43 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         self.store
     }
 
-    /// Install the pgqrs schema
+    async fn get_admin(&self) -> Result<Box<dyn crate::store::Admin>> {
+        if let (Some(hostname), Some(port)) = (&self.hostname, self.port) {
+            self.store.admin(hostname, port, self.store.config()).await
+        } else {
+            self.store.admin_ephemeral(self.store.config()).await
+        }
+    }
+
+    /// Initialize the pgqrs schema
     pub async fn install(self) -> Result<()> {
-        let admin = self.store.admin(self.store.config()).await?;
-        admin.install().await
+        self.store.bootstrap().await
+    }
+
+    /// Initialize the pgqrs schema (alias for install)
+    pub async fn bootstrap(self) -> Result<()> {
+        self.store.bootstrap().await
     }
 
     /// Verify the pgqrs installation
     pub async fn verify(self) -> Result<()> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.verify().await
     }
 
     /// Create a new queue
-    pub async fn create_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
-        let admin = self.store.admin(self.store.config()).await?;
-        admin.create_queue(name).await
+    pub async fn create_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
+        self.store.queue(name).await
     }
 
-    pub async fn get_queue(self, name: &str) -> crate::error::Result<crate::types::QueueInfo> {
+    pub async fn get_queue(self, name: &str) -> crate::error::Result<QueueRecord> {
         // Use the store's queue table directly as it's the standard way to get queue info
         self.store.queues().get_by_name(name).await
     }
 
     /// Delete a queue
-    pub async fn delete_queue(
-        self,
-        queue_info: &crate::types::QueueInfo,
-    ) -> crate::error::Result<()> {
-        let admin = self.store.admin(self.store.config()).await?;
+    pub async fn delete_queue(self, queue_info: &QueueRecord) -> crate::error::Result<()> {
+        let admin = self.get_admin().await?;
         admin.delete_queue(queue_info).await
     }
 
@@ -65,25 +92,24 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 
     /// Purge all messages from a queue
     pub async fn purge_queue(self, queue_name: &str) -> Result<()> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.purge_queue(queue_name).await
     }
 
     /// Delete a worker
     pub async fn delete_worker(self, worker_id: i64) -> Result<u64> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.delete_worker(worker_id).await
     }
 
     /// List all workers
-    pub async fn list_workers(self) -> Result<Vec<WorkerInfo>> {
-        let admin = self.store.admin(self.store.config()).await?;
-        admin.list_workers().await
+    pub async fn list_workers(self) -> Result<Vec<crate::types::WorkerRecord>> {
+        self.store.workers().list().await
     }
 
     /// Move messages to dead letter queue
     pub async fn dlq(self) -> Result<Vec<i64>> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.dlq().await
     }
 
@@ -92,7 +118,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         self,
         worker_id: i64,
     ) -> Result<Vec<crate::types::QueueMessage>> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.get_worker_messages(worker_id).await
     }
 
@@ -102,37 +128,37 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         queue_id: i64,
         older_than: Option<chrono::Duration>,
     ) -> Result<u64> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.reclaim_messages(queue_id, older_than).await
     }
 
     /// Get worker statistics for a queue
-    pub async fn worker_stats(self, queue_name: &str) -> Result<crate::types::WorkerStats> {
-        let admin = self.store.admin(self.store.config()).await?;
+    pub async fn worker_stats(self, queue_name: &str) -> Result<WorkerStats> {
+        let admin = self.get_admin().await?;
         admin.worker_stats(queue_name).await
     }
 
     /// Purge old workers
     pub async fn purge_old_workers(self, older_than: chrono::Duration) -> Result<u64> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.purge_old_workers(older_than).await
     }
 
     /// Get metrics for a specific queue
-    pub async fn queue_metrics(self, queue_name: &str) -> Result<crate::types::QueueMetrics> {
-        let admin = self.store.admin(self.store.config()).await?;
+    pub async fn queue_metrics(self, queue_name: &str) -> Result<QueueMetrics> {
+        let admin = self.get_admin().await?;
         admin.queue_metrics(queue_name).await
     }
 
     /// Get metrics for all queues
-    pub async fn all_queues_metrics(self) -> Result<Vec<crate::types::QueueMetrics>> {
-        let admin = self.store.admin(self.store.config()).await?;
+    pub async fn all_queues_metrics(self) -> Result<Vec<QueueMetrics>> {
+        let admin = self.get_admin().await?;
         admin.all_queues_metrics().await
     }
 
     /// Get system stats
-    pub async fn system_stats(self) -> Result<crate::types::SystemStats> {
-        let admin = self.store.admin(self.store.config()).await?;
+    pub async fn system_stats(self) -> Result<SystemStats> {
+        let admin = self.get_admin().await?;
         admin.system_stats().await
     }
 
@@ -141,8 +167,8 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         self,
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
-    ) -> Result<Vec<crate::types::WorkerHealthStats>> {
-        let admin = self.store.admin(self.store.config()).await?;
+    ) -> Result<Vec<WorkerHealthStats>> {
+        let admin = self.get_admin().await?;
         admin
             .worker_health_stats(heartbeat_timeout, group_by_queue)
             .await
@@ -150,7 +176,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 
     /// Release messages locked by a worker
     pub async fn release_worker_messages(self, worker_id: i64) -> Result<u64> {
-        let admin = self.store.admin(self.store.config()).await?;
+        let admin = self.get_admin().await?;
         admin.release_worker_messages(worker_id).await
     }
 }
@@ -162,9 +188,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 /// # use pgqrs::store::AnyStore;
 /// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
 /// // Create a queue
-/// let queue = pgqrs::admin(&store)
-///     .create_queue("my_queue")
-///     .await?;
+/// let queue = store.queue("my_queue").await?;
 ///
 /// // Purge a queue
 /// pgqrs::admin(&store)

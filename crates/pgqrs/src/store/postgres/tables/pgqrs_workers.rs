@@ -4,7 +4,7 @@
 //! on the `pgqrs_workers` table.
 
 use crate::error::Result;
-use crate::types::{WorkerInfo, WorkerStatus};
+use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
@@ -139,8 +139,8 @@ impl Workers {
         queue_id: i64,
         older_than: chrono::Duration,
         tx: &'a mut sqlx::Transaction<'b, sqlx::Postgres>,
-    ) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
+    ) -> Result<Vec<WorkerRecord>> {
+        let workers = sqlx::query_as::<_, WorkerRecord>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
             .bind(older_than)
             .fetch_all(&mut **tx)
@@ -310,7 +310,7 @@ impl Workers {
 // Implement the public WorkerTable trait by delegating to inherent methods
 #[async_trait]
 impl crate::store::WorkerTable for Workers {
-    async fn insert(&self, data: crate::types::NewWorker) -> Result<WorkerInfo> {
+    async fn insert(&self, data: crate::types::NewWorkerRecord) -> Result<WorkerRecord> {
         let now = Utc::now();
 
         let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
@@ -328,7 +328,7 @@ impl crate::store::WorkerTable for Workers {
                 context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
             })?;
 
-        Ok(WorkerInfo {
+        Ok(WorkerRecord {
             id: worker_id,
             hostname: data.hostname,
             port: data.port,
@@ -340,8 +340,8 @@ impl crate::store::WorkerTable for Workers {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkerInfo> {
-        let worker = sqlx::query_as::<_, WorkerInfo>(GET_WORKER_BY_ID)
+    async fn get(&self, id: i64) -> Result<WorkerRecord> {
+        let worker = sqlx::query_as::<_, WorkerRecord>(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
             .await
@@ -354,8 +354,8 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker)
     }
 
-    async fn list(&self) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ALL_WORKERS)
+    async fn list(&self) -> Result<Vec<WorkerRecord>> {
+        let workers = sqlx::query_as::<_, WorkerRecord>(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -394,8 +394,8 @@ impl crate::store::WorkerTable for Workers {
         Ok(result.rows_affected())
     }
 
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE)
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
+        let workers = sqlx::query_as::<_, WorkerRecord>(LIST_WORKERS_BY_QUEUE)
             .bind(queue_id)
             .fetch_all(&self.pool)
             .await
@@ -469,8 +469,8 @@ impl crate::store::WorkerTable for Workers {
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
-    ) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_WORKERS_BY_QUEUE_AND_STATE)
+    ) -> Result<Vec<WorkerRecord>> {
+        let workers = sqlx::query_as::<_, WorkerRecord>(LIST_WORKERS_BY_QUEUE_AND_STATE)
             .bind(queue_id)
             .bind(&state)
             .fetch_all(&self.pool)
@@ -494,8 +494,8 @@ impl crate::store::WorkerTable for Workers {
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
-    ) -> Result<Vec<WorkerInfo>> {
-        let workers = sqlx::query_as::<_, WorkerInfo>(LIST_ZOMBIE_WORKERS)
+    ) -> Result<Vec<WorkerRecord>> {
+        let workers = sqlx::query_as::<_, WorkerRecord>(LIST_ZOMBIE_WORKERS)
             .bind(queue_id)
             .bind(older_than)
             .fetch_all(&self.pool)
@@ -513,9 +513,9 @@ impl crate::store::WorkerTable for Workers {
         queue_id: Option<i64>,
         hostname: &str,
         port: i32,
-    ) -> Result<WorkerInfo> {
+    ) -> Result<WorkerRecord> {
         // Try to find existing worker by hostname+port
-        let existing_worker: Option<WorkerInfo> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
+        let existing_worker: Option<WorkerRecord> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
             .bind(hostname)
             .bind(port)
             .fetch_optional(&self.pool)
@@ -531,7 +531,7 @@ impl crate::store::WorkerTable for Workers {
                 match worker.status {
                     WorkerStatus::Stopped => {
                         // Reset stopped worker to ready
-                        sqlx::query_as::<_, WorkerInfo>(RESET_WORKER_TO_READY)
+                        sqlx::query_as::<_, WorkerRecord>(RESET_WORKER_TO_READY)
                             .bind(worker.id)
                             .bind(queue_id)
                             .fetch_one(&self.pool)
@@ -579,7 +579,7 @@ impl crate::store::WorkerTable for Workers {
                         context: format!("Failed to insert new worker {}:{}", hostname, port),
                     })?;
 
-                WorkerInfo {
+                WorkerRecord {
                     id: inserted_id,
                     hostname: hostname.to_string(),
                     port,
@@ -594,12 +594,12 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker_info)
     }
 
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerInfo> {
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
         // Generate a unique hostname using UUID
         let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
         // Create new ephemeral worker (always creates new, never reuses)
-        let worker_info = sqlx::query_as::<_, WorkerInfo>(INSERT_EPHEMERAL_WORKER)
+        let worker_info = sqlx::query_as::<_, WorkerRecord>(INSERT_EPHEMERAL_WORKER)
             .bind(&hostname)
             .bind(queue_id)
             .fetch_one(&self.pool)

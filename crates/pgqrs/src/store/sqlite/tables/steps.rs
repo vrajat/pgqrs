@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
-use crate::types::{NewWorkflowStep, WorkflowStatus, WorkflowStep};
+use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
@@ -8,19 +8,19 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
-pub struct SqliteWorkflowStepTable {
+pub struct SqliteStepRecordTable {
     pool: SqlitePool,
 }
 
-impl SqliteWorkflowStepTable {
+impl SqliteStepRecordTable {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowStep> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRecord> {
         let id: i64 = row.try_get("id")?;
         let run_id: i64 = row.try_get("run_id")?;
-        let step_id: String = row.try_get("step_id")?;
+        let step_name: String = row.try_get("step_name")?;
 
         let status_str: String = row.try_get("status")?;
         let status = WorkflowStatus::from_str(&status_str)
@@ -47,10 +47,10 @@ impl SqliteWorkflowStepTable {
         let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
         let updated_at = parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?;
 
-        Ok(WorkflowStep {
+        Ok(StepRecord {
             id,
             run_id,
-            step_id,
+            step_name,
             status,
             input,
             output,
@@ -62,21 +62,21 @@ impl SqliteWorkflowStepTable {
 }
 
 #[async_trait]
-impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
-    async fn insert(&self, data: NewWorkflowStep) -> Result<WorkflowStep> {
+impl crate::store::StepRecordTable for SqliteStepRecordTable {
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
         let input_str = data.input.map(|v| v.to_string());
 
         let row = sqlx::query(
             r#"
-            INSERT INTO pgqrs_workflow_steps (run_id, step_id, status, input, created_at, updated_at)
+            INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input, created_at, updated_at)
             VALUES ($1, $2, 'PENDING', $3, $4, $4)
-            RETURNING id, run_id, step_id, status, input, output, error, created_at, updated_at
+            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(data.run_id)
-        .bind(&data.step_id)
+        .bind(&data.step_name)
         .bind(input_str)
         .bind(now_str)
         .fetch_one(&self.pool)
@@ -84,16 +84,16 @@ impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "INSERT_WORKFLOW_STEP".into(),
             source: Box::new(e),
-            context: format!("Failed to insert workflow step '{}' for run {}", data.step_id, data.run_id),
+            context: format!("Failed to insert workflow step '{}' for run {}", data.step_name, data.run_id),
         })?;
 
         Self::map_row(row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowStep> {
+    async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = sqlx::query(
             r#"
-            SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_steps
             WHERE id = $1
             "#,
@@ -110,10 +110,10 @@ impl crate::store::WorkflowStepTable for SqliteWorkflowStepTable {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowStep>> {
+    async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, run_id, step_id, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_steps
             ORDER BY created_at DESC
             "#,

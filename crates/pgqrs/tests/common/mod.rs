@@ -2,7 +2,7 @@
 pub mod resource;
 
 use ctor::dtor;
-use pgqrs::store::BackendType;
+use pgqrs::store::{BackendType, Store};
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
 
 /// Get the current test backend.
@@ -81,24 +81,14 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
     // Install schema based on backend:
     // - Postgres: Uses global setup (setup_test_schemas binary), skip install
     // - SQLite/Turso: No global setup, install per-test
+    #[allow(unreachable_patterns)]
     match current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => {
             // Schema already provisioned by setup_test_schemas binary
         }
-        #[cfg(feature = "sqlite")]
-        BackendType::Sqlite => {
-            pgqrs::admin(&store)
-                .install()
-                .await
-                .expect("Failed to install SQLite schema");
-        }
-        #[cfg(feature = "turso")]
-        BackendType::Turso => {
-            pgqrs::admin(&store)
-                .install()
-                .await
-                .expect("Failed to install Turso schema");
+        _ => {
+            store.bootstrap().await.expect("Failed to bootstrap schema");
         }
     }
 
