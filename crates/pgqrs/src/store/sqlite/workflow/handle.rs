@@ -8,8 +8,10 @@ use std::str::FromStr;
 
 const SQL_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
-SET status = 'RUNNING', updated_at = datetime('now')
-WHERE id = $1 AND status = 'QUEUED'
+SET status = 'RUNNING',
+    started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END,
+    updated_at = datetime('now')
+WHERE id = $1 AND status IN ('QUEUED', 'PAUSED')
 RETURNING status, error
 "#;
 

@@ -33,7 +33,7 @@ impl crate::store::RunRecordTable for RunRecords {
               output,
               error,
               created_at,
-              created_at as updated_at
+              updated_at
             "#,
         )
         .bind(data.workflow_id)
@@ -60,7 +60,7 @@ impl crate::store::RunRecordTable for RunRecords {
               output,
               error,
               created_at,
-              created_at as updated_at
+              updated_at
             FROM pgqrs_workflow_runs
             WHERE id = $1
             "#,
@@ -88,7 +88,7 @@ impl crate::store::RunRecordTable for RunRecords {
               output,
               error,
               created_at,
-              created_at as updated_at
+              updated_at
             FROM pgqrs_workflow_runs
             ORDER BY created_at DESC
             "#,

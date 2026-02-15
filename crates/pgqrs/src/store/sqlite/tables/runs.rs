@@ -128,7 +128,7 @@ impl SqliteRunRecordTable {
         sqlx::query(
             r#"
             UPDATE pgqrs_workflow_runs
-            SET status = 'PAUSED', error = $2, updated_at = $3
+            SET status = 'PAUSED', error = $2, paused_at = $3, updated_at = $3
             WHERE id = $1
             "#,
         )

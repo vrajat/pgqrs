@@ -547,8 +547,10 @@ impl TursoRun {
 
 const SQL_TURSO_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
-SET status = 'RUNNING', updated_at = datetime('now'), started_at = COALESCE(started_at, datetime('now'))
-WHERE id = $1 AND status = 'QUEUED'
+SET status = 'RUNNING',
+    updated_at = datetime('now'),
+    started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
+WHERE id = $1 AND status IN ('QUEUED', 'PAUSED')
 RETURNING status, error;
 "#;
 
@@ -602,7 +604,7 @@ impl crate::store::Run for TursoRun {
         });
         let error_str = error.to_string();
         let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'PAUSED', error = $2, updated_at = datetime('now') WHERE id = $1",
+            "UPDATE pgqrs_workflow_runs SET status = 'PAUSED', error = $2, paused_at = datetime('now'), updated_at = datetime('now') WHERE id = $1",
         )
         .bind(self.id)
         .bind(error_str)

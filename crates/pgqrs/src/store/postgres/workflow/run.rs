@@ -8,8 +8,14 @@ use std::str::FromStr;
 
 const SQL_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
-SET status = 'RUNNING'::pgqrs_workflow_status, started_at = NOW()
-WHERE id = $1 AND status = 'QUEUED'::pgqrs_workflow_status
+SET status = 'RUNNING'::pgqrs_workflow_status,
+    started_at = CASE
+        WHEN status = 'QUEUED'::pgqrs_workflow_status THEN NOW()
+        ELSE started_at
+    END,
+    updated_at = NOW()
+WHERE id = $1
+  AND status IN ('QUEUED'::pgqrs_workflow_status, 'PAUSED'::pgqrs_workflow_status)
 RETURNING status
 "#;
 
@@ -96,7 +102,10 @@ impl crate::store::Run for PostgresRun {
         sqlx::query(
             r#"
             UPDATE pgqrs_workflow_runs
-            SET status = 'PAUSED'::pgqrs_workflow_status, error = $2, updated_at = NOW()
+            SET status = 'PAUSED'::pgqrs_workflow_status,
+                error = $2,
+                paused_at = NOW(),
+                updated_at = NOW()
             WHERE id = $1
             "#,
         )

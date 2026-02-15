@@ -17,7 +17,7 @@ async fn create_store(schema: &str) -> AnyStore {
 /// Test that a step with transient error returns StepNotReady
 #[tokio::test]
 async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_not_ready").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     // Create definition
     pgqrs::workflow()
@@ -87,7 +87,7 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
 /// Test that step becomes ready after retry_at timestamp passes
 #[tokio::test]
 async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_becomes_ready").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     // Create definition
     pgqrs::workflow()
@@ -180,7 +180,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 /// Test that a step exhausts retries and fails permanently
 #[tokio::test]
 async fn test_step_exhausts_retries() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_exhaust").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     // Create definition
     pgqrs::workflow()
@@ -326,7 +326,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 /// Test that non-transient errors fail immediately without retry
 #[tokio::test]
 async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_non_transient").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     pgqrs::workflow()
         .name("non_transient_wf")
@@ -385,7 +385,7 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_running_state").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     pgqrs::workflow()
         .name("running_state_wf")
@@ -440,7 +440,7 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_concurrent_step_retries() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_concurrent").await;
+    let store = create_store("workflow_retry_integration_tests").await;
 
     let mut handles = vec![];
 

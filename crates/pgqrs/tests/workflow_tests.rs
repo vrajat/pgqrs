@@ -1,6 +1,7 @@
 use pgqrs::store::AnyStore;
 use pgqrs::RunExt;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 mod common;
 
@@ -15,7 +16,7 @@ async fn create_store(schema: &str) -> AnyStore {
 
 #[tokio::test]
 async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
-    let store = create_store("workflow_test_success").await;
+    let store = create_store("workflow_tests").await;
 
     // Create definition
     pgqrs::workflow()
@@ -93,7 +94,7 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
-    let store = create_store("workflow_test_failure").await;
+    let store = create_store("workflow_tests").await;
 
     // Verify Workflow Failure Logic using new workflow
     let input_fail = TestData {
@@ -130,6 +131,46 @@ async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
         res.is_err(),
         "Workflow start should fail if currently ERROR"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
+    let store = create_store("workflow_tests").await;
+
+    pgqrs::workflow()
+        .name("pause_wf")
+        .store(&store)
+        .create()
+        .await?;
+
+    let run_msg = pgqrs::workflow()
+        .name("pause_wf")
+        .store(&store)
+        .trigger(&TestData {
+            msg: "pause".to_string(),
+        })?
+        .execute()
+        .await?;
+
+    let mut run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
+
+    run.start().await?;
+    run.pause("wait".to_string(), Duration::from_secs(30))
+        .await?;
+
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Paused);
+
+    run.start().await?;
+
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Running);
 
     Ok(())
 }
