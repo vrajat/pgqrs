@@ -115,6 +115,35 @@ impl SqliteRunRecordTable {
         })?;
         Ok(())
     }
+
+    pub async fn pause_run(
+        executor: &mut sqlx::SqliteConnection,
+        id: i64,
+        error: serde_json::Value,
+    ) -> Result<()> {
+        let error_str = error.to_string();
+        let now = Utc::now();
+        let now_str = format_sqlite_timestamp(&now);
+
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflow_runs
+            SET status = 'PAUSED', error = $2, paused_at = $3, updated_at = $3
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(error_str)
+        .bind(now_str)
+        .execute(executor)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "PAUSE_RUN".into(),
+            source: Box::new(e),
+            context: format!("Failed to pause run {}", id),
+        })?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -127,7 +156,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
         let row = sqlx::query(
             r#"
             INSERT INTO pgqrs_workflow_runs (workflow_id, status, input, created_at, updated_at)
-            VALUES ($1, 'PENDING', $2, $3, $3)
+            VALUES ($1, 'QUEUED', $2, $3, $3)
             RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
             "#,
         )

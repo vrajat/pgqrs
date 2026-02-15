@@ -162,6 +162,12 @@ pub trait Consumer: Worker {
     async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
 
     async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64>;
+
+    async fn release_with_visibility(
+        &self,
+        message_id: i64,
+        visible_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<bool>;
 }
 
 /// Interface for a workflow definition.
@@ -176,6 +182,11 @@ pub trait Run: Send + Sync {
     fn id(&self) -> i64;
     async fn start(&mut self) -> crate::error::Result<()>;
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
+    async fn pause(
+        &mut self,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> crate::error::Result<()>;
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
     async fn acquire_step(
         &self,
@@ -230,6 +241,14 @@ impl<T: ?Sized + Run> Run for Box<T> {
 
     async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
         (**self).complete(output).await
+    }
+
+    async fn pause(
+        &mut self,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> crate::error::Result<()> {
+        (**self).pause(message, resume_after).await
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {

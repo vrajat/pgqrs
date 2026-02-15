@@ -102,12 +102,12 @@ async fn test_workflow_creation_state() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    // Verify status is PENDING immediately after creation
+    // Verify status is QUEUED immediately after creation
     let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
     assert_eq!(
         record.status,
-        pgqrs::WorkflowStatus::Pending,
-        "Run should be PENDING upon creation"
+        pgqrs::WorkflowStatus::Queued,
+        "Run should be QUEUED upon creation"
     );
     Ok(())
 }

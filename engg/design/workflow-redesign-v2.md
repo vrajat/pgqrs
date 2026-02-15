@@ -73,7 +73,7 @@ In real applications:
 │          │                                              │            │
 │          │ 1. trigger()                    3. poll() & execute()    │
 │          │    validate                        report progress       │
-│          │    return run_id                                         │
+│          │    return queue message                                 │
 │          ▼                                              │            │
 │  ┌───────────────────────────────────────────────────────┴────────┐ │
 │  │                                                                 │ │
@@ -81,11 +81,11 @@ In real applications:
 │  │                                                                 │ │
 │  │  Routing: workflow_name → queue_name (1:1)                     │ │
 │  │                                                                 │ │
-│  │  2. Enqueue run:                                               │ │
+│  │  2. Enqueue trigger:                                           │ │
 │  │     - Check queue "zip_files" exists                           │ │
 │  │     - Check queue has active consumers                         │ │
-│  │     - Create workflow_run record (PENDING)                     │ │
-│  │     - Enqueue to queue "zip_files"                             │ │
+│  │     - Enqueue to queue "zip_files" with input payload          │ │
+│  │     - Run is created by the consumer on dequeue                │ │
 │  │                                                                 │ │
 │  │  State:                                                        │ │
 │  │     - Workflow definitions (name, version)                     │ │
@@ -114,23 +114,23 @@ In real applications:
 ### Key Concepts
 
 **Workflow Definition**: A named, versioned template (e.g., "zip_files" v1.0)  
-**Workflow Run**: A specific execution instance (run_id + parameters)  
+**Workflow Run**: A specific execution instance created on dequeue (run_id + input)  
 **Queue**: One queue per workflow name (1:1 mapping)  
 **Worker**: Can subscribe to multiple queues (multiple workflows)
 
 ### Run Lifecycle
 
 ```
-PENDING → RUNNING → SUCCESS (terminal)
-                 ↘ ERROR (terminal)
-                 ↘ PAUSED (waiting for external event)
+QUEUED → RUNNING → SUCCESS (terminal)
+               ↘ ERROR (terminal)
+               ↘ PAUSED (waiting interval)
 ```
 
-**PENDING**: Run created, waiting for worker to pick up  
-**RUNNING**: Worker executing steps  
+**QUEUED**: Message is in the queue, waiting for a consumer to dequeue  
+**RUNNING**: Consumer executing steps  
 **SUCCESS**: Completed with output value (terminal - message archived)  
 **ERROR**: Failed with permanent error (terminal - message archived)  
-**PAUSED**: Waiting for external event (e.g., human approval)
+**PAUSED**: Consumer paused execution and released the message for later retry
 
 ---
 
@@ -159,7 +159,7 @@ CREATE TABLE pgqrs_workflow_runs (
     run_id BIGSERIAL PRIMARY KEY,
     workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id),
     
-    status VARCHAR(50) NOT NULL, -- PENDING, RUNNING, PAUSED, SUCCESS, ERROR
+    status VARCHAR(50) NOT NULL, -- QUEUED, RUNNING, PAUSED, SUCCESS, ERROR (Postgres: enum type)
     input JSONB,      -- Workflow params (single source of truth)
     output JSONB,     -- Workflow result
     error JSONB,      -- Error details
@@ -180,7 +180,7 @@ CREATE TABLE pgqrs_workflow_steps (
     run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(run_id),
     step_id VARCHAR(255) NOT NULL,
     
-    status VARCHAR(50) NOT NULL, -- PENDING, RUNNING, PAUSED, SUCCESS, ERROR
+    status VARCHAR(50) NOT NULL, -- RUNNING, PAUSED, SUCCESS, ERROR
     input JSONB,
     output JSONB,
     error JSONB,
@@ -203,7 +203,7 @@ CREATE TABLE pgqrs_workers (
 );
 
 -- Messages (existing table, unchanged)
--- Workflow message payload format: {"run_id": 12345}
+-- Workflow message payload format: {"input": {...}, "meta": {...}}
 ```
 
 ### Schema Relationships
@@ -223,7 +223,7 @@ pgqrs_workflow_steps
 **Key Design Decisions:**
 
 1. **Strong FK Link (workflow → queue)**: Enforces 1:1 relationship in schema
-2. **Params in run.input only**: Message payload contains only `{"run_id": 12345}`, not full params (DRY)
+2. **Run created on dequeue**: Message payload contains input needed to create a run (no run_id at trigger time)
 3. **No retry_at in steps**: Message `visible_after` is single source of truth for retry timing
 
 ### Relationship to Existing Tables
@@ -236,9 +236,9 @@ pgqrs_workflow_steps
 - Worker A: subscribes to ["zip_files", "send_emails"] queues
 - Worker B: subscribes to ["send_emails"] queue only
 
-**pgqrs_messages**: Workflow runs are enqueued as messages
-- Message payload: `{"run_id": 12345}` (run_id only, params in DB)
-- Worker dequeues, fetches run details from `pgqrs_workflow_runs`
+**pgqrs_messages**: Workflow triggers are enqueued as messages
+- Message payload: `{"input": {...}, "meta": {...}}` (data required to create a run)
+- Consumer dequeues, creates the run, then processes steps
 - Message `visible_after` is **single source of truth** for retry timing (no retry_at in steps)
 
 ---
@@ -385,36 +385,38 @@ use pgqrs::workflow;
 async fn handle_upload(bucket: String, prefix: String) -> Result<i64, Box<dyn std::error::Error>> {
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
     
-    // Trigger workflow (returns run_id immediately)
-    let run_id = workflow("zip_files")
+    // Trigger workflow (returns queue message)
+    let message = workflow("zip_files")
         .trigger(&ZipParams { bucket, prefix })?
         .execute(&store)
         .await?;
     
-    println!("Started workflow run: {}", run_id);
-    Ok(run_id)
+    println!("Queued workflow message: {}", message.id());
+    Ok(message.id())
 }
 
 // Behind the scenes:
 // 1. Lookup workflow by name → get workflow_id and queue_id
-// 2. INSERT INTO pgqrs_workflow_runs (workflow_id, input, status='PENDING') RETURNING run_id
-// 3. INSERT INTO pgqrs_messages (queue_id, payload) VALUES (queue_id, '{"run_id": ...}')
-// Returns run_id
+// 2. INSERT INTO pgqrs_messages (queue_id, payload) VALUES (queue_id, '{"input": {...}, "meta": {...}}')
+// 3. Run is created by the consumer when the message is dequeued
+// Returns queue message
 ```
 
-**Note:** `workflow().trigger()` follows the noun-verb pattern and updates TWO tables (`pgqrs_workflow_runs` + `pgqrs_messages`), but semantically it's ONE operation (triggering a workflow run requires enqueuing it).
+**Note:** `workflow().trigger()` follows the noun-verb pattern and inserts a queue message only. Run creation happens when a consumer dequeues the message.
 
 ### 4.4 Check Status Later
 
 ```rust
-use pgqrs::workflow;
+use pgqrs::run;
 
-async fn check_run_status(run_id: i64) -> Result<(), Box<dyn std::error::Error>> {
+async fn check_run_status(message: QueueMessage) -> Result<(), Box<dyn std::error::Error>> {
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
     
-    // Get run status
-    let run = workflow("zip_files")
-        .get_run(run_id, &store)
+    // Non-blocking status snapshot
+    let run = run()
+        .status(message.clone())
+        .store(&store)
+        .get()
         .await?;
     
     match run.status {
@@ -425,7 +427,7 @@ async fn check_run_status(run_id: i64) -> Result<(), Box<dyn std::error::Error>>
         RunStatus::Error => {
             println!("Failed: {:?}", run.error);
         }
-        RunStatus::Running | RunStatus::Pending => {
+        RunStatus::Running | RunStatus::Queued => {
             println!("Still running...");
         }
         RunStatus::Paused => {
@@ -434,56 +436,70 @@ async fn check_run_status(run_id: i64) -> Result<(), Box<dyn std::error::Error>>
     }
     Ok(())
 }
+
+async fn wait_for_result(message: QueueMessage) -> Result<ZipResult, Box<dyn std::error::Error>> {
+    let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+    
+    // Blocking result (raises on error)
+    let result: ZipResult = run()
+        .status(message)
+        .store(&store)
+        .result()
+        .await?;
+    
+    Ok(result)
+}
 ```
 
 ### 4.5 Message Payload Structure
 
-**Design Decision:** Message contains only `run_id`, not full params (DRY principle)
+**Design Decision:** Message carries the input needed to create a run (no run_id at trigger time)
 
 ```json
-{"run_id": 12345}
+{
+  "input": {"bucket": "...", "prefix": "..."},
+  "meta": {"triggered_by": "http", "submitted_at": "..."}
+}
 ```
 
-**Worker Processing Flow:**
+**Consumer Processing Flow:**
 
 ```rust
-// Worker polls queue
-let msg = worker.dequeue().await?;
+// Consumer polls queue
+let msg = consumer.dequeue().await?;
 
-// Extract run_id from message payload
-let run_id: i64 = msg.payload["run_id"].as_i64()?;
+// Extract input from message payload
+let input = msg.payload["input"].clone();
 
-// Fetch run from DB (includes params in run.input)
-let run = store.get_workflow_run(run_id).await?;
-
-// Parse params from run.input (single source of truth)
-let params: ZipParams = serde_json::from_value(run.input)?;
+// Create run (status = QUEUED → RUNNING)
+let run = store.create_workflow_run(workflow_id, &input).await?;
+store.update_run_status(run.run_id, RunStatus::Running).await?;
 
 // Execute handler
-let result = handler(&mut WorkflowContext::new(run_id, &store), params).await;
+let params: ZipParams = serde_json::from_value(input)?;
+let result = handler(&mut WorkflowContext::new(run.run_id, &store), params).await;
 
 // Update run status
 match result {
     Ok(output) => {
-        store.update_run(run_id, RunStatus::Success, Some(output), None).await?;
+        store.update_run(run.run_id, RunStatus::Success, Some(output), None).await?;
         msg.archive().await?;  // Terminal state
     }
     Err(e) => {
-        handle_error(run_id, e, msg, &store).await?;
+        handle_error(run.run_id, e, msg, &store).await?;
     }
 }
 ```
 
 **Benefits:**
-- ✅ DRY: Params stored only in `pgqrs_workflow_runs.input`
-- ✅ Clean separation: Queue transports run_id, DB stores params
-- ✅ Smaller messages
-- ✅ Single source of truth for workflow params
+- ✅ Clear ownership: trigger enqueues input, consumer creates run
+- ✅ No run_id in queue payload
+- ✅ Queue payload stays self-sufficient for run creation
 
 ### 4.6 Python API
 
 ```python
-from pgqrs import workflow, consumer, connect
+from pgqrs import workflow, run, consumer, connect
 from dataclasses import dataclass
 
 @dataclass
@@ -525,30 +541,45 @@ async def worker_main():
     await worker.poll_forever()
 
 # Trigger (non-blocking)
-async def handle_upload(bucket: str, prefix: str) -> int:
+async def handle_upload(bucket: str, prefix: str):
     store = await connect("postgresql://localhost/mydb")
     
-    run_id = await workflow("zip_files") \
+    message = await workflow("zip_files") \
         .trigger(ZipParams(bucket=bucket, prefix=prefix)) \
         .execute(store)
     
-    print(f"Started run: {run_id}")
-    return run_id
+    print(f"Queued message: {message.id}")
+    return message
 
 # Check status
-async def check_status(run_id: int):
+async def check_status(message):
     store = await connect("postgresql://localhost/mydb")
     
-    run = await workflow("zip_files") \
-        .get_run(run_id, store)
+    run = await run() \
+        .status(message) \
+        .store(store) \
+        .get()
     
     if run.status == "SUCCESS":
         result = run.output()  # Automatically deserialized
         print(f"Done: {result.archive_path}")
     elif run.status == "ERROR":
         print(f"Failed: {run.error}")
+    elif run.status == "PAUSED":
+        print("Paused (waiting interval)")
     else:
         print("Still running...")
+
+# Blocking result
+async def wait_for_result(message):
+    store = await connect("postgresql://localhost/mydb")
+    
+    result = await run() \
+        .status(message) \
+        .store(store) \
+        .result()
+    
+    return result
 ```
 
 
@@ -690,11 +721,11 @@ let worker = consumer("worker-1", 8080, "zip_files")
 
 ### 6.1 Trigger Validation
 
-**Pre-flight checks** before accepting workflow run:
+**Pre-flight checks** before accepting a workflow trigger:
 
 ```rust
 // Inside workflow().trigger().execute()
-async fn execute(&self, store: &Store) -> Result<i64> {
+async fn execute(&self, store: &Store) -> Result<QueueMessage> {
     // 1. Check workflow is registered
     let workflow = store.get_workflow_by_name(&self.workflow_name)
         .await?
@@ -708,21 +739,20 @@ async fn execute(&self, store: &Store) -> Result<i64> {
         .await?;
     
     if active_workers == 0 {
-        // Warning: No workers available, but still accept run
-        log::warn!("No active workers for workflow '{}', run will wait in queue", self.workflow_name);
+        // Warning: No workers available, but still accept trigger
+        log::warn!("No active workers for workflow '{}', message will wait in queue", self.workflow_name);
     }
     
-    // 4. Create run
-    let run_id = store.create_workflow_run(
-        workflow.workflow_id,
-        &self.params,
-    ).await?;
-    
-    // 5. Enqueue message
-    store.enqueue_message(queue_id, json!({"run_id": run_id}))
+    // 4. Enqueue message with input payload
+    let message = store.enqueue_message(queue_id, json!({
+        "input": self.params,
+        "meta": {
+            "triggered_by": "workflow_trigger"
+        }
+    }))
         .await?;
     
-    Ok(run_id)
+    Ok(message)
 }
 ```
 
@@ -751,21 +781,23 @@ pub enum WorkflowError {
 ### 7.1 Immediate Return (Non-blocking)
 
 ```rust
-let run_id = workflow("zip_files")
+let message = workflow("zip_files")
     .trigger(&params)?
     .execute(&store)
     .await?;
 
-// Returns run_id immediately, check later
+// Returns queue message immediately, check later
 ```
 
 ### 7.2 Polling Pattern
 
 ```rust
-async fn wait_for_result<T>(run_id: i64, workflow_name: &str, store: &Store) -> Result<T> {
+async fn wait_for_result<T>(message: QueueMessage, store: &Store) -> Result<T> {
     loop {
-        let run = workflow(workflow_name)
-            .get_run(run_id, store)
+        let run = run()
+            .status(message.clone())
+            .store(store)
+            .get()
             .await?;
         
         match run.status {
@@ -773,63 +805,41 @@ async fn wait_for_result<T>(run_id: i64, workflow_name: &str, store: &Store) -> 
                 return Ok(serde_json::from_value(run.output)?);
             }
             RunStatus::Error => {
-                return Err(Error::ExecutionFailed { run_id, error: run.error });
+                return Err(Error::ExecutionFailed { run_id: run.run_id, error: run.error });
             }
-            _ => {
+            RunStatus::Paused => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            RunStatus::Running | RunStatus::Queued => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }
 }
-```
 
-### 7.3 Async Notification (Postgres)
-
-```rust
-// Worker side: NOTIFY on completion
-async fn complete_run(run_id: i64, output: Value, store: &Store) -> Result<()> {
-    store.update_run(run_id, RunStatus::Success, Some(output), None).await?;
-    
-    // Notify waiting triggers
-    store.execute_raw(&format!("NOTIFY workflow_run_{}, 'completed'", run_id)).await?;
-    
-    Ok(())
-}
-
-// Trigger side: LISTEN for notification
-async fn wait_for_result_async<T>(run_id: i64, workflow_name: &str, store: &Store) -> Result<T> {
-    // Subscribe to notifications
-    let mut listener = store.listen(&format!("workflow_run_{}", run_id)).await?;
-    
-    loop {
-        tokio::select! {
-            _ = listener.recv() => {
-                // Got notification, fetch result
-                let run = workflow(workflow_name)
-                    .get_run(run_id, store)
-                    .await?;
-                    
-                if run.status == RunStatus::Success {
-                    return Ok(serde_json::from_value(run.output)?);
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(300)) => {
-                return Err(Error::Timeout);
-            }
-        }
-    }
+async fn blocking_result<T>(message: QueueMessage, store: &Store) -> Result<T> {
+    run()
+        .status(message)
+        .store(store)
+        .result()
+        .await
 }
 ```
 
-### 7.4 Timeout Handling (Future Enhancement)
+### 7.3 Timeout Handling (Required)
 
 ```rust
 // Potential future API
-workflow("zip_files")
+let message = workflow("zip_files")
     .trigger(&params)?
-    .wait()  // blocks until completion
-    .timeout(Duration::from_secs(300))  // 5 minute timeout
     .execute(&store)
+    .await?;
+
+run()
+    .status(message)
+    .store(&store)
+    .result()
+    .timeout(Duration::from_secs(300))  // 5 minute timeout
     .await?
 ```
 
@@ -845,7 +855,7 @@ workflow("zip_files")
 | **Trigger API** | `pgqrs::workflow().create()` | `workflow("name").trigger()` (noun-verb) |
 | **Worker Registration** | None | `consumer().handler(fn).create()` |
 | **Handler Storage** | N/A | In-memory (not persisted) |
-| **Message Payload** | Workflow params | `{"run_id": 12345}` only |
+| **Message Payload** | Workflow params | Workflow input payload (no run_id) |
 | **Step API** | `pgqrs::step(wf_id, "step")` | `ctx.step("step", closure)` |
 | **Result Retrieval** | Unclear | `workflow().get_run()` |
 
@@ -871,8 +881,8 @@ let step_res = pgqrs::step(workflow.id(), "step1")
 // Setup (one-time)
 store.create_workflow("test_wf").await?;
 
-// Trigger (creates run)
-let run_id = workflow("test_wf")
+// Trigger (enqueue message)
+let message = workflow("test_wf")
     .trigger(&input)?
     .execute(&store)
     .await?;
@@ -889,46 +899,6 @@ async fn test_wf_handler(ctx: &mut dyn Workflow, input: Input) -> Result<Output>
 
 
 ---
-
-## 9. Migration Path
-
-*(For reference only - not required for initial implementation)*
-
-### Breaking Changes
-
-1. **API**: `pgqrs::workflow()` → `trigger().workflow()`
-2. **Schema**: workflow_id now references definition, not execution
-3. **Step API**: Global `step()` → method on Workflow trait
-
-### Deprecation Strategy
-
-**Phase 1**: Add new API alongside old
-```rust
-// Old (deprecated)
-let workflow = pgqrs::workflow().create(&store).await?;
-
-// New
-let run_id = trigger().workflow("name").execute(&store).await?;
-```
-
-**Phase 2**: Mark old API as `#[deprecated]`
-
-**Phase 3**: Remove old API in next major version
-
-### Data Migration
-
-```sql
--- Migrate existing workflows to new schema
-INSERT INTO pgqrs_workflows (name)
-SELECT DISTINCT name
-FROM old_pgqrs_workflows;
-
--- Migrate existing executions to runs
-INSERT INTO pgqrs_workflow_runs (workflow_id, status, input, output, error, created_at)
-SELECT w.workflow_id, old.status, old.input, old.output, old.error, old.created_at
-FROM old_pgqrs_workflows old
-JOIN pgqrs_workflows w ON w.name = old.name;
-```
 
 ---
 
@@ -948,19 +918,20 @@ JOIN pgqrs_workflows w ON w.name = old.name;
 |----------|--------------|------------|-------------|---------------|
 | **Success** | ARCHIVED | SUCCESS | All SUCCESS | Archive message |
 | **Permanent Error** | ARCHIVED | ERROR | Some ERROR | Archive message |
-| **Worker Crash** | INVISIBLE → timeout → VISIBLE | RUNNING | Some SUCCESS, some PENDING | Another worker dequeues |
-| **Transient Error** | visible_after = NOW() + retry_delay | RUNNING | PENDING | Update visibility, move on |
-| **Paused** | visible_after = NOW() + pause_interval | PAUSED | PAUSED | Check condition, bump visibility, move on |
+| **Worker Crash** | INVISIBLE → timeout → VISIBLE | RUNNING | Some SUCCESS, some RUNNING | Another consumer dequeues |
+| **Transient Error** | visible_after = NOW() + retry_delay | RUNNING | RUNNING | Update visibility, move on |
+| **Paused** | visible_after = pause_until | PAUSED | PAUSED | Release worker_id, move on |
 
 ### 10.3 Scenario Details
 
-#### Scenario 1: Worker Successfully Executes Workflow ✅ TERMINAL
+#### Scenario 1: Consumer Successfully Executes Workflow ✅ TERMINAL
 
 ```rust
-// Worker dequeues message {"run_id": 123}
+// Consumer dequeues message with input payload
+// Consumer creates run: status = RUNNING
 // Handler executes all steps successfully
-// Worker updates run: status = SUCCESS, output = {...}
-// Worker archives message
+// Consumer updates run: status = SUCCESS, output = {...}
+// Consumer archives message
 ```
 
 **Final State:**
@@ -1009,17 +980,17 @@ async fn handler(ctx: &mut dyn Workflow, params: Params) -> Result<Output> {
 #### Scenario 3: Worker Crashes 💥 NON-TERMINAL
 
 ```rust
-// Worker dequeues message {"run_id": 123} (message invisible for visibility_timeout)
-// Worker updates run: status = RUNNING
+// Consumer dequeues message with input payload (message invisible for visibility_timeout)
+// Consumer creates run: status = RUNNING
 // Step "download" executes, saves to DB: status = SUCCESS
-// Worker crashes (hardware failure, OOM, SIGKILL)
+// Consumer crashes (hardware failure, OOM, SIGKILL)
 // Message visibility timeout expires (e.g., 5 minutes)
-// Different worker dequeues same message {"run_id": 123}
-// Worker calls handler again
+// Different consumer dequeues same message (input payload)
+// Consumer calls handler again
 // Step "download" checks DB, sees SUCCESS, returns cached result
 // Step "process" executes for first time
-// Worker completes, updates run: status = SUCCESS
-// Worker archives message
+// Consumer completes, updates run: status = SUCCESS
+// Consumer archives message
 ```
 
 **State while crashed (before timeout):**
@@ -1060,16 +1031,16 @@ async fn handler(ctx: &mut dyn Workflow, params: Params) -> Result<Output> {
 **Handler returns transient error:**
 ```rust
 // Worker catches TransientError
-// Worker updates step: status = PENDING (no retry_at - DRY!)
-// Worker updates message: visible_after = NOW() + 30s
-// Worker moves on to next message (doesn't block)
+// Consumer updates step: status = RUNNING (pause until retry)
+// Consumer updates message: visible_after = NOW() + 30s
+// Consumer moves on to next message (doesn't block)
 
 // ... 30 seconds later ...
 
 // Message becomes visible
-// Worker (same or different) dequeues message {"run_id": 123}
-// Worker calls handler
-// Step "api_call" executes again (status was PENDING)
+// Consumer (same or different) dequeues message with input payload
+// Consumer calls handler
+// Step "api_call" executes again (status was RUNNING)
 // If succeeds: continues to next step
 // If fails again: repeat with exponential backoff
 ```
@@ -1077,7 +1048,7 @@ async fn handler(ctx: &mut dyn Workflow, params: Params) -> Result<Output> {
 **State during wait period:**
 - Message: visible_after = NOW() + 30s (in queue but invisible)
 - Run: status = RUNNING
-- Steps: step "api_call": status = PENDING
+- Steps: step "api_call": status = RUNNING
 
 **Why non-terminal?** Transient error, retry likely to succeed.
 
@@ -1098,7 +1069,7 @@ async fn handler(ctx: &mut dyn Workflow, params: Params) -> Result<Output> {
     
     // Pause until approval received
     let approval_data = ctx.step("wait_for_approval", || async {
-        Err(PauseError::new("Waiting for approval"))
+        Err(Step::pause(Duration::hours(1)))
     }).await?;
     
     // Process approval
@@ -1110,26 +1081,26 @@ async fn handler(ctx: &mut dyn Workflow, params: Params) -> Result<Output> {
 }
 ```
 
-**Handler returns pause error:**
+**Handler returns pause:**
 ```rust
-// Worker catches PauseError
-// Worker updates step: status = PAUSED
-// Worker updates run: status = PAUSED, paused_at = NOW()
-// Worker updates message: visible_after = NOW() + pause_check_interval (e.g., 1 hour)
-// Worker moves on
+// Consumer catches Step::Pause
+// Consumer updates step: status = PAUSED, paused_at = NOW(), pause_until
+// Consumer updates run: status = PAUSED, paused_at = NOW()
+// Consumer releases worker_id and updates message visibility to pause_until
+// Consumer continues other runnable steps before pausing message
 
-// ... 1 hour later ...
+// ... pause interval elapses ...
 
 // Message becomes visible
-// Worker dequeues message {"run_id": 123}
-// Worker checks run: status = PAUSED
-// Worker checks if resume condition met (e.g., query approval DB)
-// If not met: update visibility to NOW() + pause_check_interval, move on
-// If met: update run status = RUNNING, execute handler
+// Consumer dequeues message with input payload
+// Consumer re-executes paused step
+// If still paused: update visibility to new pause_until, move on
+// If ready: update run status = RUNNING, continue
 ```
 
+
 **State while paused:**
-- Message: visible_after = NOW() + pause_check_interval (bumped periodically)
+- Message: visible_after = pause_until
 - Run: status = PAUSED, paused_at = T0
 - Steps: step "wait_for_approval": status = PAUSED
 
@@ -1141,7 +1112,7 @@ async fn approval_webhook(run_id: i64, approval_data: Value) -> Result<()> {
     
     // Option 1: Update step with approval data, let worker poll naturally
     store.update_step(run_id, "wait_for_approval", 
-        StepStatus::Pending, Some(approval_data)).await?;
+        StepStatus::Running, Some(approval_data)).await?;
     store.update_run(run_id, RunStatus::Running).await?;
     
     // Option 2: Make message immediately visible (skip wait)
@@ -1152,22 +1123,13 @@ async fn approval_webhook(run_id: i64, approval_data: Value) -> Result<()> {
 }
 ```
 
-**Why non-terminal?** Work not complete, but cannot progress without external event.
+**Why non-terminal?** Work not complete, but cannot progress without external event. Handler is responsible for pausing steps and returning RunStatus::Paused with the pause interval.
 
-**Configuration:**
-```rust
-// Global configuration
-let config = WorkflowConfig {
-    pause_check_interval: Duration::hours(1),  // Default: check every hour
-    message_visibility_timeout: Duration::minutes(5),  // For crash recovery
-};
-let store = pgqrs::connect_with(config).await?;
-```
 
-**Pause check interval:**
-- **Default:** 1 hour (most paused workflows wait hours/days)
-- **Configurable globally** (not per-workflow - keep it simple)
-- **Trade-off:** Longer = less worker churn, but slower to react when resumed
+**Pause interval:**
+- Determined by `Step::Pause` metadata returned by the handler
+- Consumer updates message visibility to `pause_until` and clears worker_id
+- If other steps are runnable, the handler should finish them before pausing the message
 
 ---
 
@@ -1178,28 +1140,30 @@ let store = pgqrs::connect_with(config).await?;
 - Preserves: Step completion state (skip already-successful steps)
 - Audit trail: One run_id from start to finish
 - Idempotency: Steps check (run_id, step_id) in DB before executing
+- Run is created on dequeue; retries reuse the same run_id
 
 **New Run (Re-trigger):**
 - Use when: Permanent error, want to retry with different params
 - Fresh start: All steps execute from beginning
 - Audit trail: Multiple run_ids, can track which attempt succeeded
 - Different params: Fix the issue (e.g., correct file path)
+- Trigger creates a new queue message; run is created on dequeue
 
 **Example:**
 ```rust
 // Permanent error: file not found
-let run_id_1 = trigger()
+let message_1 = trigger()
     .workflow("process_file")
     .params(&Params { key: "wrong/path.txt" })?
     .execute(&store).await?;
-// Completes with ERROR: "File not found"
+// Consumer creates run and completes with ERROR: "File not found"
 
-// Check status
-let run = pgqrs::get_run(run_id_1, &store).await?;
+// Check status (run_id comes from run records, not the queue message)
+let run = pgqrs::get_run_by_input("process_file", &Params { key: "wrong/path.txt" }, &store).await?;
 assert_eq!(run.status, RunStatus::Error);
 
 // Retry with CORRECTED params (new run)
-let run_id_2 = trigger()
+let message_2 = trigger()
     .workflow("process_file")
     .params(&Params { key: "correct/path.txt" })?  // Fixed!
     .execute(&store).await?;
@@ -1223,24 +1187,25 @@ async fn handle_step_transient_error(
     let visible_after = Utc::now() + retry_delay;
     store.update_message_visibility(message_id, visible_after).await?;
     
-    // Step state remains PENDING (or doesn't exist yet)
+    // Step state remains RUNNING (or doesn't exist yet)
     // No duplicate retry_at timestamp
     
     Ok(())
 }
 ```
 
-**When worker dequeues message:**
+**When consumer dequeues message:**
 ```rust
-// Worker dequeues (visibility timeout passed)
+// Consumer dequeues (visibility timeout passed)
 let message = store.dequeue(queue_id).await?;
-let run_id = message.payload["run_id"];
 
-// Worker calls handler
+// Consumer creates run from payload input
+// Consumer calls handler
 // Handler calls step
-// Step checks DB: status = PENDING (no retry_at to check)
+// Step checks DB: status = RUNNING (no retry_at to check)
 // Step executes
 ```
+
 
 **Benefits:**
 - ✅ No duplicate timestamps (DRY principle)
@@ -1400,7 +1365,7 @@ trigger()
 
 **Alternative**: Route by message payload instead of queue
 ```json
-{"workflow": "zip_files", "run_id": 123}
+{"workflow": "zip_files", "input": {...}}
 ```
 Pro: One queue for all workflows  
 Con: Workers must filter messages they can't handle
@@ -1505,12 +1470,12 @@ async fn handle_upload(
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
     
     // Trigger workflow (non-blocking)
-    let run_id = workflow("process_file")
+    let message = workflow("process_file")
         .trigger(&ProcessFileParams { bucket, key })?
         .execute(&store)
         .await?;
     
-    Ok(format!("Processing started: run_id={}", run_id))
+    Ok(format!("Processing queued: message_id={}", message.id()))
 }
 
 // === Check Result Later ===
@@ -1560,9 +1525,9 @@ async fn process_file_handler(ctx: &mut dyn Workflow, params: ProcessFileParams)
 
 // When worker restarts:
 // 1. Message becomes visible again (visibility timeout expired)
-// 2. Worker dequeues same message {"run_id": 123}
-// 3. Worker fetches run from DB
-// 4. Worker calls handler again
+// 2. Consumer dequeues same message with input payload
+// 3. Consumer recreates run and sees step state
+// 4. Consumer calls handler again
 // 5. Step "download" checks DB, sees SUCCESS, returns cached result
 // 6. Step "process" executes for first time
 // 7. Run completes successfully
@@ -1643,23 +1608,23 @@ async fn multi_worker_main() -> Result<()> {
 
 This redesign fundamentally improves the developer experience by:
 
-1. **Clear separation**: Triggers submit runs, workers execute them
+1. **Clear separation**: Triggers enqueue input, consumers create and execute runs
 2. **Strong FK relationship**: Workflow → Queue (1:1) enforced in schema
 3. **Clean API**: `workflow().trigger()` (noun-verb), `consumer().handler(fn).create()`
-4. **DRY principle**: Message contains only run_id, params stored in DB once
+4. **Trigger payload**: Message contains input needed to create a run (no run_id at trigger time)
 5. **Natural retry**: Message queue handles crash recovery and transient errors
 6. **DRY retry mechanism**: Message visibility is single source of truth (no duplicate retry_at)
 7. **Same run continues**: Preserves step state and audit trail across retries
 8. **Pause support**: Workflows can wait for external events (human approval, scheduled time)
 9. **Reusable workflows**: One definition, many runs
 10. **Handler in memory**: Not persisted, attached at worker startup
-11. **Single-table updates**: Each API call updates one table (except semantically-coupled operations)
+11. **Single-table updates**: Each API call updates one table (with justified exceptions)
 
 **API Design Principles:**
 - **Noun-verb pattern**: `workflow().trigger()`, `workflow().get_run()`
 - **Fluent builders**: `consumer().handler(fn).create()`
 - **Single responsibility**: Each method updates one table (with justified exceptions)
-- **Message payload**: Contains only run_id (DRY - params in DB)
+- **Message payload**: Carries input for run creation, run_id generated on dequeue
 
 ### Issues Resolved
 

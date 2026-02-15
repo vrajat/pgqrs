@@ -343,6 +343,17 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(rows)
     }
 
+    async fn update_payload(&self, id: i64, payload: JsonValue) -> Result<u64> {
+        let payload_str = payload.to_string();
+        let sql = "UPDATE pgqrs_messages SET payload = ? WHERE id = ?";
+        let rows = crate::store::turso::query(sql)
+            .bind(payload_str)
+            .bind(id)
+            .execute_once(&self.db)
+            .await?;
+        Ok(rows)
+    }
+
     async fn extend_visibility(
         &self,
         id: i64,
@@ -503,6 +514,29 @@ impl crate::store::MessageTable for TursoMessageTable {
             .collect();
 
         Ok(result)
+    }
+
+    async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        let vt_str = format_turso_timestamp(&vt);
+        let sql = r#"
+            UPDATE pgqrs_messages
+            SET vt = ?, consumer_worker_id = NULL
+            WHERE id = ? AND consumer_worker_id = ?
+        "#;
+
+        let rows = crate::store::turso::query(sql)
+            .bind(vt_str)
+            .bind(id)
+            .bind(worker_id)
+            .execute_once(&self.db)
+            .await?;
+
+        Ok(rows)
     }
 
     async fn count_pending(&self, queue_id: i64) -> Result<i64> {

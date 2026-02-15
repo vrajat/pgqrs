@@ -23,9 +23,8 @@ async def test_builder_api(test_dsn, schema):
         await pgqrs.workflow().name(wf_name).store(store).trigger(input_data).execute()
     )
     assert msg.id > 0
-    # The message payload for a workflow trigger is wrapped: {"workflow_id": id, "input": input}
-    assert msg.payload["input"] == input_data
-    assert msg.payload["workflow_id"] == wf.id
+    # The message payload for a workflow trigger contains the input
+    assert msg.payload == input_data
 
     # 3. Test RunBuilder
     run = await pgqrs.run().message(msg).store(store).execute()
@@ -81,6 +80,7 @@ async def test_workflow_decorators_with_builders(test_dsn, schema):
 
     # Trigger and get run handle
     msg = await pgqrs.workflow().name(wf_name).store(store).trigger("hello").execute()
+    assert msg.payload == "hello"
     run = await pgqrs.run().message(msg).store(store).execute()
 
     # Execute workflow

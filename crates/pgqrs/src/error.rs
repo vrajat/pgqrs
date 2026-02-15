@@ -239,6 +239,13 @@ pub enum Error {
     #[error("{entity} with id '{id}' not found")]
     NotFound { entity: String, id: String },
 
+    /// Workflow execution paused
+    #[error("Workflow paused: {message}")]
+    Paused {
+        message: String,
+        resume_after: std::time::Duration,
+    },
+
     /// Transient error that can be retried
     #[error("Transient error ({code}): {message}")]
     Transient {

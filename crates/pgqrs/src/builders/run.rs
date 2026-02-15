@@ -42,7 +42,8 @@ impl<'a, S: Store> RunBuilder<'a, S> {
             .ok_or_else(|| crate::error::Error::ValidationFailed {
                 reason: "QueueMessage is required for RunBuilder::execute".to_string(),
             })?;
-        store.run(message).await
+        let run = store.run(message).await?;
+        Ok(run)
     }
 }
 

@@ -16,21 +16,6 @@ impl TursoWorkflowTable {
         Self { db }
     }
 
-    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
-        let row = crate::store::turso::query(
-            r#"
-            SELECT id, name, queue_id, created_at
-            FROM pgqrs_workflows
-            WHERE name = $1
-            "#,
-        )
-        .bind(name)
-        .fetch_one(&self.db)
-        .await?;
-
-        Self::map_row(&row)
-    }
-
     fn map_row(row: &turso::Row) -> Result<WorkflowRecord> {
         let id: i64 = row.get(0)?;
         let name: String = row.get(1)?;
@@ -90,6 +75,21 @@ impl TursoWorkflowTable {
 
 #[async_trait]
 impl crate::store::WorkflowTable for TursoWorkflowTable {
+    async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+        let row = crate::store::turso::query(
+            r#"
+            SELECT id, name, queue_id, created_at
+            FROM pgqrs_workflows
+            WHERE name = $1
+            "#,
+        )
+        .bind(name)
+        .fetch_one(&self.db)
+        .await?;
+
+        Self::map_row(&row)
+    }
+
     async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);

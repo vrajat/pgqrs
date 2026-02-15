@@ -411,6 +411,19 @@ impl crate::store::Consumer for SqliteConsumer {
             .await?;
         Ok(res.iter().filter(|&&b| b).count() as u64)
     }
+
+    async fn release_with_visibility(
+        &self,
+        message_id: i64,
+        visible_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        use crate::store::MessageTable;
+        let count = self
+            .messages
+            .release_with_visibility(message_id, self.worker_record.id, visible_at)
+            .await?;
+        Ok(count > 0)
+    }
 }
 
 // Auto-cleanup for ephemeral workers

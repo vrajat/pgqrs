@@ -16,7 +16,6 @@ pub trait QueueTable: Send + Sync {
     async fn list(&self) -> crate::error::Result<Vec<QueueRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
-
     async fn get_by_name(&self, name: &str) -> crate::error::Result<QueueRecord>;
     async fn exists(&self, name: &str) -> crate::error::Result<bool>;
     async fn delete_by_name(&self, name: &str) -> crate::error::Result<u64>;
@@ -50,6 +49,12 @@ pub trait MessageTable: Send + Sync {
         vt: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<u64>;
 
+    async fn update_payload(
+        &self,
+        id: i64,
+        payload: serde_json::Value,
+    ) -> crate::error::Result<u64>;
+
     async fn extend_visibility(
         &self,
         id: i64,
@@ -69,6 +74,13 @@ pub trait MessageTable: Send + Sync {
         message_ids: &[i64],
         worker_id: i64,
     ) -> crate::error::Result<Vec<bool>>;
+
+    async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: chrono::DateTime<chrono::Utc>,
+    ) -> crate::error::Result<u64>;
 
     async fn count_pending(&self, queue_id: i64) -> crate::error::Result<i64>;
 
@@ -169,6 +181,7 @@ pub trait ArchiveTable: Send + Sync {
 pub trait WorkflowTable: Send + Sync {
     async fn insert(&self, data: NewWorkflowRecord) -> crate::error::Result<WorkflowRecord>;
     async fn get(&self, id: i64) -> crate::error::Result<WorkflowRecord>;
+    async fn get_by_name(&self, name: &str) -> crate::error::Result<WorkflowRecord>;
     async fn list(&self) -> crate::error::Result<Vec<WorkflowRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;

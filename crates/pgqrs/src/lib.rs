@@ -8,6 +8,7 @@ pub mod tables;
 pub mod types;
 pub mod validation;
 pub mod workers;
+pub mod workflow;
 
 pub mod builders {
     pub mod admin;
@@ -33,9 +34,8 @@ pub use crate::tables::{
     ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
     WorkflowTable,
 };
-pub use crate::workers::{
-    Admin, Consumer, Producer, Run, RunExt, StepGuard, StepGuardExt, Worker, Workflow,
-};
+pub use crate::workers::{Admin, Consumer, Producer, Run, RunExt, StepGuard, StepGuardExt, Worker};
+pub use crate::workflow::{pause_error, workflow_handler, workflow_step};
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result, TransientStepError};

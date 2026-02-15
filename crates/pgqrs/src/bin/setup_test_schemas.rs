@@ -26,19 +26,8 @@ const TEST_SCHEMAS: &[&str] = &[
     "macro_test_idempotency",
     "macro_test_step_failure",
     "macro_test_workflow_failure",
-    "workflow_test_success",
-    "workflow_test_failure",
-    // Workflow retry integration test schemas
-    "workflow_retry_not_ready",
-    "workflow_retry_becomes_ready",
-    "workflow_retry_exhaust",
-    "workflow_retry_non_transient",
-    "workflow_retry_at_future",
-    "workflow_retry_count",
-    "workflow_retry_custom_delay",
-    "workflow_retry_running_state",
-    "workflow_retry_wrapping",
-    "workflow_retry_concurrent",
+    "workflow_tests",
+    "workflow_retry_integration_tests",
 ];
 
 #[tokio::main]
