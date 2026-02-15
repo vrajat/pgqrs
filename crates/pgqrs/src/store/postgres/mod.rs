@@ -263,14 +263,10 @@ impl Store for PostgresStore {
         name: &str,
         input: Option<serde_json::Value>,
     ) -> crate::error::Result<crate::types::QueueMessage> {
-        let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
-
         let now = chrono::Utc::now();
-        let payload = serde_json::json!({
-            "workflow_id": workflow.id,
-            "input": input
-        });
+
+        let payload = input.unwrap_or(serde_json::Value::Null);
 
         let msg = self
             .messages
@@ -293,22 +289,39 @@ impl Store for PostgresStore {
 
         let payload = &message.payload;
 
-        let run_id = if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            run_id
-        } else if let Some(workflow_id) = payload.get("workflow_id").and_then(|v| v.as_i64()) {
-            let input = payload.get("input").cloned();
-            let run = self
-                .workflow_runs()
-                .insert(crate::types::NewRunRecord { workflow_id, input })
-                .await?;
-            run.id
-        } else {
-            return Err(crate::error::Error::Internal {
-                message: "Invalid workflow message payload".to_string(),
-            });
-        };
+        // If payload has run_id, it's a resumption or already initialized
+        if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
+            return Ok(Box::new(PostgresRun::new(self.pool.clone(), run_id)));
+        }
 
-        Ok(Box::new(PostgresRun::new(self.pool.clone(), run_id)))
+        // Otherwise, it's a new trigger. Create run record.
+        let queue = self.queues.get(message.queue_id).await?;
+        let workflow = self.workflows.get_by_name(&queue.queue_name).await?;
+
+        let run_rec = self
+            .workflow_runs
+            .insert(crate::types::NewRunRecord {
+                workflow_id: workflow.id,
+                input: Some(payload.clone()),
+            })
+            .await?;
+
+        // Update message payload to include run_id for future resumptions
+        let mut new_payload = payload.clone();
+        if let Some(obj) = new_payload.as_object_mut() {
+            obj.insert("run_id".to_string(), serde_json::json!(run_rec.id));
+        } else {
+            // If payload is not an object, wrap it
+            new_payload = serde_json::json!({
+                "input": payload,
+                "run_id": run_rec.id
+            });
+        }
+        self.messages
+            .update_payload(message.id, new_payload)
+            .await?;
+
+        Ok(Box::new(PostgresRun::new(self.pool.clone(), run_rec.id)))
     }
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn WorkerTrait>> {

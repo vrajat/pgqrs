@@ -32,10 +32,9 @@
 //! ```
 
 use crate::error::Result;
-use crate::store::postgres::tables::pgqrs_workers::Workers;
-use crate::store::postgres::tables::Messages;
-use crate::store::WorkerTable;
-use crate::types::{ArchivedMessage, QueueMessage, WorkerStatus};
+use crate::store::postgres::tables::{Messages, Workers};
+use crate::tables::WorkerTable;
+use crate::{ArchivedMessage, QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -403,6 +402,18 @@ impl crate::store::Consumer for Consumer {
             .await?;
         // Count how many were successfully released
         Ok(results.into_iter().filter(|&released| released).count() as u64)
+    }
+
+    async fn release_with_visibility(
+        &self,
+        message_id: i64,
+        visible_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        let messages = Messages::new(self.pool.clone());
+        let rows_affected = messages
+            .release_with_visibility(message_id, self.worker_record.id, visible_at)
+            .await?;
+        Ok(rows_affected > 0)
     }
 }
 

@@ -14,7 +14,24 @@ impl Workflows {
         Self { pool }
     }
 
-    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+    fn map_row(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
+        let workflow_id: i64 = row.try_get("id")?;
+        let name: String = row.try_get("name")?;
+        let queue_id: i64 = row.try_get("queue_id")?;
+        let created_at: DateTime<Utc> = row.try_get("created_at")?;
+
+        Ok(WorkflowRecord {
+            id: workflow_id,
+            name,
+            queue_id,
+            created_at,
+        })
+    }
+}
+
+#[async_trait]
+impl crate::store::WorkflowTable for Workflows {
+    async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, name, queue_id, created_at
@@ -34,23 +51,6 @@ impl Workflows {
         Self::map_row(row)
     }
 
-    fn map_row(row: sqlx::postgres::PgRow) -> Result<WorkflowRecord> {
-        let workflow_id: i64 = row.try_get("id")?;
-        let name: String = row.try_get("name")?;
-        let queue_id: i64 = row.try_get("queue_id")?;
-        let created_at: DateTime<Utc> = row.try_get("created_at")?;
-
-        Ok(WorkflowRecord {
-            id: workflow_id,
-            name,
-            queue_id,
-            created_at,
-        })
-    }
-}
-
-#[async_trait]
-impl crate::store::WorkflowTable for Workflows {
     async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         // Workflow definitions require `queue_id` (FK to pgqrs_queues).
         let row = sqlx::query(

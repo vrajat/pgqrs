@@ -374,6 +374,18 @@ impl Consumer for TursoConsumer {
             .await?;
         Ok(res.iter().filter(|&&x| x).count() as u64)
     }
+
+    async fn release_with_visibility(
+        &self,
+        message_id: i64,
+        visible_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let count = self
+            .messages
+            .release_with_visibility(message_id, self.worker_record.id, visible_at)
+            .await?;
+        Ok(count > 0)
+    }
 }
 
 impl Drop for TursoConsumer {

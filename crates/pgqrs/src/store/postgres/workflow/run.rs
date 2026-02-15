@@ -9,7 +9,7 @@ use std::str::FromStr;
 const SQL_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING'::pgqrs_workflow_status, started_at = NOW()
-WHERE id = $1 AND status = 'PENDING'::pgqrs_workflow_status
+WHERE id = $1 AND status = 'QUEUED'::pgqrs_workflow_status
 RETURNING status
 "#;
 
@@ -83,6 +83,31 @@ impl crate::store::Run for PostgresRun {
             query: "COMPLETE_RUN".into(),
             source: Box::new(e),
             context: format!("Failed to complete run {}", self.id),
+        })?;
+
+        Ok(())
+    }
+
+    async fn pause(&mut self, message: String, resume_after: std::time::Duration) -> Result<()> {
+        let error = serde_json::json!({
+            "message": message,
+            "resume_after": resume_after.as_secs()
+        });
+        sqlx::query(
+            r#"
+            UPDATE pgqrs_workflow_runs
+            SET status = 'PAUSED'::pgqrs_workflow_status, error = $2, updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(self.id)
+        .bind(error)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "PAUSE_RUN".into(),
+            source: Box::new(e),
+            context: format!("Failed to pause run {}", self.id),
         })?;
 
         Ok(())

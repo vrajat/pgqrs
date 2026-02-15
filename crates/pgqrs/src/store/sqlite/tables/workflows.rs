@@ -15,7 +15,24 @@ impl SqliteWorkflowTable {
         Self { pool }
     }
 
-    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord> {
+        let id: i64 = row.try_get("id")?;
+        let name: String = row.try_get("name")?;
+        let queue_id: i64 = row.try_get("queue_id")?;
+        let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
+
+        Ok(WorkflowRecord {
+            id,
+            name,
+            queue_id,
+            created_at,
+        })
+    }
+}
+
+#[async_trait]
+impl crate::store::WorkflowTable for SqliteWorkflowTable {
+    async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, name, queue_id, created_at
@@ -35,23 +52,6 @@ impl SqliteWorkflowTable {
         Self::map_row(row)
     }
 
-    fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord> {
-        let id: i64 = row.try_get("id")?;
-        let name: String = row.try_get("name")?;
-        let queue_id: i64 = row.try_get("queue_id")?;
-        let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
-
-        Ok(WorkflowRecord {
-            id,
-            name,
-            queue_id,
-            created_at,
-        })
-    }
-}
-
-#[async_trait]
-impl crate::store::WorkflowTable for SqliteWorkflowTable {
     async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);

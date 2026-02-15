@@ -548,7 +548,7 @@ impl TursoRun {
 const SQL_TURSO_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING', updated_at = datetime('now'), started_at = COALESCE(started_at, datetime('now'))
-WHERE id = $1 AND status = 'PENDING'
+WHERE id = $1 AND status = 'QUEUED'
 RETURNING status, error;
 "#;
 
@@ -590,6 +590,22 @@ impl crate::store::Run for TursoRun {
         )
         .bind(self.id)
         .bind(output_str)
+        .execute_once(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    async fn pause(&mut self, message: String, resume_after: std::time::Duration) -> Result<()> {
+        let error = serde_json::json!({
+            "message": message,
+            "resume_after": resume_after.as_secs()
+        });
+        let error_str = error.to_string();
+        let _rows = query(
+            "UPDATE pgqrs_workflow_runs SET status = 'PAUSED', error = $2, updated_at = datetime('now') WHERE id = $1",
+        )
+        .bind(self.id)
+        .bind(error_str)
         .execute_once(&self.db)
         .await?;
         Ok(())
@@ -886,15 +902,10 @@ impl Store for TursoStore {
         name: &str,
         input: Option<serde_json::Value>,
     ) -> Result<crate::types::QueueMessage> {
-        // Enqueue message with input and workflow name.
-        let workflow = self.workflows.get_by_name(name).await?;
         let queue = self.queues.get_by_name(name).await?;
-
         let now = Utc::now();
-        let payload = serde_json::json!({
-            "workflow_id": workflow.id,
-            "input": input
-        });
+
+        let payload = input.unwrap_or(serde_json::Value::Null);
 
         let msg = self
             .messages
@@ -915,24 +926,39 @@ impl Store for TursoStore {
     async fn run(&self, message: crate::types::QueueMessage) -> Result<Box<dyn Run>> {
         let payload = &message.payload;
 
-        let run_id = if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            // Existing run resumption
-            run_id
-        } else if let Some(workflow_id) = payload.get("workflow_id").and_then(|v| v.as_i64()) {
-            // New trigger
-            let input = payload.get("input").cloned();
-            let run = self
-                .workflow_runs
-                .insert(crate::types::NewRunRecord { workflow_id, input })
-                .await?;
-            run.id
-        } else {
-            return Err(crate::error::Error::Internal {
-                message: "Invalid workflow message payload".to_string(),
-            });
-        };
+        // If payload has run_id, it's a resumption or already initialized
+        if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
+            return Ok(Box::new(TursoRun::new(self.db.clone(), run_id)));
+        }
 
-        Ok(Box::new(TursoRun::new(self.db.clone(), run_id)))
+        // Otherwise, it's a new trigger. Create run record.
+        let queue = self.queues.get(message.queue_id).await?;
+        let workflow = self.workflows.get_by_name(&queue.queue_name).await?;
+
+        let run_rec = self
+            .workflow_runs
+            .insert(crate::types::NewRunRecord {
+                workflow_id: workflow.id,
+                input: Some(payload.clone()),
+            })
+            .await?;
+
+        // Update message payload to include run_id for future resumptions
+        let mut new_payload = payload.clone();
+        if let Some(obj) = new_payload.as_object_mut() {
+            obj.insert("run_id".to_string(), serde_json::json!(run_rec.id));
+        } else {
+            // If payload is not an object, wrap it
+            new_payload = serde_json::json!({
+                "input": payload,
+                "run_id": run_rec.id
+            });
+        }
+        self.messages
+            .update_payload(message.id, new_payload)
+            .await?;
+
+        Ok(Box::new(TursoRun::new(self.db.clone(), run_rec.id)))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {

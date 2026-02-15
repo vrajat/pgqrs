@@ -22,7 +22,7 @@ impl crate::store::RunRecordTable for RunRecords {
             INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
             VALUES (
               $1,
-              'PENDING'::pgqrs_workflow_status,
+              'QUEUED'::pgqrs_workflow_status,
               $2
             )
             RETURNING

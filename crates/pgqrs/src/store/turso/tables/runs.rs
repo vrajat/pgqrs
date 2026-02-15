@@ -67,7 +67,7 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
         let row = crate::store::turso::query(
             r#"
             INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
-            VALUES (?, 'PENDING', ?)
+            VALUES (?, 'QUEUED', ?)
             RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
             "#,
         )

@@ -204,7 +204,6 @@ impl Messages {
         Ok(result.rows_affected())
     }
 
-    // Existing inherent methods
     pub async fn batch_insert(
         &self,
         queue_id: i64,
@@ -254,6 +253,22 @@ impl Messages {
                 query: "UPDATE_MESSAGE_VT".into(),
                 source: Box::new(e),
                 context: format!("Failed to update visibility timeout for message {}", id),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
+    }
+
+    pub async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
+        let rows_affected = sqlx::query("UPDATE pgqrs_messages SET payload = $2 WHERE id = $1")
+            .bind(id)
+            .bind(payload)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "UPDATE_MESSAGE_PAYLOAD".into(),
+                source: Box::new(e),
+                context: format!("Failed to update payload for message {}", id),
             })?
             .rows_affected();
 
@@ -363,6 +378,34 @@ impl Messages {
             .collect();
 
         Ok(result)
+    }
+
+    pub async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: DateTime<Utc>,
+    ) -> Result<u64> {
+        const RELEASE_WITH_VT: &str = r#"
+            UPDATE pgqrs_messages
+            SET vt = $3, consumer_worker_id = NULL
+            WHERE id = $1 AND consumer_worker_id = $2;
+        "#;
+
+        let rows_affected = sqlx::query(RELEASE_WITH_VT)
+            .bind(id)
+            .bind(worker_id)
+            .bind(vt)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "RELEASE_WITH_VT".into(),
+                source: Box::new(e),
+                context: format!("Failed to release message {} with visibility", id),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
     }
 
     pub async fn count_pending(&self, queue_id: i64) -> Result<i64> {
@@ -475,6 +518,10 @@ impl crate::store::MessageTable for Messages {
         self.update_visibility_timeout(id, vt).await
     }
 
+    async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
+        self.update_payload(id, payload).await
+    }
+
     async fn extend_visibility(
         &self,
         id: i64,
@@ -501,6 +548,15 @@ impl crate::store::MessageTable for Messages {
         worker_id: i64,
     ) -> Result<Vec<bool>> {
         self.release_messages_by_ids(message_ids, worker_id).await
+    }
+
+    async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: DateTime<Utc>,
+    ) -> Result<u64> {
+        self.release_with_visibility(id, worker_id, vt).await
     }
 
     async fn count_pending(&self, queue_id: i64) -> Result<i64> {

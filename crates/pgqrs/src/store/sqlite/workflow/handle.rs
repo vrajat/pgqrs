@@ -9,7 +9,7 @@ use std::str::FromStr;
 const SQL_START_RUN: &str = r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'RUNNING', updated_at = datetime('now')
-WHERE id = $1 AND status = 'PENDING'
+WHERE id = $1 AND status = 'QUEUED'
 RETURNING status, error
 "#;
 
@@ -93,6 +93,19 @@ impl crate::store::Run for SqliteRun {
             .await
             .map_err(crate::error::Error::Database)?;
         SqliteRunRecordTable::complete_run(&mut conn, self.id, output).await
+    }
+
+    async fn pause(&mut self, message: String, resume_after: std::time::Duration) -> Result<()> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(crate::error::Error::Database)?;
+        let error = serde_json::json!({
+            "message": message,
+            "resume_after": resume_after.as_secs()
+        });
+        SqliteRunRecordTable::pause_run(&mut conn, self.id, error).await
     }
 
     async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {

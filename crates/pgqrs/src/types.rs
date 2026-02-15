@@ -292,8 +292,9 @@ pub struct BatchInsertParams {
     )
 )]
 pub enum WorkflowStatus {
-    Pending,
+    Queued,
     Running,
+    Paused,
     Success,
     Error,
 }
@@ -301,8 +302,9 @@ pub enum WorkflowStatus {
 impl fmt::Display for WorkflowStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WorkflowStatus::Pending => write!(f, "PENDING"),
+            WorkflowStatus::Queued => write!(f, "QUEUED"),
             WorkflowStatus::Running => write!(f, "RUNNING"),
+            WorkflowStatus::Paused => write!(f, "PAUSED"),
             WorkflowStatus::Success => write!(f, "SUCCESS"),
             WorkflowStatus::Error => write!(f, "ERROR"),
         }
@@ -314,8 +316,9 @@ impl std::str::FromStr for WorkflowStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "PENDING" => Ok(WorkflowStatus::Pending),
+            "QUEUED" => Ok(WorkflowStatus::Queued),
             "RUNNING" => Ok(WorkflowStatus::Running),
+            "PAUSED" => Ok(WorkflowStatus::Paused),
             "SUCCESS" => Ok(WorkflowStatus::Success),
             "ERROR" => Ok(WorkflowStatus::Error),
             _ => Err(format!("Invalid workflow status: {}", s)),

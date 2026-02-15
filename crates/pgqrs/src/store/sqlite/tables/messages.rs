@@ -262,17 +262,34 @@ impl crate::store::MessageTable for SqliteMessageTable {
 
     async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
         let vt_str = format_sqlite_timestamp(&vt);
-        let result = sqlx::query(UPDATE_MESSAGE_VT)
+        let rows = sqlx::query(UPDATE_MESSAGE_VT)
             .bind(id)
             .bind(vt_str)
             .execute(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("UPDATE_MESSAGE_VT ({})", id),
+                query: "UPDATE_MESSAGE_VT".into(),
                 source: Box::new(e),
-                context: format!("Failed to update visibility timeout for message {}", id),
-            })?;
-        Ok(result.rows_affected())
+                context: format!("Failed to update vt for message {}", id),
+            })?
+            .rows_affected();
+        Ok(rows)
+    }
+
+    async fn update_payload(&self, id: i64, payload: Value) -> Result<u64> {
+        let sql = "UPDATE pgqrs_messages SET payload = $2 WHERE id = $1";
+        let rows = sqlx::query(sql)
+            .bind(id)
+            .bind(payload.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "UPDATE_MESSAGE_PAYLOAD".into(),
+                source: Box::new(e),
+                context: format!("Failed to update payload for message {}", id),
+            })?
+            .rows_affected();
+        Ok(rows)
     }
 
     async fn extend_visibility(
@@ -356,8 +373,8 @@ impl crate::store::MessageTable for SqliteMessageTable {
             return Ok(vec![]);
         }
 
-        let mut query_builder = sqlx::QueryBuilder::new("UPDATE pgqrs_messages SET vt = datetime('now'), consumer_worker_id = NULL WHERE id IN (");
-
+        let mut query_builder =
+            sqlx::QueryBuilder::new("UPDATE pgqrs_messages SET vt = datetime('now'), consumer_worker_id = NULL WHERE id IN (");
         let mut separated = query_builder.separated(", ");
         for id in message_ids {
             separated.push_bind(id);
@@ -371,18 +388,44 @@ impl crate::store::MessageTable for SqliteMessageTable {
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: "RELEASE_SPECIFIC_MESSAGES_DYNAMIC".into(),
+                query: "RELEASE_MESSAGES_BY_IDS".into(),
                 source: Box::new(e),
-                context: format!("Failed to release {} messages", message_ids.len()),
+                context: format!(
+                    "Failed to release {} messages for worker {}",
+                    message_ids.len(),
+                    worker_id
+                ),
             })?;
 
         let released_set: std::collections::HashSet<i64> = released_ids.into_iter().collect();
-        let result = message_ids
+        Ok(message_ids
             .iter()
             .map(|id| released_set.contains(id))
-            .collect();
+            .collect())
+    }
 
-        Ok(result)
+    async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: DateTime<Utc>,
+    ) -> Result<u64> {
+        let vt_str = format_sqlite_timestamp(&vt);
+        let sql =
+            "UPDATE pgqrs_messages SET vt = $2, consumer_worker_id = NULL WHERE id = $1 AND consumer_worker_id = $3";
+        let rows = sqlx::query(sql)
+            .bind(id)
+            .bind(vt_str)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "RELEASE_WITH_VISIBILITY".into(),
+                source: Box::new(e),
+                context: format!("Failed to release message {}", id),
+            })?
+            .rows_affected();
+        Ok(rows)
     }
 
     async fn count_pending(&self, queue_id: i64) -> Result<i64> {

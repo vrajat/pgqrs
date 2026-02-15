@@ -110,8 +110,8 @@ impl<'a> DequeueBuilder<'a> {
     /// Returns a DequeueHandlerBuilder for execution.
     pub fn handle<F, Fut>(self, handler: F) -> DequeueHandlerBuilder<'a, F>
     where
-        F: FnOnce(QueueMessage) -> Fut,
-        Fut: Future<Output = Result<()>>,
+        F: Fn(QueueMessage) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<()>> + Send,
     {
         DequeueHandlerBuilder {
             base: self,
@@ -123,8 +123,8 @@ impl<'a> DequeueBuilder<'a> {
     /// Returns a DequeueBatchHandlerBuilder for execution.
     pub fn handle_batch<F, Fut>(self, handler: F) -> DequeueBatchHandlerBuilder<'a, F>
     where
-        F: FnOnce(Vec<QueueMessage>) -> Fut,
-        Fut: Future<Output = Result<()>>,
+        F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<()>> + Send,
     {
         DequeueBatchHandlerBuilder {
             base: self,
@@ -174,8 +174,8 @@ pub struct DequeueHandlerBuilder<'a, F> {
 
 impl<'a, F, Fut> DequeueHandlerBuilder<'a, F>
 where
-    F: FnOnce(QueueMessage) -> Fut,
-    Fut: Future<Output = Result<()>>,
+    F: Fn(QueueMessage) -> Fut + Send + Sync + Clone + 'static,
+    Fut: Future<Output = Result<()>> + Send,
 {
     /// Execute the dequeue and handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
@@ -214,8 +214,8 @@ pub struct DequeueBatchHandlerBuilder<'a, F> {
 
 impl<'a, F, Fut> DequeueBatchHandlerBuilder<'a, F>
 where
-    F: FnOnce(Vec<QueueMessage>) -> Fut,
-    Fut: Future<Output = Result<()>>,
+    F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone + 'static,
+    Fut: Future<Output = Result<()>> + Send,
 {
     /// Execute the dequeue and batch handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {

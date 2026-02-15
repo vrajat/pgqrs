@@ -1,9 +1,14 @@
 -- Create enum type
 DO $$
 BEGIN
-    CREATE TYPE pgqrs_workflow_status AS ENUM ('PENDING', 'RUNNING', 'SUCCESS', 'ERROR', 'PAUSED');
+    CREATE TYPE pgqrs_workflow_status AS ENUM ('QUEUED', 'RUNNING', 'SUCCESS', 'ERROR', 'PAUSED');
 EXCEPTION
-    WHEN duplicate_object THEN null;
+    WHEN duplicate_object THEN
+        BEGIN
+            ALTER TYPE pgqrs_workflow_status ADD VALUE IF NOT EXISTS 'QUEUED';
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END;
 END $$;
 
 -- Workflow definitions (templates)
