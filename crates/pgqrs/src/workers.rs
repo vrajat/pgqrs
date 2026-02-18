@@ -8,7 +8,7 @@ pub use crate::types::{
 };
 use crate::validation::ValidationConfig;
 use async_trait::async_trait;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 /// Trait defining the interface for all worker types.
@@ -182,11 +182,25 @@ pub trait Workflow: Send + Sync {
 pub struct Run {
     store: AnyStore,
     record: RunRecord,
+    current_time: Option<DateTime<Utc>>,
 }
 
 impl Run {
     pub fn new(store: AnyStore, record: RunRecord) -> Self {
-        Self { store, record }
+        Self {
+            store,
+            record,
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn current_time(&self) -> Option<DateTime<Utc>> {
+        self.current_time
     }
 
     pub fn id(&self) -> i64 {
@@ -264,7 +278,8 @@ impl Run {
         step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
-        let step = self.acquire_step(step_name, chrono::Utc::now()).await?;
+        let current_time = self.current_time().unwrap_or_else(chrono::Utc::now);
+        let step = self.acquire_step(step_name, current_time).await?;
         let mut guard = self.store.step_guard(step.id);
         crate::store::StepGuard::complete(&mut *guard, output).await
     }

@@ -48,6 +48,7 @@ postgres = ["sqlx", "sqlx/postgres"]
 sqlite = ["sqlx", "sqlx/sqlite"]
 # Turso backend (Rust-native logic)
 turso = ["dep:turso"]
+test-utils = []
 
 [dependencies]
 sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros", "migrate"], optional = true }

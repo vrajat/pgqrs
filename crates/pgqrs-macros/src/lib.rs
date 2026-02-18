@@ -190,7 +190,12 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
             // Execute body with workflow_step semantics (idempotent)
             let result: #output_type = match pgqrs::workflow_step(#first_arg_name, stringify!(#fn_name), || async {
                 let result: #output_type = async { #block }.await;
-                result
+                match result {
+                    Ok(value) => Ok(value),
+                    Err(err) => Err(pgqrs::Error::Internal {
+                        message: err.to_string(),
+                    }),
+                }
             }).await {
                 Ok(value) => Ok(value),
                 Err(err) => {

@@ -18,7 +18,7 @@ started_at = CASE
     WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
     ELSE NOW()
 END
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
 "#;
 
 const SQL_SCHEDULE_RETRY: &str = r#"
@@ -124,6 +124,8 @@ impl StepGuard {
             }
         }
 
+        let started_at: DateTime<Utc> = row.try_get("started_at")?;
+
         Ok(StepRecord {
             id,
             run_id: row.try_get("run_id")?,
@@ -132,8 +134,9 @@ impl StepGuard {
             input: row.try_get("input")?,
             output: row.try_get("output")?,
             error: row.try_get("error")?,
-            created_at: Utc::now(), // Placeholder
-            updated_at: Utc::now(), // Placeholder
+            created_at: started_at,
+            updated_at: started_at,
+            retry_at,
         })
     }
 }

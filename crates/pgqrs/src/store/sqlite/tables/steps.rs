@@ -44,6 +44,12 @@ impl SqliteStepRecordTable {
             None => None,
         };
 
+        let retry_at_str: Option<String> = row.try_get("retry_at")?;
+        let retry_at = match retry_at_str {
+            Some(s) => Some(parse_sqlite_timestamp(&s)?),
+            None => None,
+        };
+
         let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
         let updated_at = parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?;
 
@@ -57,6 +63,7 @@ impl SqliteStepRecordTable {
             error,
             created_at,
             updated_at,
+            retry_at,
         })
     }
 }
@@ -72,7 +79,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
             r#"
             INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input, created_at, updated_at)
             VALUES ($1, $2, 'PENDING', $3, $4, $4)
-            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at
+            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             "#,
         )
         .bind(data.run_id)
@@ -93,7 +100,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
     async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = sqlx::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             FROM pgqrs_workflow_steps
             WHERE id = $1
             "#,
@@ -113,7 +120,7 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
     async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             FROM pgqrs_workflow_steps
             ORDER BY created_at DESC
             "#,

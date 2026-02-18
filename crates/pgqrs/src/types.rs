@@ -375,6 +375,7 @@ pub struct StepRecord {
     pub error: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub retry_at: Option<DateTime<Utc>>,
 }
 
 /// Input data for creating a new workflow step.

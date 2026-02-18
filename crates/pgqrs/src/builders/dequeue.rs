@@ -110,7 +110,7 @@ impl<'a> DequeueBuilder<'a> {
     /// Returns a DequeueHandlerBuilder for execution.
     pub fn handle<F, Fut>(self, handler: F) -> DequeueHandlerBuilder<'a, F>
     where
-        F: Fn(QueueMessage) -> Fut + Send + Sync + Clone + 'static,
+        F: Fn(QueueMessage) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send,
     {
         DequeueHandlerBuilder {
@@ -123,7 +123,7 @@ impl<'a> DequeueBuilder<'a> {
     /// Returns a DequeueBatchHandlerBuilder for execution.
     pub fn handle_batch<F, Fut>(self, handler: F) -> DequeueBatchHandlerBuilder<'a, F>
     where
-        F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone + 'static,
+        F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send,
     {
         DequeueBatchHandlerBuilder {
@@ -174,14 +174,17 @@ pub struct DequeueHandlerBuilder<'a, F> {
 
 impl<'a, F, Fut> DequeueHandlerBuilder<'a, F>
 where
-    F: Fn(QueueMessage) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(QueueMessage) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send,
 {
     /// Execute the dequeue and handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
         let consumer = self.base.resolve_consumer(store).await?;
         // Dequeue one message (force 1 for single handler semantics)
-        let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
+        let msgs = if let Some(at) = self.base.at {
+            let vt = self.base.vt_offset_seconds.unwrap_or(5);
+            consumer.dequeue_at(1, vt, at).await?
+        } else if let Some(vt_offset) = self.base.vt_offset_seconds {
             consumer.dequeue_many_with_delay(1, vt_offset).await?
         } else {
             consumer.dequeue().await?
@@ -196,6 +199,10 @@ where
                     consumer.archive(msg_id).await?;
                 }
                 Err(e) => {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    if matches!(e, crate::error::Error::TestCrash) {
+                        return Err(e);
+                    }
                     // Error - release the message back to the queue
                     consumer.release_messages(&[msg_id]).await?;
                     return Err(e);
@@ -214,14 +221,17 @@ pub struct DequeueBatchHandlerBuilder<'a, F> {
 
 impl<'a, F, Fut> DequeueBatchHandlerBuilder<'a, F>
 where
-    F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send,
 {
     /// Execute the dequeue and batch handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
         let consumer = self.base.resolve_consumer(store).await?;
         // Dequeue batch
-        let msgs = if let Some(vt_offset) = self.base.vt_offset_seconds {
+        let msgs = if let Some(at) = self.base.at {
+            let vt = self.base.vt_offset_seconds.unwrap_or(5);
+            consumer.dequeue_at(self.base.batch_size, vt, at).await?
+        } else if let Some(vt_offset) = self.base.vt_offset_seconds {
             consumer
                 .dequeue_many_with_delay(self.base.batch_size, vt_offset)
                 .await?
