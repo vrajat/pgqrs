@@ -139,7 +139,7 @@ where
             if let Some(time) = current_time {
                 run = run.with_time(time);
             }
-            run.start().await?;
+            run = run.start().await?;
 
             let input: T = if let Some(input) = msg.payload.get("input") {
                 if msg.payload.get("run_id").is_some()
@@ -161,14 +161,14 @@ where
             match handler(run.clone(), input).await {
                 Ok(output) => {
                     let val = serde_json::to_value(output)?;
-                    run.complete(val).await?;
+                    let _ = run.complete(val).await?;
                 }
                 Err(e) => match e {
                     Error::Paused {
                         message,
                         resume_after,
                     } => {
-                        run.pause(message.clone(), resume_after).await?;
+                        let _ = run.pause(message.clone(), resume_after).await?;
                         return Err(Error::Paused {
                             message,
                             resume_after,
@@ -183,12 +183,12 @@ where
                     }
                     Error::Internal { message } => {
                         let err_val = serde_json::json!(message);
-                        run.fail_with_json(err_val).await?;
+                        let _ = run.fail_with_json(err_val).await?;
                         return Ok(());
                     }
                     _ => {
                         let err_val = serde_json::json!(e.to_string());
-                        run.fail_with_json(err_val).await?;
+                        let _ = run.fail_with_json(err_val).await?;
                         return Ok(());
                     }
                 },

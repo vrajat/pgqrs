@@ -22,7 +22,11 @@ def workflow(func):
             )
 
         # Start workflow
-        await ctx.start()
+        try:
+            await ctx.start()
+        except pgqrs.ValidationError as e:
+            if "terminal SUCCESS" not in str(e):
+                raise
 
         try:
             result = await func(ctx, *args, **kwargs)

@@ -155,13 +155,13 @@ async fn test_step_idempotency() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let idem_wf_run = pgqrs::run()
+    let mut idem_wf_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    idem_wf_run.start().await?;
+    idem_wf_run = idem_wf_run.start().await?;
 
     // 2. Run step first time -> Success
     let res1 = step_side_effect(&idem_wf_run, "run1").await?;

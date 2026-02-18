@@ -278,10 +278,12 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
                 })?;
 
         if let Some(s) = status_str {
-            if let Ok(WorkflowStatus::Error) = WorkflowStatus::from_str(&s) {
-                return Err(crate::error::Error::ValidationFailed {
-                    reason: format!("Run {} is in terminal ERROR state", id),
-                });
+            if let Ok(status) = WorkflowStatus::from_str(&s) {
+                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                    return Err(crate::error::Error::ValidationFailed {
+                        reason: format!("Run {} is in terminal {} state", id, status),
+                    });
+                }
             }
         }
 

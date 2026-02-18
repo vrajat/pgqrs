@@ -211,46 +211,59 @@ impl Run {
         &self.record
     }
 
-    pub async fn refresh(&self) -> crate::error::Result<RunRecord> {
-        self.store.workflow_runs().get(self.record.id).await
+    fn with_record(&self, record: RunRecord) -> Self {
+        Self {
+            store: self.store.clone(),
+            record,
+            current_time: self.current_time,
+        }
     }
 
-    pub async fn start(&self) -> crate::error::Result<RunRecord> {
-        self.store.workflow_runs().start_run(self.record.id).await
+    pub async fn refresh(&self) -> crate::error::Result<Run> {
+        let record = self.store.workflow_runs().get(self.record.id).await?;
+        Ok(self.with_record(record))
     }
 
-    pub async fn complete(&self, output: serde_json::Value) -> crate::error::Result<RunRecord> {
-        self.store
+    pub async fn start(&self) -> crate::error::Result<Run> {
+        let record = self.store.workflow_runs().start_run(self.record.id).await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn complete(&self, output: serde_json::Value) -> crate::error::Result<Run> {
+        let record = self
+            .store
             .workflow_runs()
             .complete_run(self.record.id, output)
-            .await
+            .await?;
+        Ok(self.with_record(record))
     }
 
     pub async fn pause(
         &self,
         message: String,
         resume_after: std::time::Duration,
-    ) -> crate::error::Result<RunRecord> {
-        self.store
+    ) -> crate::error::Result<Run> {
+        let record = self
+            .store
             .workflow_runs()
             .pause_run(self.record.id, message, resume_after)
-            .await
+            .await?;
+        Ok(self.with_record(record))
     }
 
-    pub async fn fail_with_json(
-        &self,
-        error: serde_json::Value,
-    ) -> crate::error::Result<RunRecord> {
-        self.store
+    pub async fn fail_with_json(&self, error: serde_json::Value) -> crate::error::Result<Run> {
+        let record = self
+            .store
             .workflow_runs()
             .fail_run(self.record.id, error)
-            .await
+            .await?;
+        Ok(self.with_record(record))
     }
 
     pub async fn success<T: serde::Serialize + Send + Sync>(
         &self,
         output: &T,
-    ) -> crate::error::Result<RunRecord> {
+    ) -> crate::error::Result<Run> {
         let value = serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
         self.complete(value).await
     }
@@ -258,7 +271,7 @@ impl Run {
     pub async fn fail<T: serde::Serialize + Send + Sync>(
         &self,
         error: &T,
-    ) -> crate::error::Result<RunRecord> {
+    ) -> crate::error::Result<Run> {
         let value = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
         self.fail_with_json(value).await
     }

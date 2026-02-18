@@ -1238,7 +1238,7 @@ impl PyRun {
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.start().await.map_err(to_py_err)?;
+            let _ = inner.start().await.map_err(to_py_err)?;
             Ok(true)
         })
     }
@@ -1246,7 +1246,7 @@ impl PyRun {
     fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.fail(&error).await.map_err(to_py_err)?;
+            let _ = inner.fail(&error).await.map_err(to_py_err)?;
             Ok(true)
         })
     }
@@ -1255,7 +1255,7 @@ impl PyRun {
         let inner = self.inner.clone();
         let json_res = py_to_json(py, result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            inner.success(&json_res).await.map_err(to_py_err)?;
+            let _ = inner.success(&json_res).await.map_err(to_py_err)?;
             Ok(true)
         })
     }

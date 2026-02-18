@@ -36,12 +36,12 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     // Step 1: Fail with transient error
     let step_name = "transient_step";
@@ -102,12 +102,12 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     let step_name = "delayed_step";
 
@@ -191,12 +191,12 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     let step_name = "exhausting_step";
 
@@ -320,12 +320,12 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     let step_name = "non_transient_step";
 
@@ -375,12 +375,12 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     let step_name = "running_step";
 
@@ -440,13 +440,13 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .await
                 .unwrap();
 
-            let workflow = pgqrs::run()
+            let mut workflow = pgqrs::run()
                 .message(run_msg)
                 .store(&store)
                 .execute()
                 .await
                 .unwrap();
-            workflow.start().await.unwrap();
+            workflow = workflow.start().await.unwrap();
 
             let step_name = "concurrent_step";
 

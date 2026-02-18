@@ -35,13 +35,13 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let workflow = pgqrs::run()
+    let mut workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    workflow.start().await?;
+    workflow = workflow.start().await?;
 
     // Step 1: Run
     let step1_name = "step1";
@@ -52,14 +52,18 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
         .await?;
 
     // Finish Workflow
-    workflow
+    workflow = workflow
         .complete(serde_json::to_value(&TestData {
             msg: "done".to_string(),
         })?)
         .await?;
 
     // Restart Workflow (should adhere to SUCCESS terminal state)
-    workflow.start().await?;
+    let res = workflow.start().await;
+    assert!(
+        res.is_err(),
+        "Workflow start should fail if currently SUCCESS"
+    );
 
     Ok(())
 }
@@ -85,15 +89,15 @@ async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let wf_fail = pgqrs::run()
+    let mut wf_fail = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    wf_fail.start().await?;
+    wf_fail = wf_fail.start().await?;
 
-    wf_fail
+    wf_fail = wf_fail
         .fail(&TestData {
             msg: "failed".to_string(),
         })
@@ -128,20 +132,21 @@ async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let run = pgqrs::run()
+    let mut run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    run.start().await?;
-    run.pause("wait".to_string(), Duration::from_secs(30))
+    run = run.start().await?;
+    run = run
+        .pause("wait".to_string(), Duration::from_secs(30))
         .await?;
 
     let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
     assert_eq!(record.status, pgqrs::WorkflowStatus::Paused);
 
-    run.start().await?;
+    run = run.start().await?;
 
     let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
     assert_eq!(record.status, pgqrs::WorkflowStatus::Running);
