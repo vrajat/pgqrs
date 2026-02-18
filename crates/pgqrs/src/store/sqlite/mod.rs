@@ -1,10 +1,13 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::store::ConcurrencyModel;
 use crate::store::{
-    Admin, ArchiveTable, ConcurrencyModel, Consumer, MessageTable, Producer, QueueTable, Run,
-    RunRecordTable, StepGuard, StepRecordTable, Store, Worker, WorkerTable, Workflow,
-    WorkflowTable,
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
+    WorkerTable, WorkflowTable,
 };
+use crate::workers::Workflow;
+use crate::{Admin, Consumer, Producer, Worker};
+
 use async_trait::async_trait;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
@@ -299,14 +302,16 @@ impl Store for SqliteStore {
         Ok(msg)
     }
 
-    async fn run(&self, message: crate::types::QueueMessage) -> Result<Box<dyn Run>> {
-        use self::workflow::handle::SqliteRun;
-
+    async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
         let payload = &message.payload;
 
         // If payload has run_id, it's a resumption or already initialized
         if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            return Ok(Box::new(SqliteRun::new(self.pool.clone(), run_id)));
+            let record = self.workflow_runs.get(run_id).await?;
+            return Ok(crate::workers::Run::new(
+                crate::store::AnyStore::Sqlite(self.clone()),
+                record,
+            ));
         }
 
         // Otherwise, it's a new trigger. Create run record.
@@ -336,7 +341,10 @@ impl Store for SqliteStore {
             .update_payload(message.id, new_payload)
             .await?;
 
-        Ok(Box::new(SqliteRun::new(self.pool.clone(), run_rec.id)))
+        Ok(crate::workers::Run::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            run_rec,
+        ))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {

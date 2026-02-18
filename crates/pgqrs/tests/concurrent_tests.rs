@@ -1,12 +1,31 @@
+use pgqrs::error::Result;
 use pgqrs::store::AnyStore;
+use pgqrs::Run;
 use pgqrs::Store;
 use serde_json::json;
 use serial_test::serial;
+use std::sync::{Arc, Mutex};
 
 mod common;
 
 async fn create_store() -> AnyStore {
     common::create_store("pgqrs_concurrent_test").await
+}
+
+async fn scenario_success_steps(run: &Run, step_state: &Arc<Mutex<Option<String>>>) -> Result<()> {
+    pgqrs::workflow_step(run, "step1", || {
+        let step_state = step_state.clone();
+        async move {
+            let mut state = step_state.lock().expect("state lock poisoned");
+            if state.is_none() {
+                *state = Some("step_success".to_string());
+            }
+            Ok::<_, String>(state.clone().unwrap())
+        }
+    })
+    .await?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -249,4 +268,66 @@ async fn test_concurrent_visibility_extension() {
         extended_by_a,
         "Consumer A should be able to extend visibility of its own message"
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_success() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_success";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_success_cons", 3200, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "success"}))?
+        .execute()
+        .await?;
+
+    let step_state: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let handler_state = step_state.clone();
+
+    let handler = pgqrs::workflow_handler(store.clone(), move |run, input: serde_json::Value| {
+        let handler_state = handler_state.clone();
+        async move {
+            let _input = input;
+            scenario_success_steps(&run, &handler_state).await?;
+            Ok(json!({"done": true}))
+        }
+    });
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, pgqrs::WorkflowStatus::Success);
+
+    let steps = store.workflow_steps().list().await?;
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].status, pgqrs::WorkflowStatus::Success);
+
+    Ok(())
 }

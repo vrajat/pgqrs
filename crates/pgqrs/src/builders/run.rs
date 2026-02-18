@@ -1,6 +1,7 @@
 use crate::error::Result;
-use crate::store::{Run, Store};
+use crate::store::Store;
 use crate::types::QueueMessage;
+use crate::workers::Run;
 
 /// Builder for creating local run handles.
 pub struct RunBuilder<'a, S: Store> {
@@ -31,7 +32,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
     }
 
     /// Execute the build and return a run handle.
-    pub async fn execute(self) -> Result<Box<dyn Run>> {
+    pub async fn execute(self) -> Result<Run> {
         let store = self
             .store
             .ok_or_else(|| crate::error::Error::ValidationFailed {

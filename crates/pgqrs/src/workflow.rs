@@ -16,7 +16,7 @@ pub fn pause_error(duration: Duration, message: &str) -> Error {
     }
 }
 
-pub async fn workflow_step<F, Fut, T, E>(run: &mut dyn Run, name: &str, f: F) -> Result<T>
+pub async fn workflow_step<F, Fut, T, E>(run: &Run, name: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send,
     Fut: Future<Output = std::result::Result<T, E>> + Send,
@@ -49,10 +49,14 @@ where
 pub fn workflow_handler<S, F, Fut, T, R>(
     store: S,
     handler: F,
-) -> impl Fn(QueueMessage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync + 'static
+) -> impl Fn(QueueMessage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
+       + Send
+       + Sync
+       + Clone
+       + 'static
 where
     S: Store + Clone + 'static,
-    F: Fn(&mut dyn Run, T) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Run, T) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<R>> + Send,
     T: DeserializeOwned + Send + 'static,
     R: Serialize + Send + 'static,
@@ -61,7 +65,7 @@ where
         let store = store.clone();
         let handler = handler.clone();
         Box::pin(async move {
-            let mut run = store.run(msg.clone()).await?;
+            let run = store.run(msg.clone()).await?;
             run.start().await?;
 
             let input: T = if let Some(input) = msg.payload.get("input") {
@@ -81,7 +85,7 @@ where
                 serde_json::from_value(msg.payload)?
             };
 
-            match handler(run.as_mut(), input).await {
+            match handler(run.clone(), input).await {
                 Ok(output) => {
                     let val = serde_json::to_value(output)?;
                     run.complete(val).await?;

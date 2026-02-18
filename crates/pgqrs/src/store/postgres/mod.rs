@@ -2,7 +2,7 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, Run, RunRecordTable, StepGuard, StepRecordTable, Store,
+    Producer as ProducerTrait, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
     Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
 };
 use async_trait::async_trait;
@@ -284,14 +284,19 @@ impl Store for PostgresStore {
         Ok(msg)
     }
 
-    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Box<dyn Run>> {
-        use self::workflow::run::PostgresRun;
-
+    async fn run(
+        &self,
+        message: crate::types::QueueMessage,
+    ) -> crate::error::Result<crate::workers::Run> {
         let payload = &message.payload;
 
         // If payload has run_id, it's a resumption or already initialized
         if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            return Ok(Box::new(PostgresRun::new(self.pool.clone(), run_id)));
+            let record = self.workflow_runs.get(run_id).await?;
+            return Ok(crate::workers::Run::new(
+                crate::store::AnyStore::Postgres(self.clone()),
+                record,
+            ));
         }
 
         // Otherwise, it's a new trigger. Create run record.
@@ -321,7 +326,10 @@ impl Store for PostgresStore {
             .update_payload(message.id, new_payload)
             .await?;
 
-        Ok(Box::new(PostgresRun::new(self.pool.clone(), run_rec.id)))
+        Ok(crate::workers::Run::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            run_rec,
+        ))
     }
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn WorkerTrait>> {

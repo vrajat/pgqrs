@@ -1,10 +1,11 @@
 use crate::error::Result;
-use crate::store::{Run, Store};
+use crate::store::Store;
 use crate::types::StepRecord;
+use crate::workers::Run;
 
 /// Builder for acquiring and managing workflow steps.
 pub struct StepBuilder<'a> {
-    run: Option<&'a dyn Run>,
+    run: Option<&'a Run>,
     name: Option<String>,
     current_time: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -19,7 +20,7 @@ impl<'a> StepBuilder<'a> {
     }
 
     /// Set the run handle for the step.
-    pub fn run(mut self, run: &'a dyn Run) -> Self {
+    pub fn run(mut self, run: &'a Run) -> Self {
         self.run = Some(run);
         self
     }

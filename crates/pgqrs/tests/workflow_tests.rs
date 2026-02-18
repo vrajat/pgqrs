@@ -1,5 +1,4 @@
 use pgqrs::store::AnyStore;
-use pgqrs::RunExt;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -36,7 +35,7 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -46,36 +45,9 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
 
     // Step 1: Run
     let step1_name = "step1";
-    let step_rec = pgqrs::step()
-        .run(&*workflow)
-        .name(step1_name)
-        .execute()
-        .await?;
-
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
-
-    let output = TestData {
-        msg: "step1_done".to_string(),
-    };
-    let val = serde_json::to_value(&output)?;
-    workflow.complete_step(step1_name, val).await?;
-
-    // Step 1: Rerun (should skip)
-    let step_rec = pgqrs::step()
-        .run(&*workflow)
-        .name(step1_name)
-        .execute()
-        .await?;
-
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
-    let val: TestData = serde_json::from_value(step_rec.output.unwrap())?;
-    assert_eq!(val.msg, "step1_done");
-
-    // Step 2: Acquire
-    let step2_name = "step2";
     let _step_rec = pgqrs::step()
-        .run(&*workflow)
-        .name(step2_name)
+        .run(&workflow)
+        .name(step1_name)
         .execute()
         .await?;
 
@@ -113,12 +85,14 @@ async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut wf_fail = pgqrs::run()
+    let wf_fail = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
+
     wf_fail.start().await?;
+
     wf_fail
         .fail(&TestData {
             msg: "failed".to_string(),
@@ -154,7 +128,7 @@ async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut run = pgqrs::run()
+    let run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()

@@ -1,5 +1,4 @@
 use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store};
-
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -10,7 +9,7 @@ struct TestData {
 }
 
 #[pgqrs_step]
-async fn step_one(ctx: &mut (impl Run + ?Sized), _input: &str) -> anyhow::Result<TestData> {
+async fn step_one(ctx: &Run, _input: &str) -> anyhow::Result<TestData> {
     Ok(TestData {
         msg: "step1_done".to_string(),
     })
@@ -18,21 +17,14 @@ async fn step_one(ctx: &mut (impl Run + ?Sized), _input: &str) -> anyhow::Result
 
 #[pgqrs_step]
 #[allow(unused_variables)] // Test attribute forwarding (should not warn about arg2)
-async fn step_multi_args(
-    ctx: &mut (impl Run + ?Sized),
-    arg1: &str,
-    arg2: i32,
-) -> anyhow::Result<TestData> {
+async fn step_multi_args(ctx: &Run, arg1: &str, arg2: i32) -> anyhow::Result<TestData> {
     Ok(TestData {
         msg: format!("multi: {}", arg1),
     })
 }
 
 #[pgqrs_step]
-async fn step_side_effect(
-    _ctx: &mut (impl Run + ?Sized),
-    _input: &str,
-) -> anyhow::Result<TestData> {
+async fn step_side_effect(_ctx: &Run, _input: &str) -> anyhow::Result<TestData> {
     // This step returns a value that we will manually tamper with in the DB
     // to prove that the second execution returns the DB value, not this value.
     Ok(TestData {
@@ -41,12 +33,12 @@ async fn step_side_effect(
 }
 
 #[pgqrs_step]
-async fn step_fail(ctx: &mut (impl Run + ?Sized), _input: &str) -> anyhow::Result<TestData> {
+async fn step_fail(ctx: &Run, _input: &str) -> anyhow::Result<TestData> {
     anyhow::bail!("step failed intentionally")
 }
 
 #[pgqrs_workflow]
-async fn my_workflow(ctx: &mut (impl Run + ?Sized), input: &TestData) -> anyhow::Result<TestData> {
+async fn my_workflow(ctx: &Run, input: &TestData) -> anyhow::Result<TestData> {
     // Step 1
     let s1 = step_one(ctx, "input").await?;
 
@@ -60,10 +52,7 @@ async fn my_workflow(ctx: &mut (impl Run + ?Sized), input: &TestData) -> anyhow:
 }
 
 #[pgqrs_workflow]
-async fn workflow_with_failing_step(
-    ctx: &mut (impl Run + ?Sized),
-    _input: &TestData,
-) -> anyhow::Result<TestData> {
+async fn workflow_with_failing_step(ctx: &Run, _input: &TestData) -> anyhow::Result<TestData> {
     let _ = step_fail(ctx, "fail").await?;
     Ok(TestData {
         msg: "should not happen".to_string(),
@@ -71,10 +60,7 @@ async fn workflow_with_failing_step(
 }
 
 #[pgqrs_workflow]
-async fn workflow_fail_at_end(
-    ctx: &mut (impl Run + ?Sized),
-    _input: &TestData,
-) -> anyhow::Result<TestData> {
+async fn workflow_fail_at_end(ctx: &Run, _input: &TestData) -> anyhow::Result<TestData> {
     anyhow::bail!("workflow failed intentionally")
 }
 
@@ -130,13 +116,13 @@ async fn test_successful_workflow() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut my_wf_run = pgqrs::run()
+    let my_wf_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    let res = my_workflow(&mut *my_wf_run, &input).await?;
+    let res = my_workflow(&my_wf_run, &input).await?;
     assert_eq!(res.msg, "start, step1_done, multi: arg");
 
     // Verify persisting SUCCESS
@@ -169,7 +155,7 @@ async fn test_step_idempotency() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut idem_wf_run = pgqrs::run()
+    let idem_wf_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -178,7 +164,7 @@ async fn test_step_idempotency() -> anyhow::Result<()> {
     idem_wf_run.start().await?;
 
     // 2. Run step first time -> Success
-    let res1 = step_side_effect(&mut *idem_wf_run, "run1").await?;
+    let res1 = step_side_effect(&idem_wf_run, "run1").await?;
     assert_eq!(res1.msg, "original_value");
 
     // 3. Manually TAMPER with the step output in the database
@@ -193,7 +179,7 @@ async fn test_step_idempotency() -> anyhow::Result<()> {
     store.execute_raw(&update_sql).await?;
 
     // 4. Run step second time -> Should return TAMPERED value
-    let res2 = step_side_effect(&mut *idem_wf_run, "run2").await?;
+    let res2 = step_side_effect(&idem_wf_run, "run2").await?;
     assert_eq!(
         res2.msg, "tampered_value",
         "Step should have returned cached (tampered) result from DB"
@@ -219,13 +205,13 @@ async fn test_step_failure() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut wf_failing_step_run = pgqrs::run()
+    let wf_failing_step_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    let res = workflow_with_failing_step(&mut *wf_failing_step_run, &input).await;
+    let res = workflow_with_failing_step(&wf_failing_step_run, &input).await;
     assert!(res.is_err());
     assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
@@ -262,13 +248,13 @@ async fn test_workflow_failure() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut wf_fail_run = pgqrs::run()
+    let wf_fail_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
 
-    let res = workflow_fail_at_end(&mut *wf_fail_run, &input).await;
+    let res = workflow_fail_at_end(&wf_fail_run, &input).await;
     assert!(res.is_err());
     assert_eq!(
         res.unwrap_err().to_string(),

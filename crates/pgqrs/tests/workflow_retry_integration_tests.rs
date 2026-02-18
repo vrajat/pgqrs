@@ -36,7 +36,7 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -46,7 +46,7 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
     // Step 1: Fail with transient error
     let step_name = "transient_step";
     let step_rec = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -62,11 +62,7 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
     workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Try to acquire again - should return StepNotReady immediately
-    let step_res = pgqrs::step()
-        .run(&*workflow)
-        .name(step_name)
-        .execute()
-        .await;
+    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
 
     // Should get StepNotReady error
     match step_res {
@@ -106,7 +102,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -117,7 +113,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 
     // Fail with transient error
     let step_rec = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -131,11 +127,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Get the retry_at timestamp
-    let step_res = pgqrs::step()
-        .run(&*workflow)
-        .name(step_name)
-        .execute()
-        .await;
+    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
 
     let retry_at = match step_res {
         Err(Error::StepNotReady { retry_at, .. }) => retry_at,
@@ -147,7 +139,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 
     // Now should be able to acquire for execution
     let step_rec = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .with_time(simulated_time)
         .execute()
@@ -165,7 +157,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 
     // Verify step now succeeds on next acquire
     let step_rec = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -199,7 +191,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -210,7 +202,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
     // Initial execution (attempt 0)
     let _ = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -224,11 +216,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
     // Retry 1
     {
-        let step_res = pgqrs::step()
-            .run(&*workflow)
-            .name(step_name)
-            .execute()
-            .await;
+        let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 1"),
@@ -236,7 +224,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
-            .run(&*workflow)
+            .run(&workflow)
             .name(step_name)
             .with_time(simulated_time)
             .execute()
@@ -252,11 +240,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
     // Retry 2
     {
-        let step_res = pgqrs::step()
-            .run(&*workflow)
-            .name(step_name)
-            .execute()
-            .await;
+        let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 2"),
@@ -264,7 +248,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
-            .run(&*workflow)
+            .run(&workflow)
             .name(step_name)
             .with_time(simulated_time)
             .execute()
@@ -280,11 +264,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
     // Retry 3
     {
-        let step_res = pgqrs::step()
-            .run(&*workflow)
-            .name(step_name)
-            .execute()
-            .await;
+        let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
         let retry_at = match step_res {
             Err(Error::StepNotReady { retry_at, .. }) => retry_at,
             _ => panic!("Expected StepNotReady at Retry 3"),
@@ -292,7 +272,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 
         let simulated_time = retry_at + chrono::Duration::milliseconds(100);
         let _ = pgqrs::step()
-            .run(&*workflow)
+            .run(&workflow)
             .name(step_name)
             .with_time(simulated_time)
             .execute()
@@ -307,11 +287,7 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
     }
 
     // Now should fail with RetriesExhausted
-    let step_res = pgqrs::step()
-        .run(&*workflow)
-        .name(step_name)
-        .execute()
-        .await;
+    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
 
     match step_res {
         Err(Error::RetriesExhausted { attempts, .. }) => {
@@ -344,7 +320,7 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -354,7 +330,7 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
     let step_name = "non_transient_step";
 
     let _ = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -367,11 +343,7 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
     workflow.fail_step(step_name, error, Utc::now()).await?;
 
     // Should immediately fail with RetriesExhausted
-    let step_res = pgqrs::step()
-        .run(&*workflow)
-        .name(step_name)
-        .execute()
-        .await;
+    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
 
     match step_res {
         Err(Error::RetriesExhausted { attempts, .. }) => {
@@ -403,7 +375,7 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let workflow = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
@@ -413,7 +385,7 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
     let step_name = "running_step";
 
     let _ = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(step_name)
         .execute()
         .await?;
@@ -428,7 +400,7 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
     // Workflow should still be in RUNNING state
     let other_step_name = "other_step";
     let step_rec = pgqrs::step()
-        .run(&*workflow)
+        .run(&workflow)
         .name(other_step_name)
         .execute()
         .await?;
@@ -468,7 +440,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .await
                 .unwrap();
 
-            let mut workflow = pgqrs::run()
+            let workflow = pgqrs::run()
                 .message(run_msg)
                 .store(&store)
                 .execute()
@@ -479,7 +451,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
             let step_name = "concurrent_step";
 
             let _ = pgqrs::step()
-                .run(&*workflow)
+                .run(&workflow)
                 .name(step_name)
                 .execute()
                 .await
@@ -495,12 +467,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .await
                 .unwrap();
 
-            let retry_at = match pgqrs::step()
-                .run(&*workflow)
-                .name(step_name)
-                .execute()
-                .await
-            {
+            let retry_at = match pgqrs::step().run(&workflow).name(step_name).execute().await {
                 Err(Error::StepNotReady { retry_at, .. }) => retry_at,
                 _ => panic!("Expected StepNotReady"),
             };
@@ -508,7 +475,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
             let simulated_time = retry_at + chrono::Duration::milliseconds(100);
 
             let step_rec = pgqrs::step()
-                .run(&*workflow)
+                .run(&workflow)
                 .name(step_name)
                 .with_time(simulated_time)
                 .execute()

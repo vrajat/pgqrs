@@ -6,10 +6,10 @@ use pyo3::types::{PyDict, PyList};
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::{
     QueueMessage as RustQueueMessage, QueueRecord as RustQueueRecord,
-    WorkerRecord as RustWorkerInfo, WorkerStatus,
+    WorkerRecord as RustWorkerInfo,
 };
 use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
-use rust_pgqrs::{Run, RunExt, StepGuard};
+use rust_pgqrs::{Run, StepGuard};
 
 use pyo3::pyasync::IterANextOutput;
 use std::future::Future;
@@ -434,29 +434,12 @@ impl ConsumerIterator {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let mut state = inner.lock().await;
-            if let Some(consumer) = &state.consumer {
-                // Check status and transition gracefully
-                if let Ok(status) = consumer.status().await {
-                    match status {
-                        WorkerStatus::Ready => {
-                            let _ = consumer.suspend().await;
-                            let _ = consumer.shutdown().await;
-                        }
-                        WorkerStatus::Suspended => {
-                            let _ = consumer.shutdown().await;
-                        }
-                        WorkerStatus::Stopped => {
-                            // Already stopped, do nothing
-                        }
-                    }
-                } else {
-                    // If we can't get status, try forceful shutdown path just in case
-                    let _ = consumer.suspend().await;
-                    let _ = consumer.shutdown().await;
-                }
+            if let Some(consumer) = &mut state.consumer {
+                consumer.suspend().await.map_err(to_py_err)?;
+                consumer.shutdown().await.map_err(to_py_err)
+            } else {
+                Ok(())
             }
-            state.consumer = None;
-            Ok(())
         })
     }
 
@@ -653,7 +636,7 @@ impl Admin {
                 let workflow_id = workflow.id();
 
                 Ok(PyRun {
-                    inner: Arc::new(tokio::sync::Mutex::new(workflow)),
+                    inner: Arc::new(workflow),
                     store,
                     workflow_id,
                 })
@@ -1241,7 +1224,7 @@ impl From<rust_pgqrs::types::ArchivedMessage> for ArchivedMessage {
 
 #[pyclass]
 struct PyRun {
-    inner: Arc<tokio::sync::Mutex<Box<dyn Run>>>,
+    inner: Arc<Run>,
     store: AnyStore,
     workflow_id: i64,
 }
@@ -1255,16 +1238,16 @@ impl PyRun {
     fn start<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut wf = inner.lock().await;
-            wf.start().await.map_err(to_py_err)
+            inner.start().await.map_err(to_py_err)?;
+            Ok(true)
         })
     }
 
     fn fail<'a>(&self, py: Python<'a>, error: String) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut wf = inner.lock().await;
-            wf.fail(&error).await.map_err(to_py_err)
+            inner.fail(&error).await.map_err(to_py_err)?;
+            Ok(true)
         })
     }
 
@@ -1272,8 +1255,8 @@ impl PyRun {
         let inner = self.inner.clone();
         let json_res = py_to_json(py, result.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut wf = inner.lock().await;
-            wf.success(&json_res).await.map_err(to_py_err)
+            inner.success(&json_res).await.map_err(to_py_err)?;
+            Ok(true)
         })
     }
 
@@ -1286,8 +1269,8 @@ impl PyRun {
         let inner = self.inner.clone();
         let json_output = py_to_json(py, output.as_ref(py))?;
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let run = inner.lock().await;
-            run.complete_step(&step_name, json_output)
+            inner
+                .complete_step(&step_name, json_output)
                 .await
                 .map_err(to_py_err)
         })
@@ -1317,8 +1300,8 @@ impl PyRun {
         };
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let run = inner.lock().await;
-            run.fail_step(&step_name, json_error, time)
+            inner
+                .fail_step(&step_name, json_error, time)
                 .await
                 .map_err(to_py_err)
         })
@@ -1336,9 +1319,7 @@ impl PyRun {
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let (_run_id, time) = {
-                let run_handle = inner.lock().await;
-                let id = run_handle.id();
-
+                let id = inner.id();
                 let time = if let Some(time_str) = current_time {
                     chrono::DateTime::parse_from_rfc3339(&time_str)
                         .map_err(|e| {
@@ -1354,17 +1335,14 @@ impl PyRun {
                 (id, time)
             };
 
-            let res = {
-                let run_handle = inner.lock().await;
-                rust_pgqrs::step()
-                    .store(&store)
-                    .run(&**run_handle)
-                    .name(&step_name)
-                    .with_time(time)
-                    .execute()
-                    .await
-                    .map_err(to_py_err)?
-            };
+            let res = rust_pgqrs::step()
+                .store(&store)
+                .run(&inner)
+                .name(&step_name)
+                .with_time(time)
+                .execute()
+                .await
+                .map_err(to_py_err)?;
 
             let step_record_id = res.id;
 
@@ -1712,7 +1690,7 @@ impl PyRunBuilder {
             let run = builder.execute().await.map_err(to_py_err)?;
             let workflow_id = run.id();
             Ok(PyRun {
-                inner: Arc::new(tokio::sync::Mutex::new(run)),
+                inner: Arc::new(run),
                 store: store.unwrap(),
                 workflow_id,
             })
@@ -1775,21 +1753,16 @@ impl PyStepBuilder {
                 (run_borrow.inner.clone(), run_borrow.store.clone())
             });
 
-            let (step_record_id, res) = {
-                let run_handle = inner.lock().await;
+            let time = current_time.unwrap_or_else(chrono::Utc::now);
+            let res = rust_pgqrs::step()
+                .run(&inner)
+                .name(&step_name)
+                .with_time(time)
+                .execute()
+                .await
+                .map_err(to_py_err)?;
 
-                let time = current_time.unwrap_or_else(chrono::Utc::now);
-
-                let res = rust_pgqrs::step()
-                    .run(&**run_handle)
-                    .name(&step_name)
-                    .with_time(time)
-                    .execute()
-                    .await
-                    .map_err(to_py_err)?;
-
-                (res.id, res)
-            };
+            let step_record_id = res.id;
 
             Python::with_gil(|py| {
                 if res.status == rust_pgqrs::WorkflowStatus::Success {

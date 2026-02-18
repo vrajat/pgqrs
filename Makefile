@@ -43,7 +43,11 @@ check-nextest:
 
 test-rust: check-nextest ## Run Rust tests only (using nextest)
 ifdef TEST
+ifdef FILTER
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) --test $(TEST) -E '$(FILTER)'
+else
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) --test $(TEST)
+endif
 else
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES)
 endif
