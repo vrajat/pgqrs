@@ -46,6 +46,11 @@ impl TursoStepRecordTable {
 
         let created_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
         let updated_at = parse_turso_timestamp(&row.get::<String>(8)?)?;
+        let retry_at_str: Option<String> = row.get(9)?;
+        let retry_at = match retry_at_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
 
         Ok(StepRecord {
             id,
@@ -57,6 +62,7 @@ impl TursoStepRecordTable {
             error,
             created_at,
             updated_at,
+            retry_at,
         })
     }
 }
@@ -70,7 +76,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
             r#"
             INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input)
             VALUES (?, ?, 'PENDING', ?)
-            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at
+            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             "#,
         )
         .bind(data.run_id)
@@ -85,7 +91,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
     async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = crate::store::turso::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             FROM pgqrs_workflow_steps
             WHERE id = ?
             "#,
@@ -100,7 +106,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
     async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
             FROM pgqrs_workflow_steps
             ORDER BY created_at DESC
             "#,

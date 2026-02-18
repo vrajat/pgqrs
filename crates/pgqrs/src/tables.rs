@@ -195,6 +195,19 @@ pub trait RunRecordTable: Send + Sync {
     async fn list(&self) -> crate::error::Result<Vec<RunRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+    async fn start_run(&self, id: i64) -> crate::error::Result<RunRecord>;
+    async fn complete_run(
+        &self,
+        id: i64,
+        output: serde_json::Value,
+    ) -> crate::error::Result<RunRecord>;
+    async fn pause_run(
+        &self,
+        id: i64,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> crate::error::Result<RunRecord>;
+    async fn fail_run(&self, id: i64, error: serde_json::Value) -> crate::error::Result<RunRecord>;
 }
 
 /// Repository for managing workflow steps.

@@ -99,7 +99,7 @@ use syn::{parse_macro_input, ItemFn};
 ///
 /// #[pgqrs_step]
 /// pub async fn charge_customer(
-///     ctx: &mut (impl Run + ?Sized),
+///     ctx: &Run,
 ///     amount_cents: i64,
 /// ) -> Result<(), anyhow::Error> {
 ///     // This body is wrapped with StepGuard logic:
@@ -116,7 +116,7 @@ use syn::{parse_macro_input, ItemFn};
 pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
     let fn_name = &input_fn.sig.ident;
-    let step_name = fn_name.to_string(); // Default to fn name
+    let _step_name = fn_name.to_string(); // Default to fn name
     let attrs = &input_fn.attrs;
 
     // Identify the first argument name to use as context (e.g., ctx)
@@ -126,7 +126,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named parameter of type &mut (impl Run + ?Sized) (e.g., ctx: &mut (impl Run + ?Sized))",
+                "First argument must be a named parameter of type &Run (e.g., ctx: &Run)",
             )
             .to_compile_error()
             .into();
@@ -182,35 +182,23 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #(#attrs)*
         #visibility #sig {
-            // Import trait for extension methods
-            use pgqrs::RunExt as _;
-
-            let step_name = #step_name;
-
-            // Attempt to initialize the step via workflow context
-            let current_time = chrono::Utc::now();
-            let step_rec = #first_arg_name.acquire_step(step_name, current_time).await?;
-
-            if step_rec.status == pgqrs::WorkflowStatus::Success {
-                return Ok(serde_json::from_value(step_rec.output.unwrap_or(serde_json::Value::Null))?);
-            }
-
-            // Execute the original function body and capture the result
-            let result: #output_type = async { #block }.await;
-
-            match &result {
-                Ok(val) => {
-                    let output_val = serde_json::to_value(val)?;
-                    #first_arg_name.complete_step(step_name, output_val).await?;
+            let result: #output_type = match pgqrs::workflow_step(#first_arg_name, stringify!(#fn_name), || async {
+                let result: #output_type = async { #block }.await;
+                match result {
+                    Ok(value) => Ok(value),
+                    Err(err) => Err(pgqrs::Error::Internal {
+                        message: err.to_string(),
+                    }),
                 }
-                Err(e) => {
-                    let error_val = serde_json::json!({
-                        "message": e.to_string(),
-                        "is_transient": false
-                    });
-                    #first_arg_name.fail_step(step_name, error_val, current_time).await?;
+            })
+            .await
+            {
+                Ok(value) => Ok(value),
+                Err(err) => match err {
+                    pgqrs::Error::Internal { message } => Err(anyhow::anyhow!(message)),
+                    other => Err(anyhow::Error::new(other)),
                 },
-            }
+            };
 
             result
         }
@@ -234,7 +222,7 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// 1. **First argument is a workflow handle**
 ///    - The function must take at least one argument.
-///    - The first argument must be a named pattern typed as `&mut (impl pgqrs::Run + ?Sized)` (or similar context).
+///    - The first argument must be a named pattern typed as `&Run` (or similar context).
 ///    - This handle is used to call `.start()`, `.success()`, and `.fail()`.
 ///
 /// 2. **Return type must be a `Result`**
@@ -257,29 +245,29 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// use pgqrs_macros::pgqrs_workflow;
 ///
 /// #[pgqrs_workflow]
-/// async fn process_order(workflow: &mut (impl Run + ?Sized), order_id: i32) -> Result<String, anyhow::Error> {
+/// async fn process_order(workflow: &Run, order_id: i32) -> Result<String, anyhow::Error> {
 ///     // Workflow logic here...
 ///     Ok("Order processed".to_string())
 /// }
 ///
 /// // Usage:
 /// // let workflow = Workflow::create(pool, "process_order", &order_id).await?;
-/// // process_order(&mut workflow, order_id).await?;
+/// // process_order(&workflow, order_id).await?;
 /// ```
 #[proc_macro_attribute]
 pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(input as ItemFn);
-
     let attrs = &input_fn.attrs;
+    let visibility = &input_fn.vis;
+    let sig = &input_fn.sig;
 
-    // Identify first argument (workflow context)
     let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
         if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
             &pat_ident.ident
         } else {
             return syn::Error::new_spanned(
                 pat_type,
-                "First argument must be a named parameter of type &mut (impl Run + ?Sized) (e.g., workflow: &mut (impl Run + ?Sized))",
+                "First argument must be a named parameter of type &Run (e.g., workflow: &Run)",
             )
             .to_compile_error()
             .into();
@@ -294,13 +282,9 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let block = &input_fn.block;
-    let visibility = &input_fn.vis;
-    let sig = &input_fn.sig;
 
-    // Validate return type is Result
     let output_type = match &sig.output {
         syn::ReturnType::Type(_, ty) => {
-            // Simple heuristic to check if return type is a Result.
             let is_result = if let syn::Type::Path(type_path) = &**ty {
                 type_path
                     .path
@@ -334,24 +318,23 @@ pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #(#attrs)*
         #visibility #sig {
-            // Import trait for extension methods
-            use pgqrs::RunExt as _;
-
             // Start workflow
-            #first_arg_name.start().await?;
+            let run = #first_arg_name.start().await?;
 
             // Execute body
             let result: #output_type = async { #block }.await;
 
             // Handle terminal state
             match &result {
-                Ok(val) => #first_arg_name.success(val).await?,
+                Ok(val) => {
+                    let _run = run.success(val).await?;
+                }
                 Err(e) => {
                     let error_val = serde_json::json!({
                         "message": e.to_string(),
                         "is_transient": false
                     });
-                    #first_arg_name.fail_with_json(error_val).await?;
+                    let _run = run.fail_with_json(error_val).await?;
                 }
             }
 

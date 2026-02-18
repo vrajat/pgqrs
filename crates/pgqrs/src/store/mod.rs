@@ -152,7 +152,7 @@ pub trait Store: Send + Sync + 'static {
     ///
     /// This should parse the message payload and either create a new RunRecord
     /// (for new triggers) or fetch an existing one (for resumptions).
-    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Box<dyn Run>>;
+    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Run>;
 
     /// Get a generic worker handle by ID.
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>>;

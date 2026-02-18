@@ -34,7 +34,9 @@ pub use crate::tables::{
     ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
     WorkflowTable,
 };
-pub use crate::workers::{Admin, Consumer, Producer, Run, RunExt, StepGuard, StepGuardExt, Worker};
+pub use crate::workers::{Admin, Consumer, Producer, Run, StepGuard, StepGuardExt, Worker};
+#[cfg(any(test, feature = "test-utils"))]
+pub use crate::workflow::workflow_handler_with_time;
 pub use crate::workflow::{pause_error, workflow_handler, workflow_step};
 
 pub use crate::config::Config;

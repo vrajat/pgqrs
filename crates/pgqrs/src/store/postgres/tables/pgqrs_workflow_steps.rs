@@ -29,6 +29,7 @@ impl crate::store::StepRecordTable for StepRecords {
               input,
               output,
               error,
+              retry_at,
               started_at as created_at,
               started_at as updated_at
             "#,
@@ -56,9 +57,11 @@ impl crate::store::StepRecordTable for StepRecords {
               step_name,
               status,
               input,
-              output,
-              error,
-              COALESCE(started_at, NOW()) as created_at,
+               output,
+               error,
+               retry_at,
+               COALESCE(started_at, NOW()) as created_at,
+
               COALESCE(started_at, NOW()) as updated_at
             FROM pgqrs_workflow_steps
             WHERE id = $1
@@ -85,9 +88,11 @@ impl crate::store::StepRecordTable for StepRecords {
               step_name,
               status,
               input,
-              output,
-              error,
-              COALESCE(started_at, NOW()) as created_at,
+               output,
+               error,
+               retry_at,
+               COALESCE(started_at, NOW()) as created_at,
+
               COALESCE(started_at, NOW()) as updated_at
             FROM pgqrs_workflow_steps
             ORDER BY id

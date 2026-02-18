@@ -160,6 +160,11 @@ impl TursoStepGuard {
             updated_at: crate::store::turso::parse_turso_timestamp(
                 &row.get::<String>(10).unwrap(),
             )?,
+            retry_at: row
+                .get::<Option<String>>(8)
+                .unwrap()
+                .map(|s| crate::store::turso::parse_turso_timestamp(&s))
+                .transpose()?,
         })
     }
 }

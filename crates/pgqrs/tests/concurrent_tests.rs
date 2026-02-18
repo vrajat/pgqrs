@@ -1,12 +1,102 @@
+use pgqrs::error::Result;
 use pgqrs::store::AnyStore;
+use pgqrs::Run;
 use pgqrs::Store;
 use serde_json::json;
 use serial_test::serial;
+use std::sync::{Arc, Mutex};
 
 mod common;
 
 async fn create_store() -> AnyStore {
     common::create_store("pgqrs_concurrent_test").await
+}
+
+async fn app_step_success(step_state: &Arc<Mutex<Option<String>>>) -> Result<String> {
+    let mut state = step_state.lock().expect("state lock poisoned");
+    if state.is_none() {
+        *state = Some("step_success".to_string());
+    }
+    Ok(state.clone().unwrap())
+}
+
+async fn app_step_permanent_error() -> Result<String> {
+    Err(pgqrs::Error::Internal {
+        message: "File not found".to_string(),
+    })
+}
+
+async fn app_workflow_success(
+    run: Run,
+    step_state: Arc<Mutex<Option<String>>>,
+) -> Result<serde_json::Value> {
+    let _ = pgqrs::workflow_step(&run, "step1", || {
+        let step_state = step_state.clone();
+        async move { app_step_success(&step_state).await }
+    })
+    .await?;
+
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_permanent_error(run: Run) -> Result<serde_json::Value> {
+    let result = pgqrs::workflow_step(&run, "download", || async {
+        app_step_permanent_error().await
+    })
+    .await;
+
+    match result {
+        Ok(_) => Ok(json!({"done": true})),
+        Err(err) => Err(err),
+    }
+}
+
+async fn app_workflow_crash_recovery(run: Run, should_crash: bool) -> Result<serde_json::Value> {
+    // Step 1
+    pgqrs::workflow_step(&run, "step1", || async {
+        Ok::<_, pgqrs::Error>("step1_done".to_string())
+    })
+    .await?;
+
+    if should_crash {
+        return Err(pgqrs::Error::TestCrash);
+    }
+
+    // Step 2
+    pgqrs::workflow_step(&run, "step2", || async {
+        Ok::<_, pgqrs::Error>("step2_done".to_string())
+    })
+    .await?;
+
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_transient_error(run: Run) -> Result<serde_json::Value> {
+    let _: () = pgqrs::workflow_step(&run, "api_call", || async {
+        Err(pgqrs::Error::Transient {
+            code: "TIMEOUT".to_string(),
+            message: "Connection timed out".to_string(),
+            retry_after: Some(std::time::Duration::from_secs(30)),
+        })
+    })
+    .await?;
+
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_pause(run: Run, should_pause: bool) -> Result<serde_json::Value> {
+    pgqrs::workflow_step(&run, "step1", || async {
+        if should_pause {
+            return Err(pgqrs::Error::Paused {
+                message: "Waiting for approval".to_string(),
+                resume_after: std::time::Duration::from_secs(60),
+            });
+        }
+        Ok::<_, pgqrs::Error>("step1_done".to_string())
+    })
+    .await?;
+
+    Ok(json!({"done": true}))
 }
 
 #[tokio::test]
@@ -249,4 +339,503 @@ async fn test_concurrent_visibility_extension() {
         extended_by_a,
         "Consumer A should be able to extend visibility of its own message"
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_success() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_success";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_success_cons", 3200, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "success"}))?
+        .execute()
+        .await?;
+
+    let step_state: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let handler_state = step_state.clone();
+
+    let handler = pgqrs::workflow_handler(store.clone(), move |run, input: serde_json::Value| {
+        let handler_state = handler_state.clone();
+        async move {
+            let _input = input;
+            app_workflow_success(run, handler_state).await
+        }
+    });
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Success);
+
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Success);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_permanent_error";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_perm_err_cons", 3210, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "perm_error"}))?
+        .execute()
+        .await?;
+
+    let handler = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, input: serde_json::Value| async move {
+            let _input = input;
+            app_workflow_permanent_error(run).await
+        },
+    );
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Error);
+    let error_val = run.error.clone().expect("run error missing");
+    let error_msg = match error_val {
+        serde_json::Value::String(value) => value,
+        value => value
+            .get("message")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    };
+    assert!(error_msg.contains("File not found"));
+
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+    let step_error = step.error.clone().expect("step error missing");
+    let step_msg = match step_error {
+        serde_json::Value::String(value) => value,
+        value => value
+            .get("message")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    };
+    assert!(step_msg.contains("File not found"));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_crash_recovery";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_crash_cons", 3220, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "crash_recovery"}))?
+        .execute()
+        .await?;
+
+    // 1. First attempt: "Crash" after step 1 using handler
+    let handler = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move {
+            app_workflow_crash_recovery(run, true).await
+        },
+    );
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    let first_attempt = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await;
+    assert!(matches!(first_attempt, Err(pgqrs::Error::TestCrash)));
+
+    // Verify state: step1 SUCCESS, run RUNNING, message NOT archived
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run_rec = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run record missing");
+    assert_eq!(run_rec.status, pgqrs::WorkflowStatus::Running);
+
+    let steps = store.workflow_steps().list().await?;
+    let steps: Vec<_> = steps
+        .into_iter()
+        .filter(|entry| entry.run_id == run_rec.id)
+        .collect();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].step_name, "step1");
+    assert_eq!(steps[0].status, pgqrs::WorkflowStatus::Success);
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 0);
+
+    // 2. Release message (simulate timeout or admin release)
+    pgqrs::admin(&store)
+        .release_worker_messages(consumer.worker_id())
+        .await?;
+
+    // 3. Second attempt: Recovery using workflow_handler
+    let handler = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move {
+            app_workflow_crash_recovery(run, false).await
+        },
+    );
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await?;
+
+    // 4. Final Verification
+    // Message should be archived
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    // Run should be SUCCESS
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Success);
+
+    // Steps: step1 SUCCESS (cached), step2 SUCCESS
+    let steps = store.workflow_steps().list().await?;
+    let step_count = steps
+        .into_iter()
+        .filter(|entry| entry.run_id == run.id)
+        .count();
+    assert_eq!(step_count, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_transient_error";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_transient_cons", 3230, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "transient_error"}))?
+        .execute()
+        .await?;
+
+    let handler = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move { app_workflow_transient_error(run).await },
+    );
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    let result = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await;
+
+    // Expect Err(Transient)
+    assert!(matches!(result, Err(pgqrs::Error::Transient { .. })));
+
+    // Verify state:
+    // 1. Message NOT archived
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 0);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Running);
+
+    // 3. Step status ERROR with is_transient true and retry_at set
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+
+    let error_val = step.error.clone().expect("step error missing");
+    assert_eq!(error_val.get("is_transient"), Some(&json!(true)));
+    assert_eq!(error_val.get("code"), Some(&json!("TIMEOUT")));
+
+    // 4. retry_at should be set
+    assert!(step.retry_at.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_pause";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_pause_cons", 3240, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "pause"}))?
+        .execute()
+        .await?;
+
+    // 1. First attempt: Pause in step 1
+    let handler = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move { app_workflow_pause(run, true).await },
+    );
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    let result = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await;
+
+    // Expect Err(Paused)
+    assert!(matches!(result, Err(pgqrs::Error::Paused { .. })));
+
+    // Verify state:
+    // 1. Message NOT archived
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 0);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    // 2. Run status PAUSED
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Paused);
+    let error_val = run.error.clone().expect("run error missing");
+    let error_msg = match error_val {
+        serde_json::Value::String(value) => value,
+        value => value
+            .get("message")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    };
+    assert_eq!(error_msg, "Waiting for approval");
+
+    // 3. Step status ERROR with code PAUSED (or is_transient false)
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+
+    let error_val = step.error.clone().expect("step error missing");
+    assert_eq!(error_val.get("code"), Some(&json!("PAUSED")));
+    assert_eq!(error_val.get("is_transient"), Some(&json!(true)));
+
+    // 4. retry_at/resume info if present
+    assert!(step.retry_at.is_some());
+
+    // 5. Release message (simulate timeout or admin release)
+    pgqrs::admin(&store)
+        .release_worker_messages(consumer.worker_id())
+        .await?;
+
+    // 6. Second attempt: Try immediately - should return StepNotReady
+    let handler_resume = pgqrs::workflow_handler(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move { app_workflow_pause(run, false).await },
+    );
+
+    let result = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler_resume)
+        .execute(&store)
+        .await;
+
+    assert!(
+        matches!(result, Err(pgqrs::Error::StepNotReady { .. })),
+        "Expected StepNotReady, got {:?}",
+        result
+    );
+
+    // 7. Third attempt: Resume with advanced time and complete
+    let resume_after = chrono::Duration::seconds(61); // pause was 60s
+    let future_time = chrono::Utc::now() + resume_after;
+
+    let handler_resume_with_time = pgqrs::workflow_handler_with_time(
+        store.clone(),
+        move |run, _input: serde_json::Value| async move { app_workflow_pause(run, false).await },
+        future_time,
+    );
+
+    pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler_resume_with_time)
+        .execute(&store)
+        .await?;
+
+    // 8. Final Verification
+    // Message should be archived
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    // Run should be SUCCESS
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Success);
+
+    // Steps: step1 SUCCESS
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Success);
+
+    Ok(())
 }

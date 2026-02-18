@@ -290,7 +290,7 @@ impl Store for AnyStore {
         }
     }
 
-    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Box<dyn Run>> {
+    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Run> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.run(message).await,

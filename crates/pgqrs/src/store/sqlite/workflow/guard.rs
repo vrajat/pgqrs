@@ -145,6 +145,10 @@ impl SqliteStepGuard {
             error: error_str.and_then(|s| serde_json::from_str(&s).ok()),
             created_at: parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?,
             updated_at: parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?,
+            retry_at: row
+                .try_get::<Option<String>, _>("retry_at")?
+                .map(|ts| parse_sqlite_timestamp(&ts))
+                .transpose()?,
         })
     }
 }

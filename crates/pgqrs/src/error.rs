@@ -102,6 +102,16 @@ impl std::fmt::Display for TransientStepError {
 
 impl std::error::Error for TransientStepError {}
 
+impl From<TransientStepError> for Error {
+    fn from(error: TransientStepError) -> Self {
+        Error::Transient {
+            code: error.code,
+            message: error.message,
+            retry_after: error.retry_after,
+        }
+    }
+}
+
 /// Error types for pgqrs operations.
 ///
 /// This enum covers all error cases that can occur when using pgqrs,
@@ -245,6 +255,11 @@ pub enum Error {
         message: String,
         resume_after: std::time::Duration,
     },
+
+    /// Test-only crash to simulate worker failure
+    #[cfg(any(test, feature = "test-utils"))]
+    #[error("Test crash")]
+    TestCrash,
 
     /// Transient error that can be retried
     #[error("Transient error ({code}): {message}")]

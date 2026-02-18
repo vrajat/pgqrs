@@ -128,4 +128,88 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
             .await?;
         Ok(count)
     }
+
+    async fn start_run(&self, id: i64) -> Result<RunRecord> {
+        let row = crate::store::turso::query(
+            r#"
+            UPDATE pgqrs_workflow_runs
+            SET status = 'RUNNING',
+                updated_at = datetime('now'),
+                started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
+            WHERE id = ? AND status IN ('QUEUED', 'PAUSED')
+            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if let Some(row) = row {
+            return Self::map_row(&row);
+        }
+
+        let status_str: Option<String> = crate::store::turso::query_scalar(
+            "SELECT status FROM pgqrs_workflow_runs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if let Some(s) = status_str {
+            if let Ok(status) = WorkflowStatus::from_str(&s) {
+                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                    return Err(crate::error::Error::ValidationFailed {
+                        reason: format!("Run {} is in terminal {} state", id, status),
+                    });
+                }
+            }
+        }
+
+        self.get(id).await
+    }
+
+    async fn complete_run(&self, id: i64, output: serde_json::Value) -> Result<RunRecord> {
+        let output_str = output.to_string();
+        let _rows = crate::store::turso::query(
+            "UPDATE pgqrs_workflow_runs SET status = 'SUCCESS', output = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
+        )
+        .bind(id)
+        .bind(output_str)
+        .execute_once(&self.db)
+        .await?;
+        self.get(id).await
+    }
+
+    async fn pause_run(
+        &self,
+        id: i64,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> Result<RunRecord> {
+        let error = serde_json::json!({
+            "message": message,
+            "resume_after": resume_after.as_secs()
+        });
+        let error_str = error.to_string();
+        let _rows = crate::store::turso::query(
+            "UPDATE pgqrs_workflow_runs SET status = 'PAUSED', error = $2, paused_at = datetime('now'), updated_at = datetime('now') WHERE id = $1",
+        )
+        .bind(id)
+        .bind(error_str)
+        .execute_once(&self.db)
+        .await?;
+        self.get(id).await
+    }
+
+    async fn fail_run(&self, id: i64, error: serde_json::Value) -> Result<RunRecord> {
+        let error_str = error.to_string();
+        let _rows = crate::store::turso::query(
+            "UPDATE pgqrs_workflow_runs SET status = 'ERROR', error = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
+        )
+        .bind(id)
+        .bind(error_str)
+        .execute_once(&self.db)
+        .await?;
+        self.get(id).await
+    }
 }

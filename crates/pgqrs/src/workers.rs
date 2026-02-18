@@ -1,13 +1,14 @@
 //! High-level actor interfaces for workers, producers, and consumers.
 
 use crate::rate_limit::RateLimitStatus;
+use crate::store::{AnyStore, Store};
 pub use crate::types::{
-    ArchivedMessage, QueueMessage, QueueRecord, StepRecord, WorkerRecord, WorkerStatus,
+    ArchivedMessage, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus,
     WorkflowRecord,
 };
 use crate::validation::ValidationConfig;
 use async_trait::async_trait;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 /// Trait defining the interface for all worker types.
@@ -176,108 +177,135 @@ pub trait Workflow: Send + Sync {
     fn workflow_record(&self) -> &WorkflowRecord;
 }
 
-/// Interface for a workflow execution run.
-#[async_trait]
-pub trait Run: Send + Sync {
-    fn id(&self) -> i64;
-    async fn start(&mut self) -> crate::error::Result<()>;
-    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
-    async fn pause(
-        &mut self,
-        message: String,
-        resume_after: std::time::Duration,
-    ) -> crate::error::Result<()>;
-    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()>;
-    async fn acquire_step(
-        &self,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord>;
-
-    async fn complete_step(
-        &self,
-        step_name: &str,
-        output: serde_json::Value,
-    ) -> crate::error::Result<()>;
-
-    async fn fail_step(
-        &self,
-        step_name: &str,
-        error: serde_json::Value,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<()>;
+/// Workflow execution run handle.
+#[derive(Clone, Debug)]
+pub struct Run {
+    store: AnyStore,
+    record: RunRecord,
+    current_time: Option<DateTime<Utc>>,
 }
 
-/// Extension trait for Run to provide generic convenience methods.
-#[async_trait]
-pub trait RunExt: Run {
-    async fn success<T: serde::Serialize + Send + Sync>(
-        &mut self,
+impl Run {
+    pub fn new(store: AnyStore, record: RunRecord) -> Self {
+        Self {
+            store,
+            record,
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn current_time(&self) -> Option<DateTime<Utc>> {
+        self.current_time
+    }
+
+    pub fn id(&self) -> i64 {
+        self.record.id
+    }
+
+    pub fn record(&self) -> &RunRecord {
+        &self.record
+    }
+
+    fn with_record(&self, record: RunRecord) -> Self {
+        Self {
+            store: self.store.clone(),
+            record,
+            current_time: self.current_time,
+        }
+    }
+
+    pub async fn refresh(&self) -> crate::error::Result<Run> {
+        let record = self.store.workflow_runs().get(self.record.id).await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn start(&self) -> crate::error::Result<Run> {
+        let record = self.store.workflow_runs().start_run(self.record.id).await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn complete(&self, output: serde_json::Value) -> crate::error::Result<Run> {
+        let record = self
+            .store
+            .workflow_runs()
+            .complete_run(self.record.id, output)
+            .await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn pause(
+        &self,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> crate::error::Result<Run> {
+        let record = self
+            .store
+            .workflow_runs()
+            .pause_run(self.record.id, message, resume_after)
+            .await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn fail_with_json(&self, error: serde_json::Value) -> crate::error::Result<Run> {
+        let record = self
+            .store
+            .workflow_runs()
+            .fail_run(self.record.id, error)
+            .await?;
+        Ok(self.with_record(record))
+    }
+
+    pub async fn success<T: serde::Serialize + Send + Sync>(
+        &self,
         output: &T,
-    ) -> crate::error::Result<()> {
+    ) -> crate::error::Result<Run> {
         let value = serde_json::to_value(output).map_err(crate::error::Error::Serialization)?;
         self.complete(value).await
     }
 
-    async fn fail<T: serde::Serialize + Send + Sync>(
-        &mut self,
+    pub async fn fail<T: serde::Serialize + Send + Sync>(
+        &self,
         error: &T,
-    ) -> crate::error::Result<()> {
+    ) -> crate::error::Result<Run> {
         let value = serde_json::to_value(error).map_err(crate::error::Error::Serialization)?;
         self.fail_with_json(value).await
     }
-}
-impl<T: ?Sized + Run> RunExt for T {}
 
-#[async_trait]
-impl<T: ?Sized + Run> Run for Box<T> {
-    fn id(&self) -> i64 {
-        (**self).id()
-    }
-
-    async fn start(&mut self) -> crate::error::Result<()> {
-        (**self).start().await
-    }
-
-    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
-        (**self).complete(output).await
-    }
-
-    async fn pause(
-        &mut self,
-        message: String,
-        resume_after: std::time::Duration,
-    ) -> crate::error::Result<()> {
-        (**self).pause(message, resume_after).await
-    }
-
-    async fn fail_with_json(&mut self, error: serde_json::Value) -> crate::error::Result<()> {
-        (**self).fail_with_json(error).await
-    }
-
-    async fn acquire_step(
+    pub async fn acquire_step(
         &self,
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord> {
-        (**self).acquire_step(step_name, current_time).await
+        self.store
+            .acquire_step(self.record.id, step_name, current_time)
+            .await
     }
 
-    async fn complete_step(
+    pub async fn complete_step(
         &self,
         step_name: &str,
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
-        (**self).complete_step(step_name, output).await
+        let current_time = self.current_time().unwrap_or_else(chrono::Utc::now);
+        let step = self.acquire_step(step_name, current_time).await?;
+        let mut guard = self.store.step_guard(step.id);
+        crate::store::StepGuard::complete(&mut *guard, output).await
     }
 
-    async fn fail_step(
+    pub async fn fail_step(
         &self,
         step_name: &str,
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        (**self).fail_step(step_name, error, current_time).await
+        let step = self.acquire_step(step_name, current_time).await?;
+        let mut guard = self.store.step_guard(step.id);
+        crate::store::StepGuard::fail_with_json(&mut *guard, error, current_time).await
     }
 }
 

@@ -1,14 +1,16 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
-    Admin, ArchiveTable, BackendType, ConcurrencyModel, Consumer, MessageTable, Producer,
-    QueueTable, Run, RunRecordTable, StepGuard, StepRecordTable, Store, Worker, WorkerTable,
-    Workflow, WorkflowTable,
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
+    WorkerTable, WorkflowTable,
 };
-use crate::types::{NewQueueMessage, NewQueueRecord, WorkflowStatus};
+use crate::store::{BackendType, ConcurrencyModel};
+use crate::workers::Workflow;
+use crate::{Admin, Consumer, Producer, Worker};
+
+use crate::types::{NewQueueMessage, NewQueueRecord};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use std::str::FromStr;
 use std::sync::Arc;
 use turso::{Database, Row};
 
@@ -533,128 +535,6 @@ pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TursoRun {
-    id: i64,
-    db: Arc<Database>,
-}
-
-impl TursoRun {
-    pub fn new(db: Arc<Database>, id: i64) -> Self {
-        Self { id, db }
-    }
-}
-
-const SQL_TURSO_START_RUN: &str = r#"
-UPDATE pgqrs_workflow_runs
-SET status = 'RUNNING',
-    updated_at = datetime('now'),
-    started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
-WHERE id = $1 AND status IN ('QUEUED', 'PAUSED')
-RETURNING status, error;
-"#;
-
-#[async_trait]
-impl crate::store::Run for TursoRun {
-    fn id(&self) -> i64 {
-        self.id
-    }
-
-    async fn start(&mut self) -> Result<()> {
-        let result = query(SQL_TURSO_START_RUN)
-            .bind(self.id)
-            .fetch_optional(&self.db)
-            .await?;
-
-        if result.is_none() {
-            let status_str: Option<String> =
-                query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE id = $1")
-                    .bind(self.id)
-                    .fetch_optional(&self.db)
-                    .await?;
-
-            if let Some(s) = status_str {
-                if let Ok(WorkflowStatus::Error) = WorkflowStatus::from_str(&s) {
-                    return Err(crate::error::Error::ValidationFailed {
-                        reason: format!("Run {} is in terminal ERROR state", self.id),
-                    });
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn complete(&mut self, output: serde_json::Value) -> Result<()> {
-        let output_str = output.to_string();
-        let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'SUCCESS', output = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
-        )
-        .bind(self.id)
-        .bind(output_str)
-        .execute_once(&self.db)
-        .await?;
-        Ok(())
-    }
-
-    async fn pause(&mut self, message: String, resume_after: std::time::Duration) -> Result<()> {
-        let error = serde_json::json!({
-            "message": message,
-            "resume_after": resume_after.as_secs()
-        });
-        let error_str = error.to_string();
-        let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'PAUSED', error = $2, paused_at = datetime('now'), updated_at = datetime('now') WHERE id = $1",
-        )
-        .bind(self.id)
-        .bind(error_str)
-        .execute_once(&self.db)
-        .await?;
-        Ok(())
-    }
-
-    async fn fail_with_json(&mut self, error: serde_json::Value) -> Result<()> {
-        let error_str = error.to_string();
-        let _rows = query(
-            "UPDATE pgqrs_workflow_runs SET status = 'ERROR', error = $2, updated_at = datetime('now'), completed_at = datetime('now') WHERE id = $1",
-        )
-        .bind(self.id)
-        .bind(error_str)
-        .execute_once(&self.db)
-        .await?;
-        Ok(())
-    }
-
-    async fn acquire_step(
-        &self,
-        step_name: &str,
-        current_time: DateTime<Utc>,
-    ) -> Result<crate::types::StepRecord> {
-        TursoStepGuard::acquire_record(&self.db, self.id, step_name, current_time).await
-    }
-
-    async fn complete_step(
-        &self,
-        step_name: &str,
-        output: serde_json::Value,
-    ) -> crate::error::Result<()> {
-        let step = self.acquire_step(step_name, chrono::Utc::now()).await?;
-        let mut guard = TursoStepGuard::new(self.db.clone(), step.id);
-        crate::store::StepGuard::complete(&mut guard, output).await
-    }
-
-    async fn fail_step(
-        &self,
-        step_name: &str,
-        error: serde_json::Value,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<()> {
-        let step = self.acquire_step(step_name, current_time).await?;
-        let mut guard = TursoStepGuard::new(self.db.clone(), step.id);
-        crate::store::StepGuard::fail_with_json(&mut guard, error, current_time).await
-    }
-}
-
 #[async_trait]
 impl Store for TursoStore {
     async fn execute_raw(&self, sql: &str) -> Result<()> {
@@ -925,12 +805,16 @@ impl Store for TursoStore {
         Ok(msg)
     }
 
-    async fn run(&self, message: crate::types::QueueMessage) -> Result<Box<dyn Run>> {
+    async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
         let payload = &message.payload;
 
         // If payload has run_id, it's a resumption or already initialized
         if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            return Ok(Box::new(TursoRun::new(self.db.clone(), run_id)));
+            let record = self.workflow_runs.get(run_id).await?;
+            return Ok(crate::workers::Run::new(
+                crate::store::AnyStore::Turso(self.clone()),
+                record,
+            ));
         }
 
         // Otherwise, it's a new trigger. Create run record.
@@ -960,7 +844,10 @@ impl Store for TursoStore {
             .update_payload(message.id, new_payload)
             .await?;
 
-        Ok(Box::new(TursoRun::new(self.db.clone(), run_rec.id)))
+        Ok(crate::workers::Run::new(
+            crate::store::AnyStore::Turso(self.clone()),
+            run_rec,
+        ))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
