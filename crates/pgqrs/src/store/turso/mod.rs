@@ -5,12 +5,11 @@ use crate::store::{
     WorkflowTable,
 };
 use crate::store::{BackendType, ConcurrencyModel};
-use crate::workers::Workflow;
 use crate::{Admin, Consumer, Producer, Worker};
 
 use crate::types::{NewQueueMessage, NewQueueRecord};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::sync::Arc;
 use turso::{Database, Row};
 
@@ -595,17 +594,6 @@ impl Store for TursoStore {
 
     fn workflow_steps(&self) -> &dyn StepRecordTable {
         self.workflow_steps.as_ref()
-    }
-
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: DateTime<Utc>,
-    ) -> Result<crate::types::StepRecord> {
-        self.workflow_steps
-            .acquire_step(run_id, step_name, current_time)
-            .await
     }
 
     async fn bootstrap(&self) -> Result<()> {

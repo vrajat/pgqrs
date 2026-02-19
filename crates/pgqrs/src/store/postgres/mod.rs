@@ -137,17 +137,6 @@ impl Store for PostgresStore {
         self.workflow_steps.as_ref()
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        self.workflow_steps
-            .acquire_step(run_id, step_name, current_time)
-            .await
-    }
-
     async fn bootstrap(&self) -> crate::error::Result<()> {
         use self::worker::admin::MIGRATOR;
         MIGRATOR.run(&self.pool).await?;

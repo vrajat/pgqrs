@@ -312,22 +312,6 @@ impl Store for AnyStore {
         }
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.acquire_step(run_id, step_name, current_time).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.acquire_step(run_id, step_name, current_time).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.acquire_step(run_id, step_name, current_time).await,
-        }
-    }
-
     async fn bootstrap(&self) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]

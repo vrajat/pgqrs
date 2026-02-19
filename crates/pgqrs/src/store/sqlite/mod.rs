@@ -154,17 +154,6 @@ impl Store for SqliteStore {
         self.workflow_steps.as_ref()
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> Result<crate::types::StepRecord> {
-        self.workflow_steps
-            .acquire_step(run_id, step_name, current_time)
-            .await
-    }
-
     async fn bootstrap(&self) -> Result<()> {
         sqlx::migrate!("migrations/sqlite")
             .run(&self.pool)

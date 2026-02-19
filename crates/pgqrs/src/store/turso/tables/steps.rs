@@ -1,8 +1,8 @@
 use crate::error::Result;
+use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::turso::parse_turso_timestamp;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,13 +26,29 @@ const SQL_ACQUIRE_STEP: &str = r#"
         WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
         ELSE datetime('now')
     END
-    RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
 "#;
 
 const SQL_CLEAR_RETRY: &str = r#"
     UPDATE pgqrs_workflow_steps
     SET status = 'RUNNING', retry_at = NULL, error = NULL
     WHERE id = ?
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
+
+const SQL_COMPLETE_STEP: &str = r#"
+    UPDATE pgqrs_workflow_steps
+    SET status = 'SUCCESS', output = ?2, completed_at = datetime('now')
+    WHERE id = ?1
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
+
+const SQL_FAIL_STEP: &str = r#"
+    UPDATE pgqrs_workflow_steps
+    SET status = 'ERROR', error = ?2, completed_at = datetime('now'),
+        retry_at = ?3, retry_count = ?4
+    WHERE id = ?1
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
 "#;
 
 impl TursoStepRecordTable {
@@ -164,126 +180,40 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
         Ok(count)
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: DateTime<Utc>,
-    ) -> Result<StepRecord> {
-        let row = crate::store::turso::query(SQL_ACQUIRE_STEP)
-            .bind(run_id)
-            .bind(step_name)
-            .fetch_one_once(&self.db)
-            .await?;
-
-        let id: i64 = row.get(0).map_err(|e| crate::error::Error::Internal {
-            message: e.to_string(),
-        })?;
-        let status_str: String = row.get(3).map_err(|e| crate::error::Error::Internal {
-            message: e.to_string(),
-        })?;
-        let mut status = WorkflowStatus::from_str(&status_str)
-            .map_err(|e| crate::error::Error::Internal { message: e })?;
-
-        let retry_count: i32 = row.get(7).map_err(|e| crate::error::Error::Internal {
-            message: e.to_string(),
-        })?;
-        let retry_at_str: Option<String> =
-            row.get(8).map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
-
-        if status == WorkflowStatus::Error {
-            if let Some(ref retry_at_s) = retry_at_str {
-                let retry_at = crate::store::turso::parse_turso_timestamp(retry_at_s)?;
-                if current_time < retry_at {
-                    return Err(crate::error::Error::StepNotReady {
-                        retry_at,
-                        retry_count: retry_count as u32,
-                    });
-                }
-
-                crate::store::turso::query(SQL_CLEAR_RETRY)
-                    .bind(id)
-                    .execute_once(&self.db)
-                    .await?;
-
-                status = WorkflowStatus::Running;
-            } else {
-                let error_str: Option<String> =
-                    row.get(6).map_err(|e| crate::error::Error::Internal {
-                        message: e.to_string(),
-                    })?;
-                let error_val: serde_json::Value = if let Some(s) = error_str {
-                    serde_json::from_str(&s)?
-                } else {
-                    serde_json::json!({
-                        "is_transient": false,
-                        "message": "Unknown error"
-                    })
-                };
-
-                return Err(crate::error::Error::RetriesExhausted {
-                    error: error_val,
-                    attempts: retry_count as u32,
-                });
-            }
+    async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
+        let mut builder = crate::store::turso::query(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(crate::store::turso::format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
         }
 
-        // If we updated the status, we should ideally return the updated record.
-        let row = if status == WorkflowStatus::Running && retry_at_str.is_some() {
-            crate::store::turso::query("SELECT id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at FROM pgqrs_workflow_steps WHERE id = ?")
-                .bind(id)
-                .fetch_one_once(&self.db)
-                .await?
-        } else {
-            row
-        };
+        let row = builder.fetch_one_once(&self.db).await?;
 
         Self::map_row(&row)
     }
 
-    async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<()> {
-        let output_str = output.to_string();
-        crate::store::turso::query(
-            r#"
-            UPDATE pgqrs_workflow_steps
-            SET status = 'SUCCESS', output = ?, completed_at = datetime('now')
-            WHERE id = ?
-            "#,
-        )
-        .bind(output_str)
-        .bind(id)
-        .execute_once(&self.db)
-        .await?;
-
-        Ok(())
+    fn sql_acquire_step(&self) -> &'static str {
+        SQL_ACQUIRE_STEP
     }
 
-    async fn fail_step(
-        &self,
-        id: i64,
-        error: serde_json::Value,
-        retry_at: Option<chrono::DateTime<chrono::Utc>>,
-        new_retry_count: i32,
-    ) -> Result<()> {
-        let error_str = error.to_string();
-        let retry_at_str = retry_at.map(|dt| crate::store::turso::format_turso_timestamp(&dt));
-        crate::store::turso::query(
-            r#"
-            UPDATE pgqrs_workflow_steps
-            SET status = 'ERROR', error = ?, completed_at = datetime('now'),
-                retry_at = ?, retry_count = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(error_str)
-        .bind(retry_at_str)
-        .bind(new_retry_count)
-        .bind(id)
-        .execute_once(&self.db)
-        .await?;
+    fn sql_clear_retry(&self) -> &'static str {
+        SQL_CLEAR_RETRY
+    }
 
-        Ok(())
+    fn sql_complete_step(&self) -> &'static str {
+        SQL_COMPLETE_STEP
+    }
+
+    fn sql_fail_step(&self) -> &'static str {
+        SQL_FAIL_STEP
     }
 }

@@ -1,7 +1,8 @@
 use crate::error::Result;
+use crate::store::query::{QueryBuilder, QueryParam};
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::{PgPool, Row};
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,22 @@ const SQL_CLEAR_RETRY: &str = r#"
 UPDATE pgqrs_workflow_steps
 SET status = 'RUNNING'::pgqrs_workflow_status, retry_at = NULL, error = NULL
 WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
+"#;
+
+const SQL_COMPLETE_STEP: &str = r#"
+UPDATE pgqrs_workflow_steps
+SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW()
+WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
+"#;
+
+const SQL_FAIL_STEP: &str = r#"
+UPDATE pgqrs_workflow_steps
+SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW(),
+    retry_at = $3, retry_count = $4
+WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
 "#;
 
 impl StepRecords {
@@ -162,135 +179,59 @@ impl crate::store::StepRecordTable for StepRecords {
         Ok(res.rows_affected())
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: DateTime<Utc>,
-    ) -> Result<StepRecord> {
-        let step_name_string = step_name.to_string();
-
-        let row = sqlx::query(SQL_ACQUIRE_STEP)
-            .bind(run_id)
-            .bind(&step_name_string)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SQL_ACQUIRE_STEP".into(),
-                source: Box::new(e),
-                context: format!(
-                    "Failed to acquire step {} for run {}",
-                    step_name_string, run_id
-                ),
-            })?;
-
-        let id: i64 = row.try_get("id")?;
-        let mut status: WorkflowStatus = row.try_get("status")?;
-        let retry_count: i32 = row.try_get("retry_count")?;
-        let retry_at: Option<DateTime<Utc>> = row.try_get("retry_at")?;
-
-        if status == WorkflowStatus::Error {
-            if let Some(retry_at) = retry_at {
-                if current_time < retry_at {
-                    return Err(crate::error::Error::StepNotReady {
-                        retry_at,
-                        retry_count: retry_count as u32,
-                    });
-                }
-
-                sqlx::query(SQL_CLEAR_RETRY)
-                    .bind(id)
-                    .execute(&self.pool)
-                    .await
-                    .map_err(|e| crate::error::Error::QueryFailed {
-                        query: "SQL_CLEAR_RETRY".into(),
-                        source: Box::new(e),
-                        context: format!("Failed to clear retry_at for step {}", id),
-                    })?;
-
-                status = WorkflowStatus::Running;
-            } else {
-                let error: Option<serde_json::Value> = row.try_get("error")?;
-                let error_val = error.unwrap_or_else(|| {
-                    serde_json::json!({
-                        "is_transient": false,
-                        "message": "Unknown error"
-                    })
-                });
-
-                return Err(crate::error::Error::RetriesExhausted {
-                    error: error_val,
-                    attempts: retry_count as u32,
-                });
-            }
+    async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
+        let mut builder = sqlx::query(query.sql());
+        for param in query.params() {
+            builder = match param {
+                QueryParam::I64(value) => builder.bind(*value),
+                QueryParam::I32(value) => builder.bind(*value),
+                QueryParam::String(value) => builder.bind(value),
+                QueryParam::Json(value) => builder.bind(value.clone()),
+                QueryParam::DateTime(value) => builder.bind(*value),
+            };
         }
 
-        let started_at: DateTime<Utc> = row.try_get("started_at")?;
+        let row =
+            builder
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "STEP_EXECUTE".into(),
+                    source: Box::new(e),
+                    context: "Failed to execute step query".into(),
+                })?;
+
+        let started_at: chrono::DateTime<Utc> = row.try_get("started_at")?;
 
         Ok(StepRecord {
-            id,
+            id: row.try_get("id")?,
             run_id: row.try_get("run_id")?,
             step_name: row.try_get("step_name")?,
-            status,
+            status: row.try_get("status")?,
             input: row.try_get("input")?,
             output: row.try_get("output")?,
             error: row.try_get("error")?,
             created_at: started_at,
             updated_at: started_at,
-            retry_at,
-            retry_count,
+            retry_at: row.try_get("retry_at")?,
+            retry_count: row.try_get("retry_count")?,
         })
     }
 
-    async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_steps
-            SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .bind(output)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "COMPLETE_WORKFLOW_STEP".into(),
-            source: Box::new(e),
-            context: format!("Failed to complete workflow step {}", id),
-        })?;
-
-        Ok(())
+    fn sql_acquire_step(&self) -> &'static str {
+        SQL_ACQUIRE_STEP
     }
 
-    async fn fail_step(
-        &self,
-        id: i64,
-        error: serde_json::Value,
-        retry_at: Option<chrono::DateTime<chrono::Utc>>,
-        new_retry_count: i32,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_steps
-            SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW(),
-                retry_at = $3, retry_count = $4
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .bind(error)
-        .bind(retry_at)
-        .bind(new_retry_count)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "FAIL_WORKFLOW_STEP".into(),
-            source: Box::new(e),
-            context: format!("Failed to fail workflow step {}", id),
-        })?;
+    fn sql_clear_retry(&self) -> &'static str {
+        SQL_CLEAR_RETRY
+    }
 
-        Ok(())
+    fn sql_complete_step(&self) -> &'static str {
+        SQL_COMPLETE_STEP
+    }
+
+    fn sql_fail_step(&self) -> &'static str {
+        SQL_FAIL_STEP
     }
 }
 
