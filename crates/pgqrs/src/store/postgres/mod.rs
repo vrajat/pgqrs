@@ -3,7 +3,7 @@
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
     Producer as ProducerTrait, QueueTable, RunRecordTable, StepRecordTable, Store,
-    Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
+    Worker as WorkerTrait, WorkerTable, WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 pub mod tables;
 pub mod worker;
-pub mod workflow;
 
 use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
@@ -211,7 +210,7 @@ impl Store for PostgresStore {
             .await
     }
 
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         // Ensure backing queue exists.
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
@@ -248,10 +247,7 @@ impl Store for PostgresStore {
                 e
             })?;
 
-        Ok(Box::new(self::workflow::handle::Workflow::new(
-            workflow_record,
-            self.pool.clone(),
-        )))
+        Ok(workflow_record)
     }
 
     async fn trigger(

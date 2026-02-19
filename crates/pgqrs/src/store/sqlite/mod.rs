@@ -5,7 +5,6 @@ use crate::store::{
     ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
     WorkflowTable,
 };
-use crate::workers::Workflow;
 use crate::{Admin, Consumer, Producer, Worker};
 
 use async_trait::async_trait;
@@ -15,7 +14,6 @@ use std::sync::Arc;
 
 pub mod tables;
 pub mod worker;
-pub mod workflow;
 
 use self::tables::archive::SqliteArchiveTable;
 use self::tables::messages::SqliteMessageTable;
@@ -230,9 +228,7 @@ impl Store for SqliteStore {
             .await
     }
 
-    async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
-        use self::workflow::handle::SqliteWorkflow;
-
+    async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -267,7 +263,7 @@ impl Store for SqliteStore {
                 e
             })?;
 
-        Ok(Box::new(SqliteWorkflow::new(workflow_record)))
+        Ok(workflow_record)
     }
 
     async fn trigger(

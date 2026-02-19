@@ -171,12 +171,6 @@ pub trait Consumer: Worker {
     ) -> crate::error::Result<bool>;
 }
 
-/// Interface for a workflow definition.
-#[async_trait]
-pub trait Workflow: Send + Sync {
-    fn workflow_record(&self) -> &WorkflowRecord;
-}
-
 /// Workflow execution run handle.
 #[derive(Clone, Debug)]
 pub struct Run {

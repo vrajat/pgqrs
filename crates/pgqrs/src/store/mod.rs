@@ -133,7 +133,7 @@ pub trait Store: Send + Sync + 'static {
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord>;
 
     /// Get a workflow definition handle.
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord>;
 
     /// Trigger a workflow run.
     ///

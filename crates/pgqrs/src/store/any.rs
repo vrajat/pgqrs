@@ -366,7 +366,7 @@ impl Store for AnyStore {
         }
     }
 
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>> {
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workflow(name).await,

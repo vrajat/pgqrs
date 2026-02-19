@@ -16,7 +16,6 @@ use turso::{Database, Row};
 
 pub mod tables;
 pub mod worker;
-pub mod workflow;
 
 use self::tables::archive::TursoArchiveTable;
 use self::tables::messages::TursoMessageTable;
@@ -25,7 +24,6 @@ use self::tables::runs::TursoRunRecordTable;
 use self::tables::steps::TursoStepRecordTable;
 use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
-use self::workflow::handle::TursoWorkflow;
 
 #[derive(Debug, Clone)]
 pub struct TursoStore {
@@ -740,7 +738,7 @@ impl Store for TursoStore {
         Ok(Box::new(consumer))
     }
 
-    async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
+    async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -770,10 +768,7 @@ impl Store for TursoStore {
                 e
             })?;
 
-        Ok(Box::new(TursoWorkflow::new(
-            workflow_record,
-            self.db.clone(),
-        )))
+        Ok(workflow_record)
     }
 
     async fn trigger(
