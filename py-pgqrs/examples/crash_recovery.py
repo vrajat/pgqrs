@@ -1,20 +1,20 @@
 import asyncio
 from pgqrs import Admin
 from pgqrs.decorators import workflow, step
-from pgqrs import PyRun
+from pgqrs import Run
 
 # Global flag to control failure simulation
 FAIL_ONCE = True
 
 
 @step
-async def step1(ctx: PyRun, msg: str):
+async def step1(ctx: Run, msg: str):
     print(f"  [Step 1] Executing with msg: {msg}")
     return f"processed_{msg}"
 
 
 @step
-async def step2(ctx: PyRun, val: str):
+async def step2(ctx: Run, val: str):
     print(f"  [Step 2] Executing with val: {val}")
     if FAIL_ONCE:
         print("  [Step 2] SIMULATING FAILURE!")
@@ -23,7 +23,7 @@ async def step2(ctx: PyRun, val: str):
 
 
 @workflow
-async def my_workflow(ctx: PyRun, arg: str):
+async def my_workflow(ctx: Run, arg: str):
     print(f"[Workflow] Starting with arg: {arg}")
     res1 = await step1(ctx, arg)
     print(f"[Workflow] Step 1 result: {res1}")
@@ -91,19 +91,19 @@ async def test_crash_recovery(dsn):
 
 # Renamed to avoid redefinition error
 @step
-async def step1_v2(ctx: PyRun, msg: str):
+async def step1_v2(ctx: Run, msg: str):
     print("  [Step 1] Executing")
     return f"processed_{msg}"
 
 
 @step
-async def step2_v2(ctx: PyRun, val: str):
+async def step2_v2(ctx: Run, val: str):
     print("  [Step 2] Executing")
     return f"step2_{val}"
 
 
 # A generic runner that mimics the workflow decorator but crashes
-async def crashing_workflow(ctx: PyRun, arg: str):
+async def crashing_workflow(ctx: Run, arg: str):
     await ctx.start()
     res1 = await step1_v2(ctx, arg)
     print(f"Step 1 done: {res1}")
@@ -113,7 +113,7 @@ async def crashing_workflow(ctx: PyRun, arg: str):
 
 # Full workflow using normal decorator (but reusing context)
 @workflow
-async def full_workflow(ctx: PyRun, arg: str):
+async def full_workflow(ctx: Run, arg: str):
     # This wrapper calls start(). If stuck in RUNNING, start() is OK.
     res1 = await step1_v2(ctx, arg)  # Should SKIP
     res2 = await step2_v2(ctx, res1)  # Should EXECUTE

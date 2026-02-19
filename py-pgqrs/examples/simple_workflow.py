@@ -2,23 +2,23 @@ import asyncio
 
 from pgqrs import Admin
 from pgqrs.decorators import workflow, step
-from pgqrs import PyRun
+from pgqrs import Run
 
 
 @step
-async def step1(ctx: PyRun, msg: str):
+async def step1(ctx: Run, msg: str):
     print(f"  [Step 1] Executing with msg: {msg}")
     return f"processed_{msg}"
 
 
 @step
-async def step2(ctx: PyRun, val: str):
+async def step2(ctx: Run, val: str):
     print(f"  [Step 2] Executing with val: {val}")
     return f"step2_{val}"
 
 
 @workflow
-async def my_workflow(ctx: PyRun, arg: str):
+async def my_workflow(ctx: Run, arg: str):
     print(f"[Workflow] Starting with arg: {arg}")
     res1 = await step1(ctx, arg)
     print(f"[Workflow] Step 1 result: {res1}")
