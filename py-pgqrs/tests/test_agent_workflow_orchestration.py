@@ -13,7 +13,7 @@ Key concepts demonstrated:
 
 import pytest
 
-from pgqrs import PyRun
+from pgqrs import Run
 from pgqrs.decorators import step, workflow
 import pgqrs
 
@@ -24,7 +24,7 @@ import pgqrs
 
 
 @step
-async def bootstrap_environment(ctx: PyRun, config: dict) -> dict:
+async def bootstrap_environment(ctx: Run, config: dict) -> dict:
     """
     Task 1: Bootstrap the environment and setup configuration
     """
@@ -40,7 +40,7 @@ async def bootstrap_environment(ctx: PyRun, config: dict) -> dict:
 
 
 @step
-async def define_boundaries(ctx: PyRun, config: dict) -> dict:
+async def define_boundaries(ctx: Run, config: dict) -> dict:
     """
     Task 2: Define system boundaries and data models
     """
@@ -55,7 +55,7 @@ async def define_boundaries(ctx: PyRun, config: dict) -> dict:
 
 
 @step
-async def analyze_interface(ctx: PyRun, config: dict) -> dict:
+async def analyze_interface(ctx: Run, config: dict) -> dict:
     """
     Task 3: Analyze external interface structure
     """
@@ -71,7 +71,7 @@ async def analyze_interface(ctx: PyRun, config: dict) -> dict:
 
 
 @step
-async def verify_connectivity(ctx: PyRun, config: dict) -> dict:
+async def verify_connectivity(ctx: Run, config: dict) -> dict:
     """
     Task 4: Verify system connectivity with generated configuration
     """
@@ -91,7 +91,7 @@ async def verify_connectivity(ctx: PyRun, config: dict) -> dict:
 
 
 @workflow
-async def integration_development_flow(ctx: PyRun, initial_config: dict) -> dict:
+async def integration_development_flow(ctx: Run, initial_config: dict) -> dict:
     """
     Main orchestration workflow that coordinates all tasks.
 
@@ -179,22 +179,22 @@ async def test_workflow_crash_recovery(test_dsn, schema):
 
     # Modified tasks that log execution
     @step
-    async def bootstrap_logged(ctx: PyRun, cfg: dict) -> dict:
+    async def bootstrap_logged(ctx: Run, cfg: dict) -> dict:
         execution_log.append("bootstrap")
         return await bootstrap_environment(ctx, cfg)
 
     @step
-    async def boundaries_logged(ctx: PyRun, cfg: dict) -> dict:
+    async def boundaries_logged(ctx: Run, cfg: dict) -> dict:
         execution_log.append("define_boundaries")
         return await define_boundaries(ctx, cfg)
 
     @step
-    async def interface_logged(ctx: PyRun, cfg: dict) -> dict:
+    async def interface_logged(ctx: Run, cfg: dict) -> dict:
         execution_log.append("analyze_interface")
         return await analyze_interface(ctx, cfg)
 
     @step
-    async def connectivity_logged(ctx: PyRun, cfg: dict) -> dict:
+    async def connectivity_logged(ctx: Run, cfg: dict) -> dict:
         execution_log.append("verify_connectivity")
         return await verify_connectivity(ctx, cfg)
 
@@ -238,23 +238,23 @@ async def test_workflow_with_conditional_steps(test_dsn, schema):
     await admin.install()
 
     @step
-    async def determine_service_type(ctx: PyRun, cfg: dict) -> dict:
+    async def determine_service_type(ctx: Run, cfg: dict) -> dict:
         """Determine service type and set requirements"""
         service_type = cfg.get("type", "simple")
         return {**cfg, "requires_oauth": service_type == "enterprise"}
 
     @step
-    async def configure_oauth(ctx: PyRun, cfg: dict) -> dict:
+    async def configure_oauth(ctx: Run, cfg: dict) -> dict:
         """Only runs for enterprise services"""
         return {**cfg, "oauth_configured": True}
 
     @step
-    async def configure_basic_auth(ctx: PyRun, cfg: dict) -> dict:
+    async def configure_basic_auth(ctx: Run, cfg: dict) -> dict:
         """Only runs for simple services"""
         return {**cfg, "basic_auth_configured": True}
 
     @workflow
-    async def conditional_flow(ctx: PyRun, cfg: dict) -> dict:
+    async def conditional_flow(ctx: Run, cfg: dict) -> dict:
         cfg = await determine_service_type(ctx, cfg)
 
         # Conditional execution based on service type
@@ -298,12 +298,12 @@ async def test_workflow_error_handling(test_dsn, schema):
     await admin.install()
 
     @step
-    async def failing_task(ctx: PyRun, msg: str) -> str:
+    async def failing_task(ctx: Run, msg: str) -> str:
         """A task that always fails"""
         raise ValueError(f"Intentional failure: {msg}")
 
     @workflow
-    async def error_workflow(ctx: PyRun, input_data: dict) -> dict:
+    async def error_workflow(ctx: Run, input_data: dict) -> dict:
         # This task will fail
         await failing_task(ctx, input_data["error_msg"])
         return {"success": True}  # Never reached

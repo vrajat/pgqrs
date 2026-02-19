@@ -30,18 +30,18 @@ Both Rust and Python APIs use declarative attributes/decorators to define workfl
 === "Python"
 
     ```python
-    from pgqrs import PyRun
+    from pgqrs import Run
     from pgqrs.decorators import workflow, step
 
     # Define a step
     @step
-    async def fetch_data(ctx: PyRun, url: str) -> str:
+    async def fetch_data(ctx: Run, url: str) -> str:
         # ... logic ...
         return "data"
 
     # Define the workflow
     @workflow
-    async def data_pipeline(ctx: PyRun, url: str) -> str:
+    async def data_pipeline(ctx: Run, url: str) -> str:
         data = await fetch_data(ctx, url)
         return data
     ```
@@ -58,7 +58,7 @@ Steps are the fundamental unit of durability.
 
 ### Workflow Context
 
-The context object (`&Workflow` in Rust, `PyRun` in Python) provides access to the workflow's state and is required as the first argument to all step and workflow functions.
+The context object (`&Workflow` in Rust, `Run` in Python) provides access to the workflow's state and is required as the first argument to all step and workflow functions.
 
 ## Execution
 
@@ -105,7 +105,7 @@ Exceptions/Errors within steps are automatically captured and persisted.
 
     ```python
     @step
-    async def risky_step(ctx: PyRun):
+    async def risky_step(ctx: Run):
         # Exception raised here is persisted
         # The step becomes "FAILED"
         raise ValueError("Something went wrong")

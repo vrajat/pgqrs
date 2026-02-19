@@ -1,5 +1,5 @@
 import functools
-from ._pgqrs import PyRun
+from ._pgqrs import Run
 import pgqrs
 
 
@@ -7,7 +7,7 @@ def workflow(func):
     """
     Decorator to mark a function as a durable workflow entry point.
 
-    The decorated function must accept a `PyRun` instance as its first argument.
+    The decorated function must accept a `Run` instance as its first argument.
     The decorator handles:
     1. Starting the workflow (transitioning to RUNNING state).
     2. Executing the function body.
@@ -16,9 +16,9 @@ def workflow(func):
 
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
-        if not isinstance(ctx, PyRun):
+        if not isinstance(ctx, Run):
             raise TypeError(
-                f"First argument to a workflow must be a PyRun instance, got {type(ctx)}"
+                f"First argument to a workflow must be a Run instance, got {type(ctx)}"
             )
 
         # Start workflow
@@ -52,7 +52,7 @@ def step(func):
     """
     Decorator to mark a function as a durable workflow step.
 
-    The decorated function must accept a `PyRun` instance as its first argument.
+    The decorated function must accept a `Run` instance as its first argument.
     The decorator handles:
     1. Checking if the step has already completed (idempotency).
     2. If completed, returning the cached result immediately (skipping execution).
@@ -62,15 +62,16 @@ def step(func):
 
     @functools.wraps(func)
     async def wrapper(ctx, *args, **kwargs):
-        if not isinstance(ctx, PyRun):
+        if not isinstance(ctx, Run):
             raise TypeError(
-                f"First argument to a step must be a PyRun instance, got {type(ctx)}"
+                f"First argument to a step must be a Run instance, got {type(ctx)}"
             )
 
         step_name = func.__name__
 
         # Acquire step (uses system time by default, or current_time parameter in tests)
-        step_result = await ctx.acquire_step(step_name)
+        current_time = getattr(ctx, "current_time", None)
+        step_result = await ctx.acquire_step(step_name, current_time=current_time)
 
         if step_result.status == "SKIPPED":
             return step_result.value
