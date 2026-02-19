@@ -51,10 +51,19 @@ async fn app_workflow_permanent_error(run: Run) -> Result<serde_json::Value> {
     }
 }
 
-async fn app_workflow_crash_recovery(run: Run, should_crash: bool) -> Result<serde_json::Value> {
+async fn app_workflow_crash_recovery(
+    run: Run,
+    should_crash: bool,
+    step1_calls: Arc<Mutex<u32>>,
+) -> Result<serde_json::Value> {
     // Step 1
-    pgqrs::workflow_step(&run, "step1", || async {
-        Ok::<_, pgqrs::Error>("step1_done".to_string())
+    pgqrs::workflow_step(&run, "step1", || {
+        let step1_calls = step1_calls.clone();
+        async move {
+            let mut calls = step1_calls.lock().expect("step1_calls lock poisoned");
+            *calls += 1;
+            Ok::<_, pgqrs::Error>("step1_done".to_string())
+        }
     })
     .await?;
 
@@ -82,6 +91,29 @@ async fn app_workflow_transient_error(run: Run) -> Result<serde_json::Value> {
     .await?;
 
     Ok(json!({"done": true}))
+}
+
+async fn app_workflow_step_crash(
+    run: Run,
+    step1_calls: Arc<Mutex<u32>>,
+) -> Result<serde_json::Value> {
+    let result: Result<()> = pgqrs::workflow_step(&run, "step1", || {
+        let step1_calls = step1_calls.clone();
+        async move {
+            let mut calls = step1_calls.lock().expect("step1_calls lock poisoned");
+            *calls += 1;
+            Err(pgqrs::Error::TestCrash)
+        }
+    })
+    .await;
+
+    match result {
+        Err(pgqrs::Error::TestCrash) => Err(pgqrs::Error::TestCrash),
+        Err(err) => Err(err),
+        Ok(_) => Err(pgqrs::Error::Internal {
+            message: "Expected TestCrash".to_string(),
+        }),
+    }
 }
 
 async fn app_workflow_pause(run: Run, should_pause: bool) -> Result<serde_json::Value> {
@@ -518,13 +550,16 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    let step1_calls = Arc::new(Mutex::new(0u32));
+
     // 1. First attempt: "Crash" after step 1 using handler
-    let handler = pgqrs::workflow_handler(
-        store.clone(),
-        move |run, _input: serde_json::Value| async move {
-            app_workflow_crash_recovery(run, true).await
-        },
-    );
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let step1_calls = step1_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let step1_calls = step1_calls.clone();
+            async move { app_workflow_crash_recovery(run, true, step1_calls).await }
+        }
+    });
 
     let handler = {
         let handler = handler.clone();
@@ -536,6 +571,7 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .handle(handler)
         .execute(&store)
         .await;
+
     assert!(matches!(first_attempt, Err(pgqrs::Error::TestCrash)));
 
     // Verify state: step1 SUCCESS, run RUNNING, message NOT archived
@@ -568,12 +604,13 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .await?;
 
     // 3. Second attempt: Recovery using workflow_handler
-    let handler = pgqrs::workflow_handler(
-        store.clone(),
-        move |run, _input: serde_json::Value| async move {
-            app_workflow_crash_recovery(run, false).await
-        },
-    );
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let step1_calls = step1_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let step1_calls = step1_calls.clone();
+            async move { app_workflow_crash_recovery(run, false, step1_calls).await }
+        }
+    });
 
     let handler = {
         let handler = handler.clone();
@@ -611,6 +648,120 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .count();
     assert_eq!(step_count, 2);
 
+    let step1_calls = step1_calls.lock().expect("step1_calls lock poisoned");
+    assert_eq!(*step1_calls, 1, "step1 should only run once");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_step_crash_recovery";
+    pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .create()
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_step_crash_cons", 3250, workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(workflow_name)
+        .store(&store)
+        .trigger(&json!({"msg": "step_crash"}))?
+        .execute()
+        .await?;
+
+    let step1_calls = Arc::new(Mutex::new(0u32));
+
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let step1_calls = step1_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let step1_calls = step1_calls.clone();
+            async move { app_workflow_step_crash(run, step1_calls).await }
+        }
+    });
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    let first_attempt = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await;
+
+    assert!(matches!(first_attempt, Err(pgqrs::Error::TestCrash)));
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 0);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let runs = pgqrs::tables(&store).workflow_runs().list().await?;
+    let run = runs
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Running);
+
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Running);
+
+    pgqrs::admin(&store)
+        .release_worker_messages(consumer.worker_id())
+        .await?;
+
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let step1_calls = step1_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let step1_calls = step1_calls.clone();
+            async move { app_workflow_step_crash(run, step1_calls).await }
+        }
+    });
+
+    let handler = {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    };
+
+    let second_attempt = pgqrs::dequeue()
+        .worker(&*consumer)
+        .handle(handler)
+        .execute(&store)
+        .await;
+
+    assert!(matches!(second_attempt, Err(pgqrs::Error::TestCrash)));
+
+    let archived = pgqrs::tables(&store)
+        .archive()
+        .filter_by_fk(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 0);
+
+    let steps = store.workflow_steps().list().await?;
+    let step = steps
+        .into_iter()
+        .find(|entry| entry.run_id == run.id)
+        .expect("step not found");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Running);
+
+    let step1_calls = step1_calls.lock().expect("step1_calls lock poisoned");
+    assert_eq!(*step1_calls, 2, "step1 should run once per attempt");
+
     Ok(())
 }
 
@@ -641,6 +792,7 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
         store.clone(),
         move |run, _input: serde_json::Value| async move { app_workflow_transient_error(run).await },
     );
+
     let handler = {
         let handler = handler.clone();
         move |msg| (handler)(msg)

@@ -280,10 +280,12 @@ impl Run {
         &self,
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        self.store
+    ) -> crate::error::Result<Step> {
+        let record = self
+            .store
             .acquire_step(self.record.id, step_name, current_time)
-            .await
+            .await?;
+        Ok(Step::new(self.store.clone(), record))
     }
 
     pub async fn complete_step(
@@ -292,9 +294,8 @@ impl Run {
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
         let current_time = self.current_time().unwrap_or_else(chrono::Utc::now);
-        let step = self.acquire_step(step_name, current_time).await?;
-        let mut guard = self.store.step_guard(step.id);
-        crate::store::StepGuard::complete(&mut *guard, output).await
+        let mut step = self.acquire_step(step_name, current_time).await?;
+        step.complete(output).await
     }
 
     pub async fn fail_step(
@@ -303,27 +304,119 @@ impl Run {
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        let step = self.acquire_step(step_name, current_time).await?;
-        let mut guard = self.store.step_guard(step.id);
-        crate::store::StepGuard::fail_with_json(&mut *guard, error, current_time).await
+        let mut step = self.acquire_step(step_name, current_time).await?;
+        step.fail_with_json(error, current_time).await
     }
 }
 
-/// A guard for a workflow step execution.
-#[async_trait]
-pub trait StepGuard: Send + Sync {
-    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
-    async fn fail_with_json(
-        &mut self,
-        error: serde_json::Value,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<()>;
+/// A handle for a workflow step execution.
+#[derive(Clone, Debug)]
+pub struct Step {
+    store: AnyStore,
+    record: StepRecord,
+    current_time: Option<DateTime<Utc>>,
 }
 
-/// Extension trait for StepGuard to provide generic convenience methods.
-#[async_trait]
-pub trait StepGuardExt: StepGuard {
-    async fn success<T: serde::Serialize + Send + Sync>(
+impl Step {
+    pub fn new(store: AnyStore, record: StepRecord) -> Self {
+        Self {
+            store,
+            record,
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn id(&self) -> i64 {
+        self.record.id
+    }
+
+    pub fn record(&self) -> &StepRecord {
+        &self.record
+    }
+
+    pub fn status(&self) -> crate::types::WorkflowStatus {
+        self.record.status
+    }
+
+    pub fn output(&self) -> Option<&serde_json::Value> {
+        self.record.output.as_ref()
+    }
+
+    pub async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
+        self.store
+            .workflow_steps()
+            .complete_step(self.record.id, output)
+            .await
+    }
+
+    pub async fn fail_with_json(
+        &mut self,
+        error: serde_json::Value,
+        current_time: DateTime<Utc>,
+    ) -> crate::error::Result<()> {
+        let error_record = if error.get("is_transient").is_some() {
+            error
+        } else {
+            serde_json::json!({
+                "is_transient": false,
+                "code": "NON_RETRYABLE",
+                "message": error.to_string(),
+            })
+        };
+
+        let is_transient = error_record
+            .get("is_transient")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if is_transient {
+            let policy = crate::StepRetryPolicy::default();
+            if !policy.should_retry(self.record.retry_count as u32) {
+                return self
+                    .store
+                    .workflow_steps()
+                    .fail_step(self.record.id, error_record, None, self.record.retry_count)
+                    .await;
+            }
+
+            let delay_seconds = policy.extract_retry_delay(&error_record, self.record.retry_count);
+            let delay_i64 =
+                delay_seconds
+                    .try_into()
+                    .map_err(|_| crate::error::Error::Internal {
+                        message: format!(
+                            "Retry delay {} seconds exceeds maximum allowed value (i64::MAX)",
+                            delay_seconds
+                        ),
+                    })?;
+
+            let retry_at = current_time + chrono::Duration::seconds(delay_i64);
+            let new_retry_count = self.record.retry_count + 1;
+
+            return self
+                .store
+                .workflow_steps()
+                .fail_step(
+                    self.record.id,
+                    error_record,
+                    Some(retry_at),
+                    new_retry_count,
+                )
+                .await;
+        }
+
+        self.store
+            .workflow_steps()
+            .fail_step(self.record.id, error_record, None, self.record.retry_count)
+            .await
+    }
+
+    pub async fn success<T: serde::Serialize + Send + Sync>(
         &mut self,
         output: &T,
     ) -> crate::error::Result<()> {
@@ -331,7 +424,7 @@ pub trait StepGuardExt: StepGuard {
         self.complete(value).await
     }
 
-    async fn fail<T: serde::Serialize + Send + Sync>(
+    pub async fn fail<T: serde::Serialize + Send + Sync>(
         &mut self,
         error: &T,
     ) -> crate::error::Result<()> {
@@ -339,4 +432,3 @@ pub trait StepGuardExt: StepGuard {
         self.fail_with_json(value, chrono::Utc::now()).await
     }
 }
-impl<T: ?Sized + StepGuard> StepGuardExt for T {}

@@ -339,17 +339,6 @@ impl Store for AnyStore {
         }
     }
 
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.step_guard(id),
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.step_guard(id),
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.step_guard(id),
-        }
-    }
-
     async fn admin(
         &self,
         hostname: &str,

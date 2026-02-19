@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::ConcurrencyModel;
 use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
-    WorkerTable, WorkflowTable,
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
 use crate::workers::Workflow;
 use crate::{Admin, Consumer, Producer, Worker};
@@ -162,8 +162,9 @@ impl Store for SqliteStore {
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::types::StepRecord> {
-        use self::workflow::guard::SqliteStepGuard;
-        SqliteStepGuard::acquire_record(&self.pool, run_id, step_name, current_time).await
+        self.workflow_steps
+            .acquire_step(run_id, step_name, current_time)
+            .await
     }
 
     async fn bootstrap(&self) -> Result<()> {
@@ -172,11 +173,6 @@ impl Store for SqliteStore {
             .await
             .map_err(|e| crate::error::Error::Database(e.into()))?;
         Ok(())
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        use self::workflow::guard::SqliteStepGuard;
-        Box::new(SqliteStepGuard::new(self.pool.clone(), id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {

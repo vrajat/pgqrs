@@ -1,7 +1,5 @@
-pub mod guard;
 pub mod handle;
 
-pub use guard::StepGuard;
 pub use handle::Workflow;
 
 use serde::{Deserialize, Serialize};

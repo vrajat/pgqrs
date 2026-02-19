@@ -23,18 +23,19 @@ where
     T: Serialize + DeserializeOwned + Send + Sync,
 {
     let current_time = run.current_time().unwrap_or_else(Utc::now);
-    let step_rec = run.acquire_step(name, current_time).await?;
+    let mut step = run.acquire_step(name, current_time).await?;
+    let step_rec = step.record();
 
     if step_rec.status == crate::types::WorkflowStatus::Success {
-        if let Some(output) = step_rec.output {
-            return serde_json::from_value(output).map_err(Error::Serialization);
+        if let Some(output) = &step_rec.output {
+            return serde_json::from_value(output.clone()).map_err(Error::Serialization);
         }
     }
 
     match f().await {
         Ok(output) => {
             let val = serde_json::to_value(&output).map_err(Error::Serialization)?;
-            run.complete_step(name, val).await?;
+            step.complete(val).await?;
             Ok(output)
         }
         Err(e) => {
@@ -59,6 +60,10 @@ where
                     "resume_after": resume_after.as_secs(),
                     "retry_after": resume_after.as_secs(),
                 }),
+                #[cfg(any(test, feature = "test-utils"))]
+                Error::TestCrash => {
+                    return Err(Error::TestCrash);
+                }
                 Error::Internal { message } => serde_json::json!({
                     "is_transient": false,
                     "code": "INTERNAL",
@@ -70,7 +75,7 @@ where
                     "message": e.to_string(),
                 }),
             };
-            run.fail_step(name, err_val, current_time).await?;
+            step.fail_with_json(err_val, current_time).await?;
             Err(e)
         }
     }

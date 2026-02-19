@@ -100,9 +100,6 @@ pub trait Store: Send + Sync + 'static {
     /// Initialize the pgqrs schema in the database.
     async fn bootstrap(&self) -> crate::error::Result<()>;
 
-    /// Create a step guard for manual management.
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard>;
-
     /// Get an admin worker interface.
     async fn admin(
         &self,

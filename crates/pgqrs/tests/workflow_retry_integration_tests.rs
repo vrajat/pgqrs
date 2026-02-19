@@ -51,7 +51,7 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         .execute()
         .await?;
 
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
     // Fail with transient error
     let error = serde_json::json!({
@@ -117,7 +117,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .name(step_name)
         .execute()
         .await?;
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
     let error = serde_json::json!({
         "is_transient": true,
@@ -145,7 +145,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
     // This time succeed
     let output = TestData {
@@ -162,8 +162,8 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Success);
-    let data: TestData = serde_json::from_value(step_rec.output.unwrap())?;
+    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Success);
+    let data: TestData = serde_json::from_value(step_rec.output().unwrap().clone())?;
     assert_eq!(data.msg, "success_after_retry");
 
     Ok(())
@@ -405,7 +405,7 @@ async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
         .execute()
         .await?;
 
-    assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
     Ok(())
 }
@@ -482,7 +482,7 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .await
                 .unwrap();
 
-            assert_eq!(step_rec.status, pgqrs::WorkflowStatus::Running);
+            assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
             workflow
                 .complete_step(step_name, serde_json::json!({"msg": format!("done_{}", i)}))
                 .await

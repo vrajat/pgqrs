@@ -4,8 +4,7 @@ use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use rust_pgqrs::store::AnyStore;
 use rust_pgqrs::types::QueueMessage as RustQueueMessage;
-use rust_pgqrs::Store;
-use rust_pgqrs::{Run, StepGuard};
+use rust_pgqrs::{Run, Step};
 use std::sync::Arc;
 
 #[pyclass]
@@ -198,24 +197,20 @@ impl PyRun {
         let store = self.store.clone();
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let (_run_id, time) = {
-                let id = inner.id();
-                let time = if let Some(time_str) = current_time {
-                    chrono::DateTime::parse_from_rfc3339(&time_str)
-                        .map_err(|e| {
-                            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                                "Invalid ISO 8601 timestamp '{}': {}",
-                                time_str, e
-                            ))
-                        })?
-                        .with_timezone(&chrono::Utc)
-                } else {
-                    chrono::Utc::now()
-                };
-                (id, time)
+            let time = if let Some(time_str) = current_time {
+                chrono::DateTime::parse_from_rfc3339(&time_str)
+                    .map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "Invalid ISO 8601 timestamp '{}': {}",
+                            time_str, e
+                        ))
+                    })?
+                    .with_timezone(&chrono::Utc)
+            } else {
+                chrono::Utc::now()
             };
 
-            let res = rust_pgqrs::step()
+            let step = rust_pgqrs::step()
                 .store(&store)
                 .run(&inner)
                 .name(&step_name)
@@ -224,11 +219,11 @@ impl PyRun {
                 .await
                 .map_err(to_py_err)?;
 
-            let step_record_id = res.id;
+            let record = step.record().clone();
 
             Python::with_gil(|py| {
-                if res.status == rust_pgqrs::WorkflowStatus::Success {
-                    let output = res.output.unwrap_or(serde_json::Value::Null);
+                if record.status == rust_pgqrs::WorkflowStatus::Success {
+                    let output = record.output.unwrap_or(serde_json::Value::Null);
                     Ok(PyStepResult {
                         status: "SKIPPED".to_string(),
                         value: json_to_py(py, &output)?,
@@ -236,7 +231,7 @@ impl PyRun {
                     }
                     .into_py(py))
                 } else {
-                    let py_guard = PyStepGuard::new(store, step_record_id, time);
+                    let py_guard = PyStepGuard::new(step, time);
                     Ok(PyStepResult {
                         status: "EXECUTE".to_string(),
                         value: py.None(),
@@ -262,7 +257,7 @@ pub struct PyStepResult {
 #[pyclass(name = "StepGuard")]
 #[derive(Clone)]
 pub struct PyStepGuard {
-    pub(crate) inner: Arc<tokio::sync::Mutex<Box<dyn StepGuard>>>,
+    pub(crate) inner: Arc<tokio::sync::Mutex<Step>>,
     pub(crate) current_time: chrono::DateTime<chrono::Utc>,
 }
 
@@ -331,10 +326,9 @@ impl PyStepGuard {
 }
 
 impl PyStepGuard {
-    pub fn new(store: AnyStore, id: i64, current_time: chrono::DateTime<chrono::Utc>) -> Self {
-        let guard = store.step_guard(id);
+    pub fn new(step: Step, current_time: chrono::DateTime<chrono::Utc>) -> Self {
         Self {
-            inner: Arc::new(tokio::sync::Mutex::new(guard)),
+            inner: Arc::new(tokio::sync::Mutex::new(step)),
             current_time,
         }
     }
@@ -528,25 +522,25 @@ impl PyStepBuilder {
         let current_time = self.current_time;
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let (inner, store) = Python::with_gil(|py| {
+            let run = Python::with_gil(|py| {
                 let run_borrow = run_py.borrow(py);
-                (run_borrow.inner.clone(), run_borrow.store.clone())
+                run_borrow.inner.clone()
             });
 
             let time = current_time.unwrap_or_else(chrono::Utc::now);
-            let res = rust_pgqrs::step()
-                .run(&inner)
+            let step = rust_pgqrs::step()
+                .run(&run)
                 .name(&step_name)
                 .with_time(time)
                 .execute()
                 .await
                 .map_err(to_py_err)?;
 
-            let step_record_id = res.id;
+            let record = step.record().clone();
 
             Python::with_gil(|py| {
-                if res.status == rust_pgqrs::WorkflowStatus::Success {
-                    let output = res.output.unwrap_or(serde_json::Value::Null);
+                if record.status == rust_pgqrs::WorkflowStatus::Success {
+                    let output = record.output.unwrap_or(serde_json::Value::Null);
                     Ok(PyStepResult {
                         status: "SKIPPED".to_string(),
                         value: json_to_py(py, &output)?,
@@ -554,7 +548,7 @@ impl PyStepBuilder {
                     }
                     .into_py(py))
                 } else {
-                    let py_guard = PyStepGuard::new(store, step_record_id, time);
+                    let py_guard = PyStepGuard::new(step, time);
                     Ok(PyStepResult {
                         status: "EXECUTE".to_string(),
                         value: py.None(),

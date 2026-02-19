@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
-    WorkerTable, WorkflowTable,
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
 use crate::store::{BackendType, ConcurrencyModel};
 use crate::workers::Workflow;
@@ -25,7 +25,6 @@ use self::tables::runs::TursoRunRecordTable;
 use self::tables::steps::TursoStepRecordTable;
 use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
-use self::workflow::guard::TursoStepGuard;
 use self::workflow::handle::TursoWorkflow;
 
 #[derive(Debug, Clone)]
@@ -606,7 +605,9 @@ impl Store for TursoStore {
         step_name: &str,
         current_time: DateTime<Utc>,
     ) -> Result<crate::types::StepRecord> {
-        TursoStepGuard::acquire_record(&self.db, run_id, step_name, current_time).await
+        self.workflow_steps
+            .acquire_step(run_id, step_name, current_time)
+            .await
     }
 
     async fn bootstrap(&self) -> Result<()> {
@@ -659,10 +660,6 @@ impl Store for TursoStore {
             }
         }
         Ok(())
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        Box::new(TursoStepGuard::new(self.db.clone(), id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {

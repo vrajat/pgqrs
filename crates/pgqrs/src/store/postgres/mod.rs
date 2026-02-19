@@ -2,7 +2,7 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
+    Producer as ProducerTrait, QueueTable, RunRecordTable, StepRecordTable, Store,
     Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
 };
 use async_trait::async_trait;
@@ -144,19 +144,15 @@ impl Store for PostgresStore {
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<crate::types::StepRecord> {
-        use self::workflow::guard::StepGuard;
-        StepGuard::acquire_record(&self.pool, run_id, step_name, current_time).await
+        self.workflow_steps
+            .acquire_step(run_id, step_name, current_time)
+            .await
     }
 
     async fn bootstrap(&self) -> crate::error::Result<()> {
         use self::worker::admin::MIGRATOR;
         MIGRATOR.run(&self.pool).await?;
         Ok(())
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        use self::workflow::guard::StepGuard;
-        Box::new(StepGuard::new(self.pool.clone(), id))
     }
 
     async fn admin(

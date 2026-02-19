@@ -1,7 +1,6 @@
 use crate::error::Result;
 use crate::store::Store;
-use crate::types::StepRecord;
-use crate::workers::Run;
+use crate::workers::{Run, Step};
 
 /// Builder for acquiring and managing workflow steps.
 pub struct StepBuilder<'a> {
@@ -47,8 +46,8 @@ impl<'a> StepBuilder<'a> {
         self
     }
 
-    /// Acquire the step and return its record.
-    pub async fn execute(self) -> Result<StepRecord> {
+    /// Acquire the step and return its handle.
+    pub async fn execute(self) -> Result<Step> {
         let run = self
             .run
             .ok_or_else(|| crate::error::Error::ValidationFailed {
