@@ -25,7 +25,7 @@
 //! ```
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::{QueueTable, WorkerTable};
+use crate::store::{MessageTable, QueueTable, WorkerTable};
 use crate::types::QueueMessage;
 
 use crate::store::postgres::tables::pgqrs_messages::Messages;
