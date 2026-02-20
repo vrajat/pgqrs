@@ -10,81 +10,83 @@ use sqlx::PgPool;
 
 // SQL query constants
 const LIST_DLQ_MESSAGES: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
            read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
+    FROM pgqrs_messages
     WHERE read_ct >= $1  -- max_attempts
-      AND consumer_worker_id IS NULL
-      AND dequeued_at IS NULL
+      AND archived_at IS NOT NULL
     ORDER BY archived_at DESC
     LIMIT $2 OFFSET $3;
 "#;
 
 const COUNT_DLQ_MESSAGES: &str = r#"
     SELECT COUNT(*)
-    FROM pgqrs_archive
+    FROM pgqrs_messages
     WHERE read_ct >= $1  -- max_attempts
-      AND consumer_worker_id IS NULL
-      AND dequeued_at IS NULL;
+      AND archived_at IS NOT NULL;
 "#;
 
 const ARCHIVE_LIST_WITH_WORKER: &str = r#"
-SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
+SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
        read_ct, archived_at, dequeued_at
-FROM pgqrs_archive
-WHERE consumer_worker_id = $1
+FROM pgqrs_messages
+WHERE (consumer_worker_id = $1 OR producer_worker_id = $1)
+  AND archived_at IS NOT NULL
 ORDER BY archived_at DESC
 LIMIT $2 OFFSET $3
 "#;
 
 const ARCHIVE_COUNT_WITH_WORKER: &str = r#"
 SELECT COUNT(*)
-FROM pgqrs_archive
-WHERE consumer_worker_id = $1
+FROM pgqrs_messages
+WHERE (consumer_worker_id = $1 OR producer_worker_id = $1)
+  AND archived_at IS NOT NULL
 "#;
 
 const ARCHIVE_DELETE_WITH_WORKER: &str = r#"
-DELETE FROM pgqrs_archive
-WHERE consumer_worker_id = $1
+DELETE FROM pgqrs_messages
+WHERE (consumer_worker_id = $1 OR producer_worker_id = $1)
+  AND archived_at IS NOT NULL
 "#;
 
 // SQL constants for Table functionality
 const INSERT_ARCHIVE: &str = r#"
-    INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    INSERT INTO pgqrs_messages (queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at)
+    VALUES ($2, $3, $4, $5, $6, $7, $8, $9, NOW())
     RETURNING id
 "#;
 
 const GET_ARCHIVE_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
-    WHERE id = $1
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE id = $1 AND archived_at IS NOT NULL
 "#;
 
 const LIST_ALL_ARCHIVE: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE archived_at IS NOT NULL
     ORDER BY archived_at DESC
 "#;
 
 const LIST_ARCHIVE_BY_QUEUE: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
-    WHERE queue_id = $1
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE queue_id = $1 AND archived_at IS NOT NULL
     ORDER BY archived_at DESC
 "#;
 
 const DELETE_ARCHIVE_BY_ID: &str = r#"
-    DELETE FROM pgqrs_archive
-    WHERE id = $1
+    DELETE FROM pgqrs_messages
+    WHERE id = $1 AND archived_at IS NOT NULL
 "#;
 
 const DELETE_ARCHIVE_BY_QUEUE: &str = r#"
-    DELETE FROM pgqrs_archive WHERE queue_id = $1
+    DELETE FROM pgqrs_messages WHERE queue_id = $1 AND archived_at IS NOT NULL
 "#;
 
 const COUNT_ARCHIVE_BY_QUEUE_TX: &str = r#"
-    SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1
+    SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1 AND archived_at IS NOT NULL
 "#;
 
 /// Archive table CRUD operations for pgqrs.
@@ -167,7 +169,7 @@ impl Archive {
     }
 
     pub async fn count(&self) -> Result<i64> {
-        let query = "SELECT COUNT(*) FROM pgqrs_archive";
+        let query = "SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL";
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
             .await
@@ -330,16 +332,15 @@ impl Archive {
     pub async fn replay_message(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
         // Replay: Move from archive back to messages
         let msg = sqlx::query_as::<_, QueueMessage>(r#"
-            WITH archived AS (
-                DELETE FROM pgqrs_archive WHERE id = $1 RETURNING *
-            )
-            INSERT INTO pgqrs_messages (
-                queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id
-            )
-            SELECT
-                queue_id, payload, 0, NOW(), NOW(), producer_worker_id
-            FROM archived
-            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = NOW(),
+                enqueued_at = NOW(),
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = $1 AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
         "#)
         .bind(msg_id)
         .fetch_optional(&self.pool)
@@ -351,6 +352,21 @@ impl Archive {
         })?;
 
         Ok(msg)
+    }
+
+    pub async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1 AND archived_at IS NOT NULL",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
+            source: Box::new(e),
+            context: format!("Failed to count archives for queue {}", queue_id),
+        })?;
+        Ok(count)
     }
 }
 
@@ -415,16 +431,6 @@ impl crate::store::ArchiveTable for Archive {
     }
 
     async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1")
-                .bind(queue_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
-                    source: Box::new(e),
-                    context: format!("Failed to count archives for queue {}", queue_id),
-                })?;
-        Ok(count)
+        self.count_for_queue(queue_id).await
     }
 }

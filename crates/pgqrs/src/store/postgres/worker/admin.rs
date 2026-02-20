@@ -81,25 +81,17 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
 "#;
 
 pub const DLQ_BATCH: &str = r#"
-    WITH archived_msgs AS (
-        DELETE FROM pgqrs_messages
-        WHERE read_ct >= $1
-        RETURNING id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
-    )
-    INSERT INTO pgqrs_archive
-        (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at)
-    SELECT
-        id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at
-    FROM archived_msgs
-    RETURNING original_msg_id;
+    UPDATE pgqrs_messages
+    SET archived_at = NOW()
+    WHERE read_ct >= $1 AND archived_at IS NULL
+    RETURNING id as original_msg_id;
 "#;
 
 const RELEASE_ZOMBIE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET consumer_worker_id = NULL,
-        vt = NOW(),
-        dequeued_at = NULL
-    WHERE consumer_worker_id = $1
+        vt = NOW()
+    WHERE consumer_worker_id = $1 AND archived_at IS NULL
 "#;
 
 const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
@@ -113,7 +105,7 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
-    WHERE consumer_worker_id = $1;
+    WHERE consumer_worker_id = $1 AND archived_at IS NULL;
 "#;
 
 /// Lock queue row for exclusive access during deletion
@@ -164,11 +156,11 @@ const GET_QUEUE_METRICS: &str = r#"
         COUNT(m.id) as total_messages,
         COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
         COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
         MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     WHERE q.id = $1
     GROUP BY q.id, q.queue_name
 "#;
@@ -179,11 +171,11 @@ const GET_ALL_QUEUES_METRICS: &str = r#"
         COUNT(m.id) as total_messages,
         COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
         COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
         MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -192,10 +184,10 @@ const GET_SYSTEM_STATS: &str = r#"
         (SELECT COUNT(*) FROM pgqrs_queues) as total_queues,
         (SELECT COUNT(*) FROM pgqrs_workers) as total_workers,
         (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready') as active_workers,
-        (SELECT COUNT(*) FROM pgqrs_messages) as total_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL) as pending_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL) as total_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL) as pending_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
         '0.5.0' as schema_version
 "#;
 
@@ -897,7 +889,7 @@ impl crate::store::Admin for Admin {
 
         // Get all messages held by this worker (locked by consumer_worker_id)
         let messages = sqlx::query_as::<_, QueueMessage>(
-            "SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+            "SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at, archived_at
              FROM pgqrs_messages
              WHERE consumer_worker_id = $1
              ORDER BY id"

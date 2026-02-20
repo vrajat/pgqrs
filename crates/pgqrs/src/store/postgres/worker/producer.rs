@@ -41,16 +41,15 @@ use sqlx::PgPool;
 
 /// SQL for replaying a message from the DLQ (archive) back to the active queue
 const REPLAY_FROM_DLQ: &str = r#"
-    WITH archived_msg AS (
-        DELETE FROM pgqrs_archive
-        WHERE id = $1
-        RETURNING queue_id, payload, enqueued_at, read_ct
-    )
-    INSERT INTO pgqrs_messages
-        (queue_id, payload, enqueued_at, vt, read_ct)
-    SELECT queue_id, payload, enqueued_at, NOW(), read_ct
-    FROM archived_msg
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    UPDATE pgqrs_messages
+    SET archived_at = NULL,
+        read_ct = 0,
+        vt = NOW(),
+        enqueued_at = NOW(),
+        consumer_worker_id = NULL,
+        dequeued_at = NULL
+    WHERE id = $1 AND archived_at IS NOT NULL
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 /// Producer interface for enqueueing messages to a specific queue.

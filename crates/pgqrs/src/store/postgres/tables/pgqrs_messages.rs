@@ -13,26 +13,27 @@ use sqlx::PgPool;
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const GET_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
     WHERE id = $1;
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
-    WHERE queue_id = $1
+    WHERE queue_id = $1 AND archived_at IS NULL
     ORDER BY enqueued_at DESC
     LIMIT 1000;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
+    WHERE archived_at IS NULL
     ORDER BY enqueued_at DESC;
 "#;
 
@@ -48,7 +49,7 @@ const BATCH_INSERT_MESSAGES: &str = r#"
 "#;
 
 const GET_MESSAGES_BY_IDS: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
     WHERE id = ANY($1)
     ORDER BY id;
@@ -130,14 +131,15 @@ impl Messages {
     }
 
     pub async fn count(&self) -> Result<i64> {
-        let count = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COUNT_MESSAGES".into(),
-                source: Box::new(e),
-                context: "Failed to count messages".into(),
-            })?;
+        let count =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES".into(),
+                    source: Box::new(e),
+                    context: "Failed to count messages".into(),
+                })?;
         Ok(count)
     }
 
@@ -423,7 +425,7 @@ impl Messages {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2
+                    WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)
@@ -436,7 +438,7 @@ impl Messages {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL
+                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)

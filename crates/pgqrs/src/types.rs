@@ -53,6 +53,10 @@ pub struct QueueMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
     pub consumer_worker_id: Option<i64>,
+    /// Timestamp when the message was archived (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for QueueMessage {
