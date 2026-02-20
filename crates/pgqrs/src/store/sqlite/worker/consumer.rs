@@ -5,7 +5,6 @@ use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::WorkerTable;
 use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
-use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use std::sync::Arc;
@@ -14,7 +13,7 @@ const DEQUEUE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = datetime('now', '+' || $3 || ' seconds'),
         read_ct = read_ct + 1,
-        dequeued_at = datetime('now'),
+        dequeued_at = COALESCE(dequeued_at, datetime('now')),
         consumer_worker_id = $4
     WHERE id IN (
         SELECT id
@@ -22,17 +21,19 @@ const DEQUEUE_MESSAGES: &str = r#"
         WHERE queue_id = $1
           AND (vt IS NULL OR vt <= datetime('now'))
           AND consumer_worker_id IS NULL
+          AND archived_at IS NULL
+          AND read_ct < $5
         ORDER BY enqueued_at ASC
         LIMIT $2
     )
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const DEQUEUE_MESSAGES_AT: &str = r#"
     UPDATE pgqrs_messages
     SET vt = datetime($5, '+' || $3 || ' seconds'),
         read_ct = read_ct + 1,
-        dequeued_at = $5,
+        dequeued_at = COALESCE(dequeued_at, $5),
         consumer_worker_id = $4
     WHERE id IN (
         SELECT id
@@ -40,10 +41,12 @@ const DEQUEUE_MESSAGES_AT: &str = r#"
         WHERE queue_id = $1
           AND (vt IS NULL OR vt <= $5)
           AND consumer_worker_id IS NULL
+          AND archived_at IS NULL
+          AND read_ct < $6
         ORDER BY enqueued_at ASC
         LIMIT $2
     )
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const DELETE_MESSAGE_OWNED: &str = r#"
@@ -170,6 +173,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .bind(limit as i64)
             .bind(vt as i32)
             .bind(self.worker_record.id)
+            .bind(self._config.max_read_ct)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -203,6 +207,7 @@ impl crate::store::Consumer for SqliteConsumer {
             .bind(vt as i32)
             .bind(self.worker_record.id)
             .bind(now_str)
+            .bind(self._config.max_read_ct)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -280,117 +285,51 @@ impl crate::store::Consumer for SqliteConsumer {
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-        // Manual Move: Select -> Insert -> Delete
-        // specific SQLite optimization: Use BEGIN IMMEDIATE to avoid "upgrade to write" deadlocks
-        // caused by starting with SELECT (Reader) and then INSERT (Writer).
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .map_err(crate::error::Error::Database)?;
+        let row = sqlx::query(
+            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL RETURNING id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at",
+        )
+        .bind(msg_id)
+        .bind(self.worker_record.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "Archive".into(),
+            source: Box::new(e),
+            context: "Archive message".into(),
+        })?;
 
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "BEGIN IMMEDIATE".into(),
-                source: Box::new(e),
-                context: "Begin transaction".into(),
-            })?;
+        if let Some(r) = row {
+            let q_id: i64 = r.try_get("queue_id")?;
+            let p_wid: Option<i64> = r.try_get("producer_worker_id")?;
+            let c_wid: Option<i64> = r.try_get("consumer_worker_id")?;
+            let payload: String = r.try_get("payload")?;
+            let enq: String = r.try_get("enqueued_at")?;
+            let vt: String = r.try_get("vt")?;
+            let read_ct: i32 = r.try_get("read_ct")?;
+            let arch: String = r.try_get("archived_at")?;
+            let deq: Option<String> = r.try_get("dequeued_at")?;
 
-        // Logic isolated to allow rollback on error
-        async fn perform_archive(
-            conn: &mut sqlx::SqliteConnection,
-            msg_id: i64,
-            worker_id: i64,
-        ) -> Result<Option<ArchivedMessage>> {
-            let row = sqlx::query(
-                "SELECT * FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2",
-            )
-            .bind(msg_id)
-            .bind(worker_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "SelArchive".into(),
-                source: Box::new(e),
-                context: "Select for archive".into(),
-            })?;
-
-            if let Some(r) = row {
-                let q_id: i64 = r.try_get("queue_id")?;
-                let p_wid: Option<i64> = r.try_get("producer_worker_id")?;
-                let c_wid: Option<i64> = r.try_get("consumer_worker_id")?;
-                let payload: String = r.try_get("payload")?;
-                let enq: String = r.try_get("enqueued_at")?;
-                let vt: String = r.try_get("vt")?;
-                let read_ct: i32 = r.try_get("read_ct")?;
-                let deq: Option<String> = r.try_get("dequeued_at")?;
-
-                let arch_id: i64 = sqlx::query_scalar("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id")
-                     .bind(msg_id)
-                     .bind(q_id)
-                     .bind(p_wid)
-                     .bind(c_wid)
-                     .bind(payload.clone()) // payload string clone
-                     .bind(enq.clone())
-                     .bind(vt.clone())
-                     .bind(read_ct)
-                     .bind(deq.clone())
-                     .fetch_one(&mut *conn)
-                     .await
-                     .map_err(|e| crate::error::Error::QueryFailed { query: "InsArchive".into(), source: Box::new(e), context: "Insert archive".into() })?;
-
-                sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1")
-                    .bind(msg_id)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(|e| crate::error::Error::QueryFailed {
-                        query: "DelArchive".into(),
-                        source: Box::new(e),
-                        context: "Delete archived".into(),
-                    })?;
-
-                use serde_json::Value;
-                let val: Value = serde_json::from_str(&payload)?;
-                Ok(Some(ArchivedMessage {
-                    id: arch_id,
-                    original_msg_id: msg_id,
-                    queue_id: q_id,
-                    producer_worker_id: p_wid,
-                    consumer_worker_id: c_wid,
-                    payload: val,
-                    enqueued_at: parse_sqlite_timestamp(&enq)?,
-                    vt: parse_sqlite_timestamp(&vt)?,
-                    read_ct,
-                    archived_at: Utc::now(), // Approx
-                    dequeued_at: if let Some(d) = deq {
-                        Some(parse_sqlite_timestamp(&d)?)
-                    } else {
-                        None
-                    },
-                }))
-            } else {
-                Ok(None)
-            }
-        }
-
-        match perform_archive(&mut conn, msg_id, self.worker_record.id).await {
-            Ok(res) => {
-                sqlx::query("COMMIT")
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(|e| crate::error::Error::QueryFailed {
-                        query: "COMMIT".into(),
-                        source: Box::new(e),
-                        context: "Commit archive".into(),
-                    })?;
-                Ok(res)
-            }
-            Err(e) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                Err(e)
-            }
+            use serde_json::Value;
+            let val: Value = serde_json::from_str(&payload)?;
+            Ok(Some(ArchivedMessage {
+                id: msg_id,
+                original_msg_id: msg_id,
+                queue_id: q_id,
+                producer_worker_id: p_wid,
+                consumer_worker_id: c_wid,
+                payload: val,
+                enqueued_at: parse_sqlite_timestamp(&enq)?,
+                vt: parse_sqlite_timestamp(&vt)?,
+                read_ct,
+                archived_at: parse_sqlite_timestamp(&arch)?,
+                dequeued_at: if let Some(d) = deq {
+                    Some(parse_sqlite_timestamp(&d)?)
+                } else {
+                    None
+                },
+            }))
+        } else {
+            Ok(None)
         }
     }
 

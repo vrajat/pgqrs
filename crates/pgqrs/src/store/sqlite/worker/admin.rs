@@ -57,9 +57,8 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
 const RELEASE_ZOMBIE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET consumer_worker_id = NULL,
-        vt = datetime('now'),
-        dequeued_at = NULL
-    WHERE consumer_worker_id = ?
+        vt = datetime('now')
+    WHERE consumer_worker_id = ? AND archived_at IS NULL
 "#;
 
 const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
@@ -70,7 +69,7 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
 "#;
 
 const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at, archived_at
     FROM pgqrs_messages
     WHERE consumer_worker_id = ?
     ORDER BY id
@@ -79,7 +78,7 @@ const GET_WORKER_MESSAGES: &str = r#"
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
-    WHERE consumer_worker_id = ?
+    WHERE consumer_worker_id = ? AND archived_at IS NULL
 "#;
 
 const CHECK_WORKER_REFERENCES: &str = r#"
@@ -113,13 +112,13 @@ const GET_QUEUE_METRICS: &str = r#"
     SELECT
         q.queue_name as name,
         COUNT(m.id) as total_messages,
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
-        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END) as oldest_pending_message,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     WHERE q.id = ?
     GROUP BY q.id, q.queue_name
 "#;
@@ -128,13 +127,13 @@ const GET_ALL_QUEUES_METRICS: &str = r#"
     SELECT
         q.queue_name as name,
         COUNT(m.id) as total_messages,
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
-        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END) as oldest_pending_message,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -143,10 +142,10 @@ const GET_SYSTEM_STATS: &str = r#"
         (SELECT COUNT(*) FROM pgqrs_queues) as total_queues,
         (SELECT COUNT(*) FROM pgqrs_workers) as total_workers,
         (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready') as active_workers,
-        (SELECT COUNT(*) FROM pgqrs_messages) as total_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL) as pending_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL) as total_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL) as pending_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL) as locked_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
         '0.5.0' as schema_version
 "#;
 
@@ -506,60 +505,22 @@ impl crate::store::Admin for SqliteAdmin {
     }
 
     async fn dlq(&self) -> Result<Vec<i64>> {
-        // SQLite: Manual MOVE (Select -> Insert -> Delete)
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(crate::error::Error::Database)?;
-
-        // 1. Select
-        let messages: Vec<SqliteRow> =
-            sqlx::query("SELECT * FROM pgqrs_messages WHERE read_ct >= ?")
-                .bind(self.config.max_read_ct)
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "DLQ_Select".into(),
-                    source: Box::new(e),
-                    context: "Select DLQ candidates".into(),
-                })?;
+        let row = sqlx::query(
+            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE read_ct >= $1 AND archived_at IS NULL RETURNING id",
+        )
+        .bind(self.config.max_read_ct)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "DLQ".into(),
+            source: Box::new(e),
+            context: "Move messages to DLQ".into(),
+        })?;
 
         let mut moved_ids = Vec::new();
-
-        for row in messages {
-            let id: i64 = row.try_get("id")?;
-            let q_id: i64 = row.try_get("queue_id")?;
-            let p_wid: Option<i64> = row.try_get("producer_worker_id")?;
-            let c_wid: Option<i64> = row.try_get("consumer_worker_id")?;
-            let payload: String = row.try_get("payload")?;
-            let vt: String = row.try_get("vt")?; // raw string
-            let enq: String = row.try_get("enqueued_at")?;
-            let read_ct: i32 = row.try_get("read_ct")?;
-            let deq: Option<String> = row.try_get("dequeued_at")?;
-
-            // 2. Insert into Archive
-            sqlx::query("INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                 .bind(id).bind(q_id).bind(p_wid).bind(c_wid).bind(payload).bind(enq).bind(vt).bind(read_ct).bind(deq)
-                 .execute(&mut *tx)
-                 .await
-                 .map_err(|e| crate::error::Error::QueryFailed { query: "DLQ_Insert".into(), source: Box::new(e), context: "Insert DLQ archive".into() })?;
-
-            // 3. Delete
-            sqlx::query("DELETE FROM pgqrs_messages WHERE id = ?")
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "DLQ_Delete".into(),
-                    source: Box::new(e),
-                    context: "Delete DLQ message".into(),
-                })?;
-
-            moved_ids.push(id);
+        for r in row {
+            moved_ids.push(r.get("id"));
         }
-
-        tx.commit().await.map_err(crate::error::Error::Database)?;
         Ok(moved_ids)
     }
 

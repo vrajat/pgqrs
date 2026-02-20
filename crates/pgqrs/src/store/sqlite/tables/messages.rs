@@ -9,18 +9,19 @@ use sqlx::{Row, SqlitePool};
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const GET_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
     WHERE id = $1;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
+    WHERE archived_at IS NULL
     ORDER BY enqueued_at DESC;
 "#;
 
@@ -30,9 +31,9 @@ const DELETE_MESSAGE_BY_ID: &str = r#"
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
-    WHERE queue_id = $1
+    WHERE queue_id = $1 AND archived_at IS NULL
     ORDER BY enqueued_at DESC
     LIMIT 1000;
 "#;
@@ -77,6 +78,12 @@ impl SqliteMessageTable {
         let producer_worker_id: Option<i64> = row.try_get("producer_worker_id")?;
         let consumer_worker_id: Option<i64> = row.try_get("consumer_worker_id")?;
 
+        let archived_at_str: Option<String> = row.try_get("archived_at")?;
+        let archived_at = match archived_at_str {
+            Some(s) => Some(parse_sqlite_timestamp(&s)?),
+            None => None,
+        };
+
         Ok(QueueMessage {
             id,
             queue_id,
@@ -87,6 +94,7 @@ impl SqliteMessageTable {
             dequeued_at,
             producer_worker_id,
             consumer_worker_id,
+            archived_at,
         })
     }
 }
@@ -149,14 +157,15 @@ impl crate::store::MessageTable for SqliteMessageTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COUNT_MESSAGES".into(),
-                source: Box::new(e),
-                context: "Failed to count messages".into(),
-            })?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES".into(),
+                    source: Box::new(e),
+                    context: "Failed to count messages".into(),
+                })?;
         Ok(count)
     }
 
@@ -235,7 +244,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             return Ok(vec![]);
         }
 
-        let mut query_builder = sqlx::QueryBuilder::new("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN (");
+        let mut query_builder = sqlx::QueryBuilder::new("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at FROM pgqrs_messages WHERE id IN (");
 
         let mut separated = query_builder.separated(", ");
         for id in ids {
@@ -439,7 +448,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2
+                    WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)
@@ -452,7 +461,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
+                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)
@@ -536,6 +545,7 @@ mod tests {
                 dequeued_at TEXT,
                 producer_worker_id INTEGER,
                 consumer_worker_id INTEGER,
+                archived_at TEXT,
                 FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
             );
             "#,

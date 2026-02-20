@@ -7,32 +7,33 @@ use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 
 const INSERT_ARCHIVE: &str = r#"
-    INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    INSERT INTO pgqrs_messages (queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at)
+    VALUES ($2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING id;
 "#;
 
 const GET_ARCHIVE_BY_ID: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
-    WHERE id = $1;
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE id = $1 AND archived_at IS NOT NULL;
 "#;
 
 const LIST_ALL_ARCHIVE: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE archived_at IS NOT NULL
     ORDER BY archived_at DESC;
 "#;
 
 const LIST_ARCHIVE_BY_QUEUE: &str = r#"
-    SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
-    FROM pgqrs_archive
-    WHERE queue_id = $1
+    SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at
+    FROM pgqrs_messages
+    WHERE queue_id = $1 AND archived_at IS NOT NULL
     ORDER BY archived_at DESC;
 "#;
 
 const DELETE_ARCHIVE_BY_ID: &str = r#"
-    DELETE FROM pgqrs_archive WHERE id = $1;
+    DELETE FROM pgqrs_messages WHERE id = $1 AND archived_at IS NOT NULL;
 "#;
 
 #[derive(Debug, Clone)]
@@ -154,14 +155,15 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COUNT_ARCHIVE".into(),
-                source: Box::new(e),
-                context: "Failed to count archived messages".into(),
-            })?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_ARCHIVE".into(),
+                    source: Box::new(e),
+                    context: "Failed to count archived messages".into(),
+                })?;
         Ok(count)
     }
 
@@ -203,12 +205,10 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
         offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
         let sql = r#"
-            SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
+            SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
                    read_ct, archived_at, dequeued_at
-            FROM pgqrs_archive
-            WHERE read_ct >= $1
-              AND consumer_worker_id IS NULL
-              AND dequeued_at IS NULL
+            FROM pgqrs_messages
+            WHERE read_ct >= $1 AND archived_at IS NOT NULL
             ORDER BY archived_at DESC
             LIMIT $2 OFFSET $3;
         "#;
@@ -238,10 +238,8 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     async fn dlq_count(&self, max_attempts: i32) -> Result<i64> {
         let sql = r#"
             SELECT COUNT(*)
-            FROM pgqrs_archive
-            WHERE read_ct >= $1
-              AND consumer_worker_id IS NULL
-              AND dequeued_at IS NULL;
+            FROM pgqrs_messages
+            WHERE read_ct >= $1 AND archived_at IS NOT NULL;
         "#;
 
         let count: i64 = sqlx::query_scalar(sql)
@@ -266,10 +264,10 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
         offset: i64,
     ) -> Result<Vec<ArchivedMessage>> {
         let sql = r#"
-            SELECT id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
+            SELECT id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt,
                    read_ct, archived_at, dequeued_at
-            FROM pgqrs_archive
-            WHERE consumer_worker_id = $1
+            FROM pgqrs_messages
+            WHERE (consumer_worker_id = $1 OR producer_worker_id = $1) AND archived_at IS NOT NULL
             ORDER BY archived_at DESC
             LIMIT $2 OFFSET $3
         "#;
@@ -293,7 +291,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     }
 
     async fn count_by_worker(&self, worker_id: i64) -> Result<i64> {
-        let sql = "SELECT COUNT(*) FROM pgqrs_archive WHERE consumer_worker_id = $1";
+        let sql = "SELECT COUNT(*) FROM pgqrs_messages WHERE (consumer_worker_id = $1 OR producer_worker_id = $1) AND archived_at IS NOT NULL";
         let count: i64 = sqlx::query_scalar(sql)
             .bind(worker_id)
             .fetch_one(&self.pool)
@@ -307,7 +305,7 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
     }
 
     async fn delete_by_worker(&self, worker_id: i64) -> Result<u64> {
-        let sql = "DELETE FROM pgqrs_archive WHERE consumer_worker_id = $1";
+        let sql = "DELETE FROM pgqrs_messages WHERE (consumer_worker_id = $1 OR producer_worker_id = $1) AND archived_at IS NOT NULL";
         let result = sqlx::query(sql)
             .bind(worker_id)
             .execute(&self.pool)
@@ -341,47 +339,34 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
                 context: format!("Failed to get archived message {}", msg_id),
             })?;
 
-        let archive = match row {
-            Some(r) => Self::map_row(r)?,
-            None => return Ok(None),
-        };
+        if row.is_none() {
+            return Ok(None);
+        }
 
-        // 2. Delete from archive
-        sqlx::query(DELETE_ARCHIVE_BY_ID)
-            .bind(msg_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DELETE_ARCHIVE_BY_ID_TX".into(),
-                source: Box::new(e),
-                context: format!("Failed to delete archived message {}", msg_id),
-            })?;
-
-        // 3. Insert into messages
+        // 2. Update message to be active again
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
-        // QueueMessage fields to return
-        // We need separate logic for map_row because we are getting back message row, not archive row.
-        // So we just fetch the inserted row and parse it manually like SqliteMessageTable::map_row
 
-        let insert_sql = r#"
-            INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id)
-            VALUES ($1, $2, 0, $3, $3, $4)
-            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
-        "#;
-
-        let msg_row = sqlx::query(insert_sql)
-            .bind(archive.queue_id)
-            .bind(archive.payload.to_string())
-            .bind(now_str)
-            .bind(archive.producer_worker_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "INSERT_REPLAY_MESSAGE".into(),
-                source: Box::new(e),
-                context: "Failed to insert replayed message".into(),
-            })?;
+        let msg_row = sqlx::query(r#"
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = $2,
+                enqueued_at = $2,
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = $1 AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+        "#)
+        .bind(msg_id)
+        .bind(now_str)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "UPDATE_REPLAY_MESSAGE".into(),
+            source: Box::new(e),
+            context: "Failed to update replayed message".into(),
+        })?;
 
         tx.commit()
             .await
@@ -418,20 +403,22 @@ impl crate::store::ArchiveTable for SqliteArchiveTable {
             dequeued_at,
             producer_worker_id,
             consumer_worker_id,
+            archived_at: None,
         }))
     }
 
     async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_archive WHERE queue_id = $1")
-                .bind(queue_id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
-                    source: Box::new(e),
-                    context: format!("Failed to count archives for queue {}", queue_id),
-                })?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1 AND archived_at IS NOT NULL",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_ARCHIVE_BY_QUEUE ({})", queue_id),
+            source: Box::new(e),
+            context: format!("Failed to count archives for queue {}", queue_id),
+        })?;
         Ok(count)
     }
 }
