@@ -238,7 +238,7 @@ fn test_queue_purge() {
 
         pgqrs::enqueue()
             .message(&serde_json::json!({"test": "purge"}))
-            .worker(&*producer)
+            .worker(&producer)
             .execute(&store)
             .await
             .unwrap();

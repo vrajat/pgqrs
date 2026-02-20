@@ -410,11 +410,6 @@ impl PyStore {
         pyo3_asyncio::tokio::future_into_py(py, async move { Ok(PyMessages { store }) })
     }
 
-    fn get_archive<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move { Ok(PyArchive { store }) })
-    }
-
     fn get_workflows<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move { Ok(PyWorkflows { store }) })
@@ -572,7 +567,6 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWorkers>()?;
     m.add_class::<PyQueues>()?;
     m.add_class::<PyMessages>()?;
-    m.add_class::<PyArchive>()?;
     m.add_class::<PyWorkflows>()?;
     m.add_class::<PyWorkflowRuns>()?;
     m.add_class::<PyWorkflowSteps>()?;
@@ -585,7 +579,6 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyRun>()?;
     m.add_class::<PyStepResult>()?;
     m.add_class::<PyStepGuard>()?;
-    m.add_class::<PyArchivedMessage>()?;
     m.add_class::<PyConsumerIterator>()?;
     m.add_class::<PyBackoffStrategy>()?;
     m.add_class::<PyStepRetryPolicy>()?;

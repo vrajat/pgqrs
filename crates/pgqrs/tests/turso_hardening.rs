@@ -141,7 +141,7 @@ async fn test_no_phantom_duplicates_with_ephemeral_workers() {
     // CRITICAL: No phantom duplicates - actual row count should equal successes
     let actual_count = store
         .messages()
-        .count_pending(queue.id)
+        .count_pending_for_queue(queue.id)
         .await
         .expect("Failed to count messages");
 

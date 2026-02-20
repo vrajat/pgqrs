@@ -231,17 +231,6 @@ impl Store for AnyStore {
         }
     }
 
-    fn archive(&self) -> &dyn ArchiveTable {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.archive(),
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.archive(),
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.archive(),
-        }
-    }
-
     fn workflows(&self) -> &dyn WorkflowTable {
         match self {
             #[cfg(feature = "postgres")]
@@ -387,7 +376,7 @@ impl Store for AnyStore {
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>> {
+    ) -> crate::error::Result<Producer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
@@ -402,7 +391,7 @@ impl Store for AnyStore {
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>> {
+    ) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
@@ -419,7 +408,7 @@ impl Store for AnyStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>> {
+    ) -> crate::error::Result<Producer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
@@ -436,7 +425,7 @@ impl Store for AnyStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>> {
+    ) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,

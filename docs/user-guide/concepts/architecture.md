@@ -33,7 +33,6 @@ flowchart TB
             QT[pgqrs_queues]
             WT[pgqrs_workers]
             MT[pgqrs_messages]
-            AT[pgqrs_archive]
         end
     end
 
@@ -55,14 +54,13 @@ flowchart TB
 
 The foundation of pgqrs. All queue data is stored in PostgreSQL tables with proper relational design.
 
-**Four core tables:**
+**Three core tables:**
 
 | Table | Purpose |
 |-------|---------|
 | `pgqrs_queues` | Queue definitions and metadata |
 | `pgqrs_workers` | Worker registrations linked to queues |
-| `pgqrs_messages` | Active messages awaiting processing |
-| `pgqrs_archive` | Processed messages for audit trails |
+| `pgqrs_messages` | All messages (ready, leased, and archived) |
 
 **Key PostgreSQL features used:**
 
@@ -155,7 +153,7 @@ stateDiagram-v2
 2. **Worker Registration**: Workers register in `pgqrs_workers` linking to their queue
 3. **Message Fetch**: Consumer dequeues using `SELECT ... FOR UPDATE SKIP LOCKED`
 4. **Processing**: Message is locked with a visibility timeout
-5. **Completion**: Consumer archives to `pgqrs_archive` or deletes
+5. **Completion**: Consumer marks as archived or deletes
 6. **Monitoring**: Admin queries all tables for metrics
 
 ```mermaid
@@ -163,10 +161,9 @@ sequenceDiagram
     participant P as Producer
     participant DB as PostgreSQL
     participant C as Consumer
-    participant A as Archive
 
     P->>DB: INSERT INTO pgqrs_messages
-    Note over DB: Message created with<br/>status = pending
+    Note over DB: Message created with<br/>archived_at = NULL
 
     C->>DB: SELECT ... FOR UPDATE SKIP LOCKED
     Note over DB: Message locked with<br/>visibility timeout
@@ -174,8 +171,7 @@ sequenceDiagram
     C->>C: Process message
 
     alt Success
-        C->>DB: INSERT INTO pgqrs_archive
-        C->>DB: DELETE FROM pgqrs_messages
+        C->>DB: UPDATE pgqrs_messages SET archived_at = NOW()
     else Failure
         Note over DB: Lock expires,<br/>message becomes available
     end

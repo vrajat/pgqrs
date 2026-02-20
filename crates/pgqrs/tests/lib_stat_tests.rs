@@ -36,13 +36,13 @@ async fn test_queue_metrics() {
     // Enqueue 2 messages
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::enqueue()
         .message(&json!({"id": 2}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -59,7 +59,7 @@ async fn test_queue_metrics() {
 
     // Consume 1 message (locks it)
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();
@@ -80,13 +80,13 @@ async fn test_queue_metrics() {
     consumer.archive(msg_id).await.unwrap();
 
     // Check metrics: 1 pending, 0 locked, 1 archived
-    // Note: total_messages counts only active messages, so it's 1 after archiving
+    // Note: total_messages counts all messages in the table (active + archived)
 
     let metrics = pgqrs::admin(&store)
         .queue_metrics(queue_name)
         .await
         .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 1); // Only 1 left in active table
+    assert_eq!(metrics.total_messages, 2);
     assert_eq!(metrics.pending_messages, 1);
     assert_eq!(metrics.locked_messages, 0);
     assert_eq!(metrics.archived_messages, 1);
@@ -138,12 +138,12 @@ async fn test_system_stats() {
 
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap(); // Make one locked
@@ -281,12 +281,12 @@ async fn test_worker_stats() {
     // Enqueue 1 message and dequeue (lock) it by consumer
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();

@@ -1,38 +1,15 @@
 //! EnqueueBuilder for advanced enqueue options
-//!
-//! # Example
-//! ```rust,no_run
-//! # use pgqrs::{enqueue, Config};
-//! # use pgqrs::store::AnyStore;
-//! # use serde::Serialize;
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let config = Config::from_dsn("postgres://localhost/mydb");
-//! let store = pgqrs::connect_with_config(&config).await?;
-//!
-//! // Single message
-//! let ids = pgqrs::enqueue()
-//!     .message(&"payload")
-//!     .to("queue")
-//!     .execute(&store).await?;
-//!
-//! // Batch messages
-//! let ids = pgqrs::enqueue()
-//!     .messages(&[&"msg1", &"msg2"])
-//!     .to("queue")
-//!     .execute(&store).await?;
-//! # Ok(())
-//! # }
-//! ```
 
 use crate::error::Result;
 use crate::store::Store;
+use crate::workers::Producer;
 use serde::Serialize;
 
 /// Builder for enqueue operations.
 pub struct EnqueueBuilder<'a, T> {
     messages: Vec<&'a T>,
     queue: Option<String>,
-    worker: Option<&'a dyn crate::store::Producer>,
+    worker: Option<&'a Producer>,
     delay_seconds: Option<u32>,
     at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -88,7 +65,7 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
     }
 
     /// Use a managed worker instead of ephemeral
-    pub fn worker(mut self, producer: &'a dyn crate::store::Producer) -> Self {
+    pub fn worker(mut self, producer: &'a Producer) -> Self {
         self.worker = Some(producer);
         self
     }
@@ -109,23 +86,6 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
     ///
     /// This allows tests to control time for deterministic behavior when testing
     /// message delays and visibility timeouts.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use pgqrs::enqueue;
-    /// # use chrono::Utc;
-    /// # async fn example(store: &pgqrs::store::AnyStore, producer: &dyn pgqrs::store::Producer) -> Result<(), Box<dyn std::error::Error>> {
-    /// let custom_time = Utc::now() - chrono::Duration::seconds(3600); // 1 hour ago
-    /// let msg_ids = enqueue()
-    ///     .message(&serde_json::json!({"test": "value"}))
-    ///     .worker(producer)
-    ///     .with_delay(std::time::Duration::from_secs(10))
-    ///     .at(custom_time)
-    ///     .execute(store)
-    ///     .await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
         self.at = Some(time);
         self

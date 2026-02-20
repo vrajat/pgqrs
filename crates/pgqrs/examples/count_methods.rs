@@ -102,48 +102,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    // Create some test archived messages (simulating processed messages)
-    let _archive1 = pgqrs::tables(&store)
-        .archive()
-        .insert(pgqrs::types::NewArchivedMessage {
-            original_msg_id: 100, // Simulated original message ID
-            queue_id: queue1.id,
-            producer_worker_id: Some(worker1.id),
-            consumer_worker_id: Some(worker1.id),
-            payload: json!({"task": "completed_task_1"}),
-            enqueued_at: now,
-            vt: now,
-            read_ct: 1,
-            dequeued_at: Some(now),
-        })
-        .await?;
-
-    let _archive2 = pgqrs::tables(&store)
-        .archive()
-        .insert(pgqrs::types::NewArchivedMessage {
-            original_msg_id: 101,
-            queue_id: queue2.id,
-            producer_worker_id: None,
-            consumer_worker_id: None,
-            payload: json!({"task": "completed_task_2"}),
-            enqueued_at: now,
-            vt: now,
-            read_ct: 2,
-            dequeued_at: None,
-        })
-        .await?;
-
     // Demonstrate count() methods - count all records in each table
     println!("=== Count All Records ===");
     let total_queues = pgqrs::tables(&store).queues().count().await?;
     let total_workers = pgqrs::tables(&store).workers().count().await?;
     let total_messages = pgqrs::tables(&store).messages().count().await?;
-    let total_archives = pgqrs::tables(&store).archive().count().await?;
 
     println!("Total queues: {}", total_queues);
     println!("Total workers: {}", total_workers);
     println!("Total messages: {}", total_messages);
-    println!("Total archived messages: {}", total_archives);
 
     // Demonstrate count by foreign key - count by queue
     println!("\n=== Count By Queue ===");
@@ -188,30 +155,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         queue2.queue_name, queue2_messages
     );
 
-    // Count archived messages by queue
-    let queue1_archives = pgqrs::tables(&store)
-        .archive()
-        .count_for_queue(queue1.id)
-        .await?;
-    let queue2_archives = pgqrs::tables(&store)
-        .archive()
-        .count_for_queue(queue2.id)
-        .await?;
-    println!(
-        "Archived messages in queue '{}': {}",
-        queue1.queue_name, queue1_archives
-    );
-    println!(
-        "Archived messages in queue '{}': {}",
-        queue2.queue_name, queue2_archives
-    );
-
     println!("\n=== Summary ===");
     println!("The table accessors now provide a unified interface for:");
     println!("- count(): Get total record count in any table");
     println!("- filter_by_fk(): Get records matching a foreign key");
     println!("- This enables consistent operations across all tables");
-    println!("- Archive table is now included with full CRUD + count support");
 
     Ok(())
 }

@@ -20,7 +20,7 @@ impl<'a> ProducerBuilder<'a> {
     }
 
     /// Create the producer worker
-    pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn crate::store::Producer + '_>> {
+    pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Producer> {
         store
             .producer(self.queue, self.hostname, self.port, store.config())
             .await

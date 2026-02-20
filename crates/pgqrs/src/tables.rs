@@ -1,9 +1,8 @@
 //! Repository traits for low-level database operations.
 
 use crate::types::{
-    ArchivedMessage, NewArchivedMessage, NewQueueRecord, NewRunRecord, NewStepRecord,
-    NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord,
-    WorkerStatus, WorkflowRecord,
+    NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkflowRecord, QueueMessage, QueueRecord,
+    RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
 
 use async_trait::async_trait;
@@ -43,12 +42,6 @@ pub trait MessageTable: Send + Sync {
 
     async fn get_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<QueueMessage>>;
 
-    async fn update_visibility_timeout(
-        &self,
-        id: i64,
-        vt: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<u64>;
-
     async fn update_payload(
         &self,
         id: i64,
@@ -82,13 +75,44 @@ pub trait MessageTable: Send + Sync {
         vt: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<u64>;
 
-    async fn count_pending(&self, queue_id: i64) -> crate::error::Result<i64>;
+    async fn count_pending_for_queue(&self, queue_id: i64) -> crate::error::Result<i64>;
 
-    async fn count_pending_filtered(
+    async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
-        worker_id: Option<i64>,
+        worker_id: i64,
     ) -> crate::error::Result<i64>;
+
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: chrono::DateTime<chrono::Utc>,
+        max_read_ct: i32,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+
+    async fn archive(&self, id: i64, worker_id: i64) -> crate::error::Result<Option<QueueMessage>>;
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
+
+    async fn replay_dlq(&self, id: i64) -> crate::error::Result<Option<QueueMessage>>;
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> crate::error::Result<u64>;
+
+    async fn delete_many_owned(
+        &self,
+        ids: &[i64],
+        worker_id: i64,
+    ) -> crate::error::Result<Vec<bool>>;
+
+    async fn list_archived_by_queue(
+        &self,
+        queue_id: i64,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+
+    async fn count_by_fk(&self, queue_id: i64) -> crate::error::Result<i64>;
 
     async fn delete_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<bool>>;
 }
@@ -105,6 +129,7 @@ pub trait WorkerTable: Send + Sync {
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
     async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerRecord>>;
+    async fn count_by_fk(&self, queue_id: i64) -> crate::error::Result<i64>;
 
     async fn count_for_queue(
         &self,
@@ -139,41 +164,13 @@ pub trait WorkerTable: Send + Sync {
 
     async fn register_ephemeral(&self, queue_id: Option<i64>)
         -> crate::error::Result<WorkerRecord>;
-}
 
-/// Repository for managing archived messages.
-#[async_trait]
-pub trait ArchiveTable: Send + Sync {
-    async fn insert(&self, data: NewArchivedMessage) -> crate::error::Result<ArchivedMessage>;
-    async fn get(&self, id: i64) -> crate::error::Result<ArchivedMessage>;
-    async fn list(&self) -> crate::error::Result<Vec<ArchivedMessage>>;
-    async fn count(&self) -> crate::error::Result<i64>;
-    async fn delete(&self, id: i64) -> crate::error::Result<u64>;
-    async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<ArchivedMessage>>;
-
-    async fn list_dlq_messages(
-        &self,
-        max_attempts: i32,
-        limit: i64,
-        offset: i64,
-    ) -> crate::error::Result<Vec<ArchivedMessage>>;
-
-    async fn dlq_count(&self, max_attempts: i32) -> crate::error::Result<i64>;
-
-    async fn list_by_worker(
-        &self,
-        worker_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> crate::error::Result<Vec<ArchivedMessage>>;
-
-    async fn count_by_worker(&self, worker_id: i64) -> crate::error::Result<i64>;
-
-    async fn delete_by_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
-
-    async fn replay_message(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>>;
-
-    async fn count_for_queue(&self, queue_id: i64) -> crate::error::Result<i64>;
+    async fn get_status(&self, id: i64) -> crate::error::Result<WorkerStatus>;
+    async fn suspend(&self, id: i64) -> crate::error::Result<()>;
+    async fn resume(&self, id: i64) -> crate::error::Result<()>;
+    async fn shutdown(&self, id: i64) -> crate::error::Result<()>;
+    async fn heartbeat(&self, id: i64) -> crate::error::Result<()>;
+    async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> crate::error::Result<bool>;
 }
 
 /// Repository for managing workflows.

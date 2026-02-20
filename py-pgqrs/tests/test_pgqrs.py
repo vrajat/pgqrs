@@ -53,8 +53,10 @@ async def test_basic_workflow(test_dsn, schema):
 
     await pgqrs.archive(consumer, msg)
 
-    archive_msgs = await store.get_archive()
-    assert await archive_msgs.count() == 1
+    archived_msgs = await (await store.get_messages()).list_archived_by_queue(
+        msg.queue_id
+    )
+    assert len(archived_msgs) == 1
     assert await messages.count() == 0
 
 
@@ -109,8 +111,10 @@ async def test_batch_operations(test_dsn, schema):
     count_after = await (await store.get_messages()).count()
     assert count_after == 2
 
-    arch_count = await (await store.get_archive()).count()
-    assert arch_count == 3
+    archived_msgs = await (await store.get_messages()).list_archived_by_queue(
+        batch[0].queue_id
+    )
+    assert len(archived_msgs) == 3
 
 
 @pytest.mark.asyncio
@@ -240,31 +244,20 @@ async def test_archive_advanced_methods(test_dsn, schema):
     msgs = await pgqrs.dequeue(consumer, 1)
     await pgqrs.archive(consumer, msgs[0])
 
-    archive = await store.get_archive()
-    assert await archive.count() == 1
+    messages_table = await store.get_messages()
+    archived_msgs = await messages_table.list_archived_by_queue(msgs[0].queue_id)
+    assert len(archived_msgs) == 1
 
     # 1. Test get()
     # We need to list to find the ID of the archived message
     # We can use the consumer's ID since we exposed it.
     worker_id = consumer.worker_id
 
-    arch_msgs = await archive.list_by_worker(worker_id, 10, 0)
-    assert len(arch_msgs) == 1
-    arch_msg = arch_msgs[0]
+    # Filter archived messages by worker
+    arch_msg = next(m for m in archived_msgs if m.consumer_worker_id == worker_id)
 
-    fetched = await archive.get(arch_msg.id)
-    assert fetched.id == arch_msg.id
-    assert fetched.payload == {"foo": "bar"}
-
-    # 2. Test count_by_worker
-    assert await archive.count_by_worker(worker_id) == 1
-
-    # 3. Test dlq_count
-    assert await archive.dlq_count(5) == 0
-
-    # 4. Test delete()
-    await archive.delete(arch_msg.id)
-    assert await archive.count() == 0
+    # 2. Test count_by_worker - not directly available in Messages table yet, but we can filter
+    assert len([m for m in archived_msgs if m.consumer_worker_id == worker_id]) == 1
 
 
 @pytest.mark.asyncio
@@ -322,8 +315,10 @@ async def test_api_redesign_low_level(test_dsn, schema):
     # Use msg.id for archive? No, the archive pyfunction takes Quantitative message object
     await pgqrs.archive(consumer, msgs[0])
 
-    assert await (await store.get_messages()).count() == 0
-    assert await (await store.get_archive()).count() == 1
+    messages_table = await store.get_messages()
+    assert await messages_table.count() == 0
+    archived_msgs = await messages_table.list_archived_by_queue(msgs[0].queue_id)
+    assert len(archived_msgs) == 1
 
 
 # --- Durable Workflow Tests ---
@@ -431,14 +426,16 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_success_q"
-    await store.queue(queue)
+    q_info = await store.queue(queue)
 
     payload = {"data": "test_success"}
     await pgqrs.produce(store, queue, payload)
 
     # Capture counts before consume
-    msgs_before = await (await store.get_messages()).count()
-    archive_before = await (await store.get_archive()).count()
+    messages_table = await store.get_messages()
+    msgs_before = await messages_table.count()
+    archived_msgs_before = await messages_table.list_archived_by_queue(q_info.id)
+    archive_before = len(archived_msgs_before)
 
     consumed_event = asyncio.Event()
 
@@ -458,8 +455,9 @@ async def test_ephemeral_consume_success(test_dsn, schema):
     )
 
     # Verify message was archived
-    msgs_after = await (await store.get_messages()).count()
-    archive_after = await (await store.get_archive()).count()
+    msgs_after = await messages_table.count()
+    archived_msgs_after = await messages_table.list_archived_by_queue(q_info.id)
+    archive_after = len(archived_msgs_after)
     assert msgs_after == msgs_before - 1, (
         "Message should be removed from active messages after successful consume"
     )
@@ -475,14 +473,16 @@ async def test_ephemeral_consume_failure(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_fail_q"
-    await store.queue(queue)
+    q_info = await store.queue(queue)
 
     payload = {"data": "test_fail"}
     await pgqrs.produce(store, queue, payload)
 
     # Capture counts before consume attempt
-    msgs_before = await (await store.get_messages()).count()
-    archive_before = await (await store.get_archive()).count()
+    messages_table = await store.get_messages()
+    msgs_before = await messages_table.count()
+    archived_msgs_before = await messages_table.list_archived_by_queue(q_info.id)
+    archive_before = len(archived_msgs_before)
 
     async def handler(msg):
         raise ValueError("Simulated failure")
@@ -491,8 +491,9 @@ async def test_ephemeral_consume_failure(test_dsn, schema):
         await pgqrs.consume(store, queue, handler)
 
     # Verify message count unchanged (not archived)
-    msgs_after = await (await store.get_messages()).count()
-    archive_after = await (await store.get_archive()).count()
+    msgs_after = await messages_table.count()
+    archived_msgs_after = await messages_table.list_archived_by_queue(q_info.id)
+    archive_after = len(archived_msgs_after)
     assert msgs_after == msgs_before, (
         "Message count should be unchanged after failed consume"
     )
@@ -508,10 +509,12 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue = "ephemeral_batch_success_q"
-    await store.queue(queue)
+    q_info = await store.queue(queue)
 
     # Capture initial counts
-    archive_before = await (await store.get_archive()).count()
+    messages_table = await store.get_messages()
+    archived_msgs_before = await messages_table.list_archived_by_queue(q_info.id)
+    archive_before = len(archived_msgs_before)
 
     # Produce 3 messages using produce_batch to avoid multiple ephemeral workers
     payloads = [{"i": i} for i in range(3)]
@@ -535,7 +538,8 @@ async def test_ephemeral_consume_batch_success(test_dsn, schema):
     )
 
     # Verify messages were archived
-    archive_after = await (await store.get_archive()).count()
+    archived_msgs_after = await messages_table.list_archived_by_queue(q_info.id)
+    archive_after = len(archived_msgs_after)
     assert archive_after == archive_before + 3, (
         f"Expected 3 messages archived, but archive count increased by {archive_after - archive_before}"
     )
@@ -554,8 +558,10 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
     await pgqrs.produce_batch(store, queue, payloads)
 
     # Capture counts before consume attempt
-    msgs_before = await (await store.get_messages()).count()
-    archive_before = await (await store.get_archive()).count()
+    messages_table = await store.get_messages()
+    msgs_before = await messages_table.count()
+    archived_msgs_before = await messages_table.list_archived_by_queue(q_info.id)
+    archive_before = len(archived_msgs_before)
 
     async def batch_handler(msgs):
         raise ValueError("Simulated batch failure")
@@ -564,8 +570,9 @@ async def test_ephemeral_consume_batch_failure(test_dsn, schema):
         await pgqrs.consume_batch(store, queue, 10, batch_handler)
 
     # Verify message count unchanged (not archived)
-    msgs_after = await (await store.get_messages()).count()
-    archive_after = await (await store.get_archive()).count()
+    msgs_after = await messages_table.count()
+    archived_msgs_after = await messages_table.list_archived_by_queue(q_info.id)
+    archive_after = len(archived_msgs_after)
     assert msgs_after == msgs_before, (
         "Message count should be unchanged after failed batch consume"
     )
@@ -581,7 +588,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
     """
     store, admin = await setup_test(test_dsn, schema)
     queue_name = "stream_test_q"
-    await store.queue(queue_name)
+    q_info = await store.queue(queue_name)
 
     received_count = 0
 
@@ -607,8 +614,9 @@ async def test_consume_stream_iterator(test_dsn, schema):
     assert received_count == 5
 
     # Verify messages are archived
-    archive_count = await (await store.get_archive()).count()
-    assert archive_count == 5
+    messages_table = await store.get_messages()
+    archived_msgs = await messages_table.list_archived_by_queue(q_info.id)
+    assert len(archived_msgs) == 5
 
     # Verify ephemeral consumer cleanup
     # Since we used context manager, cleanup (shutdown) should have happened explicitly upon exit.

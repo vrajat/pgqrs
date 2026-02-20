@@ -14,7 +14,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 ## Key Properties
 
-- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions, and in-place archival
 - **Library-only:** Runs in-process with your application
 - **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
 - **Type-safe:** Rust core with idiomatic Python bindings

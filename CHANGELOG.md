@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **BREAKING**: Migrated from a two-table model (`pgqrs_messages` + `pgqrs_archive`) to a single-table model. All messages now reside in the `pgqrs_messages` table.
+- **BREAKING**: Removed `ArchivedMessage` and `ArchiveTable` types. Use `QueueMessage` and `MessageTable::list_archived_by_queue` instead.
+- Updated `dequeued_at` semantics to represent the first lease time only (never reset).
+- Optimized indexes for the "hot set" (`archived_at IS NULL`) across all backends.
+
 ## [0.5.0] - 2025-12-19
 
 ### Added (Python Bindings)

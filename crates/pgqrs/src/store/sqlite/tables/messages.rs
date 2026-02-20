@@ -9,18 +9,19 @@ use sqlx::{Row, SqlitePool};
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const GET_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
     WHERE id = $1;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
+    WHERE archived_at IS NULL
     ORDER BY enqueued_at DESC;
 "#;
 
@@ -30,17 +31,11 @@ const DELETE_MESSAGE_BY_ID: &str = r#"
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
-    WHERE queue_id = $1
+    WHERE queue_id = $1 AND archived_at IS NULL
     ORDER BY enqueued_at DESC
     LIMIT 1000;
-"#;
-
-const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = $2
-    WHERE id = $1;
 "#;
 
 #[derive(Debug, Clone)]
@@ -77,6 +72,12 @@ impl SqliteMessageTable {
         let producer_worker_id: Option<i64> = row.try_get("producer_worker_id")?;
         let consumer_worker_id: Option<i64> = row.try_get("consumer_worker_id")?;
 
+        let archived_at_str: Option<String> = row.try_get("archived_at")?;
+        let archived_at = match archived_at_str {
+            Some(s) => Some(parse_sqlite_timestamp(&s)?),
+            None => None,
+        };
+
         Ok(QueueMessage {
             id,
             queue_id,
@@ -87,6 +88,7 @@ impl SqliteMessageTable {
             dequeued_at,
             producer_worker_id,
             consumer_worker_id,
+            archived_at,
         })
     }
 }
@@ -149,14 +151,15 @@ impl crate::store::MessageTable for SqliteMessageTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COUNT_MESSAGES".into(),
-                source: Box::new(e),
-                context: "Failed to count messages".into(),
-            })?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES".into(),
+                    source: Box::new(e),
+                    context: "Failed to count messages".into(),
+                })?;
         Ok(count)
     }
 
@@ -201,8 +204,6 @@ impl crate::store::MessageTable for SqliteMessageTable {
             return Ok(vec![]);
         }
 
-        // query_builder handles construction.
-
         let mut query_builder = sqlx::QueryBuilder::new("INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id) ");
 
         query_builder.push_values(payloads, |mut b, payload| {
@@ -235,7 +236,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
             return Ok(vec![]);
         }
 
-        let mut query_builder = sqlx::QueryBuilder::new("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN (");
+        let mut query_builder = sqlx::QueryBuilder::new("SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at FROM pgqrs_messages WHERE id IN (");
 
         let mut separated = query_builder.separated(", ");
         for id in ids {
@@ -258,22 +259,6 @@ impl crate::store::MessageTable for SqliteMessageTable {
             messages.push(Self::map_row(row)?);
         }
         Ok(messages)
-    }
-
-    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
-        let vt_str = format_sqlite_timestamp(&vt);
-        let rows = sqlx::query(UPDATE_MESSAGE_VT)
-            .bind(id)
-            .bind(vt_str)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "UPDATE_MESSAGE_VT".into(),
-                source: Box::new(e),
-                context: format!("Failed to update vt for message {}", id),
-            })?
-            .rows_affected();
-        Ok(rows)
     }
 
     async fn update_payload(&self, id: i64, payload: Value) -> Result<u64> {
@@ -428,38 +413,18 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(rows)
     }
 
-    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending_filtered(queue_id, None).await
-    }
-
-    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
-        let count: i64 = match worker_id {
-            Some(wid) => {
-                sqlx::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2
-                    "#,
-                )
-                .bind(queue_id)
-                .bind(wid)
-                .fetch_one(&self.pool)
-                .await
-            }
-            None => {
-                sqlx::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .fetch_one(&self.pool)
-                .await
-            }
-        }.map_err(|e| crate::error::Error::QueryFailed {
+    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
             query: format!("COUNT_PENDING (queue_id={})", queue_id),
             source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
@@ -468,19 +433,250 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(count)
     }
 
+    async fn count_pending_for_queue_and_worker(
+        &self,
+        queue_id: i64,
+        worker_id: i64,
+    ) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .bind(worker_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_PENDING_FILTERED (queue_id={})", queue_id),
+            source: Box::new(e),
+            context: format!("Failed to count pending messages for queue {}", queue_id),
+        })?;
+
+        Ok(count)
+    }
+
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: chrono::DateTime<chrono::Utc>,
+        max_read_ct: i32,
+    ) -> Result<Vec<QueueMessage>> {
+        let now_str = format_sqlite_timestamp(&now);
+
+        let sql = r#"
+            UPDATE pgqrs_messages
+            SET vt = datetime(?, '+' || ? || ' seconds'),
+                read_ct = read_ct + 1,
+                dequeued_at = COALESCE(dequeued_at, ?),
+                consumer_worker_id = ?
+            WHERE id IN (
+                SELECT id
+                FROM pgqrs_messages
+                WHERE queue_id = ?
+                  AND (vt IS NULL OR vt <= ?)
+                  AND consumer_worker_id IS NULL
+                  AND archived_at IS NULL
+                  AND read_ct < ?
+                ORDER BY enqueued_at ASC
+                LIMIT ?
+            )
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+        "#;
+
+        let rows = sqlx::query(sql)
+            .bind(&now_str) // for vt calculation
+            .bind(vt as i32)
+            .bind(&now_str) // for dequeued_at
+            .bind(worker_id)
+            .bind(queue_id)
+            .bind(&now_str) // for selection filter
+            .bind(max_read_ct)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DEQUEUE_AT".into(),
+                source: Box::new(e),
+                context: "Failed to dequeue messages".into(),
+            })?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
+        let row = sqlx::query(
+            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at",
+        )
+        .bind(id)
+        .bind(worker_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "Archive".into(),
+            source: Box::new(e),
+            context: "Archive message".into(),
+        })?;
+
+        if let Some(r) = row {
+            Ok(Some(Self::map_row(r)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query_builder = sqlx::QueryBuilder::new(
+            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE id IN (",
+        );
+        let mut separated = query_builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(") AND consumer_worker_id = ");
+        query_builder.push_bind(worker_id);
+        query_builder.push(" AND archived_at IS NULL RETURNING id");
+
+        let archived_ids: Vec<i64> = query_builder
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "ARCHIVE_BATCH".into(),
+                source: Box::new(e),
+                context: "Failed to archive message batch".into(),
+            })?;
+
+        let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
+        Ok(ids.iter().map(|id| archived_set.contains(id)).collect())
+    }
+
+    async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
+        let msg = sqlx::query_as::<_, QueueMessage>(r#"
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = datetime('now'),
+                enqueued_at = datetime('now'),
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = $1 AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+        "#)
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("REPLAY_MESSAGE ({})", id),
+            source: Box::new(e),
+            context: format!("Failed to replay message {}", id),
+        })?;
+
+        Ok(msg)
+    }
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+        let result =
+            sqlx::query("DELETE FROM pgqrs_messages WHERE id = $1 AND consumer_worker_id = $2")
+                .bind(id)
+                .bind(worker_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "DELETE_MESSAGE_OWNED".into(),
+                    source: Box::new(e),
+                    context: format!("Failed to delete message {}", id),
+                })?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut query_builder = sqlx::QueryBuilder::new("DELETE FROM pgqrs_messages WHERE id IN (");
+        let mut separated = query_builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(") AND consumer_worker_id = ");
+        query_builder.push_bind(worker_id);
+        query_builder.push(" RETURNING id");
+
+        let deleted_ids: Vec<i64> = query_builder
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MANY_OWNED".into(),
+                source: Box::new(e),
+                context: "Failed to delete message batch".into(),
+            })?;
+
+        let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
+        Ok(ids.iter().map(|id| deleted_set.contains(id)).collect())
+    }
+
+    async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND archived_at IS NOT NULL
+            ORDER BY archived_at DESC
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "LIST_ARCHIVED_BY_QUEUE".into(),
+            source: Box::new(e),
+            context: format!("Failed to list archived messages for queue {}", queue_id),
+        })?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1")
+                .bind(queue_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES_BY_QUEUE".into(),
+                    source: Box::new(e),
+                    context: format!("Failed to count messages for queue {}", queue_id),
+                })?;
+        Ok(count)
+    }
+
     async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
         let mut results = Vec::with_capacity(ids.len());
-
-        // For large deletes, transactions might be better but iterating is simpler and likely fast enough for typical batches.
-        // Or we could use dynamic DELETE WHERE id IN (...)
-        // But the trait implies per-ID result, but actually returns boolean if *that* delete succeeded.
-        // If we do batch delete, we don't know which ones were deleted unless we use RETURNING id.
 
         if ids.is_empty() {
             return Ok(vec![]);
         }
 
-        // The Postgres implementation loops and executes DELETE one by one. I'll do the same for consistency regarding return type.
         for &id in ids {
             let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
                 .bind(id)
@@ -536,6 +732,7 @@ mod tests {
                 dequeued_at TEXT,
                 producer_worker_id INTEGER,
                 consumer_worker_id INTEGER,
+                archived_at TEXT,
                 FOREIGN KEY (queue_id) REFERENCES pgqrs_queues(id) ON DELETE CASCADE
             );
             "#,

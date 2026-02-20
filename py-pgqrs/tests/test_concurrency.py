@@ -185,7 +185,9 @@ async def test_workflow_scenario_success(test_dsn, schema):
     archived = await consumer.archive(msg.id)
     assert archived is True
 
-    archived_entries = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived_entries = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived_entries) == 1
 
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
@@ -227,7 +229,9 @@ async def test_workflow_scenario_permanent_error(test_dsn, schema):
     archived = await consumer.archive(msg.id)
     assert archived is True
 
-    archived_entries = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived_entries = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived_entries) == 1
 
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
@@ -265,7 +269,9 @@ async def test_workflow_scenario_crash_recovery(test_dsn, schema):
     with pytest.raises(RuntimeError, match="TestCrash"):
         raise RuntimeError("TestCrash")
 
-    archived = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived) == 0
 
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
@@ -289,7 +295,9 @@ async def test_workflow_scenario_crash_recovery(test_dsn, schema):
     await run.complete({"done": True})
     assert await consumer.archive(msg.id) is True
 
-    archived = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived) == 1
 
     runs = await (await store.get_workflow_runs()).list()
@@ -327,7 +335,9 @@ async def test_workflow_scenario_transient_error(test_dsn, schema):
     with pytest.raises(pgqrs.TransientStepError):
         await execute_step(run, "api_call", run.current_time, transient_step)
 
-    archived = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived) == 0
 
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
@@ -370,7 +380,9 @@ async def test_workflow_scenario_pause(test_dsn, schema):
     with pytest.raises(pgqrs.StepNotReadyError):
         await execute_step(run, "step1", run.current_time, pause_step)
 
-    archived = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived) == 0
 
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
@@ -402,7 +414,9 @@ async def test_workflow_scenario_pause(test_dsn, schema):
     await run.complete({"done": True})
     assert await consumer.archive(msg.id) is True
 
-    archived = await (await store.get_archive()).filter_by_fk(message.queue_id)
+    archived = await (await store.get_messages()).list_archived_by_queue(
+        message.queue_id
+    )
     assert len(archived) == 1
 
     runs = await (await store.get_workflow_runs()).list()

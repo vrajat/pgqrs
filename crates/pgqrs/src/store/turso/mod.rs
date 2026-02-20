@@ -1,11 +1,10 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
-};
 use crate::store::{BackendType, ConcurrencyModel};
-use crate::{Admin, Consumer, Producer, Worker};
+use crate::store::{
+    MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
+};
+use crate::{Admin, Worker};
 
 use crate::types::{NewQueueMessage, NewQueueRecord};
 use async_trait::async_trait;
@@ -16,7 +15,6 @@ use turso::{Database, Row};
 pub mod tables;
 pub mod worker;
 
-use self::tables::archive::TursoArchiveTable;
 use self::tables::messages::TursoMessageTable;
 use self::tables::queues::TursoQueueTable;
 use self::tables::runs::TursoRunRecordTable;
@@ -31,7 +29,6 @@ pub struct TursoStore {
     queues: Arc<TursoQueueTable>,
     messages: Arc<TursoMessageTable>,
     workers: Arc<TursoWorkerTable>,
-    archive: Arc<TursoArchiveTable>,
     workflows: Arc<TursoWorkflowTable>,
     workflow_runs: Arc<TursoRunRecordTable>,
     workflow_steps: Arc<TursoStepRecordTable>,
@@ -95,7 +92,6 @@ impl TursoStore {
             queues: Arc::new(TursoQueueTable::new(Arc::clone(&db))),
             messages: Arc::new(TursoMessageTable::new(Arc::clone(&db))),
             workers: Arc::new(TursoWorkerTable::new(Arc::clone(&db))),
-            archive: Arc::new(TursoArchiveTable::new(Arc::clone(&db))),
             workflows: Arc::new(TursoWorkflowTable::new(Arc::clone(&db))),
             workflow_runs: Arc::new(TursoRunRecordTable::new(Arc::clone(&db))),
             workflow_steps: Arc::new(TursoStepRecordTable::new(Arc::clone(&db))),
@@ -523,6 +519,21 @@ impl GenericScalarBuilder {
             Ok(None)
         }
     }
+
+    pub async fn fetch_optional_on_connection<T>(
+        self,
+        conn: &turso::Connection,
+    ) -> Result<Option<T>>
+    where
+        T: FromTursoRow,
+    {
+        let row = self.builder.fetch_optional_on_connection(conn).await?;
+        if let Some(r) = row {
+            Ok(Some(T::from_row(&r, 0)?))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
@@ -580,10 +591,6 @@ impl Store for TursoStore {
         self.workers.as_ref()
     }
 
-    fn archive(&self) -> &dyn ArchiveTable {
-        self.archive.as_ref()
-    }
-
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -616,16 +623,26 @@ impl Store for TursoStore {
                 include_str!("../../../migrations/turso/03_create_messages.sql"),
             ),
             (
-                "04_create_archive",
-                include_str!("../../../migrations/turso/04_create_archive.sql"),
-            ),
-            (
                 "05_create_workflows",
                 include_str!("../../../migrations/turso/05_create_workflows.sql"),
             ),
         ];
 
         for (name, script) in scripts {
+            // Check if migration already applied
+            if name != "00_create_schema_version" {
+                let applied: Option<i64> = crate::store::turso::query_scalar(
+                    "SELECT 1 FROM pgqrs_schema_version WHERE version = ?",
+                )
+                .bind(name.to_string())
+                .fetch_optional_on_connection(&conn)
+                .await?;
+
+                if applied.is_some() {
+                    continue;
+                }
+            }
+
             for statement in script.split(';') {
                 let s = statement.trim();
                 if !s.is_empty() {
@@ -665,13 +682,20 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> Result<Box<dyn Producer>> {
-        use self::worker::producer::TursoProducer;
+        _config: &Config,
+    ) -> Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let producer =
-            TursoProducer::new(self.db.clone(), &queue_info, hostname, port, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Turso(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer(
@@ -679,14 +703,19 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> Result<Box<dyn Consumer>> {
-        use self::worker::consumer::TursoConsumer;
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer =
-            TursoConsumer::new(self.db.clone(), &queue_info, hostname, port, config.clone())
-                .await?;
-        Ok(Box::new(consumer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Turso(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 
     async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
@@ -707,23 +736,32 @@ impl Store for TursoStore {
     async fn producer_ephemeral(
         &self,
         queue_name: &str,
-        config: &Config,
-    ) -> Result<Box<dyn Producer>> {
-        use self::worker::producer::TursoProducer;
+        _config: &Config,
+    ) -> Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let producer = TursoProducer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Turso(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer_ephemeral(
         &self,
         queue_name: &str,
-        config: &Config,
-    ) -> Result<Box<dyn Consumer>> {
-        use self::worker::consumer::TursoConsumer;
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer = TursoConsumer::new_ephemeral(self.db.clone(), &queue_info, config).await?;
-        Ok(Box::new(consumer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Turso(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 
     async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {

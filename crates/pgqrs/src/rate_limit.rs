@@ -50,6 +50,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Implements a token bucket algorithm where tokens are refilled at a constant rate
 /// up to a maximum burst capacity. Operations consume tokens and are blocked when
 /// no tokens are available.
+#[derive(Debug)]
 pub struct TokenBucket {
     /// Maximum tokens per second to add
     max_per_second: u32,
@@ -59,6 +60,17 @@ pub struct TokenBucket {
     tokens: AtomicU32,
     /// Last refill timestamp (nanoseconds since UNIX epoch)
     last_refill: AtomicU64,
+}
+
+impl Clone for TokenBucket {
+    fn clone(&self) -> Self {
+        Self {
+            max_per_second: self.max_per_second,
+            burst_capacity: self.burst_capacity,
+            tokens: AtomicU32::new(self.tokens.load(Ordering::Relaxed)),
+            last_refill: AtomicU64::new(self.last_refill.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl TokenBucket {

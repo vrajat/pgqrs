@@ -52,13 +52,13 @@ A message is **locked** when a consumer has dequeued it and is processing it.
 
 ### Archived
 
-A message is **archived** when processing completed successfully and the message was moved to the archive table.
+A message is **archived** when processing completed successfully and the message was marked as archived in the messages table.
 
 **Characteristics:**
-- Stored in `pgqrs_archive` table
+- `archived_at` column is set to a non-NULL value
 - Includes original payload and metadata
-- Records `archived_at` timestamp
 - Useful for audit trails
+- Hidden from normal dequeue operations
 
 **How to get here:**
 - `consumer.archive()`
@@ -84,21 +84,17 @@ sequenceDiagram
     participant P as Producer
     participant Q as Messages Table
     participant C as Consumer
-    participant A as Archive Table
 
     P->>Q: enqueue(payload)
-    Note over Q: Message created<br/>status: pending
+    Note over Q: Message created<br/>archived_at: NULL
 
     C->>Q: dequeue()
     Note over Q: Message locked<br/>vt = now + lock_time
 
     C->>C: Process message
 
-    C->>A: archive(id)
-    Note over A: Message archived<br/>with timestamp
-
-    C->>Q: DELETE
-    Note over Q: Message removed
+    C->>Q: archive(id)
+    Note over Q: Message marked archived<br/>with timestamp
 ```
 
 ### Timeout and Retry Flow
@@ -125,9 +121,7 @@ sequenceDiagram
     C2->>Q: archive(id)
 ```
 
-## Message Fields
-
-### In Messages Table
+### Message Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -137,17 +131,8 @@ sequenceDiagram
 | `enqueued_at` | `TIMESTAMPTZ` | When message was created |
 | `vt` | `TIMESTAMPTZ` | Visibility timeout (lock expiry) |
 | `read_ct` | `INT` | Number of dequeue attempts |
-
-### In Archive Table
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | `BIGINT` | Original message ID |
-| `queue_id` | `BIGINT` | Reference to queue |
-| `payload` | `JSONB` | Original message data |
-| `enqueued_at` | `TIMESTAMPTZ` | Original creation time |
-| `archived_at` | `TIMESTAMPTZ` | When archived |
-| `read_ct` | `INT` | Final read count |
+| `archived_at` | `TIMESTAMPTZ` | When archived (NULL if active) |
+| `dequeued_at` | `TIMESTAMPTZ` | When first dequeued |
 
 ## Delayed Messages
 
@@ -302,19 +287,19 @@ Choose based on your requirements:
 | **Delete** | No retention needed, minimize storage, ephemeral data |
 
 ### Archive
-
+    
 === "Rust"
 
     ```rust
     consumer.archive(message.id).await?;
-    // Message moved to pgqrs_archive, audit trail preserved
+    // Message marked as archived in pgqrs_messages, audit trail preserved
     ```
 
 === "Python"
 
     ```python
     await consumer.archive(message.id)
-    # Message moved to pgqrs_archive, audit trail preserved
+    # Message marked as archived in pgqrs_messages, audit trail preserved
     ```
 
 ### Delete

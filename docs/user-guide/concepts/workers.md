@@ -146,7 +146,7 @@ Gracefully stop a worker:
                     if not self.running:
                         break
                     await process_message(msg)
-                    await pgqrs.archive(self.consumer, msg)
+                    await pgqrs.archive(consumer, msg)
 
                 if not messages:
                     await asyncio.sleep(0.1)

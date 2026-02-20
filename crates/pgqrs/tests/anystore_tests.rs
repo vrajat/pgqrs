@@ -44,7 +44,7 @@ async fn test_anystore_delegates_to_backend() {
     // Verify message count
     let count = store
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to count messages");
     assert_eq!(count, 1);
@@ -141,7 +141,6 @@ async fn test_anystore_all_table_accessors() {
     let _queues = store.queues();
     let _messages = store.messages();
     let _workers = store.workers();
-    let _archive = store.archive();
     let _workflows = store.workflows();
 
     // Verify they all work by calling a method on each
@@ -165,13 +164,6 @@ async fn test_anystore_all_table_accessors() {
         .await
         .expect("Failed to count workers");
     assert!(worker_count >= 0);
-
-    let archive_count = store
-        .archive()
-        .count()
-        .await
-        .expect("Failed to count archive");
-    assert!(archive_count >= 0);
 
     let workflow_count = store
         .workflows()

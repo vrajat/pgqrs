@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub(crate) struct IteratorState {
     pub(crate) store: AnyStore,
     pub(crate) queue: String,
-    pub(crate) consumer: Option<Arc<Box<dyn rust_pgqrs::Consumer>>>,
+    pub(crate) consumer: Option<Arc<rust_pgqrs::workers::Consumer>>,
     pub(crate) poll_interval: tokio::time::Duration,
 }
 
@@ -222,138 +222,19 @@ impl PyMessages {
             store.messages().count().await.map_err(to_py_err)
         })
     }
-}
 
-#[pyclass(name = "Archive")]
-#[derive(Clone)]
-pub struct PyArchive {
-    pub(crate) store: AnyStore,
-}
-
-#[pymethods]
-impl PyArchive {
-    fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            store.archive().count().await.map_err(to_py_err)
-        })
-    }
-
-    fn list_by_worker<'a>(
-        &self,
-        py: Python<'a>,
-        worker_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> PyResult<&'a PyAny> {
+    fn list_archived_by_queue<'a>(&self, py: Python<'a>, queue_id: i64) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let messages = store
-                .archive()
-                .list_by_worker(worker_id, limit, offset)
+                .messages()
+                .list_archived_by_queue(queue_id)
                 .await
                 .map_err(to_py_err)?;
             Ok(messages
                 .into_iter()
-                .map(PyArchivedMessage::from)
+                .map(PyQueueMessage::from)
                 .collect::<Vec<_>>())
-        })
-    }
-
-    fn count_by_worker<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .archive()
-                .count_by_worker(worker_id)
-                .await
-                .map_err(to_py_err)
-        })
-    }
-
-    fn get<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let msg = store.archive().get(id).await.map_err(to_py_err)?;
-            Ok(PyArchivedMessage::from(msg))
-        })
-    }
-
-    fn delete<'a>(&self, py: Python<'a>, id: i64) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            store.archive().delete(id).await.map_err(to_py_err)
-        })
-    }
-
-    fn dlq_count<'a>(&self, py: Python<'a>, max_attempts: i32) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            store
-                .archive()
-                .dlq_count(max_attempts)
-                .await
-                .map_err(to_py_err)
-        })
-    }
-
-    fn filter_by_fk<'a>(&self, py: Python<'a>, queue_id: i64) -> PyResult<&'a PyAny> {
-        let store = self.store.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let messages = store
-                .archive()
-                .filter_by_fk(queue_id)
-                .await
-                .map_err(to_py_err)?;
-            Ok(messages
-                .into_iter()
-                .map(PyArchivedMessage::from)
-                .collect::<Vec<_>>())
-        })
-    }
-}
-
-#[pyclass(name = "ArchivedMessage")]
-#[derive(Clone)]
-pub struct PyArchivedMessage {
-    #[pyo3(get)]
-    pub id: i64,
-    #[pyo3(get)]
-    pub queue_id: i64,
-    #[pyo3(get)]
-    pub original_msg_id: i64,
-    #[pyo3(get)]
-    pub payload: PyObject,
-    #[pyo3(get)]
-    pub producer_worker_id: Option<i64>,
-    #[pyo3(get)]
-    pub consumer_worker_id: Option<i64>,
-    #[pyo3(get)]
-    pub vt: String,
-    #[pyo3(get)]
-    pub dequeued_at: Option<String>,
-    #[pyo3(get)]
-    pub archived_at: String,
-    #[pyo3(get)]
-    pub enqueued_at: String,
-    #[pyo3(get)]
-    pub read_ct: i32,
-}
-
-impl From<rust_pgqrs::types::ArchivedMessage> for PyArchivedMessage {
-    fn from(r: rust_pgqrs::types::ArchivedMessage) -> Self {
-        Python::with_gil(|py| PyArchivedMessage {
-            id: r.id,
-            queue_id: r.queue_id,
-            original_msg_id: r.original_msg_id,
-            payload: json_to_py(py, &r.payload).unwrap_or(py.None()),
-            producer_worker_id: r.producer_worker_id,
-            consumer_worker_id: r.consumer_worker_id,
-            vt: r.vt.to_rfc3339(),
-            dequeued_at: r.dequeued_at.map(|dt| dt.to_rfc3339()),
-            archived_at: r.archived_at.to_rfc3339(),
-            enqueued_at: r.enqueued_at.to_rfc3339(),
-            read_ct: r.read_ct,
         })
     }
 }
@@ -516,6 +397,11 @@ impl PyQueueMessage {
     #[getter]
     fn consumer_worker_id(&self) -> Option<i64> {
         self.inner.consumer_worker_id
+    }
+
+    #[getter]
+    fn archived_at(&self) -> Option<String> {
+        self.inner.archived_at.map(|dt| dt.to_rfc3339())
     }
 }
 

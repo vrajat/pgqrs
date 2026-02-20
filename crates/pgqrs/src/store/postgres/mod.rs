@@ -1,8 +1,7 @@
 //! Postgres implementation of the Store trait.
 
 use crate::store::{
-    Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, RunRecordTable, StepRecordTable, Store,
+    Admin as AdminTrait, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
     Worker as WorkerTrait, WorkerTable, WorkflowTable,
 };
 use async_trait::async_trait;
@@ -12,7 +11,6 @@ use std::sync::Arc;
 pub mod tables;
 pub mod worker;
 
-use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
 use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
 use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
@@ -22,8 +20,6 @@ use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
 use crate::types::NewQueueMessage;
 
 use self::worker::admin::Admin as PostgresAdmin;
-use self::worker::consumer::Consumer as PostgresConsumer;
-use self::worker::producer::Producer as PostgresProducer;
 
 use crate::config::Config;
 
@@ -34,7 +30,6 @@ pub struct PostgresStore {
     queues: Arc<PostgresQueueTable>,
     messages: Arc<PostgresMessageTable>,
     workers: Arc<PostgresWorkerTable>,
-    archive: Arc<PostgresArchiveTable>,
     workflows: Arc<PostgresWorkflowTable>,
     workflow_runs: Arc<PostgresRunRecordTable>,
     workflow_steps: Arc<PostgresStepRecordTable>,
@@ -48,7 +43,6 @@ impl PostgresStore {
             queues: Arc::new(PostgresQueueTable::new(pool.clone())),
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
-            archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
             workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
             workflow_runs: Arc::new(PostgresRunRecordTable::new(pool.clone())),
             workflow_steps: Arc::new(PostgresStepRecordTable::new(pool)),
@@ -121,10 +115,6 @@ impl Store for PostgresStore {
         self.workers.as_ref()
     }
 
-    fn archive(&self) -> &dyn ArchiveTable {
-        self.archive.as_ref()
-    }
-
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -163,12 +153,20 @@ impl Store for PostgresStore {
         queue: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
+        _config: &Config,
+    ) -> crate::error::Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let producer =
-            PostgresProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer(
@@ -176,12 +174,19 @@ impl Store for PostgresStore {
         queue: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
+        _config: &Config,
+    ) -> crate::error::Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let consumer =
-            PostgresConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-        Ok(Box::new(consumer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
@@ -332,22 +337,31 @@ impl Store for PostgresStore {
     async fn producer_ephemeral(
         &self,
         queue: &str,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn ProducerTrait>> {
+        _config: &Config,
+    ) -> crate::error::Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let producer =
-            PostgresProducer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer_ephemeral(
         &self,
         queue: &str,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn ConsumerTrait>> {
+        _config: &Config,
+    ) -> crate::error::Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let consumer =
-            PostgresConsumer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
-        Ok(Box::new(consumer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 }

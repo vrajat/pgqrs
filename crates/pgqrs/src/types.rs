@@ -53,6 +53,10 @@ pub struct QueueMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
     pub consumer_worker_id: Option<i64>,
+    /// Timestamp when the message was archived (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[tabled(skip)]
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl fmt::Display for QueueMessage {
@@ -62,6 +66,13 @@ impl fmt::Display for QueueMessage {
             "QueueMessage {{ id: {}, queue_id: {}, read_ct: {}, enqueued_at: {}, vt: {}, payload: {} }}",
             self.id, self.queue_id, self.read_ct, self.enqueued_at, self.vt, self.payload
         )
+    }
+}
+
+impl QueueMessage {
+    /// Calculate processing duration if both enqueued_at and dequeued_at are available
+    pub fn get_processing_duration(&self) -> Option<chrono::Duration> {
+        self.dequeued_at.map(|dequeued| dequeued - self.enqueued_at)
     }
 }
 
@@ -86,81 +97,6 @@ impl fmt::Display for QueueRecord {
     }
 }
 
-/// An archived message with additional tracking information
-#[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
-#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
-pub struct ArchivedMessage {
-    /// Unique archive entry ID
-    pub id: i64,
-    /// Original message ID from pgqrs_messages table
-    pub original_msg_id: i64,
-    /// Queue ID this message belonged to
-    pub queue_id: i64,
-    /// Worker ID that produced this message
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[tabled(skip)]
-    pub producer_worker_id: Option<i64>,
-    /// Worker ID that consumed this message
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[tabled(skip)]
-    pub consumer_worker_id: Option<i64>,
-    /// The actual message payload (JSON)
-    pub payload: serde_json::Value,
-    /// Timestamp when the message was originally created
-    pub enqueued_at: chrono::DateTime<chrono::Utc>,
-    /// Visibility timeout when the message was archived
-    pub vt: chrono::DateTime<chrono::Utc>,
-    /// Number of times this message was read before archiving
-    pub read_ct: i32,
-    /// Timestamp when the message was archived
-    pub archived_at: chrono::DateTime<chrono::Utc>,
-    /// Timestamp when the message was dequeued from the queue (if any)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[tabled(skip)]
-    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-/// Input data for creating a new archived message
-#[derive(Debug)]
-pub struct NewArchivedMessage {
-    /// Original message ID from pgqrs_messages table
-    pub original_msg_id: i64,
-    /// Queue ID this message belonged to
-    pub queue_id: i64,
-    /// Worker ID that produced this message
-    pub producer_worker_id: Option<i64>,
-    /// Worker ID that consumed this message
-    pub consumer_worker_id: Option<i64>,
-    /// The actual message payload (JSON)
-    pub payload: serde_json::Value,
-    /// Timestamp when the message was originally created
-    pub enqueued_at: chrono::DateTime<chrono::Utc>,
-    /// Visibility timeout when the message was archived
-    pub vt: chrono::DateTime<chrono::Utc>,
-    /// Number of times this message was read before archiving
-    pub read_ct: i32,
-    /// Timestamp when the message was dequeued from the queue (if any)
-    pub dequeued_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl fmt::Display for ArchivedMessage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ArchivedMessage {{ id: {}, original_msg_id: {}, queue_id: {}, enqueued_at: {}, archived_at: {} }}",
-            self.id, self.original_msg_id, self.queue_id, self.enqueued_at, self.archived_at
-        )
-    }
-}
-
-impl ArchivedMessage {
-    /// Calculate processing duration if both enqueued_at and dequeued_at are available
-    pub fn get_processing_duration(&self) -> Option<chrono::Duration> {
-        self.dequeued_at.map(|dequeued| dequeued - self.enqueued_at)
-    }
-}
-
-/// A worker instance that processes messages from queues
 #[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkerRecord {

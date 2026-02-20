@@ -126,6 +126,7 @@ impl ValidationConfig {
 ///
 /// This struct provides validation capabilities including size checks,
 /// structure validation, content filtering, and in-memory rate limiting.
+#[derive(Debug, Clone)]
 pub struct PayloadValidator {
     config: ValidationConfig,
     rate_limiter: Option<TokenBucket>,
@@ -148,6 +149,10 @@ impl PayloadValidator {
             config,
             rate_limiter,
         }
+    }
+
+    pub fn config(&self) -> &ValidationConfig {
+        &self.config
     }
 
     /// Validate a payload against all configured rules.

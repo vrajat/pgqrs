@@ -169,7 +169,7 @@ impl TursoWorkerTable {
 
     pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
         let held_count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ?",
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ? AND archived_at IS NULL",
         )
         .bind(worker_id)
         .fetch_one(&self.db)
@@ -282,6 +282,16 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             workers.push(Self::map_row(&row)?);
         }
         Ok(workers)
+    }
+
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ?",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count)
     }
 
     async fn count_for_queue(
@@ -429,5 +439,29 @@ impl crate::store::WorkerTable for TursoWorkerTable {
             .await?;
 
         Self::map_row(&row)
+    }
+
+    async fn get_status(&self, id: i64) -> Result<WorkerStatus> {
+        self.get_status(id).await
+    }
+
+    async fn suspend(&self, id: i64) -> Result<()> {
+        self.suspend(id).await
+    }
+
+    async fn resume(&self, id: i64) -> Result<()> {
+        self.resume(id).await
+    }
+
+    async fn shutdown(&self, id: i64) -> Result<()> {
+        self.shutdown(id).await
+    }
+
+    async fn heartbeat(&self, id: i64) -> Result<()> {
+        self.heartbeat(id).await
+    }
+
+    async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> Result<bool> {
+        self.is_healthy(id, max_age).await
     }
 }

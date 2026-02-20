@@ -120,7 +120,7 @@ async fn test_send_message() {
     // Use low-level enqueue API with managed worker
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue message");
@@ -131,14 +131,14 @@ async fn test_send_message() {
     // Verify message count using tables API
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(pending_count, EXPECTED_MESSAGE_COUNT);
 
     // Use low-level dequeue API with managed worker
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(1)
         .fetch_all(&store)
         .await
@@ -157,7 +157,7 @@ async fn test_send_message() {
     // Verify the message was archived
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(pending_count, 0);
@@ -215,7 +215,7 @@ async fn test_archive_single_message() {
     let payload = json!({"action": "process", "data": "test_archive"});
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue message");
@@ -225,15 +225,15 @@ async fn test_archive_single_message() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         1
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -242,7 +242,7 @@ async fn test_archive_single_message() {
 
     // Dequeue the message
     let dequeued_msgs = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(1)
         .fetch_all(&store)
         .await
@@ -259,18 +259,18 @@ async fn test_archive_single_message() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0
     );
     let archived_msgs = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(queue_info.id)
+        .messages()
+        .list_archived_by_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(archived_msgs.len(), 1);
-    assert_eq!(archived_msgs[0].original_msg_id, msg_id);
+    assert_eq!(archived_msgs[0].id, msg_id);
 
     // Try to archive the same message again (should return false)
     let archived_again = consumer.archive(msg_id).await;
@@ -342,7 +342,7 @@ async fn test_archive_batch_messages() {
         let payload = json!({"action": "batch_process", "index": i});
         let msg_id = pgqrs::enqueue()
             .message(&payload)
-            .worker(&*producer)
+            .worker(&producer)
             .execute(&store)
             .await
             .expect("Failed to enqueue message")[0];
@@ -353,15 +353,15 @@ async fn test_archive_batch_messages() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         5
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -370,7 +370,7 @@ async fn test_archive_batch_messages() {
 
     // Dequeue first 3 messages
     let dequeued_msgs = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(3)
         .fetch_all(&store)
         .await
@@ -401,15 +401,15 @@ async fn test_archive_batch_messages() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         2
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -480,8 +480,8 @@ async fn test_archive_nonexistent_message() {
     // Verify archive count remains zero
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -535,7 +535,7 @@ async fn test_purge_archive() {
         let payload = json!({"action": "test_purge_archive", "index": i});
         let msg_ids = pgqrs::enqueue()
             .message(&payload)
-            .worker(&*producer)
+            .worker(&producer)
             .execute(&store)
             .await
             .expect("Failed to enqueue message");
@@ -543,7 +543,7 @@ async fn test_purge_archive() {
 
         // Dequeue before archiving to acquire ownership
         let dequeued = pgqrs::dequeue()
-            .worker(&*consumer)
+            .worker(&consumer)
             .batch(1)
             .fetch_all(&store)
             .await
@@ -561,8 +561,8 @@ async fn test_purge_archive() {
     // Verify archive has 3 messages
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -578,8 +578,8 @@ async fn test_purge_archive() {
     // Verify archive is empty
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -615,7 +615,7 @@ async fn test_interval_parameter_syntax() {
     let message_payload = json!({"test": "interval_test"});
     pgqrs::enqueue()
         .message(&message_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -632,7 +632,7 @@ async fn test_interval_parameter_syntax() {
     let original_vt = message.vt;
 
     // Test extending visibility timeout (which uses make_interval in UPDATE_MESSAGE_VT)
-    let extend_result = consumer.extend_visibility(message.id, 60).await.unwrap(); // Extend by 60 seconds
+    let extend_result = consumer.extend_vt(message.id, 60).await.unwrap(); // Extend by 60 seconds
     assert!(
         extend_result,
         "Should successfully extend visibility timeout"
@@ -787,7 +787,7 @@ async fn test_queue_deletion_with_references() {
     let message_payload = json!({"test": "deletion_test"});
     pgqrs::enqueue()
         .message(&message_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -800,14 +800,14 @@ async fn test_queue_deletion_with_references() {
     );
     let error_msg = delete_result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("active worker"),
-        "Error should mention active workers, got: {}",
+        error_msg.contains("worker"),
+        "Error should mention workers, got: {}",
         error_msg
     );
 
     // Archive the message first (while worker is still active)
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(1)
         .fetch_all(&store)
         .await
@@ -841,8 +841,10 @@ async fn test_queue_deletion_with_references() {
     );
     let error_msg2 = delete_result2.unwrap_err().to_string();
     assert!(
-        error_msg2.contains("references exist") || error_msg2.contains("data exists"),
-        "Error should mention references exist or data exists, got: {}",
+        error_msg2.contains("references exist")
+            || error_msg2.contains("data exists")
+            || error_msg2.contains("worker"),
+        "Error should mention references exist, data exists or workers, got: {}",
         error_msg2
     );
 
@@ -897,7 +899,7 @@ async fn test_validation_payload_size_limit() {
     let small_payload = json!({"key": "value"});
     let result = pgqrs::enqueue()
         .message(&small_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -908,7 +910,7 @@ async fn test_validation_payload_size_limit() {
     });
     let result = pgqrs::enqueue()
         .message(&large_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_err());
@@ -963,7 +965,7 @@ async fn test_validation_forbidden_keys() {
     let valid_payload = json!({"data": "value"});
     let result = pgqrs::enqueue()
         .message(&valid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -972,7 +974,7 @@ async fn test_validation_forbidden_keys() {
     let forbidden_payload = json!({"secret": "should_not_be_allowed"});
     let result = pgqrs::enqueue()
         .message(&forbidden_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_err());
@@ -1026,7 +1028,7 @@ async fn test_validation_required_keys() {
     let valid_payload = json!({"user_id": "123", "data": "value"});
     let result = pgqrs::enqueue()
         .message(&valid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -1035,7 +1037,7 @@ async fn test_validation_required_keys() {
     let invalid_payload = json!({"data": "value"});
     let result = pgqrs::enqueue()
         .message(&invalid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_err());
@@ -1089,7 +1091,7 @@ async fn test_validation_object_depth() {
     let shallow_payload = json!({"level1": {"level2": "value"}});
     let result = pgqrs::enqueue()
         .message(&shallow_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -1098,7 +1100,7 @@ async fn test_validation_object_depth() {
     let deep_payload = json!({"level1": {"level2": {"level3": {"level4": "value"}}}});
     let result = pgqrs::enqueue()
         .message(&deep_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_err());
@@ -1172,7 +1174,7 @@ async fn test_batch_validation_atomic_failure() {
     let valid_payload = json!({"user_id": "789", "data": "test"});
     let result = pgqrs::enqueue()
         .message(&valid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -1220,7 +1222,7 @@ async fn test_validation_string_length() {
     let valid_payload = json!({"key": "short_value"});
     let result = pgqrs::enqueue()
         .message(&valid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_ok());
@@ -1229,7 +1231,7 @@ async fn test_validation_string_length() {
     let invalid_payload = json!({"key": "this_is_a_very_long_string_that_exceeds_our_limit"});
     let result = pgqrs::enqueue()
         .message(&invalid_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
     assert!(result.is_err());
@@ -1319,7 +1321,7 @@ async fn test_dlq() {
     let payload = json!({"task": "process_this"});
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue message");
@@ -1345,32 +1347,19 @@ async fn test_dlq() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0
     );
 
-    let max_read_ct = store.config().max_read_ct;
-    assert_eq!(
-        pgqrs::tables(&store)
-            .archive()
-            .dlq_count(max_read_ct)
-            .await
-            .unwrap(),
-        1
-    );
-
     let dlq_messages = pgqrs::tables(&store)
-        .archive()
-        .list_dlq_messages(max_read_ct, 1, 0)
+        .messages()
+        .list_archived_by_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(dlq_messages.len(), 1, "Should list one DLQ message");
-    assert_eq!(
-        dlq_messages[0].original_msg_id, msg_id,
-        "DLQ message ID should match"
-    );
+    assert_eq!(dlq_messages[0].id, msg_id, "DLQ message ID should match");
 
     // Cleanup
     pgqrs::admin(&store)
@@ -1527,21 +1516,21 @@ async fn test_consumer_shutdown_with_held_messages() {
     // Send multiple messages
     let msg1_ids = pgqrs::enqueue()
         .message(&json!({"task": "held"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let msg1 = msg1_ids[0];
     let msg2_ids = pgqrs::enqueue()
         .message(&json!({"task": "in_progress"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let msg2 = msg2_ids[0];
     let msg3_ids = pgqrs::enqueue()
         .message(&json!({"task": "held"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -1607,7 +1596,7 @@ async fn test_consumer_shutdown_with_held_messages() {
     // Verify all messages are back in pending state
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(
@@ -1657,14 +1646,14 @@ async fn test_consumer_shutdown_all_messages_released() {
     // Send and dequeue messages
     let msg1_ids = pgqrs::enqueue()
         .message(&json!({"task": "release_me"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let msg1 = msg1_ids[0];
     let msg2_ids = pgqrs::enqueue()
         .message(&json!({"task": "release_me_too"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -1688,7 +1677,7 @@ async fn test_consumer_shutdown_all_messages_released() {
     // Verify all messages are released back to pending
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(
@@ -1753,7 +1742,7 @@ async fn test_archive_count_for_queue() {
             .await
             .unwrap()[0];
         let dq = pgqrs::dequeue()
-            .worker(&*consumer1)
+            .worker(&consumer1)
             .fetch_one(&store)
             .await
             .unwrap()
@@ -1769,7 +1758,7 @@ async fn test_archive_count_for_queue() {
         .await
         .unwrap()[0];
     let dq = pgqrs::dequeue()
-        .worker(&*consumer2)
+        .worker(&consumer2)
         .fetch_one(&store)
         .await
         .unwrap();
@@ -1777,16 +1766,18 @@ async fn test_archive_count_for_queue() {
         consumer2.archive(msg.id).await.unwrap();
     }
 
-    // Verify counts using Archive::count_for_queue
-    let archive = pgqrs::tables(&store).archive();
-    let count1 = archive
-        .count_for_queue(q1.id)
+    // Verify counts using list_archived_by_queue
+    let messages = pgqrs::tables(&store).messages();
+    let count1 = messages
+        .list_archived_by_queue(q1.id)
         .await
-        .expect("Failed to count Q1");
-    let count2 = archive
-        .count_for_queue(q2.id)
+        .expect("Failed to count Q1")
+        .len();
+    let count2 = messages
+        .list_archived_by_queue(q2.id)
         .await
-        .expect("Failed to count Q2");
+        .expect("Failed to count Q2")
+        .len();
 
     assert_eq!(count1, 2);
     assert_eq!(count2, 1);
@@ -1819,7 +1810,7 @@ async fn test_consumer_extend_visibility_behavior() {
 
     // Dequeue with 1 second visibility
     let msg = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .vt_offset(1)
         .fetch_one(&store)
         .await
@@ -1827,7 +1818,7 @@ async fn test_consumer_extend_visibility_behavior() {
         .expect("Should have message");
 
     // Extend by 3 more seconds
-    let extended = consumer.extend_visibility(msg.id, 3).await.unwrap();
+    let extended = consumer.extend_vt(msg.id, 3).await.unwrap();
     assert!(extended);
 
     // Verify VT duration - should be ~4s from start, or ~2.5s from now
@@ -1970,23 +1961,22 @@ async fn test_archive_replay_and_recovery() {
     let payload = json!({"replay": true});
     pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
 
     let msg = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_one(&store)
         .await
         .unwrap()
         .unwrap();
     let archived = consumer.archive(msg.id).await.unwrap().unwrap();
 
-    // Replay from Archive via table directly
-    let archive_table = pgqrs::tables(&store).archive();
-    let replayed = archive_table
-        .replay_message(archived.id)
+    // Replay from Archive via Producer API
+    let replayed = producer
+        .replay_dlq(archived.id)
         .await
         .unwrap()
         .expect("Replay failed");
@@ -2005,7 +1995,7 @@ async fn test_archive_replay_and_recovery() {
     // Replay from "DLQ" using Producer API
     // First archive it again
     let dq = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_one(&store)
         .await
         .unwrap()

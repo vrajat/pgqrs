@@ -20,7 +20,7 @@ impl<'a> ConsumerBuilder<'a> {
     }
 
     /// Create the consumer worker
-    pub async fn create<S: Store>(self, store: &S) -> Result<Box<dyn crate::store::Consumer + '_>> {
+    pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Consumer> {
         store
             .consumer(self.queue, self.hostname, self.port, store.config())
             .await

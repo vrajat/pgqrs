@@ -32,7 +32,7 @@ async fn test_enqueue_all_options() {
     let payload = json!({"test": "all_options"});
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .delay(5) // 5 second delay
         .execute(&store)
         .await
@@ -81,7 +81,7 @@ async fn test_enqueue_edge_cases() {
     let empty_payload = json!({});
     let msg_ids = pgqrs::enqueue()
         .message(&empty_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue empty payload");
@@ -93,7 +93,7 @@ async fn test_enqueue_edge_cases() {
     let max_delay_payload = json!({"delayed": true});
     let msg_ids = pgqrs::enqueue()
         .message(&max_delay_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .delay(3600) // 1 hour delay
         .execute(&store)
         .await
@@ -106,7 +106,7 @@ async fn test_enqueue_edge_cases() {
     let zero_delay_payload = json!({"immediate": true});
     let msg_ids = pgqrs::enqueue()
         .message(&zero_delay_payload)
-        .worker(&*producer)
+        .worker(&producer)
         .delay(0)
         .execute(&store)
         .await
@@ -146,7 +146,7 @@ async fn test_enqueue_with_delay_duration() {
 
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .with_delay(Duration::from_secs(300)) // 5 minutes
         .execute(&store)
         .await
@@ -201,7 +201,7 @@ async fn test_dequeue_with_vt_duration() {
     // Enqueue a message
     pgqrs::enqueue()
         .message(&json!({"test": "vt"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue");
@@ -209,7 +209,7 @@ async fn test_dequeue_with_vt_duration() {
     // Dequeue with Duration-based VT
     let before = chrono::Utc::now();
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .with_vt(Duration::from_secs(600)) // 10 minutes
         .fetch_all(&store)
         .await
@@ -260,7 +260,7 @@ async fn test_dequeue_limit() {
     for i in 0..10 {
         pgqrs::enqueue()
             .message(&json!({"index": i}))
-            .worker(&*producer)
+            .worker(&producer)
             .execute(&store)
             .await
             .expect("Failed to enqueue");
@@ -268,7 +268,7 @@ async fn test_dequeue_limit() {
 
     // Test limit() method (alias for batch())
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .limit(5)
         .fetch_all(&store)
         .await
@@ -319,7 +319,7 @@ async fn test_builder_method_chaining() {
 
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .with_delay(Duration::from_secs(10))
         .at(custom_time) // Mock time: message was enqueued 20s ago with 10s delay
         .execute(&store)
@@ -335,7 +335,7 @@ async fn test_builder_method_chaining() {
 
     // Dequeue with chained ergonomic methods and custom time
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .limit(1)
         .with_vt(Duration::from_secs(30))
         .at(dequeue_time) // Use time that ensures message is visible
@@ -386,7 +386,7 @@ async fn test_enqueue_batch_builder() {
     // UPDATED: Use .messages() instead of removed enqueue_batch function
     let msg_ids = pgqrs::enqueue()
         .messages(&payloads)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue batch");
@@ -400,7 +400,7 @@ async fn test_enqueue_batch_builder() {
     let empty_batch: Vec<serde_json::Value> = vec![];
     let result = pgqrs::enqueue()
         .messages(&empty_batch)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await;
 
@@ -534,13 +534,6 @@ async fn test_tables_builder() {
         .expect("Failed to count workers");
     assert!(worker_count >= 0);
 
-    let archive_count = pgqrs::tables(&store)
-        .archive()
-        .count()
-        .await
-        .expect("Failed to count archive");
-    assert!(archive_count >= 0);
-
     let workflow_count = pgqrs::tables(&store)
         .workflows()
         .count()
@@ -611,7 +604,7 @@ async fn test_enqueue_empty_messages_error() {
         .unwrap();
 
     // Should fail because no .message() or .messages() called
-    let result = pgqrs::enqueue().worker(&*producer).execute(&store).await;
+    let result = pgqrs::enqueue().worker(&producer).execute(&store).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();

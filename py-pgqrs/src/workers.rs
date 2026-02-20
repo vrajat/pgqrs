@@ -2,13 +2,15 @@ use crate::tables::PyQueueMessage;
 use crate::{get_runtime, to_py_err, PyAdmin};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
-use rust_pgqrs::store::{AnyStore, Store};
+use rust_pgqrs::store::AnyStore;
 use rust_pgqrs::types::WorkerRecord as RustWorkerInfo;
+use rust_pgqrs::Store;
+
 use std::sync::Arc;
 
 #[pyclass(name = "Producer")]
 pub struct PyProducer {
-    pub(crate) inner: Arc<Box<dyn rust_pgqrs::store::Producer>>,
+    pub(crate) inner: Arc<rust_pgqrs::workers::Producer>,
 }
 
 #[pymethods]
@@ -27,9 +29,8 @@ impl PyProducer {
         let rt = get_runtime();
 
         let producer = rt.block_on(async {
-            // Use Store trait method directly - returns Box<dyn Producer + 'static>
-            store
-                .producer(&queue, &hostname, port, store.config())
+            // Use Store trait method directly - returns Producer struct
+            rust_pgqrs::Store::producer(&store, &queue, &hostname, port, store.config())
                 .await
                 .map_err(to_py_err)
         })?;
@@ -75,7 +76,7 @@ impl PyProducer {
 
 #[pyclass(name = "Consumer")]
 pub struct PyConsumer {
-    pub(crate) inner: Arc<Box<dyn rust_pgqrs::store::Consumer>>,
+    pub(crate) inner: Arc<rust_pgqrs::workers::Consumer>,
 }
 
 impl PyConsumer {
@@ -102,9 +103,8 @@ impl PyConsumer {
         let rt = get_runtime();
 
         let consumer = rt.block_on(async {
-            // Use Store trait method directly - returns Box<dyn Consumer + 'static>
-            store
-                .consumer(&queue, &hostname, port, store.config())
+            // Use Store trait method directly - returns Consumer struct
+            rust_pgqrs::Store::consumer(&store, &queue, &hostname, port, store.config())
                 .await
                 .map_err(to_py_err)
         })?;
@@ -177,7 +177,7 @@ impl PyConsumer {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             inner
-                .extend_visibility(message_id, seconds)
+                .extend_vt(message_id, seconds)
                 .await
                 .map_err(to_py_err)
         })
@@ -250,14 +250,20 @@ impl PyWorkers {
     fn count<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            store.workers().count().await.map_err(to_py_err)
+            rust_pgqrs::Store::workers(&store)
+                .count()
+                .await
+                .map_err(to_py_err)
         })
     }
 
     fn list<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let workers = store.workers().list().await.map_err(to_py_err)?;
+            let workers = rust_pgqrs::Store::workers(&store)
+                .list()
+                .await
+                .map_err(to_py_err)?;
             Ok(workers
                 .into_iter()
                 .map(PyWorkerInfo::from)

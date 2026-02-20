@@ -85,7 +85,6 @@ pub trait Store: Send + Sync + 'static {
     fn queues(&self) -> &dyn QueueTable;
     fn messages(&self) -> &dyn MessageTable;
     fn workers(&self) -> &dyn WorkerTable;
-    fn archive(&self) -> &dyn ArchiveTable;
     fn workflows(&self) -> &dyn WorkflowTable;
     fn workflow_runs(&self) -> &dyn RunRecordTable;
     fn workflow_steps(&self) -> &dyn StepRecordTable;
@@ -111,7 +110,7 @@ pub trait Store: Send + Sync + 'static {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>>;
+    ) -> crate::error::Result<Producer>;
 
     /// Get a consumer interface for a specific queue with worker identity.
     async fn consumer(
@@ -120,7 +119,7 @@ pub trait Store: Send + Sync + 'static {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>>;
+    ) -> crate::error::Result<Consumer>;
 
     /// Create a new queue.
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord>;
@@ -158,14 +157,14 @@ pub trait Store: Send + Sync + 'static {
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>>;
+    ) -> crate::error::Result<Producer>;
 
     /// Create an ephemeral consumer (NULL hostname/port, auto-cleanup).
     async fn consumer_ephemeral(
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>>;
+    ) -> crate::error::Result<Consumer>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

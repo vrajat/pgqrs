@@ -68,7 +68,7 @@ async fn test_sqlite_connect() {
 
     let count = store
         .messages()
-        .count_pending(queue.id)
+        .count_pending_for_queue(queue.id)
         .await
         .expect("Failed to count");
     // Should be 1 (vt <= now)

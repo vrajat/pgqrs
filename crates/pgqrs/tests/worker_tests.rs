@@ -99,20 +99,20 @@ async fn test_worker_message_assignment() {
     // Add some messages to the queue
     pgqrs::enqueue()
         .message(&json!({"task": "test1"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::enqueue()
         .message(&json!({"task": "test2"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
 
     // Read messages normally
     let messages_list = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(2)
         .fetch_all(&store)
         .await
@@ -133,7 +133,7 @@ async fn test_worker_message_assignment() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0
@@ -329,14 +329,14 @@ async fn test_worker_deletion_with_references() {
 
     let message_ids = pgqrs::enqueue()
         .message(&json!({"test": "data"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let message_id = message_ids[0];
 
     assert!(pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_one(&store)
         .await
         .is_ok());
@@ -351,7 +351,7 @@ async fn test_worker_deletion_with_references() {
 
     let error_msg = format!("{}", result.unwrap_err());
     assert!(
-        error_msg.contains("associated messages/archives"),
+        error_msg.contains("associated messages"),
         "Error should mention associated messages, got: {}",
         error_msg
     );
@@ -435,7 +435,7 @@ async fn test_worker_deletion_with_archived_references() {
     // Send and process a message (this should create archived reference)
     let message_ids = pgqrs::enqueue()
         .message(&json!({"test": "archive_data"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -443,7 +443,7 @@ async fn test_worker_deletion_with_archived_references() {
 
     // Read the message to assign it to worker
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();
@@ -463,8 +463,8 @@ async fn test_worker_deletion_with_archived_references() {
 
     let error_msg = format!("{}", result.unwrap_err());
     assert!(
-        error_msg.contains("associated messages/archives"),
-        "Error should mention associated archives, got: {}",
+        error_msg.contains("associated messages"),
+        "Error should mention associated messages, got: {}",
         error_msg
     );
 }

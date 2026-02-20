@@ -3,10 +3,9 @@
 use crate::rate_limit::RateLimitStatus;
 use crate::store::{AnyStore, Store};
 pub use crate::types::{
-    ArchivedMessage, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus,
-    WorkflowRecord,
+    QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
-use crate::validation::ValidationConfig;
+use crate::validation::{PayloadValidator, ValidationConfig};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -87,88 +86,365 @@ pub trait Admin: Worker {
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
 }
 
-/// Producer interface for enqueueing messages.
-#[async_trait]
-pub trait Producer: Worker {
-    async fn get_message_by_id(&self, msg_id: i64) -> crate::error::Result<QueueMessage>;
-    async fn enqueue(&self, payload: &Value) -> crate::error::Result<QueueMessage>;
-    async fn enqueue_delayed(
+/// Producer interface for enqueueing messages to a specific queue.
+#[derive(Clone, Debug)]
+pub struct Producer {
+    store: AnyStore,
+    queue_info: QueueRecord,
+    worker_record: WorkerRecord,
+    validator: PayloadValidator,
+    current_time: Option<DateTime<Utc>>,
+}
+
+impl Producer {
+    pub fn new(
+        store: AnyStore,
+        queue_info: QueueRecord,
+        worker_record: WorkerRecord,
+        validation_config: ValidationConfig,
+    ) -> Self {
+        Self {
+            store,
+            queue_info,
+            worker_record,
+            validator: PayloadValidator::new(validation_config),
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn current_time(&self) -> DateTime<Utc> {
+        self.current_time.unwrap_or_else(Utc::now)
+    }
+
+    pub fn worker_id(&self) -> i64 {
+        self.worker_record.id
+    }
+
+    pub fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
+    }
+
+    pub async fn status(&self) -> crate::error::Result<WorkerStatus> {
+        self.store.workers().get_status(self.worker_record.id).await
+    }
+
+    pub async fn suspend(&self) -> crate::error::Result<()> {
+        self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    pub async fn resume(&self) -> crate::error::Result<()> {
+        self.store.workers().resume(self.worker_record.id).await
+    }
+
+    pub async fn shutdown(&self) -> crate::error::Result<()> {
+        self.store.workers().shutdown(self.worker_record.id).await
+    }
+
+    pub async fn heartbeat(&self) -> crate::error::Result<()> {
+        self.store.workers().heartbeat(self.worker_record.id).await
+    }
+
+    pub async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool> {
+        self.store
+            .workers()
+            .is_healthy(self.worker_record.id, max_age)
+            .await
+    }
+
+    pub async fn get_message_by_id(&self, msg_id: i64) -> crate::error::Result<QueueMessage> {
+        self.store.messages().get(msg_id).await
+    }
+
+    pub async fn enqueue(&self, payload: &Value) -> crate::error::Result<QueueMessage> {
+        self.enqueue_delayed(payload, 0).await
+    }
+
+    pub async fn enqueue_delayed(
         &self,
         payload: &Value,
         delay_seconds: u32,
-    ) -> crate::error::Result<QueueMessage>;
-    async fn batch_enqueue(&self, payloads: &[Value]) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn batch_enqueue_delayed(
-        &self,
-        payloads: &[serde_json::Value],
-        delay_seconds: u32,
-    ) -> crate::error::Result<Vec<QueueMessage>>;
+    ) -> crate::error::Result<QueueMessage> {
+        self.validator.validate(payload)?;
 
-    async fn enqueue_at(
+        let now = self.current_time();
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+
+        let new_message = crate::types::NewQueueMessage {
+            queue_id: self.queue_info.id,
+            payload: payload.clone(),
+            read_ct: 0,
+            enqueued_at: now,
+            vt,
+            producer_worker_id: Some(self.worker_record.id),
+            consumer_worker_id: None,
+        };
+
+        self.store.messages().insert(new_message).await
+    }
+
+    pub async fn batch_enqueue(
+        &self,
+        payloads: &[Value],
+    ) -> crate::error::Result<Vec<QueueMessage>> {
+        self.batch_enqueue_delayed(payloads, 0).await
+    }
+
+    pub async fn batch_enqueue_delayed(
+        &self,
+        payloads: &[Value],
+        delay_seconds: u32,
+    ) -> crate::error::Result<Vec<QueueMessage>> {
+        self.batch_enqueue_at(payloads, self.current_time(), delay_seconds)
+            .await
+    }
+
+    pub async fn enqueue_at(
         &self,
         payload: &Value,
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
-    ) -> crate::error::Result<QueueMessage>;
+    ) -> crate::error::Result<QueueMessage> {
+        self.validator.validate(payload)?;
 
-    async fn batch_enqueue_at(
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+
+        let new_message = crate::types::NewQueueMessage {
+            queue_id: self.queue_info.id,
+            payload: payload.clone(),
+            read_ct: 0,
+            enqueued_at: now,
+            vt,
+            producer_worker_id: Some(self.worker_record.id),
+            consumer_worker_id: None,
+        };
+
+        self.store.messages().insert(new_message).await
+    }
+
+    pub async fn batch_enqueue_at(
         &self,
         payloads: &[Value],
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
-    ) -> crate::error::Result<Vec<QueueMessage>>;
+    ) -> crate::error::Result<Vec<QueueMessage>> {
+        self.validator.validate_batch(payloads)?;
 
-    async fn insert_message(
+        let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
+
+        let ids = self
+            .store
+            .messages()
+            .batch_insert(
+                self.queue_info.id,
+                payloads,
+                crate::types::BatchInsertParams {
+                    read_ct: 0,
+                    enqueued_at: now,
+                    vt,
+                    producer_worker_id: Some(self.worker_record.id),
+                    consumer_worker_id: None,
+                },
+            )
+            .await?;
+
+        self.store.messages().get_by_ids(&ids).await
+    }
+
+    pub async fn replay_dlq(
         &self,
-        payload: &Value,
-        now: chrono::DateTime<chrono::Utc>,
-        vt: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<i64>;
+        archived_msg_id: i64,
+    ) -> crate::error::Result<Option<QueueMessage>> {
+        self.store.messages().replay_dlq(archived_msg_id).await
+    }
 
-    async fn replay_dlq(&self, archived_msg_id: i64) -> crate::error::Result<Option<QueueMessage>>;
+    pub fn validation_config(&self) -> &ValidationConfig {
+        self.validator.config()
+    }
 
-    fn validation_config(&self) -> &ValidationConfig;
-    fn rate_limit_status(&self) -> Option<RateLimitStatus>;
+    pub fn rate_limit_status(&self) -> Option<RateLimitStatus> {
+        self.validator.rate_limit_status()
+    }
 }
 
 /// Consumer interface for processing messages.
-#[async_trait]
-pub trait Consumer: Worker {
-    async fn dequeue(&self) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn dequeue_many(&self, limit: usize) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn dequeue_delay(&self, vt: u32) -> crate::error::Result<Vec<QueueMessage>>;
-    async fn dequeue_many_with_delay(
+#[derive(Clone, Debug)]
+pub struct Consumer {
+    store: AnyStore,
+    queue_info: QueueRecord,
+    worker_record: WorkerRecord,
+    current_time: Option<DateTime<Utc>>,
+}
+
+impl Consumer {
+    pub fn new(store: AnyStore, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
+        Self {
+            store,
+            queue_info,
+            worker_record,
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn current_time(&self) -> DateTime<Utc> {
+        self.current_time.unwrap_or_else(Utc::now)
+    }
+
+    pub fn worker_id(&self) -> i64 {
+        self.worker_record.id
+    }
+
+    pub fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
+    }
+
+    pub async fn status(&self) -> crate::error::Result<WorkerStatus> {
+        self.store.workers().get_status(self.worker_record.id).await
+    }
+
+    pub async fn suspend(&self) -> crate::error::Result<()> {
+        self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    pub async fn resume(&self) -> crate::error::Result<()> {
+        self.store.workers().resume(self.worker_record.id).await
+    }
+
+    pub async fn shutdown(&self) -> crate::error::Result<()> {
+        let pending = self
+            .store
+            .messages()
+            .count_pending_for_queue_and_worker(self.queue_info.id, self.worker_record.id)
+            .await?;
+
+        if pending > 0 {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
+                count: pending as u64,
+                reason: format!("Consumer has {} pending messages", pending),
+            });
+        }
+        self.store.workers().shutdown(self.worker_record.id).await
+    }
+
+    pub async fn heartbeat(&self) -> crate::error::Result<()> {
+        self.store.workers().heartbeat(self.worker_record.id).await
+    }
+
+    pub async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool> {
+        self.store
+            .workers()
+            .is_healthy(self.worker_record.id, max_age)
+            .await
+    }
+
+    pub async fn dequeue(&self) -> crate::error::Result<Vec<QueueMessage>> {
+        self.dequeue_many(1).await
+    }
+
+    pub async fn dequeue_many(&self, limit: usize) -> crate::error::Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(limit, 30).await
+    }
+
+    pub async fn dequeue_delay(&self, vt: u32) -> crate::error::Result<Vec<QueueMessage>> {
+        self.dequeue_many_with_delay(1, vt).await
+    }
+
+    pub async fn dequeue_many_with_delay(
         &self,
         limit: usize,
         vt: u32,
-    ) -> crate::error::Result<Vec<QueueMessage>>;
+    ) -> crate::error::Result<Vec<QueueMessage>> {
+        self.dequeue_at(limit, vt, self.current_time()).await
+    }
 
-    async fn dequeue_at(
+    pub async fn dequeue_at(
         &self,
         limit: usize,
         vt: u32,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<Vec<QueueMessage>>;
+    ) -> crate::error::Result<Vec<QueueMessage>> {
+        self.store
+            .messages()
+            .dequeue_at(
+                self.queue_info.id,
+                limit,
+                vt,
+                self.worker_record.id,
+                now,
+                self.store.config().max_read_ct,
+            )
+            .await
+    }
 
-    async fn extend_visibility(
-        &self,
-        message_id: i64,
-        additional_seconds: u32,
-    ) -> crate::error::Result<bool>;
+    pub async fn extend_vt(&self, message_id: i64, seconds: u32) -> crate::error::Result<bool> {
+        let count = self
+            .store
+            .messages()
+            .extend_visibility(message_id, self.worker_record.id, seconds)
+            .await?;
+        Ok(count > 0)
+    }
 
-    async fn delete(&self, message_id: i64) -> crate::error::Result<bool>;
-    async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
+    pub async fn delete(&self, message_id: i64) -> crate::error::Result<bool> {
+        let count = self
+            .store
+            .messages()
+            .delete_owned(message_id, self.worker_record.id)
+            .await?;
+        Ok(count > 0)
+    }
 
-    async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<ArchivedMessage>>;
-    async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
+    pub async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
+        self.store
+            .messages()
+            .delete_many_owned(&message_ids, self.worker_record.id)
+            .await
+    }
 
-    async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64>;
+    pub async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>> {
+        self.store
+            .messages()
+            .archive(msg_id, self.worker_record.id)
+            .await
+    }
 
-    async fn release_with_visibility(
+    pub async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
+        self.store
+            .messages()
+            .archive_many(&msg_ids, self.worker_record.id)
+            .await
+    }
+
+    pub async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64> {
+        let res = self
+            .store
+            .messages()
+            .release_messages_by_ids(message_ids, self.worker_record.id)
+            .await?;
+        Ok(res.iter().filter(|&&x| x).count() as u64)
+    }
+
+    pub async fn release_with_visibility(
         &self,
         message_id: i64,
         visible_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<bool>;
+    ) -> crate::error::Result<bool> {
+        let count = self
+            .store
+            .messages()
+            .release_with_visibility(message_id, self.worker_record.id, visible_at)
+            .await?;
+        Ok(count > 0)
+    }
 }
 
 /// Workflow execution run handle.

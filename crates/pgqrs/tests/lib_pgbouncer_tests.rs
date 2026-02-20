@@ -68,7 +68,7 @@ async fn test_pgbouncer_happy_path() {
 
     pgqrs::enqueue()
         .message(&test_message)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Failed to enqueue message through PgBouncer");
@@ -76,7 +76,7 @@ async fn test_pgbouncer_happy_path() {
     // Verify we have a pending message
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to get pending count through PgBouncer");
 
@@ -84,7 +84,7 @@ async fn test_pgbouncer_happy_path() {
 
     // Read the message through PgBouncer
     let messages_list = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(1)
         .fetch_all(&store)
         .await
@@ -107,7 +107,7 @@ async fn test_pgbouncer_happy_path() {
     // Verify the message is gone from the main queue
     let pending_count_after = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to get pending count after dequeue");
 

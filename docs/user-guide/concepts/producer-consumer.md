@@ -307,7 +307,7 @@ After successful processing, archive the message:
     # await consumer.archive_batch([msg1.id, msg2.id, msg3.id])
     ```
 
-Archiving moves the message to `pgqrs_archive` for audit trails.
+Archiving marks the message as archived in the messages table for audit trails.
 
 #### Delete Messages
 
