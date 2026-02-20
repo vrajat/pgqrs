@@ -32,7 +32,7 @@
 use crate::error::Result;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
 use crate::store::postgres::tables::Messages;
-use crate::store::WorkerTable;
+use crate::store::{MessageTable, WorkerTable};
 use crate::types::{QueueMessage, QueueRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;

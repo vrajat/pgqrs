@@ -549,11 +549,25 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(rows)
     }
 
-    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending_filtered(queue_id, None).await
+    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = crate::store::turso::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count)
     }
 
-    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
+    async fn count_pending_for_queue_and_worker(
+        &self,
+        queue_id: i64,
+        worker_id: Option<i64>,
+    ) -> Result<i64> {
         let count: i64 = match worker_id {
             Some(wid) => {
                 crate::store::turso::query_scalar(
@@ -605,7 +619,7 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(messages)
     }
 
-    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
         let count: i64 = crate::store::turso::query_scalar(
             "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = ?",
         )

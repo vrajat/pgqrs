@@ -407,6 +407,19 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(COUNT_WORKERS_BY_QUEUE_TX)
+            .bind(queue_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_WORKERS_BY_QUEUE".into(),
+                source: Box::new(e),
+                context: format!("Failed to count workers for queue {}", queue_id),
+            })?;
+        Ok(count)
+    }
+
     async fn count_for_queue(
         &self,
         queue_id: i64,

@@ -81,9 +81,9 @@ pub trait MessageTable: Send + Sync {
         vt: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<u64>;
 
-    async fn count_pending(&self, queue_id: i64) -> crate::error::Result<i64>;
+    async fn count_pending_for_queue(&self, queue_id: i64) -> crate::error::Result<i64>;
 
-    async fn count_pending_filtered(
+    async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
         worker_id: Option<i64>,
@@ -94,7 +94,7 @@ pub trait MessageTable: Send + Sync {
         queue_id: i64,
     ) -> crate::error::Result<Vec<QueueMessage>>;
 
-    async fn count_for_queue(&self, queue_id: i64) -> crate::error::Result<i64>;
+    async fn count_by_fk(&self, queue_id: i64) -> crate::error::Result<i64>;
 
     async fn delete_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<bool>>;
 }
@@ -111,6 +111,7 @@ pub trait WorkerTable: Send + Sync {
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
     async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerRecord>>;
+    async fn count_by_fk(&self, queue_id: i64) -> crate::error::Result<i64>;
 
     async fn count_for_queue(
         &self,

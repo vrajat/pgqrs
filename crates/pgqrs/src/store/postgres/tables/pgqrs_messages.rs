@@ -83,95 +83,6 @@ impl Messages {
         Self { pool }
     }
 
-    pub async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
-        let message = sqlx::query_as::<_, QueueMessage>(INSERT_MESSAGE)
-            .bind(data.queue_id)
-            .bind(data.payload)
-            .bind(data.read_ct)
-            .bind(data.enqueued_at)
-            .bind(data.vt)
-            .bind(data.producer_worker_id)
-            .bind(data.consumer_worker_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "INSERT_MESSAGE".into(),
-                source: Box::new(e),
-                context: "Failed to insert message".into(),
-            })?;
-
-        Ok(message)
-    }
-
-    pub async fn get(&self, id: i64) -> Result<QueueMessage> {
-        let message = sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "GET_MESSAGE_BY_ID".into(),
-                source: Box::new(e),
-                context: format!("Failed to get message {}", id),
-            })?;
-
-        Ok(message)
-    }
-
-    pub async fn list(&self) -> Result<Vec<QueueMessage>> {
-        let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "LIST_ALL_MESSAGES".into(),
-                source: Box::new(e),
-                context: "Failed to list all messages".into(),
-            })?;
-
-        Ok(messages)
-    }
-
-    pub async fn count(&self) -> Result<i64> {
-        let count =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "COUNT_MESSAGES".into(),
-                    source: Box::new(e),
-                    context: "Failed to count messages".into(),
-                })?;
-        Ok(count)
-    }
-
-    pub async fn delete(&self, id: i64) -> Result<u64> {
-        let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DELETE_MESSAGE_BY_ID".into(),
-                source: Box::new(e),
-                context: format!("Failed to delete message {}", id),
-            })?
-            .rows_affected();
-
-        Ok(rows_affected)
-    }
-
-    pub async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<QueueMessage>> {
-        let messages = sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_QUEUE)
-            .bind(foreign_key_value)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "LIST_MESSAGES_BY_QUEUE".into(),
-                source: Box::new(e),
-                context: format!("Failed to list messages for queue {}", foreign_key_value),
-            })?;
-
-        Ok(messages)
-    }
-
     pub async fn count_for_fk<'a, 'b: 'a>(
         &self,
         foreign_key_value: i64,
@@ -205,8 +116,100 @@ impl Messages {
             })?;
         Ok(result.rows_affected())
     }
+}
 
-    pub async fn batch_insert(
+#[async_trait]
+impl crate::store::MessageTable for Messages {
+    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
+        let message = sqlx::query_as::<_, QueueMessage>(INSERT_MESSAGE)
+            .bind(data.queue_id)
+            .bind(data.payload)
+            .bind(data.read_ct)
+            .bind(data.enqueued_at)
+            .bind(data.vt)
+            .bind(data.producer_worker_id)
+            .bind(data.consumer_worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_MESSAGE".into(),
+                source: Box::new(e),
+                context: "Failed to insert message".into(),
+            })?;
+
+        Ok(message)
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueMessage> {
+        let message = sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_MESSAGE_BY_ID".into(),
+                source: Box::new(e),
+                context: format!("Failed to get message {}", id),
+            })?;
+
+        Ok(message)
+    }
+
+    async fn list(&self) -> Result<Vec<QueueMessage>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_ALL_MESSAGES".into(),
+                source: Box::new(e),
+                context: "Failed to list all messages".into(),
+            })?;
+
+        Ok(messages)
+    }
+
+    async fn count(&self) -> Result<i64> {
+        let count =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES".into(),
+                    source: Box::new(e),
+                    context: "Failed to count messages".into(),
+                })?;
+        Ok(count)
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_BY_ID".into(),
+                source: Box::new(e),
+                context: format!("Failed to delete message {}", id),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
+    }
+
+    async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<QueueMessage>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_QUEUE)
+            .bind(foreign_key_value)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_MESSAGES_BY_QUEUE".into(),
+                source: Box::new(e),
+                context: format!("Failed to list messages for queue {}", foreign_key_value),
+            })?;
+
+        Ok(messages)
+    }
+
+    async fn batch_insert(
         &self,
         queue_id: i64,
         payloads: &[serde_json::Value],
@@ -231,7 +234,7 @@ impl Messages {
         Ok(ids)
     }
 
-    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
+    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(GET_MESSAGES_BY_IDS)
             .bind(ids)
             .fetch_all(&self.pool)
@@ -245,7 +248,7 @@ impl Messages {
         Ok(messages)
     }
 
-    pub async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
+    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
         let rows_affected = sqlx::query(UPDATE_MESSAGE_VT)
             .bind(id)
             .bind(vt)
@@ -261,7 +264,7 @@ impl Messages {
         Ok(rows_affected)
     }
 
-    pub async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
+    async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
         let rows_affected = sqlx::query("UPDATE pgqrs_messages SET payload = $2 WHERE id = $1")
             .bind(id)
             .bind(payload)
@@ -277,7 +280,7 @@ impl Messages {
         Ok(rows_affected)
     }
 
-    pub async fn extend_visibility(
+    async fn extend_visibility(
         &self,
         id: i64,
         worker_id: i64,
@@ -305,7 +308,7 @@ impl Messages {
         Ok(rows_affected)
     }
 
-    pub async fn extend_visibility_batch(
+    async fn extend_visibility_batch(
         &self,
         message_ids: &[i64],
         worker_id: i64,
@@ -346,7 +349,7 @@ impl Messages {
         Ok(result)
     }
 
-    pub async fn release_messages_by_ids(
+    async fn release_messages_by_ids(
         &self,
         message_ids: &[i64],
         worker_id: i64,
@@ -382,7 +385,7 @@ impl Messages {
         Ok(result)
     }
 
-    pub async fn release_with_visibility(
+    async fn release_with_visibility(
         &self,
         id: i64,
         worker_id: i64,
@@ -410,11 +413,27 @@ impl Messages {
         Ok(rows_affected)
     }
 
-    pub async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending_filtered(queue_id, None).await
+    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_PENDING (queue_id={})", queue_id),
+            source: Box::new(e),
+            context: format!("Failed to count pending messages for queue {}", queue_id),
+        })?;
+
+        Ok(count)
     }
 
-    pub async fn count_pending_filtered(
+    async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
         worker_id: Option<i64>,
@@ -447,126 +466,12 @@ impl Messages {
             }
         }
         .map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("COUNT_PENDING (queue_id={})", queue_id),
+            query: format!("COUNT_PENDING_FILTERED (queue_id={})", queue_id),
             source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;
 
         Ok(count)
-    }
-
-    pub async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
-        let mut results = Vec::with_capacity(ids.len());
-
-        for &id in ids {
-            let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: format!("DELETE_MESSAGE_BY_ID ({})", id),
-                    source: Box::new(e),
-                    context: format!("Failed to delete message {}", id),
-                })?
-                .rows_affected();
-
-            results.push(rows_affected > 0);
-        }
-
-        Ok(results)
-    }
-}
-
-#[async_trait]
-impl crate::store::MessageTable for Messages {
-    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
-        self.insert(data).await
-    }
-
-    async fn get(&self, id: i64) -> Result<QueueMessage> {
-        self.get(id).await
-    }
-
-    async fn list(&self) -> Result<Vec<QueueMessage>> {
-        self.list().await
-    }
-
-    async fn count(&self) -> Result<i64> {
-        self.count().await
-    }
-
-    async fn delete(&self, id: i64) -> Result<u64> {
-        self.delete(id).await
-    }
-
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
-        self.filter_by_fk(queue_id).await
-    }
-
-    async fn batch_insert(
-        &self,
-        queue_id: i64,
-        payloads: &[serde_json::Value],
-        params: crate::types::BatchInsertParams,
-    ) -> Result<Vec<i64>> {
-        self.batch_insert(queue_id, payloads, params).await
-    }
-
-    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
-        self.get_by_ids(ids).await
-    }
-
-    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
-        self.update_visibility_timeout(id, vt).await
-    }
-
-    async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
-        self.update_payload(id, payload).await
-    }
-
-    async fn extend_visibility(
-        &self,
-        id: i64,
-        worker_id: i64,
-        additional_seconds: u32,
-    ) -> Result<u64> {
-        self.extend_visibility(id, worker_id, additional_seconds)
-            .await
-    }
-
-    async fn extend_visibility_batch(
-        &self,
-        message_ids: &[i64],
-        worker_id: i64,
-        additional_seconds: u32,
-    ) -> Result<Vec<bool>> {
-        self.extend_visibility_batch(message_ids, worker_id, additional_seconds)
-            .await
-    }
-
-    async fn release_messages_by_ids(
-        &self,
-        message_ids: &[i64],
-        worker_id: i64,
-    ) -> Result<Vec<bool>> {
-        self.release_messages_by_ids(message_ids, worker_id).await
-    }
-
-    async fn release_with_visibility(
-        &self,
-        id: i64,
-        worker_id: i64,
-        vt: DateTime<Utc>,
-    ) -> Result<u64> {
-        self.release_with_visibility(id, worker_id, vt).await
-    }
-
-    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending(queue_id).await
-    }
-
-    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
-        self.count_pending_filtered(queue_id, worker_id).await
     }
 
     async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
@@ -590,7 +495,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1")
                 .bind(queue_id)
@@ -605,6 +510,23 @@ impl crate::store::MessageTable for Messages {
     }
 
     async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
-        self.delete_by_ids(ids).await
+        let mut results = Vec::with_capacity(ids.len());
+
+        for &id in ids {
+            let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: format!("DELETE_MESSAGE_BY_ID ({})", id),
+                    source: Box::new(e),
+                    context: format!("Failed to delete message {}", id),
+                })?
+                .rows_affected();
+
+            results.push(rows_affected > 0);
+        }
+
+        Ok(results)
     }
 }

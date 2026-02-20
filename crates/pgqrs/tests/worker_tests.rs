@@ -133,7 +133,7 @@ async fn test_worker_message_assignment() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0

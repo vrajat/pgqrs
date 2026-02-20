@@ -131,7 +131,7 @@ async fn test_send_message() {
     // Verify message count using tables API
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(pending_count, EXPECTED_MESSAGE_COUNT);
@@ -157,7 +157,7 @@ async fn test_send_message() {
     // Verify the message was archived
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(pending_count, 0);
@@ -225,7 +225,7 @@ async fn test_archive_single_message() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         1
@@ -259,7 +259,7 @@ async fn test_archive_single_message() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0
@@ -353,7 +353,7 @@ async fn test_archive_batch_messages() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         5
@@ -401,7 +401,7 @@ async fn test_archive_batch_messages() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         2
@@ -1347,7 +1347,7 @@ async fn test_dlq() {
     assert_eq!(
         pgqrs::tables(&store)
             .messages()
-            .count_pending(queue_info.id)
+            .count_pending_for_queue(queue_info.id)
             .await
             .unwrap(),
         0
@@ -1596,7 +1596,7 @@ async fn test_consumer_shutdown_with_held_messages() {
     // Verify all messages are back in pending state
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(
@@ -1677,7 +1677,7 @@ async fn test_consumer_shutdown_all_messages_released() {
     // Verify all messages are released back to pending
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(

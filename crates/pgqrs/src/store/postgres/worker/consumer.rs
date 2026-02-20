@@ -33,7 +33,7 @@
 
 use crate::error::Result;
 use crate::store::postgres::tables::{Messages, Workers};
-use crate::tables::WorkerTable;
+use crate::tables::{MessageTable, WorkerTable};
 use crate::{QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -221,11 +221,9 @@ impl crate::store::Worker for Consumer {
 
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
-        // Check if consumer has pending messages
-        // Use count_pending_filtered from Messages for cleaner abstraction
         let messages = Messages::new(self.pool.clone());
         let pending_count = messages
-            .count_pending_filtered(self.queue_info.id, Some(self.worker_record.id))
+            .count_pending_for_queue_and_worker(self.queue_info.id, Some(self.worker_record.id))
             .await?;
 
         if pending_count > 0 {

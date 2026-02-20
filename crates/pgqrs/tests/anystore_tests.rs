@@ -44,7 +44,7 @@ async fn test_anystore_delegates_to_backend() {
     // Verify message count
     let count = store
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to count messages");
     assert_eq!(count, 1);

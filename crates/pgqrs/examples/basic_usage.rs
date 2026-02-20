@@ -250,11 +250,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Show pending count
     let email_pending = pgqrs::tables(&store)
         .messages()
-        .count_pending(email_queue.id)
+        .count_pending_for_queue(email_queue.id)
         .await?;
     let task_pending = pgqrs::tables(&store)
         .messages()
-        .count_pending(task_queue.id)
+        .count_pending_for_queue(task_queue.id)
         .await?;
     println!("\nPending messages:");
     println!("  email queue: {}", email_pending);

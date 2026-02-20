@@ -76,7 +76,7 @@ async fn test_pgbouncer_happy_path() {
     // Verify we have a pending message
     let pending_count = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to get pending count through PgBouncer");
 
@@ -107,7 +107,7 @@ async fn test_pgbouncer_happy_path() {
     // Verify the message is gone from the main queue
     let pending_count_after = pgqrs::tables(&store)
         .messages()
-        .count_pending(queue_info.id)
+        .count_pending_for_queue(queue_info.id)
         .await
         .expect("Failed to get pending count after dequeue");
 

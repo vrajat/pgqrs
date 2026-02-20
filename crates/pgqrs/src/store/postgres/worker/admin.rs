@@ -647,7 +647,7 @@ impl crate::store::Admin for Admin {
         }
 
         // Check referential integrity using table methods
-        let total_references = self.messages.count_for_queue(queue_id).await?;
+        let total_references = self.messages.count_by_fk(queue_id).await?;
 
         if total_references > 0 {
             return Err(crate::error::Error::ValidationFailed {

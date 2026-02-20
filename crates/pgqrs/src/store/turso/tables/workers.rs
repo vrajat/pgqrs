@@ -284,6 +284,16 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         Ok(workers)
     }
 
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = ?",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count)
+    }
+
     async fn count_for_queue(
         &self,
         queue_id: i64,

@@ -332,7 +332,7 @@ impl Admin for TursoAdmin {
         }
 
         // Check references
-        let msgs = self.messages.count_for_queue(queue_info.id).await?;
+        let msgs = self.messages.count_by_fk(queue_info.id).await?;
         if msgs > 0 {
             return Err(crate::error::Error::ValidationFailed {
                 reason: "Cannot delete queue: data exists".to_string(),

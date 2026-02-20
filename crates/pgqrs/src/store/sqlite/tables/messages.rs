@@ -437,11 +437,16 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(rows)
     }
 
-    async fn count_pending(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending_filtered(queue_id, None).await
+    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        self.count_pending_for_queue_and_worker(queue_id, None)
+            .await
     }
 
-    async fn count_pending_filtered(&self, queue_id: i64, worker_id: Option<i64>) -> Result<i64> {
+    async fn count_pending_for_queue_and_worker(
+        &self,
+        queue_id: i64,
+        worker_id: Option<i64>,
+    ) -> Result<i64> {
         let count: i64 = match worker_id {
             Some(wid) => {
                 sqlx::query_scalar(
@@ -502,7 +507,7 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(messages)
     }
 
-    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1")
                 .bind(queue_id)
