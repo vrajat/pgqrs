@@ -148,12 +148,12 @@ impl<'a> DequeueBuilder<'a> {
             })?;
 
         let worker = store.consumer_ephemeral(queue, store.config()).await?;
-        Ok(ResolvedConsumer::Owned(worker))
+        Ok(ResolvedConsumer::Owned(Box::new(worker)))
     }
 }
 
 enum ResolvedConsumer<'a> {
-    Owned(Consumer),
+    Owned(Box<Consumer>),
     Borrowed(&'a Consumer),
 }
 
@@ -162,7 +162,7 @@ impl<'a> std::ops::Deref for ResolvedConsumer<'a> {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Owned(b) => b,
-            Self::Borrowed(b) => *b,
+            Self::Borrowed(b) => b,
         }
     }
 }

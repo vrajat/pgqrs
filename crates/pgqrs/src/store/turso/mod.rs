@@ -4,7 +4,7 @@ use crate::store::{BackendType, ConcurrencyModel};
 use crate::store::{
     MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
 };
-use crate::{Admin, Consumer, Producer, Worker};
+use crate::{Admin, Worker};
 
 use crate::types::{NewQueueMessage, NewQueueRecord};
 use async_trait::async_trait;
