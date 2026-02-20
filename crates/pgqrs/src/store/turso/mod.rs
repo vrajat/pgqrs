@@ -523,6 +523,21 @@ impl GenericScalarBuilder {
             Ok(None)
         }
     }
+
+    pub async fn fetch_optional_on_connection<T>(
+        self,
+        conn: &turso::Connection,
+    ) -> Result<Option<T>>
+    where
+        T: FromTursoRow,
+    {
+        let row = self.builder.fetch_optional_on_connection(conn).await?;
+        if let Some(r) = row {
+            Ok(Some(T::from_row(&r, 0)?))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
@@ -623,9 +638,27 @@ impl Store for TursoStore {
                 "05_create_workflows",
                 include_str!("../../../migrations/turso/05_create_workflows.sql"),
             ),
+            (
+                "06_add_archived_at",
+                include_str!("../../../migrations/turso/06_add_archived_at.sql"),
+            ),
         ];
 
         for (name, script) in scripts {
+            // Check if migration already applied
+            if name != "00_create_schema_version" {
+                let applied: Option<i64> = crate::store::turso::query_scalar(
+                    "SELECT 1 FROM pgqrs_schema_version WHERE version = ?",
+                )
+                .bind(name.to_string())
+                .fetch_optional_on_connection(&conn)
+                .await?;
+
+                if applied.is_some() {
+                    continue;
+                }
+            }
+
             for statement in script.split(';') {
                 let s = statement.trim();
                 if !s.is_empty() {

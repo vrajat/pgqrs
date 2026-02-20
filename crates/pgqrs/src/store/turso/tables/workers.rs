@@ -169,7 +169,7 @@ impl TursoWorkerTable {
 
     pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
         let held_count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ?",
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ? AND archived_at IS NULL",
         )
         .bind(worker_id)
         .fetch_one(&self.db)

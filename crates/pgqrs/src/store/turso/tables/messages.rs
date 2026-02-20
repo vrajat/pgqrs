@@ -11,20 +11,21 @@ use turso::{Database, Value as TursoValue};
 const INSERT_MESSAGE: &str = r#"
     INSERT INTO pgqrs_messages (queue_id, payload, read_ct, enqueued_at, vt, producer_worker_id, consumer_worker_id)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id;
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
 const MAX_BATCH_SIZE: usize = 100;
 
 const GET_MESSAGE_BY_ID: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
     WHERE id = ?;
 "#;
 
 const LIST_ALL_MESSAGES: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
+    WHERE archived_at IS NULL
     ORDER BY enqueued_at DESC;
 "#;
 
@@ -34,9 +35,9 @@ const DELETE_MESSAGE_BY_ID: &str = r#"
 "#;
 
 const LIST_MESSAGES_BY_QUEUE: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
-    WHERE queue_id = ?
+    WHERE queue_id = ? AND archived_at IS NULL
     ORDER BY enqueued_at DESC
     LIMIT 1000;
 "#;
@@ -84,6 +85,12 @@ impl TursoMessageTable {
         let producer_worker_id: Option<i64> = row.get(7)?;
         let consumer_worker_id: Option<i64> = row.get(8)?;
 
+        let archived_at_str: Option<String> = row.get(9)?;
+        let archived_at = match archived_at_str {
+            Some(s) => Some(parse_turso_timestamp(&s)?),
+            None => None,
+        };
+
         Ok(QueueMessage {
             id,
             queue_id,
@@ -94,6 +101,7 @@ impl TursoMessageTable {
             dequeued_at,
             producer_worker_id,
             consumer_worker_id,
+            archived_at,
         })
     }
 
@@ -196,9 +204,11 @@ impl crate::store::MessageTable for TursoMessageTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_messages")
-            .fetch_one(&self.db)
-            .await?;
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL",
+        )
+        .fetch_one(&self.db)
+        .await?;
         Ok(count)
     }
 
@@ -315,7 +325,7 @@ impl crate::store::MessageTable for TursoMessageTable {
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id FROM pgqrs_messages WHERE id IN ({}) ORDER BY id",
+            "SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at FROM pgqrs_messages WHERE id IN ({}) ORDER BY id",
             placeholders.join(", ")
         );
 
@@ -550,7 +560,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = ? AND consumer_worker_id = ?
+                    WHERE queue_id = ? AND consumer_worker_id = ? AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)
@@ -563,7 +573,7 @@ impl crate::store::MessageTable for TursoMessageTable {
                     r#"
                     SELECT COUNT(*)
                     FROM pgqrs_messages
-                    WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL
+                    WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
                     "#,
                 )
                 .bind(queue_id)

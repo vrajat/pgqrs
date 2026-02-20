@@ -158,7 +158,7 @@ impl Consumer for TursoConsumer {
         let sql_select = r#"
             SELECT id
             FROM pgqrs_messages
-            WHERE queue_id = ? AND (vt IS NULL OR vt <= ?) AND consumer_worker_id IS NULL
+            WHERE queue_id = ? AND (vt IS NULL OR vt <= ?) AND consumer_worker_id IS NULL AND archived_at IS NULL AND read_ct < ?
             ORDER BY enqueued_at ASC
             LIMIT ?
         "#;
@@ -168,6 +168,7 @@ impl Consumer for TursoConsumer {
         let rows = crate::store::turso::query(sql_select)
             .bind(self.queue_info.id)
             .bind(now_str.clone())
+            .bind(self._config.max_read_ct as i64)
             .bind(limit as i64)
             .fetch_all_on_connection(&conn)
             .await;
@@ -201,7 +202,7 @@ impl Consumer for TursoConsumer {
         let new_vt_str = format_turso_timestamp(&new_vt);
 
         for id in &grabbed_ids {
-            let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = ? WHERE id = ?")
+            let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = COALESCE(dequeued_at, ?) WHERE id = ?")
                 .bind(self.worker_record.id)
                 .bind(new_vt_str.clone())
                 .bind(now_str.clone())
@@ -250,113 +251,25 @@ impl Consumer for TursoConsumer {
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-        let conn = crate::store::turso::connect_db(&self.db).await?;
-
-        // 1. Begin Transaction
-        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
-            crate::error::Error::QueryFailed {
-                query: "BEGIN IMMEDIATE".into(),
-                source: Box::new(e),
-                context: "Begin archive transaction".into(),
-            }
-        })?;
-
-        // 2. Fetch message (ensure ownership)
-        let row_opt_res = crate::store::turso::query(SELECT_MESSAGE_FOR_ARCHIVE)
-            .bind(msg_id)
-            .bind(self.worker_record.id)
-            .fetch_optional_on_connection(&conn)
-            .await;
-
-        // 2a. Handle Query Error
-        let row_opt = match row_opt_res {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(e);
-            }
-        };
-
-        // 2b. Handle Optional
-        let row = match row_opt {
-            Some(r) => r,
-            None => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Ok(None);
-            }
-        };
-
-        // Extract fields
-        let queue_id: i64 = row.get(1).map_err(crate::error::Error::from)?;
-        let payload_str: String = row.get(2).map_err(crate::error::Error::from)?;
-        let vt_str: Option<String> = row.get(3).map_err(crate::error::Error::from)?;
-        let enqueued_at_str: String = row.get(4).map_err(crate::error::Error::from)?;
-        let read_ct: i32 = row.get(5).map_err(crate::error::Error::from)?;
-        let dequeued_at_str: Option<String> = row.get(6).map_err(crate::error::Error::from)?;
-        let producer_worker_id: Option<i64> = row.get(7).map_err(crate::error::Error::from)?;
-        let consumer_worker_id: Option<i64> = row.get(8).map_err(crate::error::Error::from)?;
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
-        // 3. Insert into archive
-        let archive_row_res = crate::store::turso::query(INSERT_ARCHIVE)
-            .bind(msg_id)
-            .bind(queue_id)
-            .bind(match producer_worker_id {
-                Some(id) => turso::Value::Integer(id),
-                None => turso::Value::Null,
-            })
-            .bind(match consumer_worker_id {
-                Some(id) => turso::Value::Integer(id),
-                None => turso::Value::Null,
-            })
-            .bind(turso::Value::Text(payload_str))
-            .bind(turso::Value::Text(enqueued_at_str))
-            .bind(match vt_str {
-                Some(s) => turso::Value::Text(s),
-                None => turso::Value::Null,
-            })
-            .bind(read_ct as i64)
-            .bind(match dequeued_at_str {
-                Some(s) => turso::Value::Text(s),
-                None => turso::Value::Null,
-            })
-            .bind(turso::Value::Text(now_str))
-            .fetch_one_once_on_connection(&conn)
-            .await;
+        let row = crate::store::turso::query(
+            "UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at",
+        )
+        .bind(now_str)
+        .bind(msg_id)
+        .bind(self.worker_record.id)
+        .fetch_optional(&self.db)
+        .await?;
 
-        let archive_row = match archive_row_res {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(e);
-            }
-        };
-
-        // 4. Delete from messages (checking ownership again for safety, though transaction helps)
-        let delete_res = crate::store::turso::query(DELETE_MESSAGE_AFTER_ARCHIVE)
-            .bind(msg_id)
-            .bind(self.worker_record.id)
-            .execute_once_on_connection(&conn)
-            .await;
-
-        if let Err(e) = delete_res {
-            let _ = conn.execute("ROLLBACK", ()).await;
-            return Err(e);
+        if let Some(r) = row {
+            Ok(Some(
+                crate::store::turso::tables::archive::TursoArchiveTable::map_row(&r)?,
+            ))
+        } else {
+            Ok(None)
         }
-
-        // 5. Commit
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COMMIT".into(),
-                source: Box::new(e),
-                context: "Commit archive transaction".into(),
-            })?;
-
-        Ok(Some(
-            crate::store::turso::tables::archive::TursoArchiveTable::map_row(&archive_row)?,
-        ))
     }
 
     async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {

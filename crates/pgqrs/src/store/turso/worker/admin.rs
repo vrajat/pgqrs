@@ -54,9 +54,8 @@ const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
 const RELEASE_ZOMBIE_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET consumer_worker_id = NULL,
-        vt = datetime('now'),
-        dequeued_at = NULL
-    WHERE consumer_worker_id = ?
+        vt = datetime('now')
+    WHERE consumer_worker_id = ? AND archived_at IS NULL
 "#;
 
 const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
@@ -67,7 +66,7 @@ const SHUTDOWN_ZOMBIE_WORKER: &str = r#"
 "#;
 
 const GET_WORKER_MESSAGES: &str = r#"
-    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at
+    SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at, archived_at
     FROM pgqrs_messages
     WHERE consumer_worker_id = ?
     ORDER BY id
@@ -76,7 +75,7 @@ const GET_WORKER_MESSAGES: &str = r#"
 const RELEASE_WORKER_MESSAGES: &str = r#"
     UPDATE pgqrs_messages
     SET vt = NULL, consumer_worker_id = NULL
-    WHERE consumer_worker_id = ?
+    WHERE consumer_worker_id = ? AND archived_at IS NULL
 "#;
 
 const CHECK_WORKER_REFS_MESSAGES: &str = r#"
@@ -84,17 +83,15 @@ const CHECK_WORKER_REFS_MESSAGES: &str = r#"
 "#;
 
 const CHECK_WORKER_REFS_ARCHIVE: &str = r#"
-    SELECT COUNT(*) FROM pgqrs_archive WHERE producer_worker_id = ? OR consumer_worker_id = ?
+    SELECT COUNT(*) FROM pgqrs_messages WHERE (producer_worker_id = ? OR consumer_worker_id = ?) AND archived_at IS NOT NULL
 "#;
 
 const FIND_OLD_WORKERS_TO_PURGE: &str = r#"
     SELECT w.id FROM pgqrs_workers w
     LEFT JOIN pgqrs_messages m ON m.producer_worker_id = w.id OR m.consumer_worker_id = w.id
-    LEFT JOIN pgqrs_archive a ON a.producer_worker_id = w.id OR a.consumer_worker_id = w.id
     WHERE w.status = 'stopped'
       AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds')
       AND m.id IS NULL
-      AND a.id IS NULL
     GROUP BY w.id
 "#;
 
@@ -102,13 +99,13 @@ const GET_QUEUE_METRICS: &str = r#"
     SELECT
         q.queue_name,
         COUNT(m.id),
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0),
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0),
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
-        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
+        MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END),
         MAX(m.enqueued_at)
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     WHERE q.id = ?
     GROUP BY q.id, q.queue_name
 "#;
@@ -117,13 +114,13 @@ const GET_ALL_QUEUES_METRICS: &str = r#"
     SELECT
         q.queue_name,
         COUNT(m.id),
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL THEN 1 ELSE 0 END), 0),
-        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL THEN 1 ELSE 0 END), 0),
-        (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
-        MIN(CASE WHEN m.consumer_worker_id IS NULL THEN m.enqueued_at END),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id),
+        MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END),
         MAX(m.enqueued_at)
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -132,10 +129,10 @@ const GET_SYSTEM_STATS: &str = r#"
         (SELECT COUNT(*) FROM pgqrs_queues),
         (SELECT COUNT(*) FROM pgqrs_workers),
         (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready'),
-        (SELECT COUNT(*) FROM pgqrs_messages),
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL),
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL),
-        (SELECT COUNT(*) FROM pgqrs_archive),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL),
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive),
         '0.5.0'
 "#;
 
@@ -459,117 +456,20 @@ impl Admin for TursoAdmin {
     }
 
     async fn dlq(&self) -> Result<Vec<i64>> {
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
+        let now_str = crate::store::turso::format_turso_timestamp(&chrono::Utc::now());
 
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "BEGIN".into(),
-                source: Box::new(e),
-                context: "DLQ".into(),
-            })?;
-
-        // 1. Select candidates
-        // NOTE: We list columns explicitly to ensure index based retrieval works
-        let rows = conn
-            .query(
-                "SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at FROM pgqrs_messages WHERE read_ct >= ?",
-                vec![turso::Value::Integer(self.config.max_read_ct as i64)],
-            )
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DLQ_Select".into(),
-                source: Box::new(e),
-                context: "DLQ".into(),
-            })?;
-
-        // Collect all potential DLQ items
-        let mut messages = Vec::new();
-        let mut cursor = rows;
-        while let Some(row) = cursor
-            .next()
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DLQ_Cursor".into(),
-                source: Box::new(e),
-                context: "DLQ".into(),
-            })?
-        {
-            // Map row manually
-            let id: i64 = row.get(0).unwrap();
-            let q_id: i64 = row.get(1).unwrap();
-            let p_wid: Option<i64> = row.get(2).unwrap();
-            let c_wid: Option<i64> = row.get(3).unwrap();
-            let payload: String = row.get(4).unwrap();
-            let vt: Option<String> = row.get(5).unwrap();
-            let enq: String = row.get(6).unwrap();
-            let read_ct: i32 = row.get(7).unwrap();
-            let deq: Option<String> = row.get(8).unwrap();
-
-            messages.push((id, q_id, p_wid, c_wid, payload, vt, enq, read_ct, deq));
-        }
+        let rows = crate::store::turso::query(
+            "UPDATE pgqrs_messages SET archived_at = ? WHERE read_ct >= ? AND archived_at IS NULL RETURNING id",
+        )
+        .bind(now_str)
+        .bind(self.config.max_read_ct as i64)
+        .fetch_all(&self.db)
+        .await?;
 
         let mut moved_ids = Vec::new();
-
-        for (id, q_id, p_wid, c_wid, payload, vt, enq, read_ct, deq) in messages {
-            // 2. Insert into Archive
-            let now_str = crate::store::turso::format_turso_timestamp(&chrono::Utc::now());
-            let res = conn.execute(
-                 "INSERT INTO pgqrs_archive (original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 vec![
-                     turso::Value::Integer(id),
-                     turso::Value::Integer(q_id),
-                     match p_wid { Some(v) => turso::Value::Integer(v), None => turso::Value::Null },
-                     match c_wid { Some(v) => turso::Value::Integer(v), None => turso::Value::Null },
-                     turso::Value::Text(payload),
-                     turso::Value::Text(enq),
-                     match vt { Some(v) => turso::Value::Text(v), None => turso::Value::Null },
-                     turso::Value::Integer(read_ct as i64),
-                     match deq { Some(v) => turso::Value::Text(v), None => turso::Value::Null },
-                     turso::Value::Text(now_str)
-                 ]
-             ).await;
-
-            if let Err(e) = res {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::QueryFailed {
-                    query: "DLQ_Insert".into(),
-                    source: Box::new(e),
-                    context: "DLQ insert".into(),
-                });
-            }
-
-            // 3. Delete
-            let res = conn
-                .execute(
-                    "DELETE FROM pgqrs_messages WHERE id = ?",
-                    vec![turso::Value::Integer(id)],
-                )
-                .await;
-            if let Err(e) = res {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(crate::error::Error::QueryFailed {
-                    query: "DLQ_Delete".into(),
-                    source: Box::new(e),
-                    context: "DLQ delete".into(),
-                });
-            }
-            moved_ids.push(id);
+        for row in rows {
+            moved_ids.push(row.get(0)?);
         }
-
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COMMIT".into(),
-                source: Box::new(e),
-                context: "DLQ".into(),
-            })?;
-
         Ok(moved_ids)
     }
 
@@ -763,6 +663,7 @@ impl Admin for TursoAdmin {
                 enqueued_at,
                 read_ct,
                 dequeued_at,
+                archived_at: None,
             });
         }
         Ok(msgs)
