@@ -289,15 +289,18 @@ impl Store for SqliteStore {
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
-        let payload = &message.payload;
-
-        // If payload has run_id, it's a resumption or already initialized
-        if let Some(run_id) = payload.get("run_id").and_then(|v| v.as_i64()) {
-            let record = self.workflow_runs.get(run_id).await?;
-            return Ok(crate::workers::Run::new(
-                crate::store::AnyStore::Sqlite(self.clone()),
-                record,
-            ));
+        // Try to find existing run by message_id
+        match self.workflow_runs.get_by_message_id(message.id).await {
+            Ok(record) => {
+                return Ok(crate::workers::Run::new(
+                    crate::store::AnyStore::Sqlite(self.clone()),
+                    record,
+                ));
+            }
+            Err(crate::error::Error::NotFound { .. }) => {
+                // Not found, continue to create new run
+            }
+            Err(e) => return Err(e),
         }
 
         // Otherwise, it's a new trigger. Create run record.
@@ -308,23 +311,9 @@ impl Store for SqliteStore {
             .workflow_runs
             .insert(crate::types::NewRunRecord {
                 workflow_id: workflow.id,
-                input: Some(payload.clone()),
+                message_id: message.id,
+                input: Some(message.payload.clone()),
             })
-            .await?;
-
-        // Update message payload to include run_id for future resumptions
-        let mut new_payload = payload.clone();
-        if let Some(obj) = new_payload.as_object_mut() {
-            obj.insert("run_id".to_string(), serde_json::json!(run_rec.id));
-        } else {
-            // If payload is not an object, wrap it
-            new_payload = serde_json::json!({
-                "input": payload,
-                "run_id": run_rec.id
-            });
-        }
-        self.messages
-            .update_payload(message.id, new_payload)
             .await?;
 
         Ok(crate::workers::Run::new(

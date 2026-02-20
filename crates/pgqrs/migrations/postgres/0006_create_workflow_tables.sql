@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflows (
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
     id BIGSERIAL PRIMARY KEY,
     workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(id) ON DELETE CASCADE,
+    message_id BIGINT NOT NULL UNIQUE REFERENCES pgqrs_messages(id),
     status pgqrs_workflow_status NOT NULL,
     input JSONB,
     output JSONB,
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflows_name ON pgqrs_workflows(name);
+CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_message_id ON pgqrs_workflow_runs(message_id);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_runs_status ON pgqrs_workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_status ON pgqrs_workflow_steps(status);
 CREATE INDEX IF NOT EXISTS idx_pgqrs_workflow_steps_retry_at ON pgqrs_workflow_steps(retry_at) WHERE retry_at IS NOT NULL;

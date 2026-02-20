@@ -249,6 +249,13 @@ pub enum Error {
     #[error("{entity} with id '{id}' not found")]
     NotFound { entity: String, id: String },
 
+    /// Run failed during execution
+    #[error("Workflow run {run_id} failed: {error}")]
+    ExecutionFailed {
+        run_id: i64,
+        error: serde_json::Value,
+    },
+
     /// Workflow execution paused
     #[error("Workflow paused: {message}")]
     Paused {

@@ -27,6 +27,11 @@ const TEST_SCHEMAS: &[&str] = &[
     "macro_test_step_failure",
     "macro_test_workflow_failure",
     "workflow_tests",
+    "workflow_get_tests",
+    "workflow_retrieval_tests",
+    "workflow_polling_tests",
+    "workflow_error_polling_tests",
+    "workflow_fk_tests",
     "workflow_retry_integration_tests",
 ];
 

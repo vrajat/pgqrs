@@ -20,35 +20,37 @@ impl TursoRunRecordTable {
     fn map_row(row: &turso::Row) -> Result<RunRecord> {
         let id: i64 = row.get(0)?;
         let workflow_id: i64 = row.get(1)?;
+        let message_id: i64 = row.get(2)?;
 
-        let status_str: String = row.get(2)?;
+        let status_str: String = row.get(3)?;
         let status = WorkflowStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
-        let input_str: Option<String> = row.get(3)?;
+        let input_str: Option<String> = row.get(4)?;
         let input: Option<Value> = match input_str {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
 
-        let output_str: Option<String> = row.get(4)?;
+        let output_str: Option<String> = row.get(5)?;
         let output: Option<Value> = match output_str {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
 
-        let error_str: Option<String> = row.get(5)?;
+        let error_str: Option<String> = row.get(6)?;
         let error: Option<Value> = match error_str {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
 
-        let created_at = parse_turso_timestamp(&row.get::<String>(6)?)?;
-        let updated_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
+        let created_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
+        let updated_at = parse_turso_timestamp(&row.get::<String>(8)?)?;
 
         Ok(RunRecord {
             id,
             workflow_id,
+            message_id,
             status,
             input,
             output,
@@ -66,12 +68,13 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
 
         let row = crate::store::turso::query(
             r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
-            VALUES (?, 'QUEUED', ?)
-            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+            INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input)
+            VALUES (?, ?, 'QUEUED', ?)
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(data.workflow_id)
+        .bind(data.message_id)
         .bind(input_str)
         .fetch_one_once(&self.db)
         .await?;
@@ -82,7 +85,7 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
     async fn get(&self, id: i64) -> Result<RunRecord> {
         let row = crate::store::turso::query(
             r#"
-            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             WHERE id = ?
             "#,
@@ -97,7 +100,7 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
     async fn list(&self) -> Result<Vec<RunRecord>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             ORDER BY created_at DESC
             "#,
@@ -137,7 +140,7 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
                 updated_at = datetime('now'),
                 started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
             WHERE id = ? AND status IN ('QUEUED', 'PAUSED')
-            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -211,5 +214,20 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
         .execute_once(&self.db)
         .await?;
         self.get(id).await
+    }
+
+    async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
+        let row = crate::store::turso::query(
+            r#"
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            FROM pgqrs_workflow_runs
+            WHERE message_id = ?
+            "#,
+        )
+        .bind(message_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        Self::map_row(&row)
     }
 }

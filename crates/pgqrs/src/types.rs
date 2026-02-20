@@ -283,6 +283,7 @@ pub struct NewWorkflowRecord {
 pub struct RunRecord {
     pub id: i64,
     pub workflow_id: i64,
+    pub message_id: i64,
     pub status: WorkflowStatus,
     pub input: Option<serde_json::Value>,
     pub output: Option<serde_json::Value>,
@@ -295,6 +296,7 @@ pub struct RunRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRunRecord {
     pub workflow_id: i64,
+    pub message_id: i64,
     pub input: Option<serde_json::Value>,
 }
 
