@@ -1,10 +1,9 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
-};
 use crate::store::{BackendType, ConcurrencyModel};
+use crate::store::{
+    MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
+};
 use crate::{Admin, Consumer, Producer, Worker};
 
 use crate::types::{NewQueueMessage, NewQueueRecord};
@@ -16,7 +15,6 @@ use turso::{Database, Row};
 pub mod tables;
 pub mod worker;
 
-use self::tables::archive::TursoArchiveTable;
 use self::tables::messages::TursoMessageTable;
 use self::tables::queues::TursoQueueTable;
 use self::tables::runs::TursoRunRecordTable;
@@ -31,7 +29,6 @@ pub struct TursoStore {
     queues: Arc<TursoQueueTable>,
     messages: Arc<TursoMessageTable>,
     workers: Arc<TursoWorkerTable>,
-    archive: Arc<TursoArchiveTable>,
     workflows: Arc<TursoWorkflowTable>,
     workflow_runs: Arc<TursoRunRecordTable>,
     workflow_steps: Arc<TursoStepRecordTable>,
@@ -95,7 +92,6 @@ impl TursoStore {
             queues: Arc::new(TursoQueueTable::new(Arc::clone(&db))),
             messages: Arc::new(TursoMessageTable::new(Arc::clone(&db))),
             workers: Arc::new(TursoWorkerTable::new(Arc::clone(&db))),
-            archive: Arc::new(TursoArchiveTable::new(Arc::clone(&db))),
             workflows: Arc::new(TursoWorkflowTable::new(Arc::clone(&db))),
             workflow_runs: Arc::new(TursoRunRecordTable::new(Arc::clone(&db))),
             workflow_steps: Arc::new(TursoStepRecordTable::new(Arc::clone(&db))),
@@ -595,10 +591,6 @@ impl Store for TursoStore {
         self.workers.as_ref()
     }
 
-    fn archive(&self) -> &dyn ArchiveTable {
-        self.archive.as_ref()
-    }
-
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -631,16 +623,8 @@ impl Store for TursoStore {
                 include_str!("../../../migrations/turso/03_create_messages.sql"),
             ),
             (
-                "04_create_archive",
-                include_str!("../../../migrations/turso/04_create_archive.sql"),
-            ),
-            (
                 "05_create_workflows",
                 include_str!("../../../migrations/turso/05_create_workflows.sql"),
-            ),
-            (
-                "06_add_archived_at",
-                include_str!("../../../migrations/turso/06_add_archived_at.sql"),
             ),
         ];
 

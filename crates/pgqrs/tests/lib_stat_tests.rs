@@ -80,13 +80,13 @@ async fn test_queue_metrics() {
     consumer.archive(msg_id).await.unwrap();
 
     // Check metrics: 1 pending, 0 locked, 1 archived
-    // Note: total_messages counts only active messages, so it's 1 after archiving
+    // Note: total_messages counts all messages in the table (active + archived)
 
     let metrics = pgqrs::admin(&store)
         .queue_metrics(queue_name)
         .await
         .expect("Failed to get metrics");
-    assert_eq!(metrics.total_messages, 1); // Only 1 left in active table
+    assert_eq!(metrics.total_messages, 2);
     assert_eq!(metrics.pending_messages, 1);
     assert_eq!(metrics.locked_messages, 0);
     assert_eq!(metrics.archived_messages, 1);

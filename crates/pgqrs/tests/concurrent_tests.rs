@@ -419,8 +419,8 @@ async fn test_workflow_scenario_success() -> anyhow::Result<()> {
         .await?;
 
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 1);
 
@@ -484,8 +484,8 @@ async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
         .await?;
 
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 1);
 
@@ -593,8 +593,8 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
     assert_eq!(steps[0].status, pgqrs::WorkflowStatus::Success);
 
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 0);
 
@@ -626,8 +626,8 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
     // 4. Final Verification
     // Message should be archived
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 1);
 
@@ -701,8 +701,8 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
     assert!(matches!(first_attempt, Err(pgqrs::Error::TestCrash)));
 
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 0);
 
@@ -747,8 +747,8 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
     assert!(matches!(second_attempt, Err(pgqrs::Error::TestCrash)));
 
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 0);
 
@@ -810,8 +810,8 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
     // Verify state:
     // 1. Message NOT archived
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 0);
 
@@ -887,8 +887,8 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
     // Verify state:
     // 1. Message NOT archived
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 0);
 
@@ -968,8 +968,8 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
     // 8. Final Verification
     // Message should be archived
     let archived = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(message.queue_id)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 1);
 

@@ -324,8 +324,7 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 - `src/tables/table.rs` - Unified Table trait interface for CRUD operations
 - `src/tables/pgqrs_queues.rs` - Queue management and metadata operations
 - `src/tables/pgqrs_workers.rs` - Worker registration and health tracking
-- `src/tables/pgqrs_messages.rs` - Active message storage and operations
-- `src/tables/pgqrs_archive.rs` - Processed message archival and audit trails
+- `src/tables/pgqrs_messages.rs` - All message storage and operations
 
 **CLI Components:**
 - `src/output.rs` - Output formatting (JSON, CSV, YAML, tables)
@@ -372,8 +371,8 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 2. **Four Core Tables**:
    - `pgqrs_queues`: Queue definitions and metadata
    - `pgqrs_workers`: Worker registrations with queue relationships
-   - `pgqrs_messages`: Active messages awaiting processing
-   - `pgqrs_archive`: Processed messages for compliance/audit
+- `pgqrs_messages`: All messages (ready, leased, and archived)
+
 
 3. **Foreign Key Relationships**:
    - Workers linked to queues via `queue_id`
@@ -476,7 +475,7 @@ src/tables/
 ├── pgqrs_queues.rs     # Queue management (NewQueue -> QueueInfo)
 ├── pgqrs_workers.rs    # Worker registration (NewWorker -> WorkerInfo)
 ├── pgqrs_messages.rs   # Message operations (NewMessage -> QueueMessage)
-└── pgqrs_archive.rs    # Archive operations (NewArchivedMessage -> ArchivedMessage)
+└── pgqrs_messages.rs   # Message operations
 ```
 
 ### Testing (`tests/`)
@@ -535,13 +534,13 @@ pub use crate::consumer::Consumer;
 pub use crate::admin::Admin;
 
 // Table interface for advanced use cases
-pub use crate::tables::{Table, Queues, Workers, Messages, Archive};
-pub use crate::tables::{NewQueue, NewWorker, NewMessage}; // NewArchivedMessage available via types
+pub use crate::tables::{Table, Queues, Workers, Messages};
+pub use crate::tables::{NewQueue, NewWorker, NewMessage};
 
 // Configuration and utilities
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
-pub use crate::types::{QueueInfo, WorkerInfo, QueueMessage, ArchivedMessage, WorkerStatus};
+pub use crate::types::{QueueInfo, WorkerInfo, QueueMessage, WorkerStatus};
 ```
 
 #### **CLI Command Structure**

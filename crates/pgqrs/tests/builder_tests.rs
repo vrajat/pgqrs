@@ -534,13 +534,6 @@ async fn test_tables_builder() {
         .expect("Failed to count workers");
     assert!(worker_count >= 0);
 
-    let archive_count = pgqrs::tables(&store)
-        .archive()
-        .count()
-        .await
-        .expect("Failed to count archive");
-    assert!(archive_count >= 0);
-
     let workflow_count = pgqrs::tables(&store)
         .workflows()
         .count()

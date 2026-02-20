@@ -31,8 +31,7 @@ pub use crate::builders::tables::tables;
 
 pub use crate::store::Store;
 pub use crate::tables::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
-    WorkflowTable,
+    MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable, WorkflowTable,
 };
 pub use crate::workers::{Admin, Consumer, Producer, Run, Step, Worker};
 #[cfg(any(test, feature = "test-utils"))]
@@ -46,9 +45,9 @@ pub use crate::rate_limit::RateLimitStatus;
 pub use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 pub use crate::types::{
-    ArchivedMessage, NewArchivedMessage, NewQueueMessage, NewQueueRecord, NewRunRecord,
-    NewStepRecord, NewWorkerRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord,
-    StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord, WorkflowStatus,
+    NewQueueMessage, NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkerRecord,
+    NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord,
+    WorkerStatus, WorkflowRecord, WorkflowStatus,
 };
 
 pub use crate::validation::ValidationConfig;

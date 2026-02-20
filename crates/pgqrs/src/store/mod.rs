@@ -85,7 +85,6 @@ pub trait Store: Send + Sync + 'static {
     fn queues(&self) -> &dyn QueueTable;
     fn messages(&self) -> &dyn MessageTable;
     fn workers(&self) -> &dyn WorkerTable;
-    fn archive(&self) -> &dyn ArchiveTable;
     fn workflows(&self) -> &dyn WorkflowTable;
     fn workflow_runs(&self) -> &dyn RunRecordTable;
     fn workflow_steps(&self) -> &dyn StepRecordTable;

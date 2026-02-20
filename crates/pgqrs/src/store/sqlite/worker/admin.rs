@@ -2,11 +2,10 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 use crate::store::sqlite::parse_sqlite_timestamp;
-use crate::store::sqlite::tables::archive::SqliteArchiveTable;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::queues::SqliteQueueTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
-use crate::store::{ArchiveTable, MessageTable, QueueTable, WorkerTable};
+use crate::store::{MessageTable, QueueTable, WorkerTable};
 use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -36,22 +35,6 @@ const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
     LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
     WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
        OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
-    WHERE q.id IS NULL
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_workers pw ON a.producer_worker_id = pw.id
-    LEFT OUTER JOIN pgqrs_workers cw ON a.consumer_worker_id = cw.id
-    WHERE (a.producer_worker_id IS NOT NULL AND pw.id IS NULL)
-       OR (a.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
 "#;
 
 const RELEASE_ZOMBIE_MESSAGES: &str = r#"
@@ -84,8 +67,6 @@ const RELEASE_WORKER_MESSAGES: &str = r#"
 const CHECK_WORKER_REFERENCES: &str = r#"
     SELECT COUNT(*) as total_references FROM (
         SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = $1 OR consumer_worker_id = $1
-        UNION ALL
-        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = $1 OR consumer_worker_id = $1
     ) refs
 "#;
 
@@ -99,10 +80,6 @@ const PURGE_OLD_WORKERS: &str = r#"
               SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
               UNION
               SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
-              UNION
-              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
-              UNION
-              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
           ) refs
       )
 "#;
@@ -114,11 +91,11 @@ const GET_QUEUE_METRICS: &str = r#"
         COUNT(m.id) as total_messages,
         COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
         COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0) as archived_messages,
         MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
     WHERE q.id = ?
     GROUP BY q.id, q.queue_name
 "#;
@@ -129,11 +106,11 @@ const GET_ALL_QUEUES_METRICS: &str = r#"
         COUNT(m.id) as total_messages,
         COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
         COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
+        COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0) as archived_messages,
         MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -145,7 +122,7 @@ const GET_SYSTEM_STATS: &str = r#"
         (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL) as total_messages,
         (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL) as pending_messages,
         (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) as archived_messages,
         '0.5.0' as schema_version
 "#;
 
@@ -180,7 +157,6 @@ pub struct SqliteAdmin {
     pub queues: Arc<SqliteQueueTable>,
     pub messages: Arc<SqliteMessageTable>,
     pub workers: Arc<SqliteWorkerTable>,
-    pub archive: Arc<SqliteArchiveTable>,
     worker_record: WorkerRecord,
 }
 
@@ -189,7 +165,6 @@ impl SqliteAdmin {
         let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
         let queues = Arc::new(SqliteQueueTable::new(pool.clone()));
         let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
-        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
 
         let worker_record = workers.register(None, hostname, port).await?;
 
@@ -199,7 +174,6 @@ impl SqliteAdmin {
             queues,
             messages,
             workers,
-            archive,
             worker_record,
         })
     }
@@ -208,7 +182,6 @@ impl SqliteAdmin {
         let workers = Arc::new(SqliteWorkerTable::new(pool.clone()));
         let queues = Arc::new(SqliteQueueTable::new(pool.clone()));
         let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
-        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
 
         let worker_record = workers.register_ephemeral(None).await?;
 
@@ -218,7 +191,6 @@ impl SqliteAdmin {
             queues,
             messages,
             workers,
-            archive,
             worker_record,
         })
     }
@@ -331,7 +303,6 @@ impl crate::store::Admin for SqliteAdmin {
             ("pgqrs_queues", "Queue repository table"),
             ("pgqrs_workers", "Worker repository table"),
             ("pgqrs_messages", "Unified messages table"),
-            ("pgqrs_archive", "Unified archive table"),
         ];
 
         for (table_name, description) in &required_tables {
@@ -381,34 +352,6 @@ impl crate::store::Admin for SqliteAdmin {
             });
         }
 
-        let count: i64 = sqlx::query_scalar(CHECK_ORPHANED_ARCHIVE_QUEUES)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "CHECK_ORPHANED_ARCHIVE_QUEUES".into(),
-                source: Box::new(e),
-                context: "Check orphaned archive queues".into(),
-            })?;
-        if count > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!("Found {} orphaned archive entries", count),
-            });
-        }
-
-        let count: i64 = sqlx::query_scalar(CHECK_ORPHANED_ARCHIVE_WORKERS)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "CHECK_ORPHANED_ARCHIVE_WORKERS".into(),
-                source: Box::new(e),
-                context: "Check orphaned archive workers".into(),
-            })?;
-        if count > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!("Found {} archive entries with invalid worker refs", count),
-            });
-        }
-
         Ok(())
     }
 
@@ -421,25 +364,17 @@ impl crate::store::Admin for SqliteAdmin {
             .await
             .map_err(crate::error::Error::Database)?;
 
-        // Check active workers
-        let ready = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Ready)
-            .await?;
-        let suspended = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
-            .await?;
-        if ready + suspended > 0 {
+        // Check for any workers assigned to this queue
+        let total_workers = self.workers.filter_by_fk(queue_info.id).await?.len();
+        if total_workers > 0 {
             return Err(crate::error::Error::ValidationFailed {
-                reason: "Cannot delete queue: active workers exist".to_string(),
+                reason: format!("Cannot delete queue: {} worker(s) exist", total_workers),
             });
         }
 
         // Check references
-        let msgs = self.messages.filter_by_fk(queue_info.id).await?.len();
-        let arch = self.archive.filter_by_fk(queue_info.id).await?.len();
-        if msgs > 0 || arch > 0 {
+        let msgs = self.messages.count_for_queue(queue_info.id).await?;
+        if msgs > 0 {
             return Err(crate::error::Error::ValidationFailed {
                 reason: "Cannot delete queue: data exists".to_string(),
             });
@@ -480,15 +415,6 @@ impl crate::store::Admin for SqliteAdmin {
                 query: "PURGE_MSGS".into(),
                 source: Box::new(e),
                 context: "Purge messages".into(),
-            })?;
-        sqlx::query("DELETE FROM pgqrs_archive WHERE queue_id = ?")
-            .bind(queue.id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "PURGE_ARCHIVE".into(),
-                source: Box::new(e),
-                context: "Purge archive".into(),
             })?;
         sqlx::query("DELETE FROM pgqrs_workers WHERE queue_id = ?")
             .bind(queue.id)

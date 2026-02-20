@@ -1,4 +1,3 @@
-pub mod archive;
 pub mod messages;
 pub mod queues;
 pub mod runs;

@@ -1,9 +1,8 @@
 use crate::error::Result;
-use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::WorkerTable;
-use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
+use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -284,9 +283,9 @@ impl crate::store::Consumer for SqliteConsumer {
         Ok(results)
     }
 
-    async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
+    async fn archive(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
         let row = sqlx::query(
-            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL RETURNING id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at",
+            "UPDATE pgqrs_messages SET archived_at = datetime('now') WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at",
         )
         .bind(msg_id)
         .bind(self.worker_record.id)
@@ -299,35 +298,7 @@ impl crate::store::Consumer for SqliteConsumer {
         })?;
 
         if let Some(r) = row {
-            let q_id: i64 = r.try_get("queue_id")?;
-            let p_wid: Option<i64> = r.try_get("producer_worker_id")?;
-            let c_wid: Option<i64> = r.try_get("consumer_worker_id")?;
-            let payload: String = r.try_get("payload")?;
-            let enq: String = r.try_get("enqueued_at")?;
-            let vt: String = r.try_get("vt")?;
-            let read_ct: i32 = r.try_get("read_ct")?;
-            let arch: String = r.try_get("archived_at")?;
-            let deq: Option<String> = r.try_get("dequeued_at")?;
-
-            use serde_json::Value;
-            let val: Value = serde_json::from_str(&payload)?;
-            Ok(Some(ArchivedMessage {
-                id: msg_id,
-                original_msg_id: msg_id,
-                queue_id: q_id,
-                producer_worker_id: p_wid,
-                consumer_worker_id: c_wid,
-                payload: val,
-                enqueued_at: parse_sqlite_timestamp(&enq)?,
-                vt: parse_sqlite_timestamp(&vt)?,
-                read_ct,
-                archived_at: parse_sqlite_timestamp(&arch)?,
-                dequeued_at: if let Some(d) = deq {
-                    Some(parse_sqlite_timestamp(&d)?)
-                } else {
-                    None
-                },
-            }))
+            Ok(Some(SqliteMessageTable::map_row(r)?))
         } else {
             Ok(None)
         }

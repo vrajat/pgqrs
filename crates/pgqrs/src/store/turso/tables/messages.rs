@@ -585,6 +585,36 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(count)
     }
 
+    async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = crate::store::turso::query(
+            r#"
+            SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+            FROM pgqrs_messages
+            WHERE queue_id = ? AND archived_at IS NOT NULL
+            ORDER BY archived_at DESC
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = ?",
+        )
+        .bind(queue_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(count)
+    }
+
     async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
         let mut results = Vec::with_capacity(ids.len());
 

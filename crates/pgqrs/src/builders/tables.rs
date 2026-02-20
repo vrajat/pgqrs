@@ -8,7 +8,6 @@ use crate::store::Store;
 /// - `messages()` - Access message table operations
 /// - `queues()` - Access queue table operations
 /// - `workers()` - Access worker table operations
-/// - `archive()` - Access archive table operations
 /// - `workflows()` - Access workflow table operations
 ///
 /// # Example
@@ -52,11 +51,6 @@ impl<'a, S: Store> TablesBuilder<'a, S> {
     /// Access worker table operations
     pub fn workers(self) -> &'a dyn crate::store::WorkerTable {
         self.store.workers()
-    }
-
-    /// Access archive table operations
-    pub fn archive(self) -> &'a dyn crate::store::ArchiveTable {
-        self.store.archive()
     }
 
     /// Access workflow table operations

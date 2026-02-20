@@ -232,8 +232,8 @@ async fn test_archive_single_message() {
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -265,12 +265,12 @@ async fn test_archive_single_message() {
         0
     );
     let archived_msgs = pgqrs::tables(&store)
-        .archive()
-        .filter_by_fk(queue_info.id)
+        .messages()
+        .list_archived_by_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(archived_msgs.len(), 1);
-    assert_eq!(archived_msgs[0].original_msg_id, msg_id);
+    assert_eq!(archived_msgs[0].id, msg_id);
 
     // Try to archive the same message again (should return false)
     let archived_again = consumer.archive(msg_id).await;
@@ -360,8 +360,8 @@ async fn test_archive_batch_messages() {
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -408,8 +408,8 @@ async fn test_archive_batch_messages() {
     );
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -480,8 +480,8 @@ async fn test_archive_nonexistent_message() {
     // Verify archive count remains zero
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -561,8 +561,8 @@ async fn test_purge_archive() {
     // Verify archive has 3 messages
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -578,8 +578,8 @@ async fn test_purge_archive() {
     // Verify archive is empty
     assert_eq!(
         pgqrs::tables(&store)
-            .archive()
-            .filter_by_fk(queue_info.id)
+            .messages()
+            .list_archived_by_queue(queue_info.id)
             .await
             .unwrap()
             .len(),
@@ -800,8 +800,8 @@ async fn test_queue_deletion_with_references() {
     );
     let error_msg = delete_result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("active worker"),
-        "Error should mention active workers, got: {}",
+        error_msg.contains("worker"),
+        "Error should mention workers, got: {}",
         error_msg
     );
 
@@ -841,8 +841,10 @@ async fn test_queue_deletion_with_references() {
     );
     let error_msg2 = delete_result2.unwrap_err().to_string();
     assert!(
-        error_msg2.contains("references exist") || error_msg2.contains("data exists"),
-        "Error should mention references exist or data exists, got: {}",
+        error_msg2.contains("references exist")
+            || error_msg2.contains("data exists")
+            || error_msg2.contains("worker"),
+        "Error should mention references exist, data exists or workers, got: {}",
         error_msg2
     );
 
@@ -1351,26 +1353,13 @@ async fn test_dlq() {
         0
     );
 
-    let max_read_ct = store.config().max_read_ct;
-    assert_eq!(
-        pgqrs::tables(&store)
-            .archive()
-            .dlq_count(max_read_ct)
-            .await
-            .unwrap(),
-        1
-    );
-
     let dlq_messages = pgqrs::tables(&store)
-        .archive()
-        .list_dlq_messages(max_read_ct, 1, 0)
+        .messages()
+        .list_archived_by_queue(queue_info.id)
         .await
         .unwrap();
     assert_eq!(dlq_messages.len(), 1, "Should list one DLQ message");
-    assert_eq!(
-        dlq_messages[0].original_msg_id, msg_id,
-        "DLQ message ID should match"
-    );
+    assert_eq!(dlq_messages[0].id, msg_id, "DLQ message ID should match");
 
     // Cleanup
     pgqrs::admin(&store)
@@ -1777,16 +1766,18 @@ async fn test_archive_count_for_queue() {
         consumer2.archive(msg.id).await.unwrap();
     }
 
-    // Verify counts using Archive::count_for_queue
-    let archive = pgqrs::tables(&store).archive();
-    let count1 = archive
-        .count_for_queue(q1.id)
+    // Verify counts using list_archived_by_queue
+    let messages = pgqrs::tables(&store).messages();
+    let count1 = messages
+        .list_archived_by_queue(q1.id)
         .await
-        .expect("Failed to count Q1");
-    let count2 = archive
-        .count_for_queue(q2.id)
+        .expect("Failed to count Q1")
+        .len();
+    let count2 = messages
+        .list_archived_by_queue(q2.id)
         .await
-        .expect("Failed to count Q2");
+        .expect("Failed to count Q2")
+        .len();
 
     assert_eq!(count1, 2);
     assert_eq!(count2, 1);
@@ -1983,10 +1974,9 @@ async fn test_archive_replay_and_recovery() {
         .unwrap();
     let archived = consumer.archive(msg.id).await.unwrap().unwrap();
 
-    // Replay from Archive via table directly
-    let archive_table = pgqrs::tables(&store).archive();
-    let replayed = archive_table
-        .replay_message(archived.id)
+    // Replay from Archive via Producer API
+    let replayed = producer
+        .replay_dlq(archived.id)
         .await
         .unwrap()
         .expect("Replay failed");

@@ -1,9 +1,9 @@
 //! Postgres implementation of the Store trait.
 
 use crate::store::{
-    Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, RunRecordTable, StepRecordTable, Store,
-    Worker as WorkerTrait, WorkerTable, WorkflowTable,
+    Admin as AdminTrait, Consumer as ConsumerTrait, MessageTable, Producer as ProducerTrait,
+    QueueTable, RunRecordTable, StepRecordTable, Store, Worker as WorkerTrait, WorkerTable,
+    WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 pub mod tables;
 pub mod worker;
 
-use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
 use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
 use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
@@ -34,7 +33,6 @@ pub struct PostgresStore {
     queues: Arc<PostgresQueueTable>,
     messages: Arc<PostgresMessageTable>,
     workers: Arc<PostgresWorkerTable>,
-    archive: Arc<PostgresArchiveTable>,
     workflows: Arc<PostgresWorkflowTable>,
     workflow_runs: Arc<PostgresRunRecordTable>,
     workflow_steps: Arc<PostgresStepRecordTable>,
@@ -48,7 +46,6 @@ impl PostgresStore {
             queues: Arc::new(PostgresQueueTable::new(pool.clone())),
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
-            archive: Arc::new(PostgresArchiveTable::new(pool.clone())),
             workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
             workflow_runs: Arc::new(PostgresRunRecordTable::new(pool.clone())),
             workflow_steps: Arc::new(PostgresStepRecordTable::new(pool)),
@@ -119,10 +116,6 @@ impl Store for PostgresStore {
 
     fn workers(&self) -> &dyn WorkerTable {
         self.workers.as_ref()
-    }
-
-    fn archive(&self) -> &dyn ArchiveTable {
-        self.archive.as_ref()
     }
 
     fn workflows(&self) -> &dyn WorkflowTable {

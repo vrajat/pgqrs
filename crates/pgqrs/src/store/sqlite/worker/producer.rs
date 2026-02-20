@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::store::sqlite::tables::archive::SqliteArchiveTable;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::WorkerTable;
@@ -19,7 +18,6 @@ pub struct SqliteProducer {
     validator: PayloadValidator,
     messages: Arc<SqliteMessageTable>,
     workers: Arc<SqliteWorkerTable>,
-    archive: Arc<SqliteArchiveTable>, // Needed for replay_dlq
 }
 
 impl SqliteProducer {
@@ -44,7 +42,6 @@ impl SqliteProducer {
             queue_info.queue_name
         );
         let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
-        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
 
         Ok(Self {
             pool,
@@ -54,7 +51,6 @@ impl SqliteProducer {
             config: config.clone(),
             workers: workers_arc,
             messages,
-            archive,
         })
     }
 
@@ -67,7 +63,6 @@ impl SqliteProducer {
         let worker_record = workers_arc.register_ephemeral(Some(queue_info.id)).await?;
 
         let messages = Arc::new(SqliteMessageTable::new(pool.clone()));
-        let archive = Arc::new(SqliteArchiveTable::new(pool.clone()));
 
         Ok(Self {
             pool,
@@ -77,7 +72,6 @@ impl SqliteProducer {
             config: config.clone(),
             workers: workers_arc,
             messages,
-            archive,
         })
     }
 
@@ -248,9 +242,28 @@ impl crate::store::Producer for SqliteProducer {
     }
 
     async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        use crate::store::ArchiveTable; // Import trait to use method
-                                        // Delegate to ArchiveTable logic which handles transaction safe replay
-        self.archive.replay_message(archived_msg_id).await
+        // Replay: Move from archive back to messages
+        let msg = sqlx::query_as::<_, QueueMessage>(r#"
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = datetime('now'),
+                enqueued_at = datetime('now'),
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = $1 AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+        "#)
+        .bind(archived_msg_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("REPLAY_MESSAGE ({})", archived_msg_id),
+            source: Box::new(e),
+            context: format!("Failed to replay message {}", archived_msg_id),
+        })?;
+
+        Ok(msg)
     }
 
     fn validation_config(&self) -> &crate::validation::ValidationConfig {

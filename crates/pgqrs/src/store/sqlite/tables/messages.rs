@@ -477,6 +477,45 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(count)
     }
 
+    async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND archived_at IS NOT NULL
+            ORDER BY archived_at DESC
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "LIST_ARCHIVED_BY_QUEUE".into(),
+            source: Box::new(e),
+            context: format!("Failed to list archived messages for queue {}", queue_id),
+        })?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1")
+                .bind(queue_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COUNT_MESSAGES_BY_QUEUE".into(),
+                    source: Box::new(e),
+                    context: format!("Failed to count messages for queue {}", queue_id),
+                })?;
+        Ok(count)
+    }
+
     async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
         let mut results = Vec::with_capacity(ids.len());
 

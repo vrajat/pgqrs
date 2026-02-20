@@ -22,5 +22,5 @@ This change is implemented and verified across all supported backends:
 - SQLite
 - Turso
 
-## API Compatibility
-The public API remains stable. The `ArchivedMessage` struct and related methods now read from the unified `pgqrs_messages` table where `archived_at` is set.
+## API Changes
+The `ArchivedMessage` struct and `ArchiveTable` trait have been removed. Archived messages are now represented by the `QueueMessage` struct (with `archived_at` set). Use `MessageTable::list_archived_by_queue` to retrieve archived messages.

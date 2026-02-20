@@ -2,8 +2,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::ConcurrencyModel;
 use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
+    MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
 };
 use crate::{Admin, Consumer, Producer, Worker};
 
@@ -15,7 +14,6 @@ use std::sync::Arc;
 pub mod tables;
 pub mod worker;
 
-use self::tables::archive::SqliteArchiveTable;
 use self::tables::messages::SqliteMessageTable;
 use self::tables::queues::SqliteQueueTable;
 use self::tables::runs::SqliteRunRecordTable;
@@ -30,7 +28,6 @@ pub struct SqliteStore {
     queues: Arc<SqliteQueueTable>,
     messages: Arc<SqliteMessageTable>,
     workers: Arc<SqliteWorkerTable>,
-    archive: Arc<SqliteArchiveTable>,
     workflows: Arc<SqliteWorkflowTable>,
     workflow_runs: Arc<SqliteRunRecordTable>,
     workflow_steps: Arc<SqliteStepRecordTable>,
@@ -65,7 +62,6 @@ impl SqliteStore {
             queues: Arc::new(SqliteQueueTable::new(pool.clone())),
             messages: Arc::new(SqliteMessageTable::new(pool.clone())),
             workers: Arc::new(SqliteWorkerTable::new(pool.clone())),
-            archive: Arc::new(SqliteArchiveTable::new(pool.clone())),
             workflows: Arc::new(SqliteWorkflowTable::new(pool.clone())),
             workflow_runs: Arc::new(SqliteRunRecordTable::new(pool.clone())),
             workflow_steps: Arc::new(SqliteStepRecordTable::new(pool)),
@@ -136,10 +132,6 @@ impl Store for SqliteStore {
 
     fn workers(&self) -> &dyn WorkerTable {
         self.workers.as_ref()
-    }
-
-    fn archive(&self) -> &dyn ArchiveTable {
-        self.archive.as_ref()
     }
 
     fn workflows(&self) -> &dyn WorkflowTable {

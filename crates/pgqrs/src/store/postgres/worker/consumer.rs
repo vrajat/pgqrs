@@ -34,7 +34,7 @@
 use crate::error::Result;
 use crate::store::postgres::tables::{Messages, Workers};
 use crate::tables::WorkerTable;
-use crate::{ArchivedMessage, QueueMessage, WorkerStatus};
+use crate::{QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
@@ -347,8 +347,8 @@ impl crate::store::Consumer for Consumer {
         Ok(result)
     }
 
-    async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
-        let result: Option<ArchivedMessage> = sqlx::query_as::<_, ArchivedMessage>(ARCHIVE_MESSAGE)
+    async fn archive(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
+        let result: Option<QueueMessage> = sqlx::query_as::<_, QueueMessage>(ARCHIVE_MESSAGE)
             .bind(msg_id)
             .bind(self.worker_record.id)
             .fetch_optional(&self.pool)

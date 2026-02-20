@@ -28,7 +28,6 @@ use crate::error::Result;
 use crate::store::{QueueTable, WorkerTable};
 use crate::types::QueueMessage;
 
-use crate::store::postgres::tables::pgqrs_archive::Archive;
 use crate::store::postgres::tables::pgqrs_messages::Messages;
 use crate::store::postgres::tables::pgqrs_queues::Queues;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
@@ -62,22 +61,6 @@ const CHECK_ORPHANED_MESSAGE_WORKERS: &str = r#"
     LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
     WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
        OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_QUEUES: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_queues q ON a.queue_id = q.id
-    WHERE q.id IS NULL
-"#;
-
-const CHECK_ORPHANED_ARCHIVE_WORKERS: &str = r#"
-    SELECT COUNT(*)
-    FROM pgqrs_archive a
-    LEFT OUTER JOIN pgqrs_workers pw ON a.producer_worker_id = pw.id
-    LEFT OUTER JOIN pgqrs_workers cw ON a.consumer_worker_id = cw.id
-    WHERE (a.producer_worker_id IS NOT NULL AND pw.id IS NULL)
-       OR (a.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
 "#;
 
 pub const DLQ_BATCH: &str = r#"
@@ -122,12 +105,10 @@ const LOCK_QUEUE_FOR_UPDATE: &str = r#"
     FOR NO KEY UPDATE;
 "#;
 
-/// Check if worker has any associated messages or archives
+/// Check if worker has any associated messages
 const CHECK_WORKER_REFERENCES: &str = r#"
     SELECT COUNT(*) as total_references FROM (
         SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = $1 OR consumer_worker_id = $1
-        UNION ALL
-        SELECT 1 FROM pgqrs_archive WHERE producer_worker_id = $1 OR consumer_worker_id = $1
     ) refs
 "#;
 
@@ -142,10 +123,6 @@ const PURGE_OLD_WORKERS: &str = r#"
               SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
               UNION
               SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
-              UNION
-              SELECT producer_worker_id as worker_id FROM pgqrs_archive WHERE producer_worker_id IS NOT NULL
-              UNION
-              SELECT consumer_worker_id as worker_id FROM pgqrs_archive WHERE consumer_worker_id IS NOT NULL
           ) refs
       )
 "#;
@@ -154,13 +131,13 @@ const GET_QUEUE_METRICS: &str = r#"
     SELECT
         q.queue_name as name,
         COUNT(m.id) as total_messages,
-        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
-        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
-        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL AND m.archived_at IS NULL) as pending_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL) as locked_messages,
+        COUNT(m.id) FILTER (WHERE m.archived_at IS NOT NULL) as archived_messages,
+        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL AND m.archived_at IS NULL) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
     WHERE q.id = $1
     GROUP BY q.id, q.queue_name
 "#;
@@ -169,13 +146,13 @@ const GET_ALL_QUEUES_METRICS: &str = r#"
     SELECT
         q.queue_name as name,
         COUNT(m.id) as total_messages,
-        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL) as pending_messages,
-        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages m2 WHERE m2.queue_id = q.id AND m2.archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive a WHERE a.queue_id = q.id) as archived_messages,
-        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL) as oldest_pending_message,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NULL AND m.archived_at IS NULL) as pending_messages,
+        COUNT(m.id) FILTER (WHERE m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL) as locked_messages,
+        COUNT(m.id) FILTER (WHERE m.archived_at IS NOT NULL) as archived_messages,
+        MIN(m.enqueued_at) FILTER (WHERE m.consumer_worker_id IS NULL AND m.archived_at IS NULL) as oldest_pending_message,
         MAX(m.enqueued_at) as newest_message
     FROM pgqrs_queues q
-    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
+    LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
     GROUP BY q.id, q.queue_name
 "#;
 
@@ -187,7 +164,7 @@ const GET_SYSTEM_STATS: &str = r#"
         (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL) as total_messages,
         (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL) as pending_messages,
         (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL) as locked_messages,
-        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) + (SELECT COUNT(*) FROM pgqrs_archive) as archived_messages,
+        (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) as archived_messages,
         '0.5.0' as schema_version
 "#;
 
@@ -225,7 +202,6 @@ pub struct Admin {
     pub config: Config,
     pub queues: Queues,
     pub messages: Messages,
-    pub archive: Archive,
     pub workers: Workers,
     /// Worker record for this Admin instance
     worker_record: WorkerRecord,
@@ -246,7 +222,6 @@ impl Admin {
         let workers = Workers::new(pool.clone());
         let queues = Queues::new(pool.clone());
         let messages = Messages::new(pool.clone());
-        let archive = Archive::new(pool.clone());
 
         let worker_record = workers.register(None, hostname, port).await?;
 
@@ -255,7 +230,6 @@ impl Admin {
             config,
             queues,
             messages,
-            archive,
             workers,
             worker_record,
         })
@@ -266,7 +240,6 @@ impl Admin {
         let workers = Workers::new(pool.clone());
         let queues = Queues::new(pool.clone());
         let messages = Messages::new(pool.clone());
-        let archive = Archive::new(pool.clone());
 
         let worker_record = workers.register_ephemeral(None).await?;
 
@@ -275,7 +248,6 @@ impl Admin {
             config,
             queues,
             messages,
-            archive,
             workers,
             worker_record,
         })
@@ -341,7 +313,7 @@ impl crate::store::Admin for Admin {
     /// Verify that pgqrs installation is valid and healthy.
     ///
     /// This method checks that all required infrastructure is in place:
-    /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages, pgqrs_archive)
+    /// - All unified tables exist (pgqrs_queues, pgqrs_workers, pgqrs_messages)
     /// - Referential integrity is maintained (all foreign keys are valid)
     ///
     /// # Returns
@@ -362,7 +334,6 @@ impl crate::store::Admin for Admin {
             ("pgqrs_queues", "Queue repository table"),
             ("pgqrs_workers", "Worker repository table"),
             ("pgqrs_messages", "Unified messages table"),
-            ("pgqrs_archive", "Unified archive table"),
         ];
 
         for (table_name, description) in &required_tables {
@@ -419,44 +390,6 @@ impl crate::store::Admin for Admin {
                 message: format!(
                     "Found {} messages with invalid producer_worker_id or consumer_worker_id references",
                     orphaned_message_workers
-                ),
-            });
-        }
-
-        // Check that all archived messages have valid queue_id references
-        let orphaned_archive_queues = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_QUEUES)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "CHECK_ORPHANED_ARCHIVE_QUEUES".into(),
-                source: Box::new(e),
-                context: "Failed to check archive queue referential integrity".into(),
-            })?;
-
-        if orphaned_archive_queues > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!(
-                    "Found {} archived messages with invalid queue_id references",
-                    orphaned_archive_queues
-                ),
-            });
-        }
-
-        // Check that all archived messages with producer_worker_id or consumer_worker_id have valid worker references
-        let orphaned_archive_workers = sqlx::query_scalar::<_, i64>(CHECK_ORPHANED_ARCHIVE_WORKERS)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "CHECK_ORPHANED_ARCHIVE_WORKERS".into(),
-                source: Box::new(e),
-                context: "Failed to check archive worker referential integrity".into(),
-            })?;
-
-        if orphaned_archive_workers > 0 {
-            return Err(crate::error::Error::SchemaValidation {
-                message: format!(
-                    "Found {} archived messages with invalid producer_worker_id or consumer_worker_id references",
-                    orphaned_archive_workers
                 ),
             });
         }
@@ -701,35 +634,25 @@ impl crate::store::Admin for Admin {
             name: queue_info.queue_name.clone(),
         })?;
 
-        // Check for active workers assigned to this queue
-        let ready_workers = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Ready)
-            .await?;
-        let suspended_workers = self
-            .workers
-            .count_for_queue(queue_info.id, WorkerStatus::Suspended)
-            .await?;
-        let active_workers = ready_workers + suspended_workers;
+        // Check for any workers assigned to this queue
+        let total_workers = self.workers.filter_by_fk(queue_info.id).await?.len();
 
-        if active_workers > 0 {
+        if total_workers > 0 {
             return Err(crate::error::Error::ValidationFailed {
                 reason: format!(
-                    "Cannot delete queue '{}': {} active worker(s) are still assigned to this queue. Stop workers first.",
-                    queue_info.queue_name, active_workers
+                    "Cannot delete queue '{}': {} worker(s) are still assigned to this queue. Delete workers first.",
+                    queue_info.queue_name, total_workers
                 ),
             });
         }
 
         // Check referential integrity using table methods
-        let messages_count = self.messages.count_for_fk(queue_id, &mut tx).await?;
-        let archive_count = self.archive.count_for_fk(queue_id, &mut tx).await?;
-        let total_references = messages_count + archive_count;
+        let total_references = self.messages.count_for_queue(queue_id).await?;
 
         if total_references > 0 {
             return Err(crate::error::Error::ValidationFailed {
                 reason: format!(
-                    "Cannot delete queue '{}': {} references exist in messages/archive tables. Purge data first.",
+                    "Cannot delete queue '{}': {} references exist in messages table. Purge data first.",
                     queue_info.queue_name, total_references
                 ),
             });
@@ -777,7 +700,6 @@ impl crate::store::Admin for Admin {
         })?;
 
         self.messages.delete_by_fk(queue_id, &mut tx).await?;
-        self.archive.delete_by_fk(queue_id, &mut tx).await?;
         self.workers.delete_by_fk(queue_id, &mut tx).await?;
 
         tx.commit()

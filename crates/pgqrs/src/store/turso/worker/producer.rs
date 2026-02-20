@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::store::turso::tables::archive::TursoArchiveTable;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::WorkerTable;
@@ -19,7 +18,6 @@ pub struct TursoProducer {
     validator: PayloadValidator,
     messages: Arc<TursoMessageTable>,
     workers: Arc<TursoWorkerTable>,
-    archive: Arc<TursoArchiveTable>, // Needed for replay_dlq
 }
 
 impl TursoProducer {
@@ -44,7 +42,6 @@ impl TursoProducer {
             queue_info.queue_name
         );
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
-        let archive = Arc::new(TursoArchiveTable::new(db.clone()));
 
         Ok(Self {
             db: db.clone(),
@@ -54,7 +51,6 @@ impl TursoProducer {
             config: config.clone(),
             workers: workers_arc,
             messages,
-            archive,
         })
     }
 
@@ -67,7 +63,6 @@ impl TursoProducer {
         let worker_record = workers_arc.register_ephemeral(Some(queue_info.id)).await?;
 
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
-        let archive = Arc::new(TursoArchiveTable::new(db.clone()));
 
         Ok(Self {
             db,
@@ -77,7 +72,6 @@ impl TursoProducer {
             config: config.clone(),
             workers: workers_arc,
             messages,
-            archive,
         })
     }
 
@@ -248,9 +242,73 @@ impl crate::store::Producer for TursoProducer {
     }
 
     async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        use crate::store::ArchiveTable; // Import trait to use method
-                                        // Delegate to ArchiveTable logic which handles transaction safe replay
-        self.archive.replay_message(archived_msg_id).await
+        use crate::store::turso::format_turso_timestamp;
+        // Need manual transaction to update message to be active again
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "BEGIN".into(),
+                source: Box::new(e),
+                context: "Begin replay".into(),
+            })?;
+
+        let now_str = format_turso_timestamp(&chrono::Utc::now());
+
+        let msg_row_opt = crate::store::turso::query(
+            r#"
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = ?,
+                enqueued_at = ?,
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = ? AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+            "#,
+        )
+        .bind(now_str.clone())
+        .bind(now_str)
+        .bind(archived_msg_id)
+        .fetch_optional_on_connection(&conn)
+        .await;
+
+        let msg_row_opt = match msg_row_opt {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+
+        if let Some(msg_row) = msg_row_opt {
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COMMIT".into(),
+                    source: Box::new(e),
+                    context: "Commit replay".into(),
+                })?;
+
+            let msg = TursoMessageTable::map_row(&msg_row)?;
+            Ok(Some(msg))
+        } else {
+            conn.execute("ROLLBACK", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "ROLLBACK".into(),
+                    source: Box::new(e),
+                    context: "Rollback replay (not found)".into(),
+                })?;
+            Ok(None)
+        }
     }
 
     fn validation_config(&self) -> &crate::validation::ValidationConfig {

@@ -4,29 +4,11 @@ use crate::store::turso::format_turso_timestamp;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::{Consumer, MessageTable, Worker};
-use crate::types::{ArchivedMessage, QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
+use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use std::sync::Arc;
 use turso::Database;
-
-const SELECT_MESSAGE_FOR_ARCHIVE: &str = r#"
-    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id
-    FROM pgqrs_messages
-    WHERE id = ? AND consumer_worker_id = ?
-"#;
-
-const INSERT_ARCHIVE: &str = r#"
-    INSERT INTO pgqrs_archive (
-        original_msg_id, queue_id, producer_worker_id, consumer_worker_id,
-        payload, enqueued_at, vt, read_ct, dequeued_at, archived_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    RETURNING id, original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, dequeued_at, archived_at
-"#;
-
-const DELETE_MESSAGE_AFTER_ARCHIVE: &str = r#"
-    DELETE FROM pgqrs_messages WHERE id = ? AND consumer_worker_id = ?
-"#;
 
 pub struct TursoConsumer {
     db: Arc<Database>,
@@ -250,12 +232,12 @@ impl Consumer for TursoConsumer {
             .await
     }
 
-    async fn archive(&self, msg_id: i64) -> Result<Option<ArchivedMessage>> {
+    async fn archive(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
         let row = crate::store::turso::query(
-            "UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at",
+            "UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at",
         )
         .bind(now_str)
         .bind(msg_id)
@@ -264,9 +246,7 @@ impl Consumer for TursoConsumer {
         .await?;
 
         if let Some(r) = row {
-            Ok(Some(
-                crate::store::turso::tables::archive::TursoArchiveTable::map_row(&r)?,
-            ))
+            Ok(Some(TursoMessageTable::map_row(&r)?))
         } else {
             Ok(None)
         }

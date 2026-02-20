@@ -7,9 +7,11 @@ CREATE TABLE IF NOT EXISTS pgqrs_messages (
     read_ct INTEGER DEFAULT 0,
     dequeued_at TEXT,
     producer_worker_id INTEGER REFERENCES pgqrs_workers(id),
-    consumer_worker_id INTEGER REFERENCES pgqrs_workers(id)
+    consumer_worker_id INTEGER REFERENCES pgqrs_workers(id),
+    archived_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_queue_vt ON pgqrs_messages(queue_id, vt);
 CREATE INDEX IF NOT EXISTS idx_messages_consumer ON pgqrs_messages(consumer_worker_id);
 CREATE INDEX IF NOT EXISTS idx_messages_queue_enqueued_at ON pgqrs_messages(queue_id, enqueued_at);
+CREATE INDEX IF NOT EXISTS idx_messages_archived_at ON pgqrs_messages (queue_id, archived_at);

@@ -3,8 +3,7 @@
 use crate::rate_limit::RateLimitStatus;
 use crate::store::{AnyStore, Store};
 pub use crate::types::{
-    ArchivedMessage, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus,
-    WorkflowRecord,
+    QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
 use crate::validation::ValidationConfig;
 use async_trait::async_trait;
@@ -159,7 +158,7 @@ pub trait Consumer: Worker {
     async fn delete(&self, message_id: i64) -> crate::error::Result<bool>;
     async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
 
-    async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<ArchivedMessage>>;
+    async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>>;
     async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>>;
 
     async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64>;

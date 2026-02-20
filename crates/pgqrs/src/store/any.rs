@@ -231,17 +231,6 @@ impl Store for AnyStore {
         }
     }
 
-    fn archive(&self) -> &dyn ArchiveTable {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.archive(),
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.archive(),
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.archive(),
-        }
-    }
-
     fn workflows(&self) -> &dyn WorkflowTable {
         match self {
             #[cfg(feature = "postgres")]

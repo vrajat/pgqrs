@@ -206,13 +206,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Show archive counts
     println!("Archive counts:");
     let email_archive_count = pgqrs::tables(&store)
-        .archive()
-        .count_for_queue(email_queue.id)
-        .await?;
+        .messages()
+        .list_archived_by_queue(email_queue.id)
+        .await?
+        .len();
     let task_archive_count = pgqrs::tables(&store)
-        .archive()
-        .count_for_queue(task_queue.id)
-        .await?;
+        .messages()
+        .list_archived_by_queue(task_queue.id)
+        .await?
+        .len();
     println!("  email queue archived: {}", email_archive_count);
     println!("  task queue archived: {}", task_archive_count);
 
@@ -258,8 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  email queue: {}", email_pending);
     println!("  task queue: {}", task_pending);
 
-    println!("\nNote: When deleting a queue with admin.delete_queue(), both the queue");
-    println!("and its archive table are removed to prevent orphaned archive tables.");
+    println!("\nNote: When deleting a queue with admin.delete_queue(), the queue");
+    println!("and all its messages are removed.");
 
     println!("\nExample completed successfully!");
 

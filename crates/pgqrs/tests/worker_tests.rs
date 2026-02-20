@@ -351,7 +351,7 @@ async fn test_worker_deletion_with_references() {
 
     let error_msg = format!("{}", result.unwrap_err());
     assert!(
-        error_msg.contains("associated messages/archives"),
+        error_msg.contains("associated messages"),
         "Error should mention associated messages, got: {}",
         error_msg
     );
@@ -463,8 +463,8 @@ async fn test_worker_deletion_with_archived_references() {
 
     let error_msg = format!("{}", result.unwrap_err());
     assert!(
-        error_msg.contains("associated messages/archives"),
-        "Error should mention associated archives, got: {}",
+        error_msg.contains("associated messages"),
+        "Error should mention associated messages, got: {}",
         error_msg
     );
 }
