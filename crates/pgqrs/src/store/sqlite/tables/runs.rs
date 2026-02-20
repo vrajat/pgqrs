@@ -13,7 +13,7 @@ SET status = 'RUNNING',
     started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END,
     updated_at = datetime('now')
 WHERE id = $1 AND status IN ('QUEUED', 'PAUSED')
-RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
 "#;
 
 #[derive(Debug, Clone)]
@@ -29,6 +29,7 @@ impl SqliteRunRecordTable {
     fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord> {
         let id: i64 = row.try_get("id")?;
         let workflow_id: i64 = row.try_get("workflow_id")?;
+        let message_id: i64 = row.try_get("message_id")?;
 
         let status_str: String = row.try_get("status")?;
         let status = WorkflowStatus::from_str(&status_str)
@@ -58,6 +59,7 @@ impl SqliteRunRecordTable {
         Ok(RunRecord {
             id,
             workflow_id,
+            message_id,
             status,
             input,
             output,
@@ -164,12 +166,13 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_id, status, input, created_at, updated_at)
-            VALUES ($1, 'QUEUED', $2, $3, $3)
-            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+            INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input, created_at, updated_at)
+            VALUES ($1, $2, 'QUEUED', $3, $4, $4)
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(data.workflow_id)
+        .bind(data.message_id)
         .bind(input_str)
         .bind(now_str)
         .fetch_one(&self.pool)
@@ -186,7 +189,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     async fn get(&self, id: i64) -> Result<RunRecord> {
         let row = sqlx::query(
             r#"
-            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             WHERE id = $1
             "#,
@@ -206,7 +209,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     async fn list(&self) -> Result<Vec<RunRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, workflow_id, status, input, output, error, created_at, updated_at
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             FROM pgqrs_workflow_runs
             ORDER BY created_at DESC
             "#,
@@ -330,5 +333,31 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
         Self::fail_run(&mut conn, id, error).await?;
         drop(conn);
         self.get(id).await
+    }
+
+    async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            FROM pgqrs_workflow_runs
+            WHERE message_id = $1
+            "#,
+        )
+        .bind(message_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => crate::error::Error::NotFound {
+                entity: "RunRecord".to_string(),
+                id: format!("message_id:{}", message_id),
+            },
+            _ => crate::error::Error::QueryFailed {
+                query: format!("GET_WORKFLOW_RUN_BY_MESSAGE_ID ({})", message_id),
+                source: Box::new(e),
+                context: format!("Failed to get workflow run for message {}", message_id),
+            },
+        })?;
+
+        Self::map_row(row)
     }
 }

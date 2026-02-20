@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflows (
 CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_id INTEGER NOT NULL REFERENCES pgqrs_workflows(id),
+    message_id INTEGER NOT NULL UNIQUE REFERENCES pgqrs_messages(id),
     status TEXT NOT NULL,
     input TEXT,
     output TEXT,
@@ -42,5 +43,6 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
 );
 
 -- Indices
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_message_id ON pgqrs_workflow_runs(message_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON pgqrs_workflow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_status ON pgqrs_workflow_steps(status);

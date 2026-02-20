@@ -20,15 +20,17 @@ impl crate::store::RunRecordTable for RunRecords {
     async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_id, status, input)
+            INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input)
             VALUES (
               $1,
+              $2,
               'QUEUED'::pgqrs_workflow_status,
-              $2
+              $3
             )
             RETURNING
               id,
               workflow_id,
+              message_id,
               status,
               input,
               output,
@@ -38,6 +40,7 @@ impl crate::store::RunRecordTable for RunRecords {
             "#,
         )
         .bind(data.workflow_id)
+        .bind(data.message_id)
         .bind(data.input)
         .fetch_one(&self.pool)
         .await
@@ -56,6 +59,7 @@ impl crate::store::RunRecordTable for RunRecords {
             SELECT
               id,
               workflow_id,
+              message_id,
               status,
               input,
               output,
@@ -84,6 +88,7 @@ impl crate::store::RunRecordTable for RunRecords {
             SELECT
               id,
               workflow_id,
+              message_id,
               status,
               input,
               output,
@@ -144,7 +149,7 @@ impl crate::store::RunRecordTable for RunRecords {
                 updated_at = NOW()
             WHERE id = $1
               AND status IN ('QUEUED'::pgqrs_workflow_status, 'PAUSED'::pgqrs_workflow_status)
-            RETURNING id, workflow_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -185,16 +190,17 @@ impl crate::store::RunRecordTable for RunRecords {
     }
 
     async fn complete_run(&self, id: i64, output: serde_json::Value) -> Result<RunRecord> {
-        sqlx::query(
+        let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW(), updated_at = NOW()
             WHERE id = $1
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(id)
         .bind(output)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "COMPLETE_RUN".into(),
@@ -202,7 +208,7 @@ impl crate::store::RunRecordTable for RunRecords {
             context: format!("Failed to complete run {}", id),
         })?;
 
-        self.get(id).await
+        Ok(row)
     }
 
     async fn pause_run(
@@ -215,7 +221,7 @@ impl crate::store::RunRecordTable for RunRecords {
             "message": message,
             "resume_after": resume_after.as_secs()
         });
-        sqlx::query(
+        let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'PAUSED'::pgqrs_workflow_status,
@@ -223,11 +229,12 @@ impl crate::store::RunRecordTable for RunRecords {
                 paused_at = NOW(),
                 updated_at = NOW()
             WHERE id = $1
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(id)
         .bind(error)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "PAUSE_RUN".into(),
@@ -235,20 +242,21 @@ impl crate::store::RunRecordTable for RunRecords {
             context: format!("Failed to pause run {}", id),
         })?;
 
-        self.get(id).await
+        Ok(row)
     }
 
     async fn fail_run(&self, id: i64, error: serde_json::Value) -> Result<RunRecord> {
-        sqlx::query(
+        let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW(), updated_at = NOW()
             WHERE id = $1
+            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
             "#,
         )
         .bind(id)
         .bind(error)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: "FAIL_RUN".into(),
@@ -256,7 +264,42 @@ impl crate::store::RunRecordTable for RunRecords {
             context: format!("Failed to fail run {}", id),
         })?;
 
-        self.get(id).await
+        Ok(row)
+    }
+
+    async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(
+            r#"
+            SELECT
+              id,
+              workflow_id,
+              message_id,
+              status,
+              input,
+              output,
+              error,
+              created_at,
+              updated_at
+            FROM pgqrs_workflow_runs
+            WHERE message_id = $1
+            "#,
+        )
+        .bind(message_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => crate::error::Error::NotFound {
+                entity: "RunRecord".to_string(),
+                id: format!("message_id:{}", message_id),
+            },
+            _ => crate::error::Error::QueryFailed {
+                query: format!("GET_WORKFLOW_RUN_BY_MESSAGE_ID ({})", message_id),
+                source: Box::new(e),
+                context: format!("Failed to get workflow run for message {}", message_id),
+            },
+        })?;
+
+        Ok(row)
     }
 }
 

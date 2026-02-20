@@ -470,6 +470,41 @@ impl PyRunBuilder {
             })
         })
     }
+
+    fn result<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        let message = self.message.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut builder = rust_pgqrs::run();
+            if let Some(ref s) = store {
+                builder = builder.store(s);
+            }
+            if let Some(m) = message {
+                builder = builder.message(m);
+            }
+            let res: serde_json::Value = builder.result().await.map_err(to_py_err)?;
+            Python::with_gil(|py| json_to_py(py, &res))
+        })
+    }
+
+    fn get<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        let message = self.message.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let mut builder = rust_pgqrs::run();
+            if let Some(ref s) = store {
+                builder = builder.store(s);
+            }
+            if let Some(m) = message {
+                builder = builder.message(m);
+            }
+            let res: Option<serde_json::Value> = builder.get().await.map_err(to_py_err)?;
+            Python::with_gil(|py| match res {
+                Some(val) => json_to_py(py, &val),
+                None => Ok(py.None()),
+            })
+        })
+    }
 }
 
 #[pyclass(name = "StepBuilder")]
