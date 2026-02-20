@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::store::turso::format_turso_timestamp;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
 use crate::store::{Consumer, MessageTable, Worker};
@@ -11,7 +10,6 @@ use std::sync::Arc;
 use turso::Database;
 
 pub struct TursoConsumer {
-    db: Arc<Database>,
     worker_record: WorkerRecord,
     queue_info: QueueRecord,
     _config: Config,
@@ -36,7 +34,6 @@ impl TursoConsumer {
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
 
         Ok(Self {
-            db,
             worker_record,
             queue_info: queue_info.clone(),
             _config: config,
@@ -56,7 +53,6 @@ impl TursoConsumer {
         let messages = Arc::new(TursoMessageTable::new(db.clone()));
 
         Ok(Self {
-            db,
             worker_record,
             queue_info: queue_info.clone(),
             _config: config.clone(),
@@ -85,6 +81,17 @@ impl Worker for TursoConsumer {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        let pending = self
+            .messages
+            .count_pending_for_queue_and_worker(self.queue_info.id, self.worker_record.id)
+            .await?;
+
+        if pending > 0 {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
+                count: pending as u64,
+                reason: format!("Consumer has {} pending messages", pending),
+            });
+        }
         self.workers.shutdown(self.worker_record.id).await
     }
 
@@ -124,90 +131,16 @@ impl Consumer for TursoConsumer {
         vt: u32,
         now: DateTime<Utc>,
     ) -> Result<Vec<QueueMessage>> {
-        // Implement Manual Transaction Dequeue
-        let now_str = format_turso_timestamp(&now);
-        let conn = crate::store::turso::connect_db(&self.db).await?;
-
-        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
-            crate::error::Error::QueryFailed {
-                query: "BEGIN IMMEDIATE".into(),
-                source: Box::new(e),
-                context: "Dequeue start".into(),
-            }
-        })?;
-
-        // 1. Select candidates
-        let sql_select = r#"
-            SELECT id
-            FROM pgqrs_messages
-            WHERE queue_id = ? AND (vt IS NULL OR vt <= ?) AND consumer_worker_id IS NULL AND archived_at IS NULL AND read_ct < ?
-            ORDER BY enqueued_at ASC
-            LIMIT ?
-        "#;
-
-        let mut grabbed_ids = Vec::new();
-
-        let rows = crate::store::turso::query(sql_select)
-            .bind(self.queue_info.id)
-            .bind(now_str.clone())
-            .bind(self._config.max_read_ct as i64)
-            .bind(limit as i64)
-            .fetch_all_on_connection(&conn)
-            .await;
-
-        let rows = match rows {
-            Ok(res) => res,
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(e);
-            }
-        };
-
-        for row in rows {
-            let id: i64 = row.get(0)?;
-            grabbed_ids.push(id);
-        }
-
-        if grabbed_ids.is_empty() {
-            conn.execute("ROLLBACK", ())
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "ROLLBACK".into(),
-                    source: Box::new(e),
-                    context: "Dequeue empty".into(),
-                })?;
-            return Ok(vec![]);
-        }
-
-        // 2. Update them
-        let new_vt = now + chrono::Duration::seconds(vt as i64);
-        let new_vt_str = format_turso_timestamp(&new_vt);
-
-        for id in &grabbed_ids {
-            let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = COALESCE(dequeued_at, ?) WHERE id = ?")
-                .bind(self.worker_record.id)
-                .bind(new_vt_str.clone())
-                .bind(now_str.clone())
-                .bind(*id)
-                .execute_once_on_connection(&conn)
-                .await;
-
-            if let Err(e) = update_res {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(e);
-            }
-        }
-
-        conn.execute("COMMIT", ())
+        self.messages
+            .dequeue_at(
+                self.queue_info.id,
+                limit,
+                vt,
+                self.worker_record.id,
+                now,
+                self._config.max_read_ct,
+            )
             .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COMMIT".into(),
-                source: Box::new(e),
-                context: "Dequeue commit".into(),
-            })?;
-
-        // 3. Fetch full objects
-        self.messages.get_by_ids(&grabbed_ids).await
     }
 
     async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
@@ -233,31 +166,13 @@ impl Consumer for TursoConsumer {
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
-        let now = Utc::now();
-        let now_str = format_turso_timestamp(&now);
-
-        let row = crate::store::turso::query(
-            "UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at",
-        )
-        .bind(now_str)
-        .bind(msg_id)
-        .bind(self.worker_record.id)
-        .fetch_optional(&self.db)
-        .await?;
-
-        if let Some(r) = row {
-            Ok(Some(TursoMessageTable::map_row(&r)?))
-        } else {
-            Ok(None)
-        }
+        self.messages.archive(msg_id, self.worker_record.id).await
     }
 
     async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
-        let mut results = Vec::new();
-        for id in msg_ids {
-            results.push(self.archive(id).await?.is_some());
-        }
-        Ok(results)
+        self.messages
+            .archive_many(&msg_ids, self.worker_record.id)
+            .await
     }
 
     async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {

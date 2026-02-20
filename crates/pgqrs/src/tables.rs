@@ -83,6 +83,30 @@ pub trait MessageTable: Send + Sync {
         worker_id: i64,
     ) -> crate::error::Result<i64>;
 
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: chrono::DateTime<chrono::Utc>,
+        max_read_ct: i32,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+
+    async fn archive(&self, id: i64, worker_id: i64) -> crate::error::Result<Option<QueueMessage>>;
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> crate::error::Result<Vec<bool>>;
+
+    async fn replay_dlq(&self, id: i64) -> crate::error::Result<Option<QueueMessage>>;
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> crate::error::Result<u64>;
+
+    async fn delete_many_owned(
+        &self,
+        ids: &[i64],
+        worker_id: i64,
+    ) -> crate::error::Result<Vec<bool>>;
+
     async fn list_archived_by_queue(
         &self,
         queue_id: i64,

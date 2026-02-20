@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
-use crate::store::WorkerTable;
+use crate::store::{MessageTable, WorkerTable};
 use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
@@ -116,7 +116,6 @@ impl crate::store::Worker for SqliteProducer {
 #[async_trait]
 impl crate::store::Producer for SqliteProducer {
     async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.messages.get(msg_id).await
     }
 
@@ -129,7 +128,6 @@ impl crate::store::Producer for SqliteProducer {
         payload: &serde_json::Value,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.validator.validate(payload)?;
 
         let now = Utc::now();
@@ -147,7 +145,6 @@ impl crate::store::Producer for SqliteProducer {
         payloads: &[serde_json::Value],
         delay_seconds: u32,
     ) -> Result<Vec<QueueMessage>> {
-        use crate::store::MessageTable;
         self.validator.validate_batch(payloads)?;
 
         let now = Utc::now();
@@ -168,8 +165,6 @@ impl crate::store::Producer for SqliteProducer {
             )
             .await?;
 
-        // get_by_ids is strict about returning same count if possible, but map_row in MessageTable returns Vec.
-        // If some IDs are missing (should not happen in transaction/atomic insert), they won't be returned.
         let queue_messages = self.messages.get_by_ids(&ids).await?;
         Ok(queue_messages)
     }
@@ -180,7 +175,6 @@ impl crate::store::Producer for SqliteProducer {
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.validator.validate(payload)?;
 
         let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
@@ -194,7 +188,6 @@ impl crate::store::Producer for SqliteProducer {
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
     ) -> Result<Vec<QueueMessage>> {
-        use crate::store::MessageTable;
         self.validator.validate_batch(payloads)?;
 
         let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
@@ -224,7 +217,6 @@ impl crate::store::Producer for SqliteProducer {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        use crate::store::MessageTable;
         use crate::types::NewQueueMessage;
 
         let new_message = NewQueueMessage {
@@ -242,28 +234,7 @@ impl crate::store::Producer for SqliteProducer {
     }
 
     async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        // Replay: Move from archive back to messages
-        let msg = sqlx::query_as::<_, QueueMessage>(r#"
-            UPDATE pgqrs_messages
-            SET archived_at = NULL,
-                read_ct = 0,
-                vt = datetime('now'),
-                enqueued_at = datetime('now'),
-                consumer_worker_id = NULL,
-                dequeued_at = NULL
-            WHERE id = $1 AND archived_at IS NOT NULL
-            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
-        "#)
-        .bind(archived_msg_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("REPLAY_MESSAGE ({})", archived_msg_id),
-            source: Box::new(e),
-            context: format!("Failed to replay message {}", archived_msg_id),
-        })?;
-
-        Ok(msg)
+        self.messages.replay_dlq(archived_msg_id).await
     }
 
     fn validation_config(&self) -> &crate::validation::ValidationConfig {

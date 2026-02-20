@@ -63,6 +63,96 @@ const COUNT_MESSAGES_BY_QUEUE_TX: &str = r#"
     SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1
 "#;
 
+const DELETE_MESSAGE_OWNED: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = $1 AND consumer_worker_id = $2
+"#;
+
+const DELETE_MESSAGE_BATCH_OWNED: &str = r#"
+    DELETE FROM pgqrs_messages
+    WHERE id = ANY($1) AND consumer_worker_id = $2
+    RETURNING id;
+"#;
+
+const ARCHIVE_MESSAGE: &str = r#"
+    UPDATE pgqrs_messages
+    SET archived_at = NOW()
+    WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+"#;
+
+const ARCHIVE_BATCH: &str = r#"
+    UPDATE pgqrs_messages
+    SET archived_at = NOW()
+    WHERE id = ANY($1) AND consumer_worker_id = $2 AND archived_at IS NULL
+    RETURNING id;
+"#;
+
+const DEQUEUE_MESSAGES_AT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = $5 + make_interval(secs => $3::double precision),
+        read_ct = read_ct + 1,
+        dequeued_at = COALESCE(dequeued_at, $5),
+        consumer_worker_id = $4
+    WHERE id IN (
+        SELECT id
+        FROM pgqrs_messages
+        WHERE queue_id = $1
+          AND (vt IS NULL OR vt <= $5)
+          AND consumer_worker_id IS NULL
+          AND archived_at IS NULL
+          AND read_ct < $6
+        ORDER BY enqueued_at ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+"#;
+
+const REPLAY_FROM_DLQ: &str = r#"
+    UPDATE pgqrs_messages
+    SET archived_at = NULL,
+        read_ct = 0,
+        vt = NOW(),
+        enqueued_at = NOW(),
+        consumer_worker_id = NULL,
+        dequeued_at = NULL
+    WHERE id = $1 AND archived_at IS NOT NULL
+    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+"#;
+
+const UPDATE_MESSAGE_PAYLOAD: &str = r#"
+    UPDATE pgqrs_messages
+    SET payload = $2
+    WHERE id = $1;
+"#;
+
+const EXTEND_MESSAGE_VT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = vt + make_interval(secs => $3::double precision)
+    WHERE id = $1 AND consumer_worker_id = $2;
+"#;
+
+const EXTEND_BATCH_VT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = vt + make_interval(secs => $3::double precision)
+    WHERE id = ANY($1) AND consumer_worker_id = $2
+    RETURNING id;
+"#;
+
+const RELEASE_SPECIFIC_MESSAGES: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = NOW(), consumer_worker_id = NULL
+    WHERE id = ANY($1) AND consumer_worker_id = $2
+    RETURNING id;
+"#;
+
+const RELEASE_WITH_VT: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = $3, consumer_worker_id = NULL
+    WHERE id = $1 AND consumer_worker_id = $2;
+"#;
+
 /// Messages table CRUD operations for pgqrs.
 ///
 /// Provides pure CRUD operations on the `pgqrs_messages` table without business logic.
@@ -243,7 +333,7 @@ impl crate::store::MessageTable for Messages {
     }
 
     async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
-        let rows_affected = sqlx::query("UPDATE pgqrs_messages SET payload = $2 WHERE id = $1")
+        let rows_affected = sqlx::query(UPDATE_MESSAGE_PAYLOAD)
             .bind(id)
             .bind(payload)
             .execute(&self.pool)
@@ -264,12 +354,6 @@ impl crate::store::MessageTable for Messages {
         worker_id: i64,
         additional_seconds: u32,
     ) -> Result<u64> {
-        const EXTEND_MESSAGE_VT: &str = r#"
-            UPDATE pgqrs_messages
-            SET vt = vt + make_interval(secs => $3::double precision)
-            WHERE id = $1 AND consumer_worker_id = $2;
-        "#;
-
         let rows_affected = sqlx::query(EXTEND_MESSAGE_VT)
             .bind(id)
             .bind(worker_id)
@@ -295,13 +379,6 @@ impl crate::store::MessageTable for Messages {
         if message_ids.is_empty() {
             return Ok(vec![]);
         }
-
-        const EXTEND_BATCH_VT: &str = r#"
-            UPDATE pgqrs_messages
-            SET vt = vt + make_interval(secs => $3::double precision)
-            WHERE id = ANY($1) AND consumer_worker_id = $2
-            RETURNING id;
-        "#;
 
         let extended_ids: Vec<i64> = sqlx::query_scalar(EXTEND_BATCH_VT)
             .bind(message_ids)
@@ -336,13 +413,6 @@ impl crate::store::MessageTable for Messages {
             return Ok(vec![]);
         }
 
-        const RELEASE_SPECIFIC_MESSAGES: &str = r#"
-            UPDATE pgqrs_messages
-            SET vt = NOW(), consumer_worker_id = NULL
-            WHERE id = ANY($1) AND consumer_worker_id = $2
-            RETURNING id;
-        "#;
-
         let released_ids: Vec<i64> = sqlx::query_scalar(RELEASE_SPECIFIC_MESSAGES)
             .bind(message_ids)
             .bind(worker_id)
@@ -369,12 +439,6 @@ impl crate::store::MessageTable for Messages {
         worker_id: i64,
         vt: DateTime<Utc>,
     ) -> Result<u64> {
-        const RELEASE_WITH_VT: &str = r#"
-            UPDATE pgqrs_messages
-            SET vt = $3, consumer_worker_id = NULL
-            WHERE id = $1 AND consumer_worker_id = $2;
-        "#;
-
         let rows_affected = sqlx::query(RELEASE_WITH_VT)
             .bind(id)
             .bind(worker_id)
@@ -434,6 +498,116 @@ impl crate::store::MessageTable for Messages {
         })?;
 
         Ok(count)
+    }
+
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: chrono::DateTime<chrono::Utc>,
+        max_read_ct: i32,
+    ) -> Result<Vec<QueueMessage>> {
+        let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES_AT)
+            .bind(queue_id)
+            .bind(limit as i64)
+            .bind(vt as i32)
+            .bind(worker_id)
+            .bind(now)
+            .bind(max_read_ct)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DEQUEUE_MESSAGES_AT".into(),
+                source: Box::new(e),
+                context: "Failed to dequeue messages".into(),
+            })?;
+
+        Ok(messages)
+    }
+
+    async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
+        let result: Option<QueueMessage> = sqlx::query_as::<_, QueueMessage>(ARCHIVE_MESSAGE)
+            .bind(id)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("ARCHIVE_MESSAGE ({})", id),
+                source: Box::new(e),
+                context: format!("Failed to archive message {}", id),
+            })?;
+
+        Ok(result)
+    }
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
+            .bind(ids)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "ARCHIVE_BATCH".into(),
+                source: Box::new(e),
+                context: "Failed to archive message batch".into(),
+            })?;
+
+        let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
+        let result = ids.iter().map(|id| archived_set.contains(id)).collect();
+        Ok(result)
+    }
+
+    async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
+        let msg = sqlx::query_as::<_, QueueMessage>(REPLAY_FROM_DLQ)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("REPLAY_FROM_DLQ ({})", id),
+                source: Box::new(e),
+                context: format!("Failed to replay message {}", id),
+            })?;
+
+        Ok(msg)
+    }
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+        let rows_affected = sqlx::query(DELETE_MESSAGE_OWNED)
+            .bind(id)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_OWNED".into(),
+                source: Box::new(e),
+                context: format!("Failed to delete message {}", id),
+            })?
+            .rows_affected();
+
+        Ok(rows_affected)
+    }
+
+    async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH_OWNED)
+            .bind(ids)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "DELETE_MESSAGE_BATCH_OWNED".into(),
+                source: Box::new(e),
+                context: "Failed to delete message batch".into(),
+            })?;
+
+        let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
+        let result = ids.iter().map(|id| deleted_set.contains(id)).collect();
+        Ok(result)
     }
 
     async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {

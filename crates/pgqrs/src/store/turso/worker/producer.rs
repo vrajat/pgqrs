@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
-use crate::store::WorkerTable;
+use crate::store::{MessageTable, WorkerTable};
 use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use crate::validation::PayloadValidator;
 use async_trait::async_trait;
@@ -116,7 +116,6 @@ impl crate::store::Worker for TursoProducer {
 #[async_trait]
 impl crate::store::Producer for TursoProducer {
     async fn get_message_by_id(&self, msg_id: i64) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.messages.get(msg_id).await
     }
 
@@ -129,7 +128,6 @@ impl crate::store::Producer for TursoProducer {
         payload: &serde_json::Value,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.validator.validate(payload)?;
 
         let now = Utc::now();
@@ -147,7 +145,6 @@ impl crate::store::Producer for TursoProducer {
         payloads: &[serde_json::Value],
         delay_seconds: u32,
     ) -> Result<Vec<QueueMessage>> {
-        use crate::store::MessageTable;
         self.validator.validate_batch(payloads)?;
 
         let now = Utc::now();
@@ -168,8 +165,6 @@ impl crate::store::Producer for TursoProducer {
             )
             .await?;
 
-        // get_by_ids is strict about returning same count if possible, but map_row in MessageTable returns Vec.
-        // If some IDs are missing (should not happen in transaction/atomic insert), they won't be returned.
         let queue_messages = self.messages.get_by_ids(&ids).await?;
         Ok(queue_messages)
     }
@@ -180,7 +175,6 @@ impl crate::store::Producer for TursoProducer {
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
     ) -> Result<QueueMessage> {
-        use crate::store::MessageTable;
         self.validator.validate(payload)?;
 
         let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
@@ -194,7 +188,6 @@ impl crate::store::Producer for TursoProducer {
         now: chrono::DateTime<chrono::Utc>,
         delay_seconds: u32,
     ) -> Result<Vec<QueueMessage>> {
-        use crate::store::MessageTable;
         self.validator.validate_batch(payloads)?;
 
         let vt = now + chrono::Duration::seconds(i64::from(delay_seconds));
@@ -224,7 +217,6 @@ impl crate::store::Producer for TursoProducer {
         now: chrono::DateTime<chrono::Utc>,
         vt: chrono::DateTime<chrono::Utc>,
     ) -> Result<i64> {
-        use crate::store::MessageTable;
         use crate::types::NewQueueMessage;
 
         let new_message = NewQueueMessage {
@@ -242,73 +234,7 @@ impl crate::store::Producer for TursoProducer {
     }
 
     async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        use crate::store::turso::format_turso_timestamp;
-        // Need manual transaction to update message to be active again
-        let conn = self
-            .db
-            .connect()
-            .map_err(|e| crate::error::Error::Internal {
-                message: e.to_string(),
-            })?;
-
-        conn.execute("BEGIN", ())
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "BEGIN".into(),
-                source: Box::new(e),
-                context: "Begin replay".into(),
-            })?;
-
-        let now_str = format_turso_timestamp(&chrono::Utc::now());
-
-        let msg_row_opt = crate::store::turso::query(
-            r#"
-            UPDATE pgqrs_messages
-            SET archived_at = NULL,
-                read_ct = 0,
-                vt = ?,
-                enqueued_at = ?,
-                consumer_worker_id = NULL,
-                dequeued_at = NULL
-            WHERE id = ? AND archived_at IS NOT NULL
-            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
-            "#,
-        )
-        .bind(now_str.clone())
-        .bind(now_str)
-        .bind(archived_msg_id)
-        .fetch_optional_on_connection(&conn)
-        .await;
-
-        let msg_row_opt = match msg_row_opt {
-            Ok(res) => res,
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK", ()).await;
-                return Err(e);
-            }
-        };
-
-        if let Some(msg_row) = msg_row_opt {
-            conn.execute("COMMIT", ())
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "COMMIT".into(),
-                    source: Box::new(e),
-                    context: "Commit replay".into(),
-                })?;
-
-            let msg = TursoMessageTable::map_row(&msg_row)?;
-            Ok(Some(msg))
-        } else {
-            conn.execute("ROLLBACK", ())
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "ROLLBACK".into(),
-                    source: Box::new(e),
-                    context: "Rollback replay (not found)".into(),
-                })?;
-            Ok(None)
-        }
+        self.messages.replay_dlq(archived_msg_id).await
     }
 
     fn validation_config(&self) -> &crate::validation::ValidationConfig {

@@ -97,55 +97,6 @@ impl TursoMessageTable {
             archived_at,
         })
     }
-
-    pub async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
-        let rows = crate::store::turso::query(
-            "DELETE FROM pgqrs_messages WHERE id = ? AND consumer_worker_id = ?",
-        )
-        .bind(id)
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
-        Ok(rows)
-    }
-
-    pub async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
-        if ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        if ids.len() > MAX_BATCH_SIZE {
-            return Err(crate::error::Error::ValidationFailed {
-                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
-            });
-        }
-
-        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
-        let sql = format!(
-            "DELETE FROM pgqrs_messages WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id",
-            placeholders.join(", ")
-        );
-
-        let mut query = crate::store::turso::query(&sql);
-        for id in ids {
-            query = query.bind(*id);
-        }
-        query = query.bind(worker_id);
-
-        let rows = query.fetch_all_once(&self.db).await?;
-
-        let mut deleted_ids = HashSet::new();
-        for row in rows {
-            let id: i64 = row.get(0)?;
-            deleted_ids.insert(id);
-        }
-
-        let mut results = Vec::with_capacity(ids.len());
-        for id in ids {
-            results.push(deleted_ids.contains(id));
-        }
-        Ok(results)
-    }
 }
 
 #[async_trait]
@@ -256,7 +207,6 @@ impl crate::store::MessageTable for TursoMessageTable {
         let vt_str = format_turso_timestamp(&params.vt);
 
         for payload in payloads {
-            // We can check if loop fails, we should ROLLBACK ideally.
             let res = async {
                 crate::store::turso::query(
                     r#"
@@ -566,6 +516,247 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(count)
     }
 
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: chrono::DateTime<chrono::Utc>,
+        max_read_ct: i32,
+    ) -> Result<Vec<QueueMessage>> {
+        let now_str = format_turso_timestamp(&now);
+        let conn = crate::store::turso::connect_db(&self.db).await?;
+
+        conn.execute("BEGIN IMMEDIATE", ()).await.map_err(|e| {
+            crate::error::Error::QueryFailed {
+                query: "BEGIN IMMEDIATE".into(),
+                source: Box::new(e),
+                context: "Dequeue start".into(),
+            }
+        })?;
+
+        // 1. Select candidates
+        let sql_select = r#"
+            SELECT id
+            FROM pgqrs_messages
+            WHERE queue_id = ? AND (vt IS NULL OR vt <= ?) AND consumer_worker_id IS NULL AND archived_at IS NULL AND read_ct < ?
+            ORDER BY enqueued_at ASC
+            LIMIT ?
+        "#;
+
+        let mut grabbed_ids = Vec::new();
+
+        let rows = crate::store::turso::query(sql_select)
+            .bind(queue_id)
+            .bind(now_str.clone())
+            .bind(max_read_ct as i64)
+            .bind(limit as i64)
+            .fetch_all_on_connection(&conn)
+            .await;
+
+        let rows = match rows {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+
+        for row in rows {
+            let id: i64 = row.get(0)?;
+            grabbed_ids.push(id);
+        }
+
+        if grabbed_ids.is_empty() {
+            conn.execute("ROLLBACK", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "ROLLBACK".into(),
+                    source: Box::new(e),
+                    context: "Dequeue empty".into(),
+                })?;
+            return Ok(vec![]);
+        }
+
+        // 2. Update them
+        let new_vt = now + chrono::Duration::seconds(vt as i64);
+        let new_vt_str = format_turso_timestamp(&new_vt);
+
+        let mut messages = Vec::with_capacity(grabbed_ids.len());
+
+        for id in &grabbed_ids {
+            let update_res = crate::store::turso::query("UPDATE pgqrs_messages SET consumer_worker_id = ?, vt = ?, read_ct = read_ct + 1, dequeued_at = COALESCE(dequeued_at, ?) WHERE id = ? RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at")
+                .bind(worker_id)
+                .bind(new_vt_str.clone())
+                .bind(now_str.clone())
+                .bind(*id)
+                .fetch_one_once_on_connection(&conn)
+                .await;
+
+            match update_res {
+                Ok(row) => {
+                    messages.push(Self::map_row(&row)?);
+                }
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMMIT".into(),
+                source: Box::new(e),
+                context: "Dequeue commit".into(),
+            })?;
+
+        Ok(messages)
+    }
+
+    async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
+        let now = chrono::Utc::now();
+        let now_str = format_turso_timestamp(&now);
+
+        let row = crate::store::turso::query(
+            "UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at",
+        )
+        .bind(now_str)
+        .bind(id)
+        .bind(worker_id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if let Some(r) = row {
+            Ok(Some(Self::map_row(&r)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "BEGIN".into(),
+                source: Box::new(e),
+                context: "Begin archive batch".into(),
+            })?;
+
+        let mut archived_set = HashSet::new();
+        let now = chrono::Utc::now();
+        let now_str = format_turso_timestamp(&now);
+
+        for id in ids {
+            let res = async {
+                crate::store::turso::query("UPDATE pgqrs_messages SET archived_at = ? WHERE id = ? AND consumer_worker_id = ? AND archived_at IS NULL RETURNING id")
+                    .bind(now_str.clone())
+                    .bind(*id)
+                    .bind(worker_id)
+                    .fetch_optional_on_connection(&conn)
+                    .await
+            }
+            .await;
+
+            match res {
+                Ok(Some(row)) => {
+                    let id: i64 = row.get(0)?;
+                    archived_set.insert(id);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = conn.execute("ROLLBACK", ()).await;
+                    return Err(e);
+                }
+            }
+        }
+
+        conn.execute("COMMIT", ())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMMIT".into(),
+                source: Box::new(e),
+                context: "Commit archive batch".into(),
+            })?;
+
+        let result = ids.iter().map(|id| archived_set.contains(id)).collect();
+        Ok(result)
+    }
+
+    async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| crate::error::Error::Internal {
+                message: e.to_string(),
+            })?;
+
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "BEGIN".into(),
+                source: Box::new(e),
+                context: "Begin replay".into(),
+            })?;
+
+        let now_str = format_turso_timestamp(&chrono::Utc::now());
+
+        let msg_row_opt = crate::store::turso::query(
+            r#"
+            UPDATE pgqrs_messages
+            SET archived_at = NULL,
+                read_ct = 0,
+                vt = ?,
+                enqueued_at = ?,
+                consumer_worker_id = NULL,
+                dequeued_at = NULL
+            WHERE id = ? AND archived_at IS NOT NULL
+            RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
+            "#,
+        )
+        .bind(now_str.clone())
+        .bind(now_str)
+        .bind(id)
+        .fetch_optional_on_connection(&conn)
+        .await;
+
+        let msg_row_opt = match msg_row_opt {
+            Ok(res) => res,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e);
+            }
+        };
+
+        if let Some(msg_row) = msg_row_opt {
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "COMMIT".into(),
+                    source: Box::new(e),
+                    context: "Commit replay".into(),
+                })?;
+
+            let msg = Self::map_row(&msg_row)?;
+            Ok(Some(msg))
+        } else {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            Ok(None)
+        }
+    }
+
     async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
         let rows = crate::store::turso::query(
             r#"
@@ -611,6 +802,55 @@ impl crate::store::MessageTable for TursoMessageTable {
             results.push(rows > 0);
         }
 
+        Ok(results)
+    }
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+        let rows = crate::store::turso::query(
+            "DELETE FROM pgqrs_messages WHERE id = ? AND consumer_worker_id = ?",
+        )
+        .bind(id)
+        .bind(worker_id)
+        .execute_once(&self.db)
+        .await?;
+        Ok(rows)
+    }
+
+    async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        if ids.len() > MAX_BATCH_SIZE {
+            return Err(crate::error::Error::ValidationFailed {
+                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
+            });
+        }
+
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "DELETE FROM pgqrs_messages WHERE id IN ({}) AND consumer_worker_id = ? RETURNING id",
+            placeholders.join(", ")
+        );
+
+        let mut query = crate::store::turso::query(&sql);
+        for id in ids {
+            query = query.bind(*id);
+        }
+        query = query.bind(worker_id);
+
+        let rows = query.fetch_all_once(&self.db).await?;
+
+        let mut deleted_ids = HashSet::new();
+        for row in rows {
+            let id: i64 = row.get(0)?;
+            deleted_ids.insert(id);
+        }
+
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            results.push(deleted_ids.contains(id));
+        }
         Ok(results)
     }
 }

@@ -2,32 +2,6 @@
 //!
 //! This module defines the [`Producer`] struct, which provides methods for enqueueing
 //! messages and managing message visibility in a PostgreSQL-backed queue.
-//!
-//! ## What
-//!
-//! - [`Producer`] handles message production: adding jobs to queues with validation and rate limiting
-//! - Supports single message enqueue, delayed messages, and batch operations
-//! - Includes message visibility management for producers
-//! - Implements the [`Worker`] trait for lifecycle management
-//!
-//! ## How
-//!
-//! Create a [`Producer`] using `Producer::new()` which handles worker registration automatically.
-//!
-//! ### Example
-//!
-//! ```rust,no_run
-//! # use pgqrs::{Producer, Config};
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let config = Config::from_dsn("postgresql://localhost/test");
-//! # let store = pgqrs::connect_with_config(&config).await?;
-//! let producer = pgqrs::producer("localhost", 8080, "jobs")
-//!     .create(&store)
-//!     .await?;
-//! let message = producer.enqueue(&serde_json::json!({"foo": "bar"})).await?;
-//! # Ok(())
-//! # }
-//! ```
 
 use crate::error::Result;
 use crate::store::postgres::tables::pgqrs_workers::Workers;
@@ -38,19 +12,6 @@ use crate::validation::PayloadValidator;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
-
-/// SQL for replaying a message from the DLQ (archive) back to the active queue
-const REPLAY_FROM_DLQ: &str = r#"
-    UPDATE pgqrs_messages
-    SET archived_at = NULL,
-        read_ct = 0,
-        vt = NOW(),
-        enqueued_at = NOW(),
-        consumer_worker_id = NULL,
-        dequeued_at = NULL
-    WHERE id = $1 AND archived_at IS NOT NULL
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
-"#;
 
 /// Producer interface for enqueueing messages to a specific queue.
 ///
@@ -270,6 +231,19 @@ impl crate::store::Producer for Producer {
     ///
     /// This method validates all payloads according to the queue's validation configuration
     /// before enqueueing. Rate limiting is applied atomically to the entire batch.
+    /// If any payload fails validation, the entire batch is rejected and no messages are enqueued.
+    ///
+    /// # Arguments
+    /// * `payloads` - Slice of JSON payloads to enqueue
+    /// * `delay_seconds` - Seconds to delay before message becomes available
+    ///
+    /// # Returns
+    /// Vector of enqueued messages if all payloads pass validation.
+    ///
+    /// # Errors
+    /// Returns validation errors if any payload fails validation rules.
+    /// The database transaction is atomic - either all messages are enqueued or none are.
+    /// Rate limiting is also atomic - tokens are only consumed if the entire batch succeeds.
     async fn batch_enqueue_delayed(
         &self,
         payloads: &[serde_json::Value],
@@ -395,16 +369,7 @@ impl crate::store::Producer for Producer {
     /// # Arguments
     /// * `archived_msg_id` - The ID of the archived message to replay
     async fn replay_dlq(&self, archived_msg_id: i64) -> Result<Option<QueueMessage>> {
-        let rec = sqlx::query_as(REPLAY_FROM_DLQ)
-            .bind(archived_msg_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "REPLAY_FROM_DLQ".into(),
-                source: Box::new(e),
-                context: format!("Failed to replay message {}", archived_msg_id),
-            })?;
-        Ok(rec)
+        self.messages.replay_dlq(archived_msg_id).await
     }
 
     fn validation_config(&self) -> &crate::validation::ValidationConfig {

@@ -2,114 +2,16 @@
 //!
 //! This module defines the [`Consumer`] struct, which provides methods for dequeuing, and managing jobs in a PostgreSQL-backed queue.
 //! For message production, use the [`crate::producer::Producer`] struct.
-//!
-//! ## What
-//!
-//! - [`Consumer`] is the consumer interface for interacting with a queue: fetching jobs, updating visibility, archiving and deleting messages.
-//! - [`crate::producer::Producer`] handles message production and is defined in the `producer` module.
-//! - Implements the [`Worker`] trait for lifecycle management
-//!
-//! ## How
-//!
-//! Create a [`Consumer`] using `Consumer::register()` which handles worker registration automatically.
-//! Create a [`crate::producer::Producer`] for enqueueing messages.
-//!
-//! ### Example
-//!
-//! ```rust,no_run
-//! # use pgqrs::{Consumer, Producer, Config};
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let config = Config::from_dsn("postgresql://localhost/test");
-//! # let store = pgqrs::connect_with_config(&config).await?;
-//! let consumer = pgqrs::consumer("localhost", 8080, "jobs")
-//!     .create(&store)
-//!     .await?;
-//! let producer = pgqrs::producer("localhost", 8081, "jobs")
-//!     .create(&store)
-//!     .await?;
-//! # Ok(())
-//! # }
-//! ```
 
 use crate::error::Result;
 use crate::store::postgres::tables::{Messages, Workers};
-use crate::tables::{MessageTable, WorkerTable};
+use crate::store::{MessageTable, WorkerTable};
 use crate::{QueueMessage, WorkerStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
 
 /// Default visibility timeout in seconds for locked messages
 const VISIBILITY_TIMEOUT: u32 = 5;
-
-/// Delete batch of messages
-const DELETE_MESSAGE_BATCH: &str = r#"
-    DELETE FROM pgqrs_messages
-    WHERE id = ANY($1) AND consumer_worker_id = $2
-    RETURNING id;
-"#;
-
-/// Archive single message (atomic operation)
-const ARCHIVE_MESSAGE: &str = r#"
-    UPDATE pgqrs_messages
-    SET archived_at = NOW()
-    WHERE id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
-    RETURNING id, id as original_msg_id, queue_id, producer_worker_id, consumer_worker_id, payload, enqueued_at, vt, read_ct, archived_at, dequeued_at;
-"#;
-
-/// Archive batch of messages (efficient batch operation)
-const ARCHIVE_BATCH: &str = r#"
-    UPDATE pgqrs_messages
-    SET archived_at = NOW()
-    WHERE id = ANY($1) AND consumer_worker_id = $2 AND archived_at IS NULL
-    RETURNING id as original_msg_id;
-"#;
-
-const DEQUEUE_MESSAGES: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = NOW() + make_interval(secs => $3::double precision),
-        read_ct = read_ct + 1,
-        dequeued_at = COALESCE(dequeued_at, NOW()),
-        consumer_worker_id = $4
-    WHERE id IN (
-        SELECT id
-        FROM pgqrs_messages
-        WHERE queue_id = $1
-          AND (vt IS NULL OR vt <= NOW())
-          AND consumer_worker_id IS NULL
-          AND archived_at IS NULL
-          AND read_ct < $5
-        ORDER BY enqueued_at ASC
-        LIMIT $2
-        FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
-"#;
-
-const DEQUEUE_MESSAGES_AT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = $5 + make_interval(secs => $3::double precision),
-        read_ct = read_ct + 1,
-        dequeued_at = COALESCE(dequeued_at, $5),
-        consumer_worker_id = $4
-    WHERE id IN (
-        SELECT id
-        FROM pgqrs_messages
-        WHERE queue_id = $1
-          AND (vt IS NULL OR vt <= $5)
-          AND consumer_worker_id IS NULL
-          AND archived_at IS NULL
-          AND read_ct < $6
-        ORDER BY enqueued_at ASC
-        LIMIT $2
-        FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
-"#;
-
-const DELETE_MESSAGE_OWNED: &str = r#"
-    DELETE FROM pgqrs_messages
-    WHERE id = $1 AND consumer_worker_id = $2
-"#;
 
 /// Consumer interface for a specific queue.
 ///
@@ -130,6 +32,7 @@ pub struct Consumer {
     worker_record: crate::types::WorkerRecord,
     /// Worker lifecycle manager (Workers repository handles this now)
     workers: Workers,
+    messages: Messages,
 }
 
 impl Consumer {
@@ -153,12 +56,15 @@ impl Consumer {
             queue_info.queue_name
         );
 
+        let messages = Messages::new(pool.clone());
+
         Ok(Self {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
             worker_record,
             _config: config.clone(),
             workers,
+            messages,
         })
     }
 
@@ -179,12 +85,15 @@ impl Consumer {
             queue_info.queue_name
         );
 
+        let messages = Messages::new(pool.clone());
+
         Ok(Self {
             pool: pool.clone(),
             queue_info: queue_info.clone(),
             worker_record,
             _config: config.clone(),
             workers,
+            messages,
         })
     }
 }
@@ -221,8 +130,8 @@ impl crate::store::Worker for Consumer {
 
     /// Gracefully shutdown this consumer.
     async fn shutdown(&self) -> Result<()> {
-        let messages = Messages::new(self.pool.clone());
-        let pending_count = messages
+        let pending_count = self
+            .messages
             .count_pending_for_queue_and_worker(self.queue_info.id, self.worker_record.id)
             .await?;
 
@@ -253,26 +162,7 @@ impl crate::store::Consumer for Consumer {
     }
 
     async fn dequeue_many_with_delay(&self, limit: usize, vt: u32) -> Result<Vec<QueueMessage>> {
-        // FIXED: Corrected parameter order to match SQL
-        // SQL expects: $1=queue_id, $2=limit, $3=vt, $4=worker_id, $5=max_read_ct
-        let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES)
-            .bind(self.queue_info.id) // $1 - queue_id
-            .bind(limit as i64) // $2 - limit
-            .bind(vt as i32) // $3 - vt (visibility timeout)
-            .bind(self.worker_record.id) // $4 - worker_id
-            .bind(self._config.max_read_ct) // $5 - max_read_ct
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DEQUEUE_MESSAGES".into(),
-                source: Box::new(e),
-                context: format!(
-                    "Failed to dequeue messages for worker {}",
-                    self.worker_record.id
-                ),
-            })?;
-
-        Ok(messages)
+        self.dequeue_at(limit, vt, chrono::Utc::now()).await
     }
 
     async fn dequeue_at(
@@ -281,113 +171,53 @@ impl crate::store::Consumer for Consumer {
         vt: u32,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<QueueMessage>> {
-        // SQL expects: $1=queue_id, $2=limit, $3=vt, $4=worker_id, $5=now, $6=max_read_ct
-        let messages = sqlx::query_as::<_, QueueMessage>(DEQUEUE_MESSAGES_AT)
-            .bind(self.queue_info.id) // $1 - queue_id
-            .bind(limit as i64) // $2 - limit
-            .bind(vt as i32) // $3 - vt (visibility timeout)
-            .bind(self.worker_record.id) // $4 - worker_id
-            .bind(now) // $5 - now (reference time)
-            .bind(self._config.max_read_ct) // $6 - max_read_ct
-            .fetch_all(&self.pool)
+        self.messages
+            .dequeue_at(
+                self.queue_info.id,
+                limit,
+                vt,
+                self.worker_record.id,
+                now,
+                self._config.max_read_ct,
+            )
             .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DEQUEUE_MESSAGES".into(),
-                source: Box::new(e),
-                context: "Failed to dequeue messages".into(),
-            })?;
-
-        Ok(messages)
     }
 
     async fn extend_visibility(&self, message_id: i64, additional_seconds: u32) -> Result<bool> {
-        let messages = Messages::new(self.pool.clone());
-        let rows_affected = messages
+        let rows_affected = self
+            .messages
             .extend_visibility(message_id, self.worker_record.id, additional_seconds)
             .await?;
         Ok(rows_affected > 0)
     }
 
     async fn delete(&self, message_id: i64) -> Result<bool> {
-        let rows_affected = sqlx::query(DELETE_MESSAGE_OWNED)
-            .bind(message_id)
-            .bind(self.worker_record.id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DELETE_MESSAGE_OWNED".into(),
-                source: Box::new(e),
-                context: format!("Failed to delete message {}", message_id),
-            })?
-            .rows_affected();
-
+        let rows_affected = self
+            .messages
+            .delete_owned(message_id, self.worker_record.id)
+            .await?;
         Ok(rows_affected > 0)
     }
 
     async fn delete_many(&self, message_ids: Vec<i64>) -> Result<Vec<bool>> {
-        let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH)
-            .bind(&message_ids)
-            .bind(self.worker_record.id)
-            .fetch_all(&self.pool)
+        self.messages
+            .delete_many_owned(&message_ids, self.worker_record.id)
             .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "DELETE_MESSAGE_BATCH".into(),
-                source: Box::new(e),
-                context: "Failed to delete message batch".into(),
-            })?;
-
-        // For each input id, true if it was deleted, false otherwise
-        let deleted_set: std::collections::HashSet<i64> = deleted_ids.into_iter().collect();
-        let result = message_ids
-            .into_iter()
-            .map(|id| deleted_set.contains(&id))
-            .collect();
-        Ok(result)
     }
 
     async fn archive(&self, msg_id: i64) -> Result<Option<QueueMessage>> {
-        let result: Option<QueueMessage> = sqlx::query_as::<_, QueueMessage>(ARCHIVE_MESSAGE)
-            .bind(msg_id)
-            .bind(self.worker_record.id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("ARCHIVE_MESSAGE ({})", msg_id),
-                source: Box::new(e),
-                context: format!("Failed to archive message {}", msg_id),
-            })?;
-
-        Ok(result)
+        self.messages.archive(msg_id, self.worker_record.id).await
     }
 
     async fn archive_many(&self, msg_ids: Vec<i64>) -> Result<Vec<bool>> {
-        if msg_ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let archived_ids: Vec<i64> = sqlx::query_scalar(ARCHIVE_BATCH)
-            .bind(&msg_ids)
-            .bind(self.worker_record.id)
-            .fetch_all(&self.pool)
+        self.messages
+            .archive_many(&msg_ids, self.worker_record.id)
             .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "ARCHIVE_BATCH".into(),
-                source: Box::new(e),
-                context: "Failed to archive message batch".into(),
-            })?;
-
-        // For each input id, true if it was archived, false otherwise
-        let archived_set: std::collections::HashSet<i64> = archived_ids.into_iter().collect();
-        let result = msg_ids
-            .into_iter()
-            .map(|id| archived_set.contains(&id))
-            .collect();
-        Ok(result)
     }
 
     async fn release_messages(&self, message_ids: &[i64]) -> Result<u64> {
-        let messages = Messages::new(self.pool.clone());
-        let results = messages
+        let results = self
+            .messages
             .release_messages_by_ids(message_ids, self.worker_record.id)
             .await?;
         // Count how many were successfully released
@@ -399,8 +229,8 @@ impl crate::store::Consumer for Consumer {
         message_id: i64,
         visible_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool> {
-        let messages = Messages::new(self.pool.clone());
-        let rows_affected = messages
+        let rows_affected = self
+            .messages
             .release_with_visibility(message_id, self.worker_record.id, visible_at)
             .await?;
         Ok(rows_affected > 0)
