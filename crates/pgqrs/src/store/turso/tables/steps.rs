@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::turso::parse_turso_timestamp;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
@@ -11,6 +12,44 @@ use turso::Database;
 pub struct TursoStepRecordTable {
     db: Arc<Database>,
 }
+
+const SQL_ACQUIRE_STEP: &str = r#"
+    INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
+    VALUES (?, ?, 'RUNNING', datetime('now'), 0)
+    ON CONFLICT (run_id, step_name) DO UPDATE
+    SET status = CASE
+        WHEN status = 'SUCCESS' THEN 'SUCCESS'
+        WHEN status = 'ERROR' THEN 'ERROR'
+        ELSE 'RUNNING'
+    END,
+    started_at = CASE
+        WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
+        ELSE datetime('now')
+    END
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
+
+const SQL_CLEAR_RETRY: &str = r#"
+    UPDATE pgqrs_workflow_steps
+    SET status = 'RUNNING', retry_at = NULL, error = NULL
+    WHERE id = ?
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
+
+const SQL_COMPLETE_STEP: &str = r#"
+    UPDATE pgqrs_workflow_steps
+    SET status = 'SUCCESS', output = ?2, completed_at = datetime('now')
+    WHERE id = ?1
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
+
+const SQL_FAIL_STEP: &str = r#"
+    UPDATE pgqrs_workflow_steps
+    SET status = 'ERROR', error = ?2, completed_at = datetime('now'),
+        retry_at = ?3, retry_count = ?4
+    WHERE id = ?1
+    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#;
 
 impl TursoStepRecordTable {
     pub fn new(db: Arc<Database>) -> Self {
@@ -52,6 +91,8 @@ impl TursoStepRecordTable {
             None => None,
         };
 
+        let retry_count: i32 = row.get(10)?;
+
         Ok(StepRecord {
             id,
             run_id,
@@ -63,6 +104,7 @@ impl TursoStepRecordTable {
             created_at,
             updated_at,
             retry_at,
+            retry_count,
         })
     }
 }
@@ -76,7 +118,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
             r#"
             INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input)
             VALUES (?, ?, 'PENDING', ?)
-            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
+            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
             "#,
         )
         .bind(data.run_id)
@@ -91,7 +133,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
     async fn get(&self, id: i64) -> Result<StepRecord> {
         let row = crate::store::turso::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
             FROM pgqrs_workflow_steps
             WHERE id = ?
             "#,
@@ -106,7 +148,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
     async fn list(&self) -> Result<Vec<StepRecord>> {
         let rows = crate::store::turso::query(
             r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at
+            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
             FROM pgqrs_workflow_steps
             ORDER BY created_at DESC
             "#,
@@ -136,5 +178,42 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
             .execute_once(&self.db)
             .await?;
         Ok(count)
+    }
+
+    async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
+        let mut builder = crate::store::turso::query(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(crate::store::turso::format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
+        }
+
+        let row = builder.fetch_one_once(&self.db).await?;
+
+        Self::map_row(&row)
+    }
+
+    fn sql_acquire_step(&self) -> &'static str {
+        SQL_ACQUIRE_STEP
+    }
+
+    fn sql_clear_retry(&self) -> &'static str {
+        SQL_CLEAR_RETRY
+    }
+
+    fn sql_complete_step(&self) -> &'static str {
+        SQL_COMPLETE_STEP
+    }
+
+    fn sql_fail_step(&self) -> &'static str {
+        SQL_FAIL_STEP
     }
 }

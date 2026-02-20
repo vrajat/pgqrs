@@ -18,6 +18,7 @@ pub enum ConcurrencyModel {
 pub mod any;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+pub(crate) mod query;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "turso")]
@@ -89,19 +90,8 @@ pub trait Store: Send + Sync + 'static {
     fn workflow_runs(&self) -> &dyn RunRecordTable;
     fn workflow_steps(&self) -> &dyn StepRecordTable;
 
-    /// Attempt to acquire a step lock.
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord>;
-
     /// Initialize the pgqrs schema in the database.
     async fn bootstrap(&self) -> crate::error::Result<()>;
-
-    /// Create a step guard for manual management.
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard>;
 
     /// Get an admin worker interface.
     async fn admin(
@@ -136,7 +126,7 @@ pub trait Store: Send + Sync + 'static {
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord>;
 
     /// Get a workflow definition handle.
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>>;
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord>;
 
     /// Trigger a workflow run.
     ///

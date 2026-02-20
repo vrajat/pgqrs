@@ -1,22 +1,20 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::store::{
-    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
-    WorkerTable, WorkflowTable,
+    ArchiveTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
 use crate::store::{BackendType, ConcurrencyModel};
-use crate::workers::Workflow;
 use crate::{Admin, Consumer, Producer, Worker};
 
 use crate::types::{NewQueueMessage, NewQueueRecord};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::sync::Arc;
 use turso::{Database, Row};
 
 pub mod tables;
 pub mod worker;
-pub mod workflow;
 
 use self::tables::archive::TursoArchiveTable;
 use self::tables::messages::TursoMessageTable;
@@ -25,8 +23,6 @@ use self::tables::runs::TursoRunRecordTable;
 use self::tables::steps::TursoStepRecordTable;
 use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
-use self::workflow::guard::TursoStepGuard;
-use self::workflow::handle::TursoWorkflow;
 
 #[derive(Debug, Clone)]
 pub struct TursoStore {
@@ -600,15 +596,6 @@ impl Store for TursoStore {
         self.workflow_steps.as_ref()
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: DateTime<Utc>,
-    ) -> Result<crate::types::StepRecord> {
-        TursoStepGuard::acquire_record(&self.db, run_id, step_name, current_time).await
-    }
-
     async fn bootstrap(&self) -> Result<()> {
         let conn = connect_db(&self.db).await?;
         let scripts = [
@@ -659,10 +646,6 @@ impl Store for TursoStore {
             }
         }
         Ok(())
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        Box::new(TursoStepGuard::new(self.db.clone(), id))
     }
 
     async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
@@ -743,7 +726,7 @@ impl Store for TursoStore {
         Ok(Box::new(consumer))
     }
 
-    async fn workflow(&self, name: &str) -> Result<Box<dyn Workflow>> {
+    async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
             let _queue = self
@@ -773,10 +756,7 @@ impl Store for TursoStore {
                 e
             })?;
 
-        Ok(Box::new(TursoWorkflow::new(
-            workflow_record,
-            self.db.clone(),
-        )))
+        Ok(workflow_record)
     }
 
     async fn trigger(

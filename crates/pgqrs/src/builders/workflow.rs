@@ -53,8 +53,7 @@ impl<'a, S: Store> WorkflowBuilder<'a, S> {
             .ok_or_else(|| crate::error::Error::ValidationFailed {
                 reason: "Workflow name is required for WorkflowBuilder::create".to_string(),
             })?;
-        let handle = store.workflow(&name).await?;
-        Ok(handle.workflow_record().clone())
+        store.workflow(&name).await
     }
 
     /// Begin building a workflow trigger.

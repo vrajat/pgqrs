@@ -171,12 +171,6 @@ pub trait Consumer: Worker {
     ) -> crate::error::Result<bool>;
 }
 
-/// Interface for a workflow definition.
-#[async_trait]
-pub trait Workflow: Send + Sync {
-    fn workflow_record(&self) -> &WorkflowRecord;
-}
-
 /// Workflow execution run handle.
 #[derive(Clone, Debug)]
 pub struct Run {
@@ -280,10 +274,75 @@ impl Run {
         &self,
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        self.store
-            .acquire_step(self.record.id, step_name, current_time)
+    ) -> crate::error::Result<Step> {
+        let step_name_string = step_name.to_string();
+        let row = self
+            .store
+            .workflow_steps()
+            .execute(
+                crate::store::query::QueryBuilder::new(
+                    self.store.workflow_steps().sql_acquire_step(),
+                )
+                .bind_i64(self.record.id)
+                .bind_string(step_name_string.clone()),
+            )
             .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SQL_ACQUIRE_STEP".into(),
+                source: Box::new(e),
+                context: format!(
+                    "Failed to acquire step {} for run {}",
+                    step_name_string, self.record.id
+                ),
+            })?;
+
+        let mut status = row.status;
+        let retry_count = row.retry_count;
+        let retry_at = row.retry_at;
+
+        if status == crate::types::WorkflowStatus::Error {
+            if let Some(retry_at) = retry_at {
+                if current_time < retry_at {
+                    return Err(crate::error::Error::StepNotReady {
+                        retry_at,
+                        retry_count: retry_count as u32,
+                    });
+                }
+
+                self.store
+                    .workflow_steps()
+                    .execute(
+                        crate::store::query::QueryBuilder::new(
+                            self.store.workflow_steps().sql_clear_retry(),
+                        )
+                        .bind_i64(row.id),
+                    )
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| crate::error::Error::QueryFailed {
+                        query: "SQL_CLEAR_RETRY".into(),
+                        source: Box::new(e),
+                        context: format!("Failed to clear retry_at for step {}", row.id),
+                    })?;
+
+                status = crate::types::WorkflowStatus::Running;
+            } else {
+                let error_val = row.error.unwrap_or_else(|| {
+                    serde_json::json!({
+                        "is_transient": false,
+                        "message": "Unknown error"
+                    })
+                });
+
+                return Err(crate::error::Error::RetriesExhausted {
+                    error: error_val,
+                    attempts: retry_count as u32,
+                });
+            }
+        }
+
+        let record = StepRecord { status, ..row };
+        Ok(Step::new(self.store.clone(), record))
     }
 
     pub async fn complete_step(
@@ -292,9 +351,8 @@ impl Run {
         output: serde_json::Value,
     ) -> crate::error::Result<()> {
         let current_time = self.current_time().unwrap_or_else(chrono::Utc::now);
-        let step = self.acquire_step(step_name, current_time).await?;
-        let mut guard = self.store.step_guard(step.id);
-        crate::store::StepGuard::complete(&mut *guard, output).await
+        let mut step = self.acquire_step(step_name, current_time).await?;
+        step.complete(output).await
     }
 
     pub async fn fail_step(
@@ -303,27 +361,123 @@ impl Run {
         error: serde_json::Value,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<()> {
-        let step = self.acquire_step(step_name, current_time).await?;
-        let mut guard = self.store.step_guard(step.id);
-        crate::store::StepGuard::fail_with_json(&mut *guard, error, current_time).await
+        let mut step = self.acquire_step(step_name, current_time).await?;
+        step.fail_with_json(error, current_time).await
     }
 }
 
-/// A guard for a workflow step execution.
-#[async_trait]
-pub trait StepGuard: Send + Sync {
-    async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()>;
-    async fn fail_with_json(
-        &mut self,
-        error: serde_json::Value,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<()>;
+/// A handle for a workflow step execution.
+#[derive(Clone, Debug)]
+pub struct Step {
+    store: AnyStore,
+    record: StepRecord,
+    current_time: Option<DateTime<Utc>>,
 }
 
-/// Extension trait for StepGuard to provide generic convenience methods.
-#[async_trait]
-pub trait StepGuardExt: StepGuard {
-    async fn success<T: serde::Serialize + Send + Sync>(
+impl Step {
+    pub fn new(store: AnyStore, record: StepRecord) -> Self {
+        Self {
+            store,
+            record,
+            current_time: None,
+        }
+    }
+
+    pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
+        self.current_time = Some(time);
+        self
+    }
+
+    pub fn id(&self) -> i64 {
+        self.record.id
+    }
+
+    pub fn record(&self) -> &StepRecord {
+        &self.record
+    }
+
+    pub fn status(&self) -> crate::types::WorkflowStatus {
+        self.record.status
+    }
+
+    pub fn output(&self) -> Option<&serde_json::Value> {
+        self.record.output.as_ref()
+    }
+
+    pub async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
+        let query =
+            crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_complete_step())
+                .bind_i64(self.record.id)
+                .bind_json(output);
+        self.store.workflow_steps().execute(query).await.map(|_| ())
+    }
+
+    pub async fn fail_with_json(
+        &mut self,
+        error: serde_json::Value,
+        current_time: DateTime<Utc>,
+    ) -> crate::error::Result<()> {
+        let error_record = if error.get("is_transient").is_some() {
+            error
+        } else {
+            serde_json::json!({
+                "is_transient": false,
+                "code": "NON_RETRYABLE",
+                "message": error.to_string(),
+            })
+        };
+
+        let is_transient = error_record
+            .get("is_transient")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if is_transient {
+            let policy = crate::StepRetryPolicy::default();
+            if !policy.should_retry(self.record.retry_count as u32) {
+                let query = crate::store::query::QueryBuilder::new(
+                    self.store.workflow_steps().sql_fail_step(),
+                )
+                .bind_i64(self.record.id)
+                .bind_json(error_record)
+                .bind_datetime(None)
+                .bind_i32(self.record.retry_count);
+                return self.store.workflow_steps().execute(query).await.map(|_| ());
+            }
+
+            let delay_seconds = policy.extract_retry_delay(&error_record, self.record.retry_count);
+            let delay_i64 =
+                delay_seconds
+                    .try_into()
+                    .map_err(|_| crate::error::Error::Internal {
+                        message: format!(
+                            "Retry delay {} seconds exceeds maximum allowed value (i64::MAX)",
+                            delay_seconds
+                        ),
+                    })?;
+
+            let retry_at = current_time + chrono::Duration::seconds(delay_i64);
+            let new_retry_count = self.record.retry_count + 1;
+
+            let query =
+                crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_fail_step())
+                    .bind_i64(self.record.id)
+                    .bind_json(error_record)
+                    .bind_datetime(Some(retry_at))
+                    .bind_i32(new_retry_count);
+            return self.store.workflow_steps().execute(query).await.map(|_| ());
+        }
+
+        let query =
+            crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_fail_step())
+                .bind_i64(self.record.id)
+                .bind_json(error_record)
+                .bind_datetime(None)
+                .bind_i32(self.record.retry_count);
+        self.store.workflow_steps().execute(query).await.map(|_| ())
+    }
+
+    pub async fn success<T: serde::Serialize + Send + Sync>(
         &mut self,
         output: &T,
     ) -> crate::error::Result<()> {
@@ -331,7 +485,7 @@ pub trait StepGuardExt: StepGuard {
         self.complete(value).await
     }
 
-    async fn fail<T: serde::Serialize + Send + Sync>(
+    pub async fn fail<T: serde::Serialize + Send + Sync>(
         &mut self,
         error: &T,
     ) -> crate::error::Result<()> {
@@ -339,4 +493,3 @@ pub trait StepGuardExt: StepGuard {
         self.fail_with_json(value, chrono::Utc::now()).await
     }
 }
-impl<T: ?Sized + StepGuard> StepGuardExt for T {}

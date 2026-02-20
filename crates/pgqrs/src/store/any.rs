@@ -312,22 +312,6 @@ impl Store for AnyStore {
         }
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.acquire_step(run_id, step_name, current_time).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.acquire_step(run_id, step_name, current_time).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.acquire_step(run_id, step_name, current_time).await,
-        }
-    }
-
     async fn bootstrap(&self) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]
@@ -336,17 +320,6 @@ impl Store for AnyStore {
             AnyStore::Sqlite(s) => s.bootstrap().await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.bootstrap().await,
-        }
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.step_guard(id),
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.step_guard(id),
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.step_guard(id),
         }
     }
 
@@ -377,7 +350,7 @@ impl Store for AnyStore {
         }
     }
 
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn Workflow>> {
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workflow(name).await,

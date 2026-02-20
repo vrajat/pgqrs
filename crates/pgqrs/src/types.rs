@@ -376,6 +376,7 @@ pub struct StepRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub retry_at: Option<DateTime<Utc>>,
+    pub retry_count: i32,
 }
 
 /// Input data for creating a new workflow step.

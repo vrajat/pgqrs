@@ -2,8 +2,8 @@
 
 use crate::store::{
     Admin as AdminTrait, ArchiveTable, Consumer as ConsumerTrait, MessageTable,
-    Producer as ProducerTrait, QueueTable, RunRecordTable, StepGuard, StepRecordTable, Store,
-    Worker as WorkerTrait, WorkerTable, Workflow as WorkflowTrait, WorkflowTable,
+    Producer as ProducerTrait, QueueTable, RunRecordTable, StepRecordTable, Store,
+    Worker as WorkerTrait, WorkerTable, WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 pub mod tables;
 pub mod worker;
-pub mod workflow;
 
 use self::tables::pgqrs_archive::Archive as PostgresArchiveTable;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
@@ -138,25 +137,10 @@ impl Store for PostgresStore {
         self.workflow_steps.as_ref()
     }
 
-    async fn acquire_step(
-        &self,
-        run_id: i64,
-        step_name: &str,
-        current_time: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<crate::types::StepRecord> {
-        use self::workflow::guard::StepGuard;
-        StepGuard::acquire_record(&self.pool, run_id, step_name, current_time).await
-    }
-
     async fn bootstrap(&self) -> crate::error::Result<()> {
         use self::worker::admin::MIGRATOR;
         MIGRATOR.run(&self.pool).await?;
         Ok(())
-    }
-
-    fn step_guard(&self, id: i64) -> Box<dyn StepGuard> {
-        use self::workflow::guard::StepGuard;
-        Box::new(StepGuard::new(self.pool.clone(), id))
     }
 
     async fn admin(
@@ -215,7 +199,7 @@ impl Store for PostgresStore {
             .await
     }
 
-    async fn workflow(&self, name: &str) -> crate::error::Result<Box<dyn WorkflowTrait>> {
+    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         // Ensure backing queue exists.
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
@@ -252,10 +236,7 @@ impl Store for PostgresStore {
                 e
             })?;
 
-        Ok(Box::new(self::workflow::handle::Workflow::new(
-            workflow_record,
-            self.pool.clone(),
-        )))
+        Ok(workflow_record)
     }
 
     async fn trigger(
