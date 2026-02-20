@@ -376,7 +376,7 @@ impl Store for AnyStore {
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>> {
+    ) -> crate::error::Result<Producer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
@@ -391,7 +391,7 @@ impl Store for AnyStore {
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>> {
+    ) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
@@ -408,7 +408,7 @@ impl Store for AnyStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Producer>> {
+    ) -> crate::error::Result<Producer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
@@ -425,7 +425,7 @@ impl Store for AnyStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Consumer>> {
+    ) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,

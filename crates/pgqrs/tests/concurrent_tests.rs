@@ -162,7 +162,7 @@ async fn test_zombie_consumer_race_condition() {
     let payload = json!({"task": "slow_process"});
     let msg_ids = pgqrs::enqueue()
         .message(&payload)
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .expect("Enqueue failed");
@@ -256,7 +256,7 @@ async fn test_zombie_consumer_batch_ops() {
     // Enqueue 2 messages
     let msg1_ids = pgqrs::enqueue()
         .message(&json!(1))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -264,7 +264,7 @@ async fn test_zombie_consumer_batch_ops() {
 
     let msg2_ids = pgqrs::enqueue()
         .message(&json!(2))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -347,7 +347,7 @@ async fn test_concurrent_visibility_extension() {
     // 3. Enqueue Message
     let msg_ids = pgqrs::enqueue()
         .message(&json!({"foo": "bar"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -359,14 +359,14 @@ async fn test_concurrent_visibility_extension() {
     assert_eq!(msgs_a[0].id, msg_id);
 
     // 5. Consumer B tries to extend visibility -> SHOULD FAIL
-    let extended_by_b = consumer_b.extend_visibility(msg_id, 10).await.unwrap();
+    let extended_by_b = consumer_b.extend_vt(msg_id, 10).await.unwrap();
     assert!(
         !extended_by_b,
         "Consumer B should not be able to extend visibility of message owned by A"
     );
 
     // 6. Consumer A tries to extend visibility -> SHOULD SUCCEED
-    let extended_by_a = consumer_a.extend_visibility(msg_id, 10).await.unwrap();
+    let extended_by_a = consumer_a.extend_vt(msg_id, 10).await.unwrap();
     assert!(
         extended_by_a,
         "Consumer A should be able to extend visibility of its own message"
@@ -413,7 +413,7 @@ async fn test_workflow_scenario_success() -> anyhow::Result<()> {
     };
 
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await?;
@@ -478,7 +478,7 @@ async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
     };
 
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await?;
@@ -567,7 +567,7 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
     };
 
     let first_attempt = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await;
@@ -618,7 +618,7 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
     };
 
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await?;
@@ -693,7 +693,7 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
     };
 
     let first_attempt = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await;
@@ -739,7 +739,7 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
     };
 
     let second_attempt = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await;
@@ -799,7 +799,7 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
     };
 
     let result = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await;
@@ -876,7 +876,7 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
     };
 
     let result = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler)
         .execute(&store)
         .await;
@@ -938,7 +938,7 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
     );
 
     let result = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .handle(handler_resume)
         .execute(&store)
         .await;
@@ -960,7 +960,8 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
     );
 
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
+        .at(future_time)
         .handle(handler_resume_with_time)
         .execute(&store)
         .await?;

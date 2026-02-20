@@ -29,7 +29,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         let payload = serde_json::json!({"task": "brains"});
         let msg_ids = pgqrs::enqueue()
             .message(&payload)
-            .worker(&*producer)
+            .worker(&producer)
             .execute(&store)
             .await?;
         let msg_id = msg_ids[0];
@@ -43,10 +43,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             .create(&store)
             .await?;
 
-        let dequeued_messages = pgqrs::dequeue()
-            .worker(&*consumer)
-            .fetch_all(&store)
-            .await?;
+        let dequeued_messages = pgqrs::dequeue().worker(&consumer).fetch_all(&store).await?;
         assert_eq!(dequeued_messages.len(), 1);
         let locked_msg = &dequeued_messages[0];
         assert_eq!(locked_msg.id, msg_id);
@@ -119,7 +116,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
         // Dequeue again (should get the released message)
         let msgs_2 = pgqrs::dequeue()
-            .worker(&*consumer_2)
+            .worker(&consumer_2)
             .fetch_all(&store)
             .await?;
         assert_eq!(msgs_2.len(), 1);

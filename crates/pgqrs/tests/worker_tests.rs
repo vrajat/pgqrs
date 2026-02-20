@@ -99,20 +99,20 @@ async fn test_worker_message_assignment() {
     // Add some messages to the queue
     pgqrs::enqueue()
         .message(&json!({"task": "test1"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::enqueue()
         .message(&json!({"task": "test2"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
 
     // Read messages normally
     let messages_list = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .batch(2)
         .fetch_all(&store)
         .await
@@ -329,14 +329,14 @@ async fn test_worker_deletion_with_references() {
 
     let message_ids = pgqrs::enqueue()
         .message(&json!({"test": "data"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let message_id = message_ids[0];
 
     assert!(pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_one(&store)
         .await
         .is_ok());
@@ -435,7 +435,7 @@ async fn test_worker_deletion_with_archived_references() {
     // Send and process a message (this should create archived reference)
     let message_ids = pgqrs::enqueue()
         .message(&json!({"test": "archive_data"}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -443,7 +443,7 @@ async fn test_worker_deletion_with_archived_references() {
 
     // Read the message to assign it to worker
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();

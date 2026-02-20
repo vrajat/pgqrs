@@ -78,14 +78,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Enqueue messages using the new builder API
     let email_ids = pgqrs::enqueue()
         .message(&email_payload)
-        .worker(&*email_producer)
+        .worker(&email_producer)
         .execute(&store)
         .await?;
     let email_id = email_ids[0];
 
     let task_ids = pgqrs::enqueue()
         .message(&task_payload)
-        .worker(&*task_producer)
+        .worker(&task_producer)
         .execute(&store)
         .await?;
     let task_id = task_ids[0];
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let batch_ids = pgqrs::enqueue()
         .messages(&batch_messages)
-        .worker(&*email_producer)
+        .worker(&email_producer)
         .execute(&store)
         .await?;
     println!("Sent batch of {} emails", batch_ids.len());
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let delayed_ids = pgqrs::enqueue()
         .message(&delayed_payload)
-        .worker(&*task_producer)
+        .worker(&task_producer)
         .delay(300) // 5 minutes delay
         .execute(&store)
         .await?;
@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Reading messages...");
 
     let email_messages = pgqrs::dequeue()
-        .worker(&*email_consumer)
+        .worker(&email_consumer)
         .batch(10)
         .vt_offset(2)
         .fetch_all(&store)
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let task_messages = pgqrs::dequeue()
-        .worker(&*task_consumer)
+        .worker(&task_consumer)
         .batch(5)
         .vt_offset(5)
         .fetch_all(&store)
@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Use the consumer to extend visibility
-        let extended = task_consumer.extend_visibility(task_msg.id, 30).await?;
+        let extended = task_consumer.extend_vt(task_msg.id, 30).await?;
         if extended {
             println!("Extended lock for task message {}", task_msg.id);
         }

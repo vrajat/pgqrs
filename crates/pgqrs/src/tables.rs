@@ -164,6 +164,13 @@ pub trait WorkerTable: Send + Sync {
 
     async fn register_ephemeral(&self, queue_id: Option<i64>)
         -> crate::error::Result<WorkerRecord>;
+
+    async fn get_status(&self, id: i64) -> crate::error::Result<WorkerStatus>;
+    async fn suspend(&self, id: i64) -> crate::error::Result<()>;
+    async fn resume(&self, id: i64) -> crate::error::Result<()>;
+    async fn shutdown(&self, id: i64) -> crate::error::Result<()>;
+    async fn heartbeat(&self, id: i64) -> crate::error::Result<()>;
+    async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> crate::error::Result<bool>;
 }
 
 /// Repository for managing workflows.

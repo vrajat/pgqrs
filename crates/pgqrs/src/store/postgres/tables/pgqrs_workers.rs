@@ -625,4 +625,28 @@ impl crate::store::WorkerTable for Workers {
 
         Ok(worker_info)
     }
+
+    async fn get_status(&self, id: i64) -> Result<WorkerStatus> {
+        self.get_status(id).await
+    }
+
+    async fn suspend(&self, id: i64) -> Result<()> {
+        self.suspend(id).await
+    }
+
+    async fn resume(&self, id: i64) -> Result<()> {
+        self.resume(id).await
+    }
+
+    async fn shutdown(&self, id: i64) -> Result<()> {
+        self.shutdown(id).await
+    }
+
+    async fn heartbeat(&self, id: i64) -> Result<()> {
+        self.heartbeat(id).await
+    }
+
+    async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> Result<bool> {
+        self.is_healthy(id, max_age).await
+    }
 }

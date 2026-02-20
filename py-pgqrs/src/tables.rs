@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub(crate) struct IteratorState {
     pub(crate) store: AnyStore,
     pub(crate) queue: String,
-    pub(crate) consumer: Option<Arc<Box<dyn rust_pgqrs::Consumer>>>,
+    pub(crate) consumer: Option<Arc<rust_pgqrs::workers::Consumer>>,
     pub(crate) poll_interval: tokio::time::Duration,
 }
 

@@ -36,13 +36,13 @@ async fn test_queue_metrics() {
     // Enqueue 2 messages
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::enqueue()
         .message(&json!({"id": 2}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
@@ -59,7 +59,7 @@ async fn test_queue_metrics() {
 
     // Consume 1 message (locks it)
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();
@@ -138,12 +138,12 @@ async fn test_system_stats() {
 
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap(); // Make one locked
@@ -281,12 +281,12 @@ async fn test_worker_stats() {
     // Enqueue 1 message and dequeue (lock) it by consumer
     pgqrs::enqueue()
         .message(&json!({"id": 1}))
-        .worker(&*producer)
+        .worker(&producer)
         .execute(&store)
         .await
         .unwrap();
     let messages = pgqrs::dequeue()
-        .worker(&*consumer)
+        .worker(&consumer)
         .fetch_all(&store)
         .await
         .unwrap();

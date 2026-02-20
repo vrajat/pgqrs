@@ -3,6 +3,7 @@
 use crate::error::Result;
 use crate::store::Store;
 use crate::types::QueueMessage;
+use crate::workers::Consumer;
 use std::future::Future;
 
 /// Builder for dequeue operations with advanced options.
@@ -13,7 +14,7 @@ use std::future::Future;
 pub struct DequeueBuilder<'a> {
     queue: Option<String>,
     batch_size: usize,
-    worker: Option<&'a dyn crate::store::Consumer>,
+    worker: Option<&'a Consumer>,
     vt_offset_seconds: Option<u32>,
     at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -48,7 +49,7 @@ impl<'a> DequeueBuilder<'a> {
     }
 
     /// Use a managed worker instead of ephemeral
-    pub fn worker(mut self, consumer: &'a dyn crate::store::Consumer) -> Self {
+    pub fn worker(mut self, consumer: &'a Consumer) -> Self {
         self.worker = Some(consumer);
         self
     }
@@ -152,15 +153,15 @@ impl<'a> DequeueBuilder<'a> {
 }
 
 enum ResolvedConsumer<'a> {
-    Owned(Box<dyn crate::store::Consumer>),
-    Borrowed(&'a dyn crate::store::Consumer),
+    Owned(Consumer),
+    Borrowed(&'a Consumer),
 }
 
 impl<'a> std::ops::Deref for ResolvedConsumer<'a> {
-    type Target = dyn crate::store::Consumer + 'a;
+    type Target = Consumer;
     fn deref(&self) -> &Self::Target {
         match self {
-            Self::Owned(b) => b.as_ref(),
+            Self::Owned(b) => b,
             Self::Borrowed(b) => *b,
         }
     }

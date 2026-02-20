@@ -171,13 +171,20 @@ impl Store for SqliteStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> Result<Box<dyn Producer>> {
-        use self::worker::producer::SqliteProducer;
+        _config: &Config,
+    ) -> Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let producer =
-            SqliteProducer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer(
@@ -185,13 +192,19 @@ impl Store for SqliteStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        config: &Config,
-    ) -> Result<Box<dyn Consumer>> {
-        use self::worker::consumer::SqliteConsumer;
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer =
-            SqliteConsumer::new(self.pool.clone(), &queue_info, hostname, port, config).await?;
-        Ok(Box::new(consumer))
+        let worker_record = self
+            .workers
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 
     async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
@@ -340,24 +353,31 @@ impl Store for SqliteStore {
     async fn producer_ephemeral(
         &self,
         queue_name: &str,
-        config: &Config,
-    ) -> Result<Box<dyn Producer>> {
-        use self::worker::producer::SqliteProducer;
+        _config: &Config,
+    ) -> Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let producer =
-            SqliteProducer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
-        Ok(Box::new(producer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Producer::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            queue_info,
+            worker_record,
+            _config.validation_config.clone(),
+        ))
     }
 
     async fn consumer_ephemeral(
         &self,
         queue_name: &str,
-        config: &Config,
-    ) -> Result<Box<dyn Consumer>> {
-        use self::worker::consumer::SqliteConsumer;
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue_name).await?;
-        let consumer =
-            SqliteConsumer::new_ephemeral(self.pool.clone(), &queue_info, config).await?;
-        Ok(Box::new(consumer))
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Consumer::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            queue_info,
+            worker_record,
+        ))
     }
 }
