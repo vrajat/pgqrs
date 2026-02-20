@@ -223,7 +223,7 @@ impl crate::store::Worker for Consumer {
     async fn shutdown(&self) -> Result<()> {
         let messages = Messages::new(self.pool.clone());
         let pending_count = messages
-            .count_pending_for_queue_and_worker(self.queue_info.id, Some(self.worker_record.id))
+            .count_pending_for_queue_and_worker(self.queue_info.id, self.worker_record.id)
             .await?;
 
         if pending_count > 0 {

@@ -2,7 +2,6 @@ use crate::error::Result;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::QueueMessage;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -40,12 +39,6 @@ const LIST_MESSAGES_BY_QUEUE: &str = r#"
     WHERE queue_id = ? AND archived_at IS NULL
     ORDER BY enqueued_at DESC
     LIMIT 1000;
-"#;
-
-const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = ?
-    WHERE id = ?;
 "#;
 
 #[derive(Debug, Clone)]
@@ -343,16 +336,6 @@ impl crate::store::MessageTable for TursoMessageTable {
         Ok(messages)
     }
 
-    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
-        let vt_str = format_turso_timestamp(&vt);
-        let rows = crate::store::turso::query(UPDATE_MESSAGE_VT)
-            .bind(vt_str)
-            .bind(id)
-            .execute_once(&self.db)
-            .await?;
-        Ok(rows)
-    }
-
     async fn update_payload(&self, id: i64, payload: JsonValue) -> Result<u64> {
         let payload_str = payload.to_string();
         let sql = "UPDATE pgqrs_messages SET payload = ? WHERE id = ?";
@@ -566,35 +549,19 @@ impl crate::store::MessageTable for TursoMessageTable {
     async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
-        worker_id: Option<i64>,
+        worker_id: i64,
     ) -> Result<i64> {
-        let count: i64 = match worker_id {
-            Some(wid) => {
-                crate::store::turso::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = ? AND consumer_worker_id = ? AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .bind(wid)
-                .fetch_one(&self.db)
-                .await
-            }
-            None => {
-                crate::store::turso::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .fetch_one(&self.db)
-                .await
-            }
-        }?; // Error already mapped
+        let count: i64 = crate::store::turso::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = ? AND consumer_worker_id = ? AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .bind(worker_id)
+        .fetch_one(&self.db)
+        .await?;
 
         Ok(count)
     }

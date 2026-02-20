@@ -55,12 +55,6 @@ const GET_MESSAGES_BY_IDS: &str = r#"
     ORDER BY id;
 "#;
 
-const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = $2
-    WHERE id = $1;
-"#;
-
 const DELETE_MESSAGES_BY_QUEUE: &str = r#"
     DELETE FROM pgqrs_messages WHERE queue_id = $1
 "#;
@@ -248,22 +242,6 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
-        let rows_affected = sqlx::query(UPDATE_MESSAGE_VT)
-            .bind(id)
-            .bind(vt)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "UPDATE_MESSAGE_VT".into(),
-                source: Box::new(e),
-                context: format!("Failed to update visibility timeout for message {}", id),
-            })?
-            .rows_affected();
-
-        Ok(rows_affected)
-    }
-
     async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
         let rows_affected = sqlx::query("UPDATE pgqrs_messages SET payload = $2 WHERE id = $1")
             .bind(id)
@@ -436,35 +414,19 @@ impl crate::store::MessageTable for Messages {
     async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
-        worker_id: Option<i64>,
+        worker_id: i64,
     ) -> Result<i64> {
-        let count = match worker_id {
-            Some(wid) => {
-                sqlx::query_scalar::<_, i64>(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .bind(wid)
-                .fetch_one(&self.pool)
-                .await
-            }
-            None => {
-                sqlx::query_scalar::<_, i64>(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= NOW()) AND consumer_worker_id IS NULL AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .fetch_one(&self.pool)
-                .await
-            }
-        }
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .bind(worker_id)
+        .fetch_one(&self.pool)
+        .await
         .map_err(|e| crate::error::Error::QueryFailed {
             query: format!("COUNT_PENDING_FILTERED (queue_id={})", queue_id),
             source: Box::new(e),

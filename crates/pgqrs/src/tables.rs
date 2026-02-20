@@ -42,12 +42,6 @@ pub trait MessageTable: Send + Sync {
 
     async fn get_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<QueueMessage>>;
 
-    async fn update_visibility_timeout(
-        &self,
-        id: i64,
-        vt: chrono::DateTime<chrono::Utc>,
-    ) -> crate::error::Result<u64>;
-
     async fn update_payload(
         &self,
         id: i64,
@@ -86,7 +80,7 @@ pub trait MessageTable: Send + Sync {
     async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
-        worker_id: Option<i64>,
+        worker_id: i64,
     ) -> crate::error::Result<i64>;
 
     async fn list_archived_by_queue(

@@ -38,12 +38,6 @@ const LIST_MESSAGES_BY_QUEUE: &str = r#"
     LIMIT 1000;
 "#;
 
-const UPDATE_MESSAGE_VT: &str = r#"
-    UPDATE pgqrs_messages
-    SET vt = $2
-    WHERE id = $1;
-"#;
-
 #[derive(Debug, Clone)]
 pub struct SqliteMessageTable {
     pool: SqlitePool,
@@ -269,22 +263,6 @@ impl crate::store::MessageTable for SqliteMessageTable {
         Ok(messages)
     }
 
-    async fn update_visibility_timeout(&self, id: i64, vt: DateTime<Utc>) -> Result<u64> {
-        let vt_str = format_sqlite_timestamp(&vt);
-        let rows = sqlx::query(UPDATE_MESSAGE_VT)
-            .bind(id)
-            .bind(vt_str)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "UPDATE_MESSAGE_VT".into(),
-                source: Box::new(e),
-                context: format!("Failed to update vt for message {}", id),
-            })?
-            .rows_affected();
-        Ok(rows)
-    }
-
     async fn update_payload(&self, id: i64, payload: Value) -> Result<u64> {
         let sql = "UPDATE pgqrs_messages SET payload = $2 WHERE id = $1";
         let rows = sqlx::query(sql)
@@ -438,43 +416,43 @@ impl crate::store::MessageTable for SqliteMessageTable {
     }
 
     async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
-        self.count_pending_for_queue_and_worker(queue_id, None)
-            .await
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_PENDING (queue_id={})", queue_id),
+            source: Box::new(e),
+            context: format!("Failed to count pending messages for queue {}", queue_id),
+        })?;
+
+        Ok(count)
     }
 
     async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
-        worker_id: Option<i64>,
+        worker_id: i64,
     ) -> Result<i64> {
-        let count: i64 = match worker_id {
-            Some(wid) => {
-                sqlx::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .bind(wid)
-                .fetch_one(&self.pool)
-                .await
-            }
-            None => {
-                sqlx::query_scalar(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM pgqrs_messages
-                    WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
-                    "#,
-                )
-                .bind(queue_id)
-                .fetch_one(&self.pool)
-                .await
-            }
-        }.map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("COUNT_PENDING (queue_id={})", queue_id),
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM pgqrs_messages
+            WHERE queue_id = $1 AND consumer_worker_id = $2 AND archived_at IS NULL
+            "#,
+        )
+        .bind(queue_id)
+        .bind(worker_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: format!("COUNT_PENDING_FILTERED (queue_id={})", queue_id),
             source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;

@@ -1,5 +1,4 @@
 use crate::error::Result;
-use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::store::sqlite::tables::messages::SqliteMessageTable;
 use crate::store::sqlite::tables::workers::SqliteWorkerTable;
 use crate::store::{MessageTable, WorkerTable};
@@ -140,7 +139,7 @@ impl crate::store::Worker for SqliteConsumer {
     async fn shutdown(&self) -> Result<()> {
         let pending = self
             .messages
-            .count_pending_for_queue_and_worker(self.queue_info.id, Some(self.worker_record.id))
+            .count_pending_for_queue_and_worker(self.queue_info.id, self.worker_record.id)
             .await?;
 
         if pending > 0 {
