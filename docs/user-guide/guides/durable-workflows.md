@@ -217,7 +217,7 @@ One of the most powerful features of durable workflows is **crash recovery**.
 6. The handler starts from the beginning, but when it calls `ctx.step("fetch_data", ...)`, pgqrs sees the completed result in the database and **returns it immediately without re-executing the closure**.
 7. The workflow continues from the next uncompleted step.
 
-## Advanced: Pausing for External Events
+## Advanced Pausing for External Events
 
 Workflows can pause execution and wait for an external event (like human approval).
 

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.14.0] - 2026-02-21
+## [0.14.0] - 2026-02-21 {#0140---2026-02-21}
 
 ### Added
 
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.3.0] - 2024-11-13
+## [0.3.0] - 2024-11-13 {#030---2024-11-13}
 
 ### Added
 
@@ -98,7 +98,7 @@ let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?
 
 ---
 
-## [0.2.0] - Previous Release
+## [0.2.0] - Previous Release {#020---previous-release}
 
 ### Added
 
@@ -110,7 +110,7 @@ let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?
 
 ---
 
-## [0.1.0] - Initial Release
+## [0.1.0] - Initial Release {#010---initial-release}
 
 ### Added
 
