@@ -75,10 +75,11 @@ nav:
     - Guides:
       - user-guide/guides/index.md
       - Basic Workflow: user-guide/guides/basic-workflow.md
+      - Durable Workflows: user-guide/guides/durable-workflows.md
+      - Retry & Pause: user-guide/guides/durable-workflows.md
       - Batch Processing: user-guide/guides/batch-processing.md
       - Delayed Messages: user-guide/guides/delayed-messages.md
       - Worker Management: user-guide/guides/worker-management.md
-      - Durable Workflows: user-guide/guides/durable-workflows.md
     - CLI Reference: user-guide/cli-reference.md
   - Development:
     - development/index.md

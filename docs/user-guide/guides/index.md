@@ -1,3 +1,4 @@
+<!-- Context: user-guide/guides | Priority: high | Version: 1.0 | Updated: 2026-02-21 -->
 # Guides
 
 Step-by-step tutorials and practical guides for common pgqrs use cases.
@@ -10,7 +11,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     ---
 
-    Set up a complete producer-consumer workflow from scratch.
+    Set up a complete producer-consumer workflow using the new Trigger/Worker architecture.
 
     [:octicons-arrow-right-24: Basic Workflow](basic-workflow.md)
 
@@ -42,9 +43,25 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     ---
 
-    Build crash-resistant, resumable multi-step workflows.
+    Build crash-resistant, resumable multi-step workflows with automatic recovery.
 
     [:octicons-arrow-right-24: Durable Workflows](durable-workflows.md)
+
+-   :material-sync:{ .lg .middle } **Retry Strategies**
+
+    ---
+
+    Handle transient failures with automatic, non-blocking retries and backoff.
+
+    [:octicons-arrow-right-24: Retry Strategies](durable-workflows.md#best-practices)
+
+-   :material-pause-circle:{ .lg .middle } **Pausing Workflows**
+
+    ---
+
+    Suspend execution to wait for external events or human approval.
+
+    [:octicons-arrow-right-24: Pausing Workflows](durable-workflows.md#advanced-pausing-for-external-events)
 
 </div>
 
@@ -53,10 +70,12 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 | Guide | Use Case |
 |-------|----------|
 | [Basic Workflow](basic-workflow.md) | Getting started, understanding the basics |
+| [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
+| [Retry Strategies](durable-workflows.md#best-practices) | Error handling, backoff |
+| [Pausing Workflows](durable-workflows.md#advanced-pausing-for-external-events) | Human-in-the-loop, external webhooks |
 | [Batch Processing](batch-processing.md) | High throughput, many messages |
 | [Delayed Messages](delayed-messages.md) | Scheduled tasks, reminders, deferred work |
 | [Worker Management](worker-management.md) | Production deployment, scaling |
-| [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
 
 ## Prerequisites
 

@@ -1,24 +1,24 @@
 # Basic Workflow Guide
 
-This guide walks you through setting up a complete producer-consumer workflow with pgqrs.
+This guide walks you through setting up a complete producer-consumer workflow using the new Trigger/Worker architecture introduced in pgqrs v0.14.
 
 ## What You'll Build
 
 A simple task queue system where:
 
-1. A producer sends tasks to a queue
-2. A consumer processes tasks and archives them
-3. You monitor the queue status
+1. A **Trigger** (Producer) submits tasks to a workflow.
+2. A **Worker** (Consumer) discovers and executes those tasks.
+3. You monitor the workflow status and results.
 
 ## Prerequisites
 
-- pgqrs installed
+- pgqrs v0.14+ installed
 - PostgreSQL running
 - Database connection string (DSN)
 
-## Step 1: Set Up the Environment
+## Step 1: Set Up the Workflow
 
-First, install the schema and create a queue.
+In pgqrs v0.14, workflows must be defined before they can be triggered. This is an idempotent operation that sets up the necessary queues and metadata.
 
 === "Rust"
 
@@ -33,9 +33,10 @@ First, install the schema and create a queue.
         pgqrs::admin(&store).install().await?;
         println!("✓ Schema installed");
 
-        // Create queue
-        let queue = store.queue("tasks").await?;
-        println!("✓ Created queue: {} (id: {})", queue.queue_name, queue.id);
+        // Create workflow definition (idempotent)
+        // This automatically creates a 1:1 mapped queue named "process_task"
+        store.create_workflow("process_task").await?;
+        println!("✓ Workflow 'process_task' defined");
 
         Ok(())
     }
@@ -49,56 +50,47 @@ First, install the schema and create a queue.
 
     async def setup():
         store = await pgqrs.connect("postgresql://localhost/mydb")
-        admin = pgqrs.admin(store)
-
-        # Install schema (idempotent)
-        await admin.install()
+        
+        # Install schema
+        await pgqrs.admin(store).install()
         print("✓ Schema installed")
 
-        # Create queue
-        queue = await store.queue("tasks")
-        print(f"✓ Created queue: {queue.queue_name} (id: {queue.id})")
+        # Create workflow definition
+        await store.create_workflow("process_task")
+        print("✓ Workflow 'process_task' defined")
 
     asyncio.run(setup())
     ```
 
+## Step 2: Create the Trigger (Producer)
 
-## Step 2: Create the Producer
-
-The producer sends messages to the queue.
+The trigger submits a "run" of the workflow. It doesn't execute the work itself; it enqueues the input for a worker to pick up.
 
 === "Rust"
 
     ```rust
-    // producer.rs
-    use pgqrs;
-    use serde_json::json;
+    use pgqrs::workflow;
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct TaskParams {
+        id: i32,
+        payload: String,
+    }
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        // Create producer
-        let producer = pgqrs::producer()
-            .queue("tasks")
-            .hostname("producer-app")
-            .create(&store)
+        let params = TaskParams { id: 1, payload: "Hello pgqrs".to_string() };
+
+        // Trigger the workflow
+        let run_id = workflow("process_task")
+            .trigger(&params)?
+            .execute(&store)
             .await?;
 
-        // Send tasks
-        for i in 1..=10 {
-            let payload = json!({
-                "task_id": i,
-                "type": "process_data",
-                "data": {"value": i * 10}
-            });
-
-            // Use producer to enqueue (ensures worker attribution)
-            let ids = producer.enqueue(&payload).await?;
-            println!("Sent task {}: message id {:?}", i, ids);
-        }
-
-        println!("\n✓ Sent 10 tasks to queue");
+        println!("✓ Triggered workflow run: {}", run_id);
         Ok(())
     }
     ```
@@ -106,89 +98,63 @@ The producer sends messages to the queue.
 === "Python"
 
     ```python
-    # producer.py
     import asyncio
     import pgqrs
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Create managed producer
-        producer = await store.producer("tasks")
+        params = {"id": 1, "payload": "Hello pgqrs"}
 
-        # Send tasks
-        for i in range(1, 11):
-            payload = {
-                "task_id": i,
-                "type": "process_data",
-                "data": {"value": i * 10}
-            }
+        # Trigger the workflow
+        run_id = await pgqrs.workflow("process_task") \
+            .trigger(params) \
+            .execute(store)
 
-            msg_id = await producer.enqueue(payload)
-            print(f"Sent task {i}: message id {msg_id}")
-
-        print("\n✓ Sent 10 tasks to queue")
+        print(f"✓ Triggered workflow run: {run_id}")
 
     asyncio.run(main())
     ```
 
-## Step 3: Create the Consumer
+## Step 3: Create the Worker (Consumer)
 
-The consumer processes messages and archives them.
+The worker registers itself as a handler for a specific workflow. It polls the queue, creates the run state, and executes your handler function.
 
 === "Rust"
 
     ```rust
-    // consumer.rs
-    use pgqrs;
-    use std::time::Duration;
+    use pgqrs::{consumer, Workflow};
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct TaskParams {
+        id: i32,
+        payload: String,
+    }
+
+    // The handler function that performs the work
+    async fn task_handler(ctx: &mut dyn Workflow, params: TaskParams) -> Result<(), anyhow::Error> {
+        println!("Processing task {} with payload: {}", params.id, params.payload);
+        
+        // Simulate work
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        
+        println!("✓ Task {} complete", params.id);
+        Ok(())
+    }
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        // Create consumer
-        let consumer = pgqrs::consumer()
-            .queue("tasks")
-            .hostname("consumer-app")
+        // Register worker with handler
+        let worker = consumer("worker-1", 8080, "process_task")
+            .handler(task_handler)
             .create(&store)
             .await?;
 
-        println!("Consumer started. Waiting for messages...\n");
-
-        let mut processed = 0;
-
-        loop {
-            // Fetch and process messages
-            let result = consumer.dequeue()
-                .batch(10)
-                .handle_batch(|messages| async move {
-                    for message in &messages {
-                        let task_id = message.payload.get("task_id");
-                        let data = message.payload.get("data");
-
-                        println!("Processing task {:?}", task_id);
-                        println!("  Data: {:?}", data);
-
-                        // Simulate work
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        println!("  ✓ Processed");
-                    }
-                    Ok(())
-                })
-                .await;
-
-            match result {
-                Ok(_) => processed += 1,
-                Err(_) => {
-                    if processed > 0 {
-                        println!("\nNo more messages. Processed {} batches.", processed);
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
+        println!("Worker started. Waiting for runs...");
+        worker.poll_forever().await?;
 
         Ok(())
     }
@@ -197,167 +163,54 @@ The consumer processes messages and archives them.
 === "Python"
 
     ```python
-    # consumer.py
     import asyncio
     import pgqrs
+
+    # The handler function
+    async def task_handler(ctx, params):
+        print(f"Processing task {params['id']} with payload: {params['payload']}")
+        
+        # Simulate work
+        await asyncio.sleep(1)
+        
+        print(f"✓ Task {params['id']} complete")
+        return {"status": "success"}
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Create managed consumer
-        consumer = await store.consumer("tasks")
+        # Register worker with handler
+        worker = await pgqrs.consumer("worker-1", 8080, "process_task") \
+            .handler(task_handler) \
+            .create(store)
 
-        print("Consumer started. Waiting for messages...\n")
-
-        processed = 0
-
-        while True:
-            # Process messages with handler
-            try:
-                # Use consumer object directly
-                await consumer.consume_batch(batch_size=10, handler=process_batch)
-                processed += 1
-            except:
-                if processed > 0:
-                    print(f"\nNo more messages. Processed {processed} batches.")
-                    break
-                await asyncio.sleep(1)
-
-    async def process_batch(messages):
-        for message in messages:
-            task_id = message.payload.get("task_id")
-            data = message.payload.get("data")
-
-            print(f"Processing task {task_id}")
-            print(f"  Data: {data}")
-
-            # Simulate work
-            await asyncio.sleep(0.1)
-            print("  ✓ Processed")
-        return True
+        print("Worker started. Waiting for runs...")
+        await worker.poll_forever()
 
     asyncio.run(main())
     ```
 
-## Step 4: Monitor the Queue
+## Step 4: Check Results
 
-Check the queue status during and after processing.
-
-=== "Rust"
-
-    ```rust
-    // monitor.rs
-    use pgqrs;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
-
-        for m in metrics {
-            if m.name == "tasks" {
-                println!("Queue: {}", m.name);
-                println!("  Total messages:  {}", m.total_messages);
-                println!("  Pending:         {}", m.pending_messages);
-                println!("  Locked:          {}", m.locked_messages);
-                println!("  Archived:        {}", m.archived_messages);
-            }
-        }
-
-        Ok(())
-    }
-    ```
-
-
-## Running the Complete Example
-
-1. **Terminal 1 - Setup:**
-   ```bash
-   # Run setup (once)
-   cargo run --example setup
-   # or: python setup.py
-   ```
-
-2. **Terminal 2 - Start Consumer:**
-   ```bash
-   cargo run --example consumer
-   # or: python consumer.py
-   ```
-
-3. **Terminal 3 - Run Producer:**
-   ```bash
-   cargo run --example producer
-   # or: python producer.py
-   ```
-
-4. **Terminal 4 - Monitor:**
-   ```bash
-   pgqrs queue metrics tasks
-   ```
-
-## Complete Single-File Example
-
-Here's everything in one file for easy testing:
+You can retrieve the status and output of a workflow run at any time using its `run_id`.
 
 === "Rust"
 
     ```rust
-    use pgqrs;
-    use serde_json::json;
+    use pgqrs::workflow;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+        let run_id = 1; // Use the ID from Step 2
 
-        // Setup
-        pgqrs::admin(&store).install().await?;
-        store.queue("demo").await?;
-        println!("✓ Setup complete\n");
-
-        // Create producer
-        let producer = pgqrs::producer()
-            .queue("demo")
-            .hostname("demo-producer")
-            .create(&store)
+        let run = workflow("process_task")
+            .get_run(run_id, &store)
             .await?;
 
-        // Producer - send 5 tasks
-        for i in 1..=5 {
-            producer.enqueue(&json!({"task": i})).await?;
-            println!("Produced task {}", i);
-        }
-        println!();
-
-        // Create consumer
-        let consumer = pgqrs::consumer()
-            .queue("demo")
-            .hostname("demo-consumer")
-            .create(&store)
-            .await?;
-
-        // Consumer - process all tasks
-        loop {
-            let result = consumer.dequeue()
-                .handle(|msg| async move {
-                    println!("Consumed: {:?}", msg.payload);
-                    Ok(())
-                })
-                .await;
-
-            if result.is_err() {
-                break;
-            }
-        }
-
-        // Metrics
-        println!();
-        let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
-        for m in metrics {
-            if m.name == "demo" {
-                println!("Final: {} pending, {} archived",
-                    m.pending_messages, m.archived_messages);
-            }
+        println!("Run Status: {:?}", run.status);
+        if let Some(output) = run.output {
+            println!("Output: {:?}", output);
         }
 
         Ok(())
@@ -372,46 +225,24 @@ Here's everything in one file for easy testing:
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
-        admin = pgqrs.admin(store)
+        run_id = 1
 
-        # Setup
-        await admin.install()
-        await store.queue("demo")
-        print("✓ Setup complete\n")
+        run = await pgqrs.workflow("process_task").get_run(run_id, store)
 
-        # Create managed workers
-        producer = await store.producer("demo")
-        consumer = await store.consumer("demo")
-
-        # Producer - send 5 tasks
-        for i in range(1, 6):
-            await producer.enqueue({"task": i})
-            print(f"Produced task {i}")
-        print()
-
-        # Consumer - process all tasks
-        processed = 0
-        while True:
-            try:
-                # Use lambda or regular function handler
-                await consumer.consume(handler=lambda msg: print(f"Consumed: {msg.payload}") or True)
-                processed += 1
-            except:
-                break
-
-        # Stats
-        print()
-        queues = await admin.get_queues()
-        metrics = await queues.list_metrics()
-        for m in metrics:
-            if m["name"] == "demo":
-                print(f"Final: {m['pending_messages']} pending, {m['archived_messages']} archived")
+        print(f"Run Status: {run.status}")
+        print(f"Output: {run.output}")
 
     asyncio.run(main())
     ```
 
-## What's Next?
+## Key Concepts in v0.14
 
-- [Batch Processing](batch-processing.md) - Process messages efficiently at scale
-- [Delayed Messages](delayed-messages.md) - Schedule tasks for later
-- [Worker Management](worker-management.md) - Run multiple consumers
+- **Workflow Definition**: A named template (e.g., "process_task") that maps to a queue.
+- **Workflow Run**: A specific execution instance with its own `run_id`, input, and output.
+- **Trigger**: The client that submits a run (noun-verb API: `workflow().trigger()`).
+- **Worker**: The process that executes the handler (fluent API: `consumer().handler().create()`).
+
+## Next Steps
+
+- [Durable Workflows](durable-workflows.md) - Learn how to build multi-step, crash-resistant workflows using `ctx.step()`.
+- [Workflow API Reference](../api/workflows.md) - Detailed API documentation.
