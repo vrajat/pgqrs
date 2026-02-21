@@ -1,3 +1,4 @@
+<!-- Context: user-guide | Priority: high | Version: 1.0 | Updated: 2026-02-21 -->
 # User Guide
 
 Welcome to the pgqrs User Guide. This guide covers everything you need to know to effectively use pgqrs in your applications.
@@ -29,6 +30,7 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
     - [Producer & Consumer](concepts/producer-consumer.md)
     - [Workers](concepts/workers.md)
     - [Message Lifecycle](concepts/message-lifecycle.md)
+    - [Durable Workflows](concepts/durable-workflows.md)
 
 -   :material-language-rust:{ .lg .middle } **Rust API**
 
@@ -59,6 +61,8 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
     Step-by-step tutorials for common use cases.
 
     - [Basic Workflow](guides/basic-workflow.md)
+    - [Durable Workflows](guides/durable-workflows.md)
+    - [Retry & Pause](guides/durable-workflows.md#advanced-pausing-for-external-events)
     - [Batch Processing](guides/batch-processing.md)
     - [Delayed Messages](guides/delayed-messages.md)
     - [Worker Management](guides/worker-management.md)
@@ -88,4 +92,5 @@ Before using pgqrs, ensure you have:
 | [Architecture](concepts/architecture.md) | System design and components |
 | [Producer](api/producer.md) | Creating and sending messages |
 | [Consumer](api/consumer.md) | Processing messages |
+| [Durable Workflows](guides/durable-workflows.md) | Multi-step, crash-resistant workflows |
 | [CLI Reference](cli-reference.md) | Command-line operations |

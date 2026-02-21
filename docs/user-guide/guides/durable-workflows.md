@@ -1,238 +1,145 @@
 # Durable Workflows Guide
 
-This guide walks you through building a durable workflow with pgqrs, from basic setup to handling crash recovery.
+This guide walks you through building a **durable workflow** with pgqrs v0.14. Durable workflows are multi-step processes that survive worker crashes, handle transient errors with retries, and can even pause for external events.
 
 ## Prerequisites
 
-Before starting, ensure you have:
-
-1. pgqrs installed ([Installation Guide](../getting-started/installation.md))
-2. A running PostgreSQL database
-3. The pgqrs schema installed (`pgqrs install`)
+- pgqrs v0.14+ installed
+- PostgreSQL running
+- Database connection string (DSN)
 
 ## What We'll Build
 
-We'll create a data processing workflow that:
+We'll create a data processing pipeline that:
 
-1. Fetches data from an external source
-2. Transforms the data
-3. Saves results to a destination
+1. **Fetches data** from an external source.
+2. **Transforms the data** (simulating a crash-prone step).
+3. **Saves results** to a destination.
 
-The workflow will survive crashes and resume from where it left off.
+The workflow will use the `ctx.step()` API to ensure each step is recorded in the database, allowing it to resume from where it left off if interrupted.
 
-## Building the Workflow
+## Step 1: Define the Workflow Handler
 
-### Step 1: Define Steps
-
-Steps are the atomic units of your workflow:
+In pgqrs v0.14, the workflow logic is encapsulated in a handler function. Each atomic unit of work is wrapped in a `ctx.step()` call.
 
 === "Rust"
 
-    Use the `#[pgqrs_step]` macro for clean, declarative steps:
-
     ```rust
-    use pgqrs::workflow::Workflow;
-    use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
-    use serde::{Deserialize, Serialize};
+    use pgqrs::{Workflow, TransientError, Step};
+    use serde::{Serialize, Deserialize};
+    use std::time::Duration;
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct FetchedData {
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PipelineParams {
         url: String,
-        records: Vec<Record>,
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct Record {
-        id: i32,
-        name: String,
+    #[derive(Serialize, Deserialize, Debug)]
+    struct PipelineResult {
+        processed_count: usize,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TransformedData {
-        records: Vec<TransformedRecord>,
-        count: usize,
-    }
+    // The workflow handler
+    async fn data_pipeline_handler(
+        ctx: &mut dyn Workflow,
+        params: PipelineParams,
+    ) -> Result<PipelineResult, anyhow::Error> {
+        println!("[workflow] Starting pipeline for {}", params.url);
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct TransformedRecord {
-        id: i32,
-        name: String,
-        processed: bool,
-    }
+        // Step 1: Fetch data (with transient error handling)
+        let data = ctx.step("fetch_data", || async {
+            match fetch_from_api(&params.url).await {
+                Ok(d) => Ok(d),
+                Err(e) if e.is_transient() => {
+                    // This will update message visibility and retry later
+                    Err(TransientError::with_backoff(30).into())
+                }
+                Err(e) => Err(e.into()),
+            }
+        }).await?;
 
-    #[pgqrs_step]
-    async fn fetch_data(ctx: &Workflow, url: &str) -> Result<FetchedData, anyhow::Error> {
-        println!("[fetch_data] Fetching from {}", url);
+        // Step 2: Transform data (cached result if worker crashes after this)
+        let transformed = ctx.step("transform_data", || async {
+            println!("[transform_data] Processing {} records", data.len());
+            Ok(transform_logic(data))
+        }).await?;
 
-        // Simulate API call
-        let data = FetchedData {
-            url: url.to_string(),
-            records: vec![
-                Record { id: 1, name: "Alice".to_string() },
-                Record { id: 2, name: "Bob".to_string() },
-            ],
-        };
+        // Step 3: Save results
+        ctx.step("save_results", || async {
+            println!("[save_results] Saving {} records", transformed.len());
+            save_to_db(transformed).await?;
+            Ok(())
+        }).await?;
 
-        Ok(data)
-    }
-
-    #[pgqrs_step]
-    async fn transform_data(ctx: &Workflow, data: FetchedData) -> Result<TransformedData, anyhow::Error> {
-        println!("[transform_data] Processing {} records", data.records.len());
-
-        let records: Vec<TransformedRecord> = data.records
-            .into_iter()
-            .map(|r| TransformedRecord {
-                id: r.id,
-                name: r.name.to_uppercase(),
-                processed: true,
-            })
-            .collect();
-
-        Ok(TransformedData {
-            count: records.len(),
-            records,
-        })
-    }
-
-    #[pgqrs_step]
-    async fn save_results(ctx: &Workflow, results: TransformedData) -> Result<String, anyhow::Error> {
-        println!("[save_results] Saving {} records", results.count);
-
-        Ok(format!("Saved {} records successfully", results.count))
+        Ok(PipelineResult { processed_count: transformed.len() })
     }
     ```
 
 === "Python"
-
-    Each step is decorated with `@step`:
 
     ```python
     import asyncio
-    from pgqrs import Admin, Run
-    from pgqrs.decorators import workflow, step
+    import pgqrs
+    from pgqrs import TransientError, Step
 
-    @step
-    async def fetch_data(ctx: Run, url: str) -> dict:
-        """Fetch data from an external source."""
-        print(f"[fetch_data] Fetching from {url}")
+    # The workflow handler
+    async def data_pipeline_handler(ctx, params):
+        print(f"[workflow] Starting pipeline for {params['url']}")
 
-        # Simulate API call
-        await asyncio.sleep(1)
-        return {
-            "url": url,
-            "records": [
-                {"id": 1, "name": "Alice"},
-                {"id": 2, "name": "Bob"},
-            ]
-        }
+        # Step 1: Fetch data
+        async def fetch():
+            try:
+                return await fetch_from_api(params['url'])
+            except Exception as e:
+                if is_transient(e):
+                    # Retry in 30 seconds
+                    raise TransientError(retry_after=30)
+                raise e
 
-    @step
-    async def transform_data(ctx: Run, data: dict) -> dict:
-        """Transform the fetched data."""
-        print(f"[transform_data] Processing {len(data['records'])} records")
+        data = await ctx.step("fetch_data", fetch)
 
-        transformed = []
-        for record in data["records"]:
-            transformed.append({
-                "id": record["id"],
-                "name": record["name"].upper(),
-                "processed": True
-            })
+        # Step 2: Transform data
+        async def transform():
+            print(f"[transform_data] Processing {len(data)} records")
+            return transform_logic(data)
 
-        return {"records": transformed, "count": len(transformed)}
+        transformed = await ctx.step("transform_data", transform)
 
-    @step
-    async def save_results(ctx: Run, results: dict) -> str:
-        """Save the processed results."""
-        print(f"[save_results] Saving {results['count']} records")
+        # Step 3: Save results
+        async def save():
+            print(f"[save_results] Saving {len(transformed)} records")
+            await save_to_db(transformed)
 
-        # Simulate database write
-        await asyncio.sleep(0.5)
-        return f"Saved {results['count']} records successfully"
+        await ctx.step("save_results", save)
+
+        return {"processed_count": len(transformed)}
     ```
 
-### Step 2: Define the Workflow
+## Step 2: Register the Worker
 
-The workflow orchestrates the steps:
-
-=== "Rust"
-
-    Use `#[pgqrs_workflow]` to mark the entry point:
-
-    ```rust
-    #[pgqrs_workflow]
-    async fn data_pipeline(ctx: &Workflow, url: &str) -> Result<String, anyhow::Error> {
-        println!("[workflow] Starting pipeline for {}", url);
-
-        let data = fetch_data(ctx, url).await?;
-        println!("[workflow] Fetched {} records", data.records.len());
-
-        let results = transform_data(ctx, data).await?;
-        println!("[workflow] Transformed {} records", results.count);
-
-        let message = save_results(ctx, results).await?;
-        println!("[workflow] Complete: {}", message);
-
-        Ok(message)
-    }
-    ```
-
-=== "Python"
-
-    Decorate with `@workflow`:
-
-    ```python
-    @workflow
-    async def data_pipeline(ctx: Run, url: str):
-        """A durable data processing pipeline."""
-        print(f"[workflow] Starting pipeline for {url}")
-
-        # Each step is tracked independently
-        data = await fetch_data(ctx, url)
-        print(f"[workflow] Fetched data: {data}")
-
-        results = await transform_data(ctx, data)
-        print(f"[workflow] Transformed: {results}")
-
-        message = await save_results(ctx, results)
-        print(f"[workflow] Complete: {message}")
-
-        return message
-    ```
-
-### Step 3: Run the Workflow
-
-Create and execute the workflow:
+The worker process registers the handler and starts polling for runs.
 
 === "Rust"
 
     ```rust
-    use pgqrs;
-    use pgqrs::Workflow;
+    use pgqrs::consumer;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let dsn = "postgresql://user:password@localhost:5432/mydb";
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        // Connect and install schema
-        let store = pgqrs::connect(dsn).await?;
-        pgqrs::admin(&store).install().await?;
+        // Setup workflow definition (idempotent)
+        store.create_workflow("data_pipeline").await?;
 
-        // Create workflow
-        let workflow = pgqrs::admin(&store)
-            .create_workflow(
-                "data_pipeline",
-                &"https://api.example.com/data"
-            )
+        // Register worker
+        let worker = consumer("worker-1", 8080, "data_pipeline")
+            .handler(data_pipeline_handler)
+            .create(&store)
             .await?;
 
-        println!("Created workflow ID: {}", workflow.id());
+        println!("Worker started. Waiting for runs...");
+        worker.poll_forever().await?;
 
-        // Execute workflow (macros handle start/success/fail automatically)
-        let result = data_pipeline(&workflow, "https://api.example.com/data").await?;
-
-        println!("Final result: {}", result);
         Ok(())
     }
     ```
@@ -240,398 +147,117 @@ Create and execute the workflow:
 === "Python"
 
     ```python
+    import asyncio
+    import pgqrs
+
     async def main():
-        # Connect to PostgreSQL
-        dsn = "postgresql://user:password@localhost:5432/mydb"
-        store = await pgqrs.connect(dsn)
-        admin = pgqrs.admin(store)
+        store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Install schema (creates workflow tables)
-        await admin.install()
+        # Setup workflow definition
+        await store.create_workflow("data_pipeline")
 
-        # Create a new workflow instance
-        workflow_ctx = await admin.create_workflow(
-            "data_pipeline",  # workflow name
-            "https://api.example.com/data"  # input argument
-        )
-        print(f"Created workflow ID: {workflow_ctx.id()}")
+        # Register worker
+        worker = await pgqrs.consumer("worker-1", 8080, "data_pipeline") \
+            .handler(data_pipeline_handler) \
+            .create(store)
 
-        # Execute the workflow
-        result = await data_pipeline(workflow_ctx, "https://api.example.com/data")
-        print(f"Final result: {result}")
+        print("Worker started. Waiting for runs...")
+        await worker.poll_forever()
 
-    if __name__ == "__main__":
-        asyncio.run(main())
+    asyncio.run(main())
     ```
 
-### Expected Output
+## Step 3: Trigger the Workflow
 
-```
-Created workflow ID: 1
-[workflow] Starting pipeline for https://api.example.com/data
-[fetch_data] Fetching from https://api.example.com/data
-[workflow] Fetched data: {'url': 'https://api.example.com/data', 'records': [...]}
-[transform_data] Processing 2 records
-[workflow] Transformed: {'records': [...], 'count': 2}
-[save_results] Saving 2 records
-[workflow] Complete: Saved 2 records successfully
-Final result: Saved 2 records successfully
-```
+Submit a run from any client (e.g., an HTTP handler).
+
+=== "Rust"
+
+    ```rust
+    use pgqrs::workflow;
+
+    async fn handle_request(url: String) -> Result<i64, Box<dyn std::error::Error>> {
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+
+        let run_id = workflow("data_pipeline")
+            .trigger(&PipelineParams { url })?
+            .execute(&store)
+            .await?;
+
+        Ok(run_id)
+    }
+    ```
+
+=== "Python"
+
+    ```python
+    import asyncio
+    import pgqrs
+
+    async def handle_request(url):
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+
+        run_id = await pgqrs.workflow("data_pipeline") \
+            .trigger({"url": url}) \
+            .execute(store)
+
+        return run_id
+    ```
 
 ## Crash Recovery Demo
 
-Let's simulate a crash and demonstrate recovery:
+One of the most powerful features of durable workflows is **crash recovery**.
+
+### How it works:
+1. A worker dequeues a run and starts executing `data_pipeline_handler`.
+2. `ctx.step("fetch_data", ...)` completes and the result is saved to the `pgqrs_workflow_steps` table.
+3. **The worker process crashes** (e.g., OOM, hardware failure).
+4. The message visibility timeout in the queue expires.
+5. **Another worker** (or the same one after restart) dequeues the same run.
+6. The handler starts from the beginning, but when it calls `ctx.step("fetch_data", ...)`, pgqrs sees the completed result in the database and **returns it immediately without re-executing the closure**.
+7. The workflow continues from the next uncompleted step.
+
+## Advanced: Pausing for External Events
+
+Workflows can pause execution and wait for an external event (like human approval).
 
 === "Rust"
 
     ```rust
-    use pgqrs::workflow::Workflow;
-    use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    async fn approval_workflow(ctx: &mut dyn Workflow, params: Params) -> Result<(), anyhow::Error> {
+        // Step 1: Send approval request
+        ctx.step("send_request", || async { send_email(&params.approver).await }).await?;
 
-    // Simulate a crash on first run
-    static SIMULATE_CRASH: AtomicBool = AtomicBool::new(true);
+        // Step 2: Pause until approval received
+        let approval_data = ctx.step("wait_for_approval", || async {
+            // This will pause the run and release the worker
+            Err(Step::pause(Duration::from_secs(3600)).into())
+        }).await?;
 
-    #[pgqrs_step]
-    async fn step_one(ctx: &Workflow, data: &str) -> Result<String, anyhow::Error> {
-        println!("[step_one] Executing");
-        Ok(format!("processed_{}", data))
-    }
+        // Step 3: Process approval
+        ctx.step("process_approval", || async { process(approval_data).await }).await?;
 
-    #[pgqrs_step]
-    async fn step_two(ctx: &Workflow, data: String) -> Result<String, anyhow::Error> {
-        println!("[step_two] Executing");
-
-        if SIMULATE_CRASH.swap(false, Ordering::SeqCst) {
-            println!("[step_two] SIMULATING CRASH!");
-            return Err(anyhow::anyhow!("Simulated crash!"));
-        }
-
-        Ok(format!("step2_{}", data))
-    }
-
-    #[pgqrs_workflow]
-    async fn crash_demo(ctx: &Workflow, input_data: &str) -> Result<String, anyhow::Error> {
-        let result1 = step_one(ctx, input_data).await?;
-        println!("After step_one: {}", result1);
-
-        let result2 = step_two(ctx, result1).await?;
-        println!("After step_two: {}", result2);
-
-        Ok(result2)
-    }
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let dsn = "postgresql://localhost:5432/mydb";
-        let store = pgqrs::connect(dsn).await?;
-        pgqrs::admin(&store).install().await?;
-
-        // Create workflow
-        let workflow = pgqrs::admin(&store)
-            .create_workflow("crash_demo", &"test")
-            .await?;
-        let wf_id = workflow.id();
-        println!("Created workflow: {}", wf_id);
-
-        // RUN 1: Will crash in step_two
-        println!("\n=== RUN 1 (will crash) ===");
-        match crash_demo(&workflow, "test").await {
-            Err(e) => println!("Caught crash: {}", e),
-            Ok(_) => {}
-        }
-
-        // RUN 2: Resume with same workflow
-        println!("\n=== RUN 2 (resuming) ===");
-        let result = crash_demo(&workflow, "test").await?;
-        println!("Final result: {}", result);
         Ok(())
     }
     ```
 
-=== "Python"
+### Resuming a Paused Workflow
+When an external event occurs (e.g., a webhook), you can update the step state to resume the workflow:
 
-    ```python
-    import asyncio
-    from pgqrs import Admin, Run
-    from pgqrs.decorators import workflow, step
-
-    # Simulate a crash on first run
-    SIMULATE_CRASH = True
-
-    @step
-    async def step_one(ctx: Run, data: str) -> str:
-        print("[step_one] Executing")
-        return f"processed_{data}"
-
-    @step
-    async def step_two(ctx: Run, data: str) -> str:
-        global SIMULATE_CRASH
-
-        print("[step_two] Executing")
-
-        if SIMULATE_CRASH:
-            SIMULATE_CRASH = False
-            print("[step_two] SIMULATING CRASH!")
-            raise RuntimeError("Simulated crash!")
-
-        return f"step2_{data}"
-
-    @workflow
-    async def crash_demo(ctx: Run, input_data: str):
-        result1 = await step_one(ctx, input_data)
-        print(f"After step_one: {result1}")
-
-        result2 = await step_two(ctx, result1)
-        print(f"After step_two: {result2}")
-
-        return result2
-
-    async def demo():
-        dsn = "postgresql://localhost:5432/mydb"
-        store = await pgqrs.connect(dsn)
-        admin = pgqrs.admin(store)
-        await admin.install()
-
-        # Create workflow
-        wf_ctx = await admin.create_workflow("crash_demo", "test")
-        wf_id = wf_ctx.id()
-        print(f"Created workflow: {wf_id}")
-
-        # RUN 1: Will crash in step_two
-        print("\n=== RUN 1 (will crash) ===")
-        try:
-            await crash_demo(wf_ctx, "test")
-        except RuntimeError as e:
-            print(f"Caught crash: {e}")
-
-        # RUN 2: Resume with same workflow ID
-        print("\n=== RUN 2 (resuming) ===")
-        result = await crash_demo(wf_ctx, "test")
-        print(f"Final result: {result}")
-
-    if __name__ == "__main__":
-        asyncio.run(demo())
-    ```
-
-### Expected Output
-
+```rust
+// In your webhook handler
+store.update_step(run_id, "wait_for_approval", StepStatus::Success, Some(approval_data)).await?;
+// Make the message visible immediately to resume
+store.resume_run(run_id).await?;
 ```
-Created workflow: 1
-
-=== RUN 1 (will crash) ===
-[step_one] Executing
-After step_one: processed_test
-[step_two] Executing
-[step_two] SIMULATING CRASH!
-Caught crash: Simulated crash!
-
-=== RUN 2 (resuming) ===
-After step_one: processed_test     # step_one SKIPPED, cached result returned
-[step_two] Executing               # step_two runs again
-After step_two: step2_processed_test
-Final result: step2_processed_test
-```
-
-Notice that in Run 2:
-- `step_one` was **skipped** - it returned the cached result without executing
-- `step_two` **executed** - it wasn't marked as complete before the crash
 
 ## Best Practices
 
-### 1. Use Descriptive Step IDs
-
-Step IDs should clearly describe the operation:
-
-=== "Rust"
-
-    With macros, the function name becomes the step ID:
-
-    ```rust
-    // Good - descriptive function name
-    #[pgqrs_step]
-    async fn fetch_user_profile(ctx: &Workflow, user_id: &str) -> Result<User, anyhow::Error> {
-        // ...
-    }
-
-    // Bad - ambiguous name
-    #[pgqrs_step]
-    async fn step1(ctx: &Workflow, data: &str) -> Result<String, anyhow::Error> {
-        // ...
-    }
-    ```
-
-=== "Python"
-
-    The step ID defaults to the function name:
-
-    ```python
-    # Good - descriptive function name
-    @step
-    async def fetch_user_profile(ctx: Run, user_id: str) -> dict:
-        ...
-
-    # Bad - ambiguous name
-    @step
-    async def step1(ctx: Run, data: str) -> str:
-        ...
-    ```
-
-### 2. Make Steps Idempotent
-
-For external side effects, use idempotency keys:
-
-=== "Rust"
-
-    ```rust
-    #[pgqrs_step]
-    async fn send_email(ctx: &Workflow, user_id: &str, template: &str) -> Result<String, anyhow::Error> {
-        // Use workflow ID + step for idempotency
-        let idempotency_key = format!("email-{}-{}", ctx.id(), user_id);
-
-        email_service.send(
-            user_id,
-            template,
-            &idempotency_key
-        ).await?;
-
-        Ok("sent".to_string())
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    @step
-    async def send_email(ctx: Run, user_id: str, template: str) -> str:
-        # Use workflow ID + step for idempotency
-        idempotency_key = f"email-{ctx.id()}-{user_id}"
-
-        await email_service.send(
-            user_id=user_id,
-            template=template,
-            idempotency_key=idempotency_key
-        )
-        return "sent"
-    ```
-
-### 3. Handle Errors Appropriately
-
-Decide whether errors should be terminal or recoverable:
-
-=== "Rust"
-
-    ```rust
-    use std::io;
-    use tokio::time::Duration;
-
-    #[pgqrs_step]
-    async fn risky_call(ctx: &Workflow, data: &str) -> Result<String, anyhow::Error> {
-        for attempt in 0..3 {
-            match external_api.call(data).await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    // Check for transient errors (e.g., timeout)
-                    let is_transient = e.downcast_ref::<io::Error>()
-                        .map(|io_err| io_err.kind() == io::ErrorKind::TimedOut)
-                        .unwrap_or(false);
-
-                    if is_transient {
-                        if attempt == 2 {
-                            return Err(e);  // Terminal after 3 attempts
-                        }
-                        tokio::time::sleep(Duration::from_secs(2_u64.pow(attempt))).await;
-                    } else {
-                        return Err(e);  // Non-transient, fail immediately
-                    }
-                }
-            }
-        }
-        unreachable!()
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    @step
-    async def risky_call(ctx: Run, data: dict) -> dict:
-        for attempt in range(3):
-            try:
-                return await external_api.call(data)
-            except TransientError:
-                if attempt == 2:
-                    raise  # Terminal after 3 attempts
-                await asyncio.sleep(2 ** attempt)
-
-        raise RuntimeError("Should not reach here")
-    ```
-
-### 4. Keep Steps Reasonably Sized
-
-Balance between durability and performance:
-
-=== "Rust"
-
-    ```rust
-    // Good: Logical unit of work
-    #[pgqrs_step]
-    async fn process_batch(ctx: &Workflow, batch: Vec<Item>) -> Result<BatchResult, anyhow::Error> {
-        let results: Vec<_> = batch.into_iter()
-            .map(|item| transform(item))
-            .collect();
-        Ok(BatchResult { processed: results.len(), results })
-    }
-
-    // Too granular: One step per item creates overhead
-    #[pgqrs_step]
-    async fn process_one(ctx: &Workflow, item: Item) -> Result<Item, anyhow::Error> {
-        Ok(transform(item))  // Called 1000 times = 1000 DB writes
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    # Good: Logical unit of work
-    @step
-    async def process_batch(ctx: Run, batch: list) -> dict:
-        results = []
-        for item in batch:
-            results.append(transform(item))
-        return {"processed": len(results), "results": results}
-
-    # Too granular: One step per item creates overhead
-    @step
-    async def process_one(ctx: Run, item: dict) -> dict:
-        return transform(item)  # Called 1000 times = 1000 DB writes
-    ```
-
-## Monitoring Workflows
-
-Query workflow status directly from PostgreSQL:
-
-```sql
--- Check workflow status
-SELECT workflow_id, name, status, created_at, updated_at
-FROM pgqrs_workflows
-WHERE name = 'data_pipeline'
-ORDER BY created_at DESC;
-
--- Check step progress
-SELECT w.workflow_id, w.name, w.status as wf_status,
-       s.step_id, s.status as step_status, s.completed_at
-FROM pgqrs_workflows w
-LEFT JOIN pgqrs_workflow_steps s ON w.workflow_id = s.workflow_id
-WHERE w.workflow_id = 1;
-
--- Find stuck workflows (running for too long)
-SELECT * FROM pgqrs_workflows
-WHERE status = 'RUNNING'
-AND updated_at < NOW() - INTERVAL '1 hour';
-```
+1. **Idempotency**: Ensure your step closures are idempotent, especially if they have side effects outside of pgqrs.
+2. **Step Granularity**: Balance between durability and performance. Too many small steps create database overhead; too few large steps mean more work is repeated on crash.
+3. **Error Classification**: Use `TransientError` for things that might succeed on retry (network issues) and permanent errors for logic or data issues.
 
 ## Next Steps
 
-- [Durable Workflows Concepts](../concepts/durable-workflows.md): Deeper understanding of the architecture
-- [Workflow API](../api/workflows.md): Complete API reference
+- [Workflow API Reference](../api/workflows.md) - Complete API details.
+- [Concepts: Durable Execution](../concepts/durable-workflows.md) - Deep dive into the architecture.
