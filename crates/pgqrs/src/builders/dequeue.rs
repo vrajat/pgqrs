@@ -72,25 +72,13 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
-    /// Set the visibility timeout offset in seconds.
-    pub fn vt_offset(mut self, seconds: u32) -> Self {
-        self.vt_offset_seconds = Some(seconds);
-        self
-    }
-
     /// Set visibility timeout using Duration (more ergonomic than seconds).
     pub fn with_vt(mut self, duration: std::time::Duration) -> Self {
         self.vt_offset_seconds = Some(duration.as_secs().min(u32::MAX as u64) as u32);
         self
     }
 
-    /// Set batch size (alias for `batch`).
-    pub fn limit(mut self, count: usize) -> Self {
-        self.batch_size = count;
-        self
-    }
-
-    /// Set a custom reference time for dequeue (test helper).
+    /// Set a custom reference time for the dequeue operation (useful for testing delays)
     pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
         self.at = Some(time);
         self

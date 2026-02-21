@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let email_messages = pgqrs::dequeue()
         .worker(&email_consumer)
         .batch(10)
-        .vt_offset(2)
+        .with_vt(std::time::Duration::from_secs(2))
         .fetch_all(&store)
         .await?;
     println!("Read {} newsletter messages", email_messages.len());
@@ -159,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let task_messages = pgqrs::dequeue()
         .worker(&task_consumer)
         .batch(5)
-        .vt_offset(5)
+        .with_vt(std::time::Duration::from_secs(5))
         .fetch_all(&store)
         .await?;
     println!("Read {} task messages", task_messages.len());
