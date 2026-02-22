@@ -71,8 +71,10 @@
 
 pub mod config;
 pub mod error;
+/// Retry policies and workflow backoff strategies.
 pub mod policy;
 mod rate_limit;
+/// Metrics and system statistics.
 pub mod stats;
 pub mod store;
 pub mod tables;
@@ -81,6 +83,7 @@ pub mod validation;
 pub mod workers;
 pub mod workflow;
 
+/// High-level builder APIs for queues and workflows.
 pub mod builders {
     pub mod admin;
     pub mod consumer;
@@ -92,13 +95,6 @@ pub mod builders {
     pub mod tables;
     pub mod workflow;
 }
-
-pub use crate::builders::admin::admin;
-pub use crate::builders::consumer::consumer;
-pub use crate::builders::dequeue::dequeue;
-pub use crate::builders::enqueue::enqueue;
-pub use crate::builders::producer::producer;
-pub use crate::builders::tables::tables;
 
 pub use crate::store::Store;
 pub use crate::tables::{
@@ -124,23 +120,173 @@ pub use crate::types::{
 pub use crate::validation::ValidationConfig;
 pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};
 
-pub use crate::builders::run::RunBuilder;
-pub use crate::builders::step::StepBuilder;
-pub use crate::builders::workflow::WorkflowBuilder;
+/// Create a managed admin builder.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// pgqrs::admin(&store).install().await?;
+/// # Ok(()) }
+/// ```
+pub fn admin<S: Store>(store: &S) -> builders::admin::AdminBuilder<'_, S> {
+    builders::admin::AdminBuilder::new(store)
+}
+
+/// Create a managed producer worker.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let producer = pgqrs::producer("localhost", 3000, "orders").create(&store).await?;
+/// # Ok(()) }
+/// ```
+pub fn producer<'a>(
+    hostname: &'a str,
+    port: i32,
+    queue: &'a str,
+) -> builders::producer::ProducerBuilder<'a> {
+    builders::producer::ProducerBuilder::new(hostname, port, queue)
+}
+
+/// Create a managed consumer worker.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let consumer = pgqrs::consumer("localhost", 3000, "orders").create(&store).await?;
+/// # Ok(()) }
+/// ```
+pub fn consumer<'a>(
+    hostname: &'a str,
+    port: i32,
+    queue: &'a str,
+) -> builders::consumer::ConsumerBuilder<'a> {
+    builders::consumer::ConsumerBuilder::new(hostname, port, queue)
+}
+
+/// Start an enqueue operation.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # use serde_json::json;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let ids = pgqrs::enqueue()
+///     .message(&json!({"task": "send_email"}))
+///     .to("tasks")
+///     .execute(&store)
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn enqueue() -> builders::enqueue::EnqueueBuilder<'static, ()> {
+    builders::enqueue::EnqueueBuilder::new()
+}
+
+/// Start a dequeue operation.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let messages = pgqrs::dequeue()
+///     .from("tasks")
+///     .batch(5)
+///     .fetch_all(&store)
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn dequeue() -> builders::dequeue::DequeueBuilder<'static> {
+    builders::dequeue::DequeueBuilder::new()
+}
+
+/// Start a tables builder.
+///
+/// ```rust,no_run
+/// # use pgqrs::store::AnyStore;
+/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
+/// let workers = pgqrs::tables(&store).workers().list().await?;
+/// # Ok(()) }
+/// ```
+pub fn tables<S: Store>(store: &S) -> builders::tables::TablesBuilder<'_, S> {
+    builders::tables::TablesBuilder::new(store)
+}
 
 /// Entry point for creating or getting a workflow.
-pub fn workflow() -> WorkflowBuilder<'static, crate::store::AnyStore> {
-    WorkflowBuilder::new()
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # use serde_json::json;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .create()
+///     .await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn workflow() -> builders::workflow::WorkflowBuilder<'static, crate::store::AnyStore> {
+    builders::workflow::WorkflowBuilder::new()
 }
 
 /// Entry point for creating a run handle from a message.
-pub fn run() -> RunBuilder<'static, crate::store::AnyStore> {
-    RunBuilder::new()
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// let run = pgqrs::run()
+///     .message(message)
+///     .store(&store)
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn run() -> builders::run::RunBuilder<'static, crate::store::AnyStore> {
+    builders::run::RunBuilder::new()
 }
 
 /// Entry point for acquiring a step.
-pub fn step() -> StepBuilder<'static> {
-    StepBuilder::new()
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// let run = pgqrs::run()
+///     .message(message)
+///     .store(&store)
+///     .execute()
+///     .await?;
+/// let step = pgqrs::step()
+///     .run(&run)
+///     .name("list_files")
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn step() -> builders::step::StepBuilder<'static> {
+    builders::step::StepBuilder::new()
 }
 
 /// Connect to a database using a DSN string.
