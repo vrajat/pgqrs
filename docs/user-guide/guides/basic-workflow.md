@@ -118,12 +118,12 @@ The trigger submits a "run" of the workflow. It doesn't execute the work itself;
 
 ## Step 3: Create the Worker (Consumer)
 
-The worker registers itself as a handler for a specific workflow. It polls the queue, creates the run state, and executes your handler function.
+The worker registers for a workflow queue, explicitly dequeues messages, and drives the run lifecycle.
 
 === "Rust"
 
     ```rust
-    use pgqrs::{consumer, Workflow};
+    use pgqrs::consumer;
     use serde::{Serialize, Deserialize};
 
     #[derive(Serialize, Deserialize, Debug)]
@@ -132,13 +132,9 @@ The worker registers itself as a handler for a specific workflow. It polls the q
         payload: String,
     }
 
-    // The handler function that performs the work
-    async fn task_handler(ctx: &mut dyn Workflow, params: TaskParams) -> Result<(), anyhow::Error> {
+    async fn process_task(params: TaskParams) -> anyhow::Result<()> {
         println!("Processing task {} with payload: {}", params.id, params.payload);
-        
-        // Simulate work
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        
         println!("✓ Task {} complete", params.id);
         Ok(())
     }
@@ -147,16 +143,39 @@ The worker registers itself as a handler for a specific workflow. It polls the q
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
-        // Register worker with handler
-        let worker = consumer("worker-1", 8080, "process_task")
-            .handler(task_handler)
+        // Register worker for the workflow queue
+        let consumer = consumer("worker-1", 8080, "process_task")
             .create(&store)
             .await?;
 
         println!("Worker started. Waiting for runs...");
-        worker.poll_forever().await?;
+        loop {
+            let messages = consumer.dequeue(1).await?;
+            if messages.is_empty() {
+                continue;
+            }
 
-        Ok(())
+            let msg = &messages[0];
+            let run = pgqrs::run()
+                .message(msg.clone())
+                .store(&store)
+                .execute()
+                .await?;
+
+            let step = pgqrs::step()
+                .run(&run)
+                .name("process_task")
+                .execute()
+                .await?;
+
+            if step.should_execute() {
+                process_task(serde_json::from_value(msg.payload.clone())?).await?;
+                run.complete_step("process_task", serde_json::json!({"status": "success"})).await?;
+            }
+
+            run.complete(serde_json::json!({"status": "success"})).await?;
+            consumer.archive(msg.id).await?;
+        }
     }
     ```
 
@@ -166,26 +185,34 @@ The worker registers itself as a handler for a specific workflow. It polls the q
     import asyncio
     import pgqrs
 
-    # The handler function
-    async def task_handler(ctx, params):
+    async def process_task(params):
         print(f"Processing task {params['id']} with payload: {params['payload']}")
-        
-        # Simulate work
         await asyncio.sleep(1)
-        
         print(f"✓ Task {params['id']} complete")
         return {"status": "success"}
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
 
-        # Register worker with handler
-        worker = await pgqrs.consumer("worker-1", 8080, "process_task") \
-            .handler(task_handler) \
-            .create(store)
+        # Register worker for the workflow queue
+        consumer = await pgqrs.consumer("worker-1", 8080, "process_task").create(store)
 
         print("Worker started. Waiting for runs...")
-        await worker.poll_forever()
+        while True:
+            messages = await consumer.dequeue(batch_size=1)
+            if not messages:
+                continue
+
+            msg = messages[0]
+            run = await pgqrs.run().message(msg).store(store).execute()
+
+            step = await run.acquire_step("process_task", current_time=run.current_time)
+            if step.status == "EXECUTE":
+                await process_task(msg.payload)
+                await step.guard.success({"status": "success"})
+
+            await run.complete({"status": "success"})
+            await consumer.archive(msg.id)
 
     asyncio.run(main())
     ```

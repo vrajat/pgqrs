@@ -117,7 +117,7 @@ In pgqrs v0.14, the workflow logic is encapsulated in a handler function. Each a
 
 ## Step 2: Register the Worker
 
-The worker process registers the handler and starts polling for runs.
+The worker registers for a workflow queue and explicitly dequeues messages to execute runs.
 
 === "Rust"
 
@@ -129,18 +129,46 @@ The worker process registers the handler and starts polling for runs.
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 
         // Setup workflow definition (idempotent)
-        store.create_workflow("data_pipeline").await?;
+        pgqrs::workflow()
+            .name("data_pipeline")
+            .store(&store)
+            .create()
+            .await?;
 
         // Register worker
-        let worker = consumer("worker-1", 8080, "data_pipeline")
-            .handler(data_pipeline_handler)
+        let consumer = consumer("worker-1", 8080, "data_pipeline")
             .create(&store)
             .await?;
 
         println!("Worker started. Waiting for runs...");
-        worker.poll_forever().await?;
+        loop {
+            let messages = consumer.dequeue(1).await?;
+            if messages.is_empty() {
+                continue;
+            }
 
-        Ok(())
+            let msg = &messages[0];
+            let run = pgqrs::run()
+                .message(msg.clone())
+                .store(&store)
+                .execute()
+                .await?;
+
+            // Execute steps with workflow_step or step acquisition
+            let step = pgqrs::step()
+                .run(&run)
+                .name("fetch_data")
+                .execute()
+                .await?;
+
+            if step.should_execute() {
+                run.complete_step("fetch_data", serde_json::json!({"status": "ok"}))
+                    .await?;
+            }
+
+            run.complete(serde_json::json!({"status": "done"})).await?;
+            consumer.archive(msg.id).await?;
+        }
     }
     ```
 
@@ -154,15 +182,26 @@ The worker process registers the handler and starts polling for runs.
         store = await pgqrs.connect("postgresql://localhost/mydb")
 
         # Setup workflow definition
-        await store.create_workflow("data_pipeline")
+        await pgqrs.workflow().name("data_pipeline").store(store).create()
 
         # Register worker
-        worker = await pgqrs.consumer("worker-1", 8080, "data_pipeline") \
-            .handler(data_pipeline_handler) \
-            .create(store)
+        consumer = await pgqrs.consumer("worker-1", 8080, "data_pipeline").create(store)
 
         print("Worker started. Waiting for runs...")
-        await worker.poll_forever()
+        while True:
+            messages = await consumer.dequeue(batch_size=1)
+            if not messages:
+                continue
+
+            msg = messages[0]
+            run = await pgqrs.run().message(msg).store(store).execute()
+
+            step = await run.acquire_step("fetch_data", current_time=run.current_time)
+            if step.status == "EXECUTE":
+                await step.guard.success({"status": "ok"})
+
+            await run.complete({"status": "done"})
+            await consumer.archive(msg.id)
 
     asyncio.run(main())
     ```

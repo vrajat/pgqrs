@@ -53,7 +53,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     Handle transient failures with automatic, non-blocking retries and backoff.
 
-    [:octicons-arrow-right-24: Retry Strategies](durable-workflows.md#best-practices)
+    [:octicons-arrow-right-24: Retry Strategies](durable-workflows.md)
 
 -   :material-pause-circle:{ .lg .middle } **Pausing Workflows**
 
@@ -61,7 +61,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     Suspend execution to wait for external events or human approval.
 
-    [:octicons-arrow-right-24: Pausing Workflows](durable-workflows.md#advanced-pausing-for-external-events)
+    [:octicons-arrow-right-24: Pausing Workflows](durable-workflows.md)
 
 </div>
 
@@ -71,8 +71,8 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 |-------|----------|
 | [Basic Workflow](basic-workflow.md) | Getting started, understanding the basics |
 | [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
-| [Retry Strategies](durable-workflows.md#best-practices) | Error handling, backoff |
-| [Pausing Workflows](durable-workflows.md#advanced-pausing-for-external-events) | Human-in-the-loop, external webhooks |
+| [Retry Strategies](durable-workflows.md) | Error handling, backoff |
+| [Pausing Workflows](durable-workflows.md) | Human-in-the-loop, external webhooks |
 | [Batch Processing](batch-processing.md) | High throughput, many messages |
 | [Delayed Messages](delayed-messages.md) | Scheduled tasks, reminders, deferred work |
 | [Worker Management](worker-management.md) | Production deployment, scaling |

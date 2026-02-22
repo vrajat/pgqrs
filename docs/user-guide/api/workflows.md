@@ -96,51 +96,97 @@ Workflows are defined as handler functions that take a context object and input 
 
 ## Worker Registration
 
-Workers must register with the `pgqrs` store and provide a handler for a specific workflow.
+Workers register for a workflow queue and explicitly dequeue messages to execute runs. Rust workers typically use the workflow handler utilities; Python workers use step acquisition on the run handle.
 
 === "Rust"
 
     ```rust
     use pgqrs::consumer;
+    use serde_json::json;
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
         
         // Create workflow definition (idempotent)
-        store.create_workflow("zip_files").await?;
-        
-        // Register worker with handler
-        let worker = consumer("worker-1", 8080, "zip_files")
-            .handler(zip_files_handler)
-            .create(&store)
+        pgqrs::workflow()
+            .name("zip_files")
+            .store(&store)
+            .create()
             .await?;
         
-        // Start polling for work
-        worker.poll_forever().await?;
-        
-        Ok(())
+        // Register worker for the workflow queue
+        let consumer = consumer("worker-1", 8080, "zip_files")
+            .create(&store)
+            .await?;
+
+        let handler = pgqrs::workflow_handler(store.clone(), move |run, input: serde_json::Value| async move {
+            let files = pgqrs::workflow_step(&run, "list_files", || async {
+                s3::list_objects(&input["bucket"].as_str().unwrap(), &input["prefix"].as_str().unwrap()).await
+            })
+            .await?;
+
+            let archive_path = pgqrs::workflow_step(&run, "create_archive", || async {
+                zip::create(&files).await
+            })
+            .await?;
+
+            Ok(json!({"archive_path": archive_path, "file_count": files.len()}))
+        });
+
+        let handler = {
+            let handler = handler.clone();
+            move |msg| (handler)(msg)
+        };
+
+        loop {
+            pgqrs::dequeue()
+                .worker(&consumer)
+                .handle(handler)
+                .execute(&store)
+                .await?;
+        }
     }
     ```
 
 === "Python"
 
     ```python
-    from pgqrs import connect, consumer
+    import pgqrs
 
     async def main():
-        store = await connect("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://localhost/mydb")
         
         # Setup (idempotent)
-        await store.create_workflow("zip_files")
+        await pgqrs.workflow().name("zip_files").store(store).create()
         
-        # Register worker with handler
-        worker = await consumer("worker-1", 8080, "zip_files") \
-            .handler(zip_files_handler) \
-            .create(store)
+        # Register worker for the workflow queue
+        consumer = await pgqrs.consumer("worker-1", 8080, "zip_files").create(store)
         
-        # Poll forever
-        await worker.poll_forever()
+        while True:
+            messages = await consumer.dequeue(batch_size=1)
+            if not messages:
+                continue
+
+            msg = messages[0]
+            run = await pgqrs.run().message(msg).store(store).execute()
+
+            step = await run.acquire_step("list_files", current_time=run.current_time)
+            if step.status == "SKIPPED":
+                files = step.value
+            elif step.status == "EXECUTE":
+                files = await s3.list_objects(msg.payload["bucket"], msg.payload["prefix"])
+                await step.guard.success(files)
+
+            step = await run.acquire_step("create_archive", current_time=run.current_time)
+            if step.status == "SKIPPED":
+                archive_path = step.value
+            elif step.status == "EXECUTE":
+                archive_path = await zip.create(files)
+                await step.guard.success(archive_path)
+
+            await run.complete({"archive_path": archive_path, "file_count": len(files)})
+            await consumer.archive(msg.id)
     ```
 
 ---
@@ -158,9 +204,11 @@ Triggers submit workflow runs by enqueuing a message. This is a non-blocking ope
         let store = pgqrs::connect("postgresql://localhost/mydb").await?;
         
         // Trigger workflow (returns queue message)
-        let message = workflow("zip_files")
+        let message = pgqrs::workflow()
+            .name("zip_files")
+            .store(&store)
             .trigger(&ZipParams { bucket, prefix })?
-            .execute(&store)
+            .execute()
             .await?;
         
         println!("Queued workflow message: {}", message.id());
@@ -176,9 +224,11 @@ Triggers submit workflow runs by enqueuing a message. This is a non-blocking ope
     async def handle_upload(bucket: str, prefix: str):
         store = await connect("postgresql://localhost/mydb")
         
-        message = await workflow("zip_files") \
+        message = await pgqrs.workflow() \
+            .name("zip_files") \
+            .store(store) \
             .trigger(ZipParams(bucket=bucket, prefix=prefix)) \
-            .execute(store)
+            .execute()
         
         print(f"Queued message: {message.id}")
     ```

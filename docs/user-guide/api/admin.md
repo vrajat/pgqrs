@@ -223,21 +223,23 @@ Admin provides direct access to table operations.
     count = await messages.count()
     ```
 
-### Archive Table
+### Archived Messages
+
+Archived messages live in `pgqrs_messages` with `archived_at` set. Use the Messages table APIs to query archived items.
 
 === "Rust"
 
     ```rust
-    use pgqrs::Archive;
-    let archive = Archive::new(admin.pool.clone());
-    // ... extensive archive filtering options ...
+    use pgqrs::tables::Messages;
+    let messages = Messages::new(admin.pool.clone());
+    let archived = messages.list_archived_by_queue(queue_id).await?;
     ```
 
 === "Python"
 
     ```python
-    archive = await admin.get_archive()
-    count = await archive.count()
+    messages = await admin.get_messages()
+    archived = await messages.list_archived_by_queue(queue_id)
     ```
 
 ## Example: Health Check
