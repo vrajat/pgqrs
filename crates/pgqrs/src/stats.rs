@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use tabled::Tabled;
 
-/// Queue metrics
+/// Queue metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueMetrics {
@@ -54,7 +54,7 @@ impl Tabled for QueueMetrics {
     }
 }
 
-/// Helper function to format Option<DateTime<Utc>> for Tabled
+/// Format optional timestamps for table output.
 pub fn display_option_datetime(o: &Option<DateTime<Utc>>) -> String {
     match o {
         Some(dt) => dt.to_rfc3339(),
@@ -62,7 +62,7 @@ pub fn display_option_datetime(o: &Option<DateTime<Utc>>) -> String {
     }
 }
 
-/// System-wide statistics
+/// System-wide statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct SystemStats {
@@ -117,7 +117,7 @@ impl Tabled for SystemStats {
     }
 }
 
-/// Worker health statistics
+/// Worker health statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkerHealthStats {
@@ -164,7 +164,7 @@ impl Tabled for WorkerHealthStats {
     }
 }
 
-/// Worker statistics for monitoring and management
+/// Worker statistics for monitoring and management.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerStats {
     /// Total number of workers

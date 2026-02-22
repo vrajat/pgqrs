@@ -1,47 +1,4 @@
-//! Input validation and service protection for pgqrs.
-//!
-//! This module provides configurable validation rules and rate limiting
-//! to protect services from malicious or malformed payloads.
-//!
-//! ## What
-//!
-//! - [`ValidationConfig`] defines validation rules including size limits, content validation, and rate limiting
-//! - [`PayloadValidator`] implements the validation logic with in-memory rate limiting
-//!
-//! ## How
-//!
-//! Configure validation through the main [`Config`] struct when creating queues.
-//! Validation is automatically applied to all enqueue operations.
-//!
-//! ### Example
-//!
-//! ```rust
-//! use pgqrs::{Config, Admin, Producer, ValidationConfig};
-//! use serde_json::json;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut config = Config::from_dsn("postgresql://localhost/test");
-//! config.validation_config = ValidationConfig {
-//!     max_payload_size_bytes: 64 * 1024,    // 64KB
-//!     required_keys: vec!["user_id".to_string()],
-//!     max_enqueue_per_second: Some(100),
-//!     ..Default::default()
-//! };
-//!
-//! let store = pgqrs::connect_with_config(&config).await?;
-//! pgqrs::admin(&store).install().await?;
-//! store.queue("my_queue").await?;
-//!
-//! let producer = pgqrs::producer("localhost", 8080, "my_queue")
-//!     .create(&store)
-//!     .await?;
-//!
-//! // This will be validated automatically
-//! let payload = json!({"user_id": "123", "data": "test"});
-//! let message = producer.enqueue(&payload).await?;
-//! # Ok(())
-//! # }
-//! ```
+//! Input validation and rate limiting for payloads.
 
 use crate::error::Result;
 use crate::rate_limit::TokenBucket;
@@ -49,27 +6,13 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Configuration for payload validation and rate limiting.
-///
-/// This struct defines validation rules that services can configure
-/// to protect against abuse and malformed payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationConfig {
     /// Maximum size of a JSON payload in bytes (after serialization)
     pub max_payload_size_bytes: usize,
     /// Maximum length for individual string values
     pub max_string_length: usize,
-    /// Maximum depth of nested objects/arrays to prevent JSON bombs.
-    ///
-    /// The depth limit controls how many levels of nesting are allowed. Each time
-    /// we recurse into an object or array, depth increases by 1. The depth check
-    /// is applied before processing each value, not just at each object level.
-    ///
-    /// Examples with `max_object_depth = 2`:
-    /// - ✅ Allowed: `{"key": "value"}` - value at depth 1
-    /// - ✅ Allowed: `{"outer": {"inner": "value"}}` - value at depth 2
-    /// - ❌ Rejected: `{"l1": {"l2": {"l3": "value"}}}` - value at depth 3
-    ///
-    /// Default of 5 allows reasonable API nesting while protecting against deeply nested JSON bombs.
+    /// Maximum depth of nested objects/arrays.
     pub max_object_depth: usize,
     /// List of keys that are forbidden in the payload
     pub forbidden_keys: Vec<String>,
@@ -96,17 +39,7 @@ impl Default for ValidationConfig {
 }
 
 impl ValidationConfig {
-    /// Validate payload without enqueueing (for testing).
-    ///
-    /// This method validates a payload against the configuration rules
-    /// but does not perform rate limiting checks since it's intended for testing.
-    ///
-    /// # Arguments
-    /// * `payload` - JSON payload to validate
-    ///
-    /// # Returns
-    /// * `Ok(())` if the payload is valid
-    /// * `Err(PgqrsError)` if validation fails
+    /// Validate a payload without rate limiting (testing use).
     pub fn validate_payload(&self, payload: &serde_json::Value) -> Result<()> {
         // Create a temporary validator without rate limiting for testing
         let validator = PayloadValidator {
@@ -122,10 +55,7 @@ impl ValidationConfig {
     }
 }
 
-/// Payload validator with configurable rules and rate limiting.
-///
-/// This struct provides validation capabilities including size checks,
-/// structure validation, content filtering, and in-memory rate limiting.
+/// Payload validator with size, structure, and rate limit checks.
 #[derive(Debug, Clone)]
 pub struct PayloadValidator {
     config: ValidationConfig,
@@ -133,13 +63,7 @@ pub struct PayloadValidator {
 }
 
 impl PayloadValidator {
-    /// Create a new PayloadValidator with the given configuration.
-    ///
-    /// Rate limiting is configured based on the ValidationConfig settings.
-    /// If max_enqueue_per_second is None, no rate limiting is applied.
-    ///
-    /// # Arguments
-    /// * `config` - Validation configuration
+    /// Create a validator from the given configuration.
     pub fn new(config: ValidationConfig) -> Self {
         let rate_limiter = config
             .max_enqueue_per_second
@@ -151,23 +75,12 @@ impl PayloadValidator {
         }
     }
 
+    /// Return the validation config.
     pub fn config(&self) -> &ValidationConfig {
         &self.config
     }
 
     /// Validate a payload against all configured rules.
-    ///
-    /// This method performs comprehensive validation including:
-    /// - Quick structure and content validation first (prevent CPU abuse)
-    /// - Rate limiting (after basic validation to prevent resource waste)
-    /// - Size checks (expensive serialization) done last
-    ///
-    /// # Arguments
-    /// * `payload` - JSON payload to validate
-    ///
-    /// # Returns
-    /// * `Ok(())` if the payload passes all validation rules
-    /// * `Err(PgqrsError)` if validation fails
     pub fn validate(&self, payload: &serde_json::Value) -> Result<()> {
         // 1. Fast structure and content validation first (prevents CPU abuse from malformed payloads)
         self.validate_single_pass(payload, 0, true)?;
@@ -187,24 +100,7 @@ impl PayloadValidator {
         Ok(())
     }
 
-    /// Validate multiple payloads atomically for batch operations.
-    ///
-    /// This method validates all payloads with atomic rate limit consumption.
-    /// Validation order:
-    /// 1. Structure/content validation for all payloads (fast checks)
-    /// 2. Rate limit tokens consumed atomically for entire batch
-    /// 3. Size validation for all payloads (expensive serialization)
-    ///
-    /// If structure/content validation fails, no tokens are consumed.
-    /// If rate limit is exceeded, no tokens are consumed.
-    /// If size validation fails after rate limit consumption, tokens are lost.
-    ///
-    /// # Arguments
-    /// * `payloads` - Slice of JSON payloads to validate
-    ///
-    /// # Returns
-    /// * `Ok(())` if all payloads pass validation rules
-    /// * `Err(PgqrsError)` if any payload fails validation
+    /// Validate multiple payloads with a single rate-limit check.
     pub fn validate_batch(&self, payloads: &[serde_json::Value]) -> Result<()> {
         // 1. First validate all payload structures (fast validation to prevent CPU abuse)
         for (index, payload) in payloads.iter().enumerate() {
@@ -256,7 +152,7 @@ impl PayloadValidator {
         Ok(())
     }
 
-    /// Validate the serialized size of the payload.
+    /// Validate the serialized size of a payload.
     fn validate_size(&self, payload: &serde_json::Value) -> Result<()> {
         let serialized = serde_json::to_string(payload)?;
         let size = serialized.len();
@@ -271,15 +167,7 @@ impl PayloadValidator {
         Ok(())
     }
 
-    /// Optimized single-pass validation of structure and content.
-    ///
-    /// This method combines depth checking, string length validation, and forbidden/required
-    /// key checking in a single tree traversal for optimal performance.
-    ///
-    /// # Arguments
-    /// * `payload` - JSON value to validate
-    /// * `depth` - Current nesting depth
-    /// * `is_top_level` - Whether this is the root level (for required key checking)
+    /// Validate structure and content in a single pass.
     fn validate_single_pass(
         &self,
         payload: &serde_json::Value,
@@ -358,9 +246,7 @@ impl PayloadValidator {
         Ok(())
     }
 
-    /// Get current rate limit status for debugging.
-    ///
-    /// Returns None if rate limiting is disabled.
+    /// Return the current rate limit status, if enabled.
     pub fn rate_limit_status(&self) -> Option<crate::rate_limit::RateLimitStatus> {
         self.rate_limiter.as_ref().map(|limiter| limiter.status())
     }

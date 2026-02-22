@@ -1,3 +1,74 @@
+//! pgqrs is a postgres-native, library-only durable execution engine.
+//!
+//! Built in Rust with Python bindings, pgqrs runs in-process and persists workflow state in your
+//! database. It supports PostgreSQL for production and SQLite/Turso for embedded or test setups.
+//!
+//! ## Key Properties
+//! - Postgres-native execution using SKIP LOCKED and ACID transactions
+//! - Library-only runtime that runs alongside your application
+//! - Multi-backend support: Postgres, SQLite, and Turso
+//! - Exactly-once step execution with durable workflow state
+//!
+//! ## Quick Start (Queue)
+//! ```rust,no_run
+//! use pgqrs;
+//! use pgqrs::store::Store;
+//! use serde_json::json;
+
+//!
+//! async fn app_workflow(
+//!     run: pgqrs::Run,
+//!     input: serde_json::Value,
+//! ) -> Result<serde_json::Value, pgqrs::Error> {
+//!     let files = pgqrs::workflow_step(&run, "list_files", || async {
+//!         Ok::<_, pgqrs::Error>(vec![input["path"].as_str().unwrap().to_string()])
+//!     })
+//!     .await?;
+//!
+//!     let archive = pgqrs::workflow_step(&run, "create_archive", || async {
+//!         Ok::<_, pgqrs::Error>(format!("{}.zip", files[0]))
+//!     })
+//!     .await?;
+//!
+//!     Ok(json!({"archive": archive}))
+//! }
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+//! pgqrs::admin(&store).install().await?;
+//!
+//! pgqrs::workflow()
+//!     .name("archive_files")
+//!     .store(&store)
+//!     .create()
+//!     .await?;
+//!
+//! let consumer = pgqrs::consumer("worker-1", 8080, "archive_files")
+//!     .create(&store)
+//!     .await?;
+//!
+//! let handler = pgqrs::workflow_handler(store.clone(), move |run, input| async move {
+//!     app_workflow(run, input).await
+//! });
+//! let handler = { let handler = handler.clone(); move |msg| (handler)(msg) };
+//!
+//! pgqrs::workflow()
+//!     .name("archive_files")
+//!     .store(&store)
+//!     .trigger(&json!({"path": "/tmp/report.csv"}))?
+//!     .execute()
+//!     .await?;
+//!
+//! pgqrs::dequeue()
+//!     .worker(&consumer)
+//!     .handle(handler)
+//!     .execute(&store)
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! Learn more in the documentation: <https://pgqrs.vrajat.com>
+
 pub mod config;
 pub mod error;
 pub mod policy;

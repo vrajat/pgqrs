@@ -1,4 +1,4 @@
-//! Repository traits for low-level database operations.
+//! Repository traits for low-level storage operations.
 
 use crate::types::{
     NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkflowRecord, QueueMessage, QueueRecord,
@@ -7,7 +7,7 @@ use crate::types::{
 
 use async_trait::async_trait;
 
-/// Repository for managing queues.
+/// Queue persistence operations.
 #[async_trait]
 pub trait QueueTable: Send + Sync {
     async fn insert(&self, data: NewQueueRecord) -> crate::error::Result<QueueRecord>;
@@ -20,7 +20,7 @@ pub trait QueueTable: Send + Sync {
     async fn delete_by_name(&self, name: &str) -> crate::error::Result<u64>;
 }
 
-/// Repository for managing messages.
+/// Message persistence operations.
 #[async_trait]
 pub trait MessageTable: Send + Sync {
     async fn insert(
@@ -117,7 +117,7 @@ pub trait MessageTable: Send + Sync {
     async fn delete_by_ids(&self, ids: &[i64]) -> crate::error::Result<Vec<bool>>;
 }
 
-/// Repository for managing workers.
+/// Worker persistence operations.
 #[async_trait]
 pub trait WorkerTable: Send + Sync {
     async fn insert(
@@ -173,7 +173,7 @@ pub trait WorkerTable: Send + Sync {
     async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> crate::error::Result<bool>;
 }
 
-/// Repository for managing workflows.
+/// Workflow definition persistence operations.
 #[async_trait]
 pub trait WorkflowTable: Send + Sync {
     async fn insert(&self, data: NewWorkflowRecord) -> crate::error::Result<WorkflowRecord>;
@@ -184,7 +184,7 @@ pub trait WorkflowTable: Send + Sync {
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
 }
 
-/// Repository for managing workflow runs.
+/// Workflow run persistence operations.
 #[async_trait]
 pub trait RunRecordTable: Send + Sync {
     async fn insert(&self, data: NewRunRecord) -> crate::error::Result<RunRecord>;
@@ -208,7 +208,7 @@ pub trait RunRecordTable: Send + Sync {
     async fn get_by_message_id(&self, message_id: i64) -> crate::error::Result<RunRecord>;
 }
 
-/// Repository for managing workflow steps.
+/// Workflow step persistence operations.
 #[async_trait]
 pub trait StepRecordTable: Send + Sync {
     async fn insert(&self, data: NewStepRecord) -> crate::error::Result<StepRecord>;

@@ -1,56 +1,15 @@
-//! Configuration types for pgqrs.
+//! Configuration for pgqrs connections and defaults.
 //!
-//! This module defines the [`Config`] struct and related types for configuring pgqrs, including database connection, queue, and performance options.
-//!
-//! ## What
-//!
-//! - [`Config`] holds all settings for connecting to PostgreSQL and tuning queue behavior.
-//! - The DSN (database connection string) is required and must be provided.
-//! - Schema configuration determines which PostgreSQL schema contains pgqrs tables.
-//! - Configuration can be loaded from environment variables, files, or created directly.
-//!
-//! ## How
-//!
-//! Create a [`Config`] using one of the provided methods. The DSN is always required.
-//! The schema must exist before installing pgqrs.
-//!
-//! ### Example
-//!
-//! ```no_run
-//! use pgqrs::config::Config;
-//!
-//! // Create from DSN directly (uses 'public' schema)
-//! let config = Config::from_dsn("postgresql://user:pass@localhost/db");
-//!
-//! // Create with custom schema
-//! let config = Config::from_dsn_with_schema(
-//!     "postgresql://user:pass@localhost/db",
-//!     "my_schema"
-//! ).expect("Valid schema name");
-//!
-//! // Load from environment variables (PGQRS_DSN and PGQRS_SCHEMA)
-//! let config = Config::from_env().expect("PGQRS_DSN environment variable required");
-//!
-//! // Load from file
-//! let config = Config::from_file("config.yaml").expect("Failed to load config");
-//! ```
+//! Use [`Config`] to set the DSN, schema, and queue defaults. Load from explicit values,
+//! environment variables, or a YAML file.
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Validates an Identifier such as PostgreSQL schema name according to SQL identifier rules
+/// Validate a SQL identifier for schema names.
 ///
-/// Rules from PostgreSQL documentation:
-/// - Must begin with a letter (a-z, A-Z) or underscore (_)
-/// - Subsequent characters can be letters, underscores, digits (0-9), or dollar signs ($)
-/// - Maximum length is 63 bytes (NAMEDATALEN-1)
-///
-/// # Arguments
-/// * `identifier` - The identifier to validate
-///
-/// # Returns
-/// * `Ok(())` if the schema name is valid
-/// * `Err(crate::error::Error::InvalidConfig)` if the schema name is invalid
+/// # Errors
+/// Returns `InvalidConfig` when the identifier is empty, too long, or contains invalid characters.
 fn validate_identifier(identifier: &str) -> Result<()> {
     if identifier.is_empty() {
         return Err(crate::error::Error::InvalidConfig {
@@ -118,11 +77,9 @@ const DEFAULT_SCHEMA: &str = "public";
 const DEFAULT_MAX_READ_CT: i32 = 5;
 const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5;
 
-/// Configuration for pgqrs
+/// Connection and queue defaults for pgqrs.
 ///
-/// The DSN (database connection string) is required and must be provided
-/// when creating a Config instance. The schema must exist in the database
-/// before installing pgqrs infrastructure.
+/// The DSN is required. The schema must exist before installing pgqrs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// PostgreSQL connection string (DSN) - REQUIRED
@@ -199,20 +156,10 @@ fn default_heartbeat_interval() -> u64 {
 }
 
 impl Config {
-    /// Create a new Config with the provided DSN and default values for other fields.
+    /// Build a config from a DSN with default values.
     ///
-    /// This is the simplest way to create a Config when you have a database connection string.
-    /// All other configuration fields will use their default values, ignoring environment variables.
-    ///
-    /// # Arguments
-    /// * `dsn` - PostgreSQL connection string (e.g., "postgresql://user:pass@localhost/db")
-    ///
-    /// # Example
-    /// ```
-    /// # use pgqrs::config::Config;
-    /// let config = Config::from_dsn("postgresql://user:pass@localhost/db");
-    /// assert_eq!(config.max_connections, 16); // default value
-    /// ```
+    /// This ignores environment overrides.
+
     pub fn from_dsn<S: Into<String>>(dsn: S) -> Self {
         Self {
             dsn: dsn.into(),
@@ -227,28 +174,11 @@ impl Config {
         }
     }
 
-    /// Create a new Config with the provided DSN and schema.
+    /// Build a config from a DSN and schema name.
     ///
-    /// This method validates the schema name according to PostgreSQL identifier rules.
-    /// All other configuration fields will use their default values.
-    ///
-    /// # Arguments
-    /// * `dsn` - PostgreSQL connection string (e.g., "postgresql://user:pass@localhost/db")
-    /// * `schema` - Schema name for pgqrs tables
-    ///
-    /// # Returns
-    /// * `Ok(Config)` if the schema name is valid
-    /// * `Err(crate::error::Error::InvalidConfig)` if the schema name is invalid
-    ///
-    /// # Example
-    /// ```
-    /// # use pgqrs::config::Config;
-    /// let config = Config::from_dsn_with_schema(
-    ///     "postgresql://user:pass@localhost/db",
-    ///     "my_schema"
-    /// ).expect("Valid schema name");
-    /// assert_eq!(config.schema, "my_schema");
-    /// ```
+    /// # Errors
+    /// Returns `InvalidConfig` if the schema name is not a valid identifier.
+
     pub fn from_dsn_with_schema<D, S>(dsn: D, schema: S) -> Result<Self>
     where
         D: Into<String>,
@@ -282,17 +212,11 @@ impl Config {
         self
     }
 
-    /// Create config from environment variables
+    /// Build a config from environment variables.
     ///
-    /// Environment variables supported:
-    /// - PGQRS_DSN (required): PostgreSQL connection string
-    /// - PGQRS_SCHEMA: Schema name for pgqrs tables (default: public)
-    /// - PGQRS_MAX_CONNECTIONS: Maximum database connections (default: 16)
-    /// - PGQRS_CONNECTION_TIMEOUT: Connection timeout in seconds (default: 30)
-    /// - PGQRS_DEFAULT_LOCK_TIME: Default lock time in seconds (default: 5)
-    /// - PGQRS_DEFAULT_BATCH_SIZE: Default batch size (default: 100)
-    /// - PGQRS_HEARTBEAT_INTERVAL: Heartbeat interval in seconds (default: 5)
-    /// - PGQRS_VALIDATION_CONFIG: JSON validation configuration (optional)
+    /// # Errors
+    /// Returns `MissingConfig` when `PGQRS_DSN` is not set.
+
     pub fn from_env() -> Result<Self> {
         use std::env;
 
@@ -304,16 +228,8 @@ impl Config {
         Self::with_dsn_and_env_fallback(dsn)
     }
 
-    /// Internal helper to create Config with a DSN and environment variable fallbacks.
-    ///
-    /// This method consolidates the logic for reading environment variables and applying
-    /// default values, reducing code duplication across different Config creation methods.
-    ///
-    /// # Arguments
-    /// * `dsn` - PostgreSQL connection string
-    ///
-    /// # Returns
-    /// Config instance with DSN set and other fields from environment or defaults
+    /// Build a config using a DSN plus environment fallbacks.
+
     fn with_dsn_and_env_fallback(dsn: String) -> Result<Self> {
         use std::env;
 
@@ -370,25 +286,11 @@ impl Config {
         })
     }
 
-    /// Create config from YAML file
+    /// Build a config from a YAML file.
     ///
-    /// The file must contain at least a 'dsn' field. Other fields are optional
-    /// and will use default values if not specified.
-    ///
-    /// Example YAML file:
-    /// ```yaml
-    /// dsn: "postgresql://user:pass@localhost/db"
-    /// max_connections: 32
-    /// connection_timeout_seconds: 60
-    /// ```
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pgqrs::config::Config;
-    /// let config = Config::from_file("config.yaml").expect("Failed to load config");
-    /// assert!(!config.dsn.is_empty());
-    /// ```
+    /// # Errors
+    /// Returns `InvalidConfig` if the file cannot be read or parsed.
+
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content =
@@ -409,52 +311,20 @@ impl Config {
         Ok(config)
     }
 
-    /// Create config from multiple sources with priority order
+    /// Load config from file, environment, or defaults.
     ///
-    /// This method tries to load configuration from multiple sources in the following priority:
-    /// 1. Config file specified by PGQRS_CONFIG_FILE environment variable
-    /// 2. Environment variables (PGQRS_DSN, etc.)
-    /// 3. Default config file locations (pgqrs.yaml, pgqrs.yml)
-    ///
-    /// At least one source must provide a DSN, or an error will be returned.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pgqrs::config::Config;
-    /// // Try to load from env vars, then config file
-    /// let config = Config::load().expect("Failed to load configuration");
-    /// ```
+    /// # Errors
+    /// Returns `MissingConfig` when no DSN is provided by any source.
+
     pub fn load() -> Result<Self> {
         Self::load_with_options(None::<String>, None::<String>)
     }
 
-    /// Create config from multiple sources with explicit options
+    /// Load config with explicit DSN or config file overrides.
     ///
-    /// This method allows overriding the DSN and config file path explicitly.
-    /// Priority order:
-    /// 1. Explicit DSN parameter (if provided)
-    /// 2. Explicit config file path (if provided)
-    /// 3. Config file specified by PGQRS_CONFIG_FILE environment variable
-    /// 4. Environment variables (PGQRS_DSN, etc.)
-    /// 5. Default config file locations (pgqrs.yaml, pgqrs.yml)
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pgqrs::config::Config;
-    /// // Load with explicit DSN
-    /// let config = Config::load_with_options(
-    ///     Some("postgresql://user:pass@localhost/db"),
-    ///     None::<String>
-    /// ).expect("Failed to load configuration");
-    ///
-    /// // Load with explicit config file
-    /// let config = Config::load_with_options(
-    ///     None::<String>,
-    ///     Some("custom-config.yaml")
-    /// ).expect("Failed to load configuration");
-    /// ```
+    /// # Errors
+    /// Returns `MissingConfig` when no DSN is provided by any source.
+
     pub fn load_with_options<D, P>(
         explicit_dsn: Option<D>,
         explicit_config_path: Option<P>,
@@ -466,29 +336,11 @@ impl Config {
         Self::load_with_schema_options(explicit_dsn, None::<String>, explicit_config_path)
     }
 
-    /// Create config from multiple sources with explicit options including schema
+    /// Load config with explicit DSN, schema, or file overrides.
     ///
-    /// This method allows overriding the DSN, schema, and config file path explicitly.
-    /// Priority order:
-    /// 1. Explicit DSN parameter (if provided)
-    /// 2. Explicit config file path (if provided)
-    /// 3. Config file specified by PGQRS_CONFIG_FILE environment variable
-    /// 4. Environment variables (PGQRS_DSN, etc.)
-    /// 5. Default config file locations (pgqrs.yaml, pgqrs.yml)
-    ///
-    /// If an explicit schema is provided, it overrides any schema from other sources and is validated.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use pgqrs::config::Config;
-    /// // Load with explicit DSN and schema
-    /// let config = Config::load_with_schema_options(
-    ///     Some("postgresql://user:pass@localhost/db"),
-    ///     Some("custom_schema"),
-    ///     None::<String>
-    /// ).expect("Failed to load configuration");
-    /// ```
+    /// # Errors
+    /// Returns `InvalidConfig` for invalid schema names.
+
     pub fn load_with_schema_options<D, S, P>(
         explicit_dsn: Option<D>,
         explicit_schema: Option<S>,
@@ -518,18 +370,8 @@ impl Config {
         Ok(config)
     }
 
-    /// Internal helper for loading config from standard sources with fallback logic.
-    ///
-    /// This method encapsulates the common fallback sequence used by both `load()`
-    /// and `load_with_options()` methods.
-    ///
-    /// Priority order:
-    /// 1. Config file specified by PGQRS_CONFIG_FILE environment variable
-    /// 2. Environment variables (PGQRS_DSN, etc.)
-    /// 3. Default config file locations (pgqrs.yaml, pgqrs.yml)
-    ///
-    /// # Returns
-    /// Config loaded from the first available source, or error if none found.
+    /// Load config from standard sources in priority order.
+
     fn load_from_standard_sources() -> Result<Self> {
         use std::env;
 

@@ -1,31 +1,11 @@
-//! Core types for pgqrs: queue messages, metrics, and metadata.
-//!
-//! This module defines the main data structures used for queue operations, metrics, and metadata.
-//!
-//! ## What
-//!
-//! - [`QueueMessage`] represents a job/message in the queue.
-//!
-//!
-//! ## How
-//!
-//! Use these types for interacting with queue data, inspecting metrics, and reading metadata.
-//!
-//! ### Example
-//!
-//! ```rust
-//! use pgqrs::types::QueueMessage;
-//! fn print_message(msg: QueueMessage) {
-//!     println!("{}", msg);
-//! }
-//! ```
+//! Core queue, workflow, and worker data types.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self};
 use tabled::Tabled;
 
-/// A message in the queue
+/// Queue message record.
 #[derive(Debug, Clone, Serialize, Deserialize, Tabled)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueMessage {
@@ -70,7 +50,7 @@ impl fmt::Display for QueueMessage {
 }
 
 impl QueueMessage {
-    /// Calculate processing duration if both enqueued_at and dequeued_at are available
+    /// Calculate processing duration from enqueue to dequeue.
     pub fn get_processing_duration(&self) -> Option<chrono::Duration> {
         self.dequeued_at.map(|dequeued| dequeued - self.enqueued_at)
     }
@@ -79,11 +59,11 @@ impl QueueMessage {
 #[derive(Clone, Debug, Serialize, Deserialize, Tabled)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct QueueRecord {
-    /// Queue ID (primary key)
+    /// Queue ID (primary key).
     pub id: i64,
-    /// Name of the queue
+    /// Queue name.
     pub queue_name: String,
-    /// Timestamp when the queue was created
+    /// Creation timestamp.
     pub created_at: DateTime<Utc>,
 }
 
@@ -138,7 +118,7 @@ impl fmt::Display for WorkerRecord {
     }
 }
 
-/// Worker status enumeration
+/// Worker lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(
@@ -177,15 +157,13 @@ impl std::str::FromStr for WorkerStatus {
     }
 }
 
-// Moved from src/tables/pgqrs_queues.rs
-/// Input data for creating a new queue
+/// Input for creating a new queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewQueueRecord {
     pub queue_name: String,
 }
 
-// Moved from src/tables/pgqrs_workers.rs
-/// Input data for creating a new worker
+/// Input for creating a new worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorkerRecord {
     pub hostname: String,
@@ -194,8 +172,7 @@ pub struct NewWorkerRecord {
     pub queue_id: Option<i64>,
 }
 
-// Moved from src/tables/pgqrs_messages.rs
-/// Input data for creating a new message
+/// Input for creating a new message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewQueueMessage {
     pub queue_id: i64,
@@ -207,7 +184,7 @@ pub struct NewQueueMessage {
     pub consumer_worker_id: Option<i64>,
 }
 
-/// Parameters for batch message insertion
+/// Parameters for batch message insertion.
 #[derive(Debug, Clone)]
 pub struct BatchInsertParams {
     pub read_ct: i32,
@@ -217,7 +194,7 @@ pub struct BatchInsertParams {
     pub consumer_worker_id: Option<i64>,
 }
 
-// Moved from src/workflow/mod.rs
+/// Workflow execution status.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(
@@ -262,7 +239,7 @@ impl std::str::FromStr for WorkflowStatus {
     }
 }
 
-// Moved from src/tables/pgqrs_workflows.rs
+/// Workflow definition record.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct WorkflowRecord {
@@ -272,12 +249,13 @@ pub struct WorkflowRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// Input for creating a workflow definition.
 pub struct NewWorkflowRecord {
     pub name: String,
     pub queue_id: i64,
 }
 
-/// A workflow execution run.
+/// Workflow run record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct RunRecord {
@@ -292,7 +270,7 @@ pub struct RunRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Input data for creating a new workflow run.
+/// Input for creating a workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRunRecord {
     pub workflow_id: i64,
@@ -300,7 +278,7 @@ pub struct NewRunRecord {
     pub input: Option<serde_json::Value>,
 }
 
-/// A step within a workflow run.
+/// Workflow step record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 pub struct StepRecord {
@@ -317,7 +295,7 @@ pub struct StepRecord {
     pub retry_count: i32,
 }
 
-/// Input data for creating a new workflow step.
+/// Input for creating a workflow step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewStepRecord {
     pub run_id: i64,

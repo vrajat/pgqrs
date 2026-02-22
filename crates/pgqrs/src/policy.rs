@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 /// Backoff strategy for workflow step retries.
-///
-/// Determines how long to wait between retry attempts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BackoffStrategy {
     /// Fixed delay between retries
@@ -28,28 +26,7 @@ pub enum BackoffStrategy {
 
 /// Retry policy for workflow steps.
 ///
-/// Configures automatic retry behavior when steps fail with transient errors.
-///
-/// ## What
-///
-/// Controls step-level retry with:
-/// - `max_attempts`: Maximum number of retry attempts
-/// - `backoff`: Delay strategy between attempts
-///
-/// ## How
-///
-/// ```rust
-/// use pgqrs::policy::{StepRetryPolicy, BackoffStrategy};
-///
-/// // Default: 3 attempts with exponential backoff + jitter
-/// let policy = StepRetryPolicy::default();
-///
-/// // Custom: 5 attempts with fixed 10-second delay
-/// let policy = StepRetryPolicy {
-///     max_attempts: 5,
-///     backoff: BackoffStrategy::Fixed { delay_seconds: 10 },
-/// };
-/// ```
+/// Controls max attempts and backoff strategy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepRetryPolicy {
     /// Maximum number of retry attempts (0 = no retry, 1 = one retry after initial attempt)
@@ -71,15 +48,8 @@ impl Default for StepRetryPolicy {
 }
 
 impl StepRetryPolicy {
-    /// Calculate delay in seconds for the given retry attempt (0-indexed).
-    ///
-    /// # Arguments
-    ///
-    /// * `attempt` - The retry count (0 = before first retry, 1 = after first retry, etc.)
-    ///
-    /// # Returns
-    ///
-    /// Delay in seconds before the next retry attempt.
+    /// Calculate delay in seconds for a retry attempt.
+
     pub fn calculate_delay(&self, attempt: u32) -> u32 {
         match &self.backoff {
             BackoffStrategy::Fixed { delay_seconds } => *delay_seconds,
@@ -126,32 +96,14 @@ impl StepRetryPolicy {
         }
     }
 
-    /// Check if retry should be attempted for the given attempt number.
-    ///
-    /// # Arguments
-    ///
-    /// * `attempt` - The current attempt number (0 = initial attempt, 1 = first retry, etc.)
-    ///
-    /// # Returns
-    ///
-    /// `true` if retry should be attempted, `false` if retries are exhausted.
+    /// Return true if the given attempt should retry.
+
     pub fn should_retry(&self, attempt: u32) -> bool {
         attempt < self.max_attempts
     }
 
-    /// Extract retry delay from error or calculate from policy.
-    ///
-    /// Checks the error for a `retry_after` field and uses that if present.
-    /// Otherwise, calculates delay using the retry policy's backoff strategy.
-    ///
-    /// # Arguments
-    ///
-    /// * `error` - The error value that may contain a `retry_after` field
-    /// * `retry_count` - The current retry count (0-indexed)
-    ///
-    /// # Returns
-    ///
-    /// Delay in seconds before the next retry attempt.
+    /// Extract retry delay from an error or policy.
+
     pub fn extract_retry_delay(&self, error: &serde_json::Value, retry_count: i32) -> u64 {
         if let Some(retry_after_val) = error.get("retry_after") {
             if let Some(secs) = retry_after_val.as_u64() {
@@ -168,8 +120,6 @@ impl StepRetryPolicy {
 }
 
 /// Workflow configuration (future use).
-///
-/// Will be used to configure workflow-level settings including default retry policies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     /// Default retry policy for all steps in the workflow

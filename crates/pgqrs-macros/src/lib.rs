@@ -9,7 +9,7 @@ use syn::{parse_macro_input, ItemFn};
 /// `#[pgqrs_step]` wraps a step function so that it:
 ///
 /// - Derives a **step name** from the function name.
-/// - Uses [`pgqrs::Run`] to:
+/// - Uses `pgqrs::Run` to:
 ///   - Skip execution if the step has already completed successfully.
 ///   - Run the step body when needed.
 ///   - Persist the step result as **success** or **failure**.
@@ -67,7 +67,7 @@ use syn::{parse_macro_input, ItemFn};
 ///
 /// 1. Constructs a step guard:
 ///    `ctx.acquire_step(step_name).await?`.
-/// 2. Examines the returned [`pgqrs::store::StepResult`]:
+/// 2. Examines the returned step result:
 ///    - `StepResult::Skipped(val)` — the step has already completed; the stored
 ///      value is returned immediately as `Ok(val)` without re-running the body.
 ///    - `StepResult::Execute(guard)` — the step body should be executed now.

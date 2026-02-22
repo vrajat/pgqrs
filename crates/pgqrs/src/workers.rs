@@ -1,4 +1,4 @@
-//! High-level actor interfaces for workers, producers, and consumers.
+//! Worker, producer, and consumer interfaces.
 
 use crate::rate_limit::RateLimitStatus;
 use crate::store::{AnyStore, Store};
@@ -10,13 +10,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
-/// Trait defining the interface for all worker types.
+/// Common worker operations and lifecycle hooks.
 #[async_trait]
 pub trait Worker: Send + Sync {
-    /// Get the unique identifier for this worker.
+    /// Get the worker record for this instance.
     fn worker_record(&self) -> &WorkerRecord;
 
-    /// Get the unique identifier for this worker.
+    /// Get the worker id for this instance.
     fn worker_id(&self) -> i64 {
         self.worker_record().id
     }
@@ -29,7 +29,7 @@ pub trait Worker: Send + Sync {
     async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool>;
 }
 
-/// Admin interface for managing pgqrs infrastructure.
+/// Admin operations for queues, workers, and stats.
 #[async_trait]
 pub trait Admin: Worker {
     /// Verify the pgqrs schema is correctly installed.
@@ -86,7 +86,7 @@ pub trait Admin: Worker {
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
 }
 
-/// Producer interface for enqueueing messages to a specific queue.
+/// Producer for enqueueing messages to a queue.
 #[derive(Clone, Debug)]
 pub struct Producer {
     store: AnyStore,
@@ -97,6 +97,7 @@ pub struct Producer {
 }
 
 impl Producer {
+    /// Create a producer bound to a queue and worker record.
     pub fn new(
         store: AnyStore,
         queue_info: QueueRecord,
@@ -112,43 +113,53 @@ impl Producer {
         }
     }
 
+    /// Set the current time used for enqueue timestamps.
     pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
         self.current_time = Some(time);
         self
     }
 
+    /// Return the current time used for enqueue timestamps.
     pub fn current_time(&self) -> DateTime<Utc> {
         self.current_time.unwrap_or_else(Utc::now)
     }
 
+    /// Return the worker id for this producer.
     pub fn worker_id(&self) -> i64 {
         self.worker_record.id
     }
 
+    /// Return the worker record for this producer.
     pub fn worker_record(&self) -> &WorkerRecord {
         &self.worker_record
     }
 
+    /// Fetch the current worker status.
     pub async fn status(&self) -> crate::error::Result<WorkerStatus> {
         self.store.workers().get_status(self.worker_record.id).await
     }
 
+    /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
         self.store.workers().suspend(self.worker_record.id).await
     }
 
+    /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
         self.store.workers().resume(self.worker_record.id).await
     }
 
+    /// Shut down this worker.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
         self.store.workers().shutdown(self.worker_record.id).await
     }
 
+    /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
         self.store.workers().heartbeat(self.worker_record.id).await
     }
 
+    /// Check if the worker heartbeat is within the given age.
     pub async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool> {
         self.store
             .workers()
@@ -156,14 +167,17 @@ impl Producer {
             .await
     }
 
+    /// Fetch a message by id.
     pub async fn get_message_by_id(&self, msg_id: i64) -> crate::error::Result<QueueMessage> {
         self.store.messages().get(msg_id).await
     }
 
+    /// Enqueue a message immediately.
     pub async fn enqueue(&self, payload: &Value) -> crate::error::Result<QueueMessage> {
         self.enqueue_delayed(payload, 0).await
     }
 
+    /// Enqueue a message with a delay in seconds.
     pub async fn enqueue_delayed(
         &self,
         payload: &Value,
@@ -187,6 +201,7 @@ impl Producer {
         self.store.messages().insert(new_message).await
     }
 
+    /// Enqueue multiple messages immediately.
     pub async fn batch_enqueue(
         &self,
         payloads: &[Value],
@@ -194,6 +209,7 @@ impl Producer {
         self.batch_enqueue_delayed(payloads, 0).await
     }
 
+    /// Enqueue multiple messages with a delay in seconds.
     pub async fn batch_enqueue_delayed(
         &self,
         payloads: &[Value],
@@ -203,6 +219,7 @@ impl Producer {
             .await
     }
 
+    /// Enqueue a message using an explicit time reference.
     pub async fn enqueue_at(
         &self,
         payload: &Value,
@@ -226,6 +243,7 @@ impl Producer {
         self.store.messages().insert(new_message).await
     }
 
+    /// Enqueue multiple messages using an explicit time reference.
     pub async fn batch_enqueue_at(
         &self,
         payloads: &[Value],
@@ -255,6 +273,7 @@ impl Producer {
         self.store.messages().get_by_ids(&ids).await
     }
 
+    /// Replay an archived DLQ message back into the queue.
     pub async fn replay_dlq(
         &self,
         archived_msg_id: i64,
@@ -262,16 +281,18 @@ impl Producer {
         self.store.messages().replay_dlq(archived_msg_id).await
     }
 
+    /// Return the validation config for this producer.
     pub fn validation_config(&self) -> &ValidationConfig {
         self.validator.config()
     }
 
+    /// Return the current rate limit status, if enabled.
     pub fn rate_limit_status(&self) -> Option<RateLimitStatus> {
         self.validator.rate_limit_status()
     }
 }
 
-/// Consumer interface for processing messages.
+/// Consumer for dequeueing and managing messages.
 #[derive(Clone, Debug)]
 pub struct Consumer {
     store: AnyStore,
@@ -281,6 +302,7 @@ pub struct Consumer {
 }
 
 impl Consumer {
+    /// Create a consumer bound to a queue and worker record.
     pub fn new(store: AnyStore, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
         Self {
             store,
@@ -290,35 +312,43 @@ impl Consumer {
         }
     }
 
+    /// Set the current time used for dequeue timestamps.
     pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
         self.current_time = Some(time);
         self
     }
 
+    /// Return the current time used for dequeue timestamps.
     pub fn current_time(&self) -> DateTime<Utc> {
         self.current_time.unwrap_or_else(Utc::now)
     }
 
+    /// Return the worker id for this consumer.
     pub fn worker_id(&self) -> i64 {
         self.worker_record.id
     }
 
+    /// Return the worker record for this consumer.
     pub fn worker_record(&self) -> &WorkerRecord {
         &self.worker_record
     }
 
+    /// Fetch the current worker status.
     pub async fn status(&self) -> crate::error::Result<WorkerStatus> {
         self.store.workers().get_status(self.worker_record.id).await
     }
 
+    /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
         self.store.workers().suspend(self.worker_record.id).await
     }
 
+    /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
         self.store.workers().resume(self.worker_record.id).await
     }
 
+    /// Shut down this worker if no messages are pending.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
         let pending = self
             .store
@@ -335,10 +365,12 @@ impl Consumer {
         self.store.workers().shutdown(self.worker_record.id).await
     }
 
+    /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
         self.store.workers().heartbeat(self.worker_record.id).await
     }
 
+    /// Check if the worker heartbeat is within the given age.
     pub async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool> {
         self.store
             .workers()
@@ -346,18 +378,22 @@ impl Consumer {
             .await
     }
 
+    /// Dequeue a single message.
     pub async fn dequeue(&self) -> crate::error::Result<Vec<QueueMessage>> {
         self.dequeue_many(1).await
     }
 
+    /// Dequeue multiple messages.
     pub async fn dequeue_many(&self, limit: usize) -> crate::error::Result<Vec<QueueMessage>> {
         self.dequeue_many_with_delay(limit, 30).await
     }
 
+    /// Dequeue a message with a custom visibility timeout.
     pub async fn dequeue_delay(&self, vt: u32) -> crate::error::Result<Vec<QueueMessage>> {
         self.dequeue_many_with_delay(1, vt).await
     }
 
+    /// Dequeue multiple messages with a visibility timeout.
     pub async fn dequeue_many_with_delay(
         &self,
         limit: usize,
@@ -366,6 +402,7 @@ impl Consumer {
         self.dequeue_at(limit, vt, self.current_time()).await
     }
 
+    /// Dequeue messages using an explicit time reference.
     pub async fn dequeue_at(
         &self,
         limit: usize,
@@ -385,6 +422,7 @@ impl Consumer {
             .await
     }
 
+    /// Extend the visibility timeout for a message.
     pub async fn extend_vt(&self, message_id: i64, seconds: u32) -> crate::error::Result<bool> {
         let count = self
             .store
@@ -394,6 +432,7 @@ impl Consumer {
         Ok(count > 0)
     }
 
+    /// Delete a message owned by this consumer.
     pub async fn delete(&self, message_id: i64) -> crate::error::Result<bool> {
         let count = self
             .store
@@ -403,6 +442,7 @@ impl Consumer {
         Ok(count > 0)
     }
 
+    /// Delete multiple messages owned by this consumer.
     pub async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
         self.store
             .messages()
@@ -410,6 +450,7 @@ impl Consumer {
             .await
     }
 
+    /// Archive a message owned by this consumer.
     pub async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>> {
         self.store
             .messages()
@@ -417,6 +458,7 @@ impl Consumer {
             .await
     }
 
+    /// Archive multiple messages owned by this consumer.
     pub async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
         self.store
             .messages()
@@ -424,6 +466,7 @@ impl Consumer {
             .await
     }
 
+    /// Release messages back to the queue.
     pub async fn release_messages(&self, message_ids: &[i64]) -> crate::error::Result<u64> {
         let res = self
             .store
@@ -433,6 +476,7 @@ impl Consumer {
         Ok(res.iter().filter(|&&x| x).count() as u64)
     }
 
+    /// Release a message with a custom visibility time.
     pub async fn release_with_visibility(
         &self,
         message_id: i64,
@@ -448,6 +492,8 @@ impl Consumer {
 }
 
 /// Workflow execution run handle.
+///
+/// Use this to acquire steps and complete or pause a workflow run.
 #[derive(Clone, Debug)]
 pub struct Run {
     store: AnyStore,
@@ -456,6 +502,7 @@ pub struct Run {
 }
 
 impl Run {
+    /// Create a run handle from a run record.
     pub fn new(store: AnyStore, record: RunRecord) -> Self {
         Self {
             store,
@@ -464,19 +511,23 @@ impl Run {
         }
     }
 
+    /// Set the current time used for step acquisition.
     pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
         self.current_time = Some(time);
         self
     }
 
+    /// Return the current time override, if any.
     pub fn current_time(&self) -> Option<DateTime<Utc>> {
         self.current_time
     }
 
+    /// Return the run id.
     pub fn id(&self) -> i64 {
         self.record.id
     }
 
+    /// Return the run record.
     pub fn record(&self) -> &RunRecord {
         &self.record
     }
@@ -489,16 +540,19 @@ impl Run {
         }
     }
 
+    /// Refresh the run record from storage.
     pub async fn refresh(&self) -> crate::error::Result<Run> {
         let record = self.store.workflow_runs().get(self.record.id).await?;
         Ok(self.with_record(record))
     }
 
+    /// Mark the run as started.
     pub async fn start(&self) -> crate::error::Result<Run> {
         let record = self.store.workflow_runs().start_run(self.record.id).await?;
         Ok(self.with_record(record))
     }
 
+    /// Complete the run with output.
     pub async fn complete(&self, output: serde_json::Value) -> crate::error::Result<Run> {
         let record = self
             .store
@@ -508,6 +562,7 @@ impl Run {
         Ok(self.with_record(record))
     }
 
+    /// Pause the run until a resume time.
     pub async fn pause(
         &self,
         message: String,
@@ -521,6 +576,7 @@ impl Run {
         Ok(self.with_record(record))
     }
 
+    /// Fail the run with a structured error payload.
     pub async fn fail_with_json(&self, error: serde_json::Value) -> crate::error::Result<Run> {
         let record = self
             .store
@@ -530,6 +586,7 @@ impl Run {
         Ok(self.with_record(record))
     }
 
+    /// Complete the run with a serializable payload.
     pub async fn success<T: serde::Serialize + Send + Sync>(
         &self,
         output: &T,
@@ -538,6 +595,7 @@ impl Run {
         self.complete(value).await
     }
 
+    /// Fail the run with a serializable payload.
     pub async fn fail<T: serde::Serialize + Send + Sync>(
         &self,
         error: &T,
@@ -546,6 +604,7 @@ impl Run {
         self.fail_with_json(value).await
     }
 
+    /// Acquire a step for execution or replay.
     pub async fn acquire_step(
         &self,
         step_name: &str,
@@ -621,6 +680,7 @@ impl Run {
         Ok(Step::new(self.store.clone(), record))
     }
 
+    /// Complete a step by name.
     pub async fn complete_step(
         &self,
         step_name: &str,
@@ -631,6 +691,7 @@ impl Run {
         step.complete(output).await
     }
 
+    /// Fail a step by name with a structured error payload.
     pub async fn fail_step(
         &self,
         step_name: &str,
@@ -642,7 +703,7 @@ impl Run {
     }
 }
 
-/// A handle for a workflow step execution.
+/// Workflow step execution handle.
 #[derive(Clone, Debug)]
 pub struct Step {
     store: AnyStore,
@@ -651,6 +712,7 @@ pub struct Step {
 }
 
 impl Step {
+    /// Create a step handle from a step record.
     pub fn new(store: AnyStore, record: StepRecord) -> Self {
         Self {
             store,
@@ -659,27 +721,33 @@ impl Step {
         }
     }
 
+    /// Set the current time used for retry calculations.
     pub fn with_time(mut self, time: DateTime<Utc>) -> Self {
         self.current_time = Some(time);
         self
     }
 
+    /// Return the step id.
     pub fn id(&self) -> i64 {
         self.record.id
     }
 
+    /// Return the step record.
     pub fn record(&self) -> &StepRecord {
         &self.record
     }
 
+    /// Return the step status.
     pub fn status(&self) -> crate::types::WorkflowStatus {
         self.record.status
     }
 
+    /// Return the step output, if available.
     pub fn output(&self) -> Option<&serde_json::Value> {
         self.record.output.as_ref()
     }
 
+    /// Complete the step with an output payload.
     pub async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
         let query =
             crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_complete_step())
@@ -688,6 +756,7 @@ impl Step {
         self.store.workflow_steps().execute(query).await.map(|_| ())
     }
 
+    /// Fail the step with a structured error payload.
     pub async fn fail_with_json(
         &mut self,
         error: serde_json::Value,
@@ -753,6 +822,7 @@ impl Step {
         self.store.workflow_steps().execute(query).await.map(|_| ())
     }
 
+    /// Complete the step with a serializable payload.
     pub async fn success<T: serde::Serialize + Send + Sync>(
         &mut self,
         output: &T,
@@ -761,6 +831,7 @@ impl Step {
         self.complete(value).await
     }
 
+    /// Fail the step with a serializable payload.
     pub async fn fail<T: serde::Serialize + Send + Sync>(
         &mut self,
         error: &T,

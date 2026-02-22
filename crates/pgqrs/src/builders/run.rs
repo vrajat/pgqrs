@@ -3,7 +3,32 @@ use crate::store::Store;
 use crate::types::QueueMessage;
 use crate::workers::Run;
 
+/// Start a run handle builder.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// let run = pgqrs::run()
+///     .message(message)
+///     .store(&store)
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn run() -> RunBuilder<'static, crate::store::AnyStore> {
+    RunBuilder::new()
+}
+
 /// Builder for creating local run handles.
+///
+/// Use `.message()` and `.store()` before calling `.execute()`.
 pub struct RunBuilder<'a, S: Store> {
     pub(crate) store: Option<&'a S>,
     pub(crate) message: Option<QueueMessage>,

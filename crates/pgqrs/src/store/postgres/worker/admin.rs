@@ -6,7 +6,7 @@
 //!
 //! - [`Admin`] allows you to create, delete, purge, and list queues, as well as install and uninstall the schema.
 //! - Provides metrics and access to individual queues.
-//! - Implements the [`Worker`] trait for lifecycle management.
+//! - Implements the `Worker` trait for lifecycle management.
 //!
 //! ## How
 //!
@@ -195,7 +195,7 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
 #[derive(Debug)]
 /// Admin interface for managing pgqrs infrastructure
 ///
-/// Implements the [`Worker`] trait for lifecycle management.
+/// Implements the `Worker` trait for lifecycle management.
 /// Call `register()` after `install()` to register Admin as a worker.
 pub struct Admin {
     pub pool: PgPool,

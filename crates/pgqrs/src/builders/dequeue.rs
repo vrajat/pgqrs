@@ -1,4 +1,4 @@
-//! DequeueBuilder for advanced dequeue options
+//! Builder for dequeue operations with worker selection and visibility timeouts.
 
 use crate::error::Result;
 use crate::store::Store;
@@ -6,11 +6,29 @@ use crate::types::QueueMessage;
 use crate::workers::Consumer;
 use std::future::Future;
 
+/// Start a dequeue operation.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let messages = pgqrs::dequeue()
+///     .from("tasks")
+///     .batch(5)
+///     .fetch_all(&store)
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn dequeue() -> DequeueBuilder<'static> {
+    DequeueBuilder::new()
+}
+
 /// Builder for dequeue operations with advanced options.
 ///
-/// Supports two modes:
-/// 1. Ephemeral worker (auto-managed): `.from(queue).execute(store)`
-/// 2. Managed worker: `.worker(&consumer).execute()`
+/// Supports:
+/// - Ephemeral workers via `.from(queue)`.
+/// - Managed workers via `.worker(&consumer)`.
+/// - Visibility timeout tweaks via `.vt_offset()` or `.with_vt()`.
 pub struct DequeueBuilder<'a> {
     queue: Option<String>,
     batch_size: usize,
@@ -36,25 +54,25 @@ impl<'a> DequeueBuilder<'a> {
         }
     }
 
-    /// Specify queue (for ephemeral worker mode)
+    /// Specify queue (ephemeral worker mode).
     pub fn from(mut self, queue: &str) -> Self {
         self.queue = Some(queue.to_string());
         self
     }
 
-    /// Set batch size
+    /// Set the batch size for dequeue.
     pub fn batch(mut self, size: usize) -> Self {
         self.batch_size = size;
         self
     }
 
-    /// Use a managed worker instead of ephemeral
+    /// Use a managed consumer instead of an ephemeral one.
     pub fn worker(mut self, consumer: &'a Consumer) -> Self {
         self.worker = Some(consumer);
         self
     }
 
-    /// Set visibility timeout offset in seconds
+    /// Set the visibility timeout offset in seconds.
     pub fn vt_offset(mut self, seconds: u32) -> Self {
         self.vt_offset_seconds = Some(seconds);
         self
@@ -66,19 +84,19 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
-    /// Set batch size (alias for `batch` with clearer naming).
+    /// Set batch size (alias for `batch`).
     pub fn limit(mut self, count: usize) -> Self {
         self.batch_size = count;
         self
     }
 
-    /// Set a custom reference time for the dequeue operation (useful for testing delays)
+    /// Set a custom reference time for dequeue (test helper).
     pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
         self.at = Some(time);
         self
     }
 
-    /// Fetch one message
+    /// Fetch one message (if available).
     pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
         let consumer = self.resolve_consumer(store).await?;
         let msgs = if let Some(at) = self.at {
@@ -92,7 +110,7 @@ impl<'a> DequeueBuilder<'a> {
         Ok(msgs.into_iter().next())
     }
 
-    /// Fetch all messages (up to batch size)
+    /// Fetch all messages (up to batch size).
     pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<QueueMessage>> {
         let consumer = self.resolve_consumer(store).await?;
         if let Some(at) = self.at {
@@ -107,8 +125,7 @@ impl<'a> DequeueBuilder<'a> {
         }
     }
 
-    /// Set handler for single-message processing.
-    /// Returns a DequeueHandlerBuilder for execution.
+    /// Set a handler for single-message processing.
     pub fn handle<F, Fut>(self, handler: F) -> DequeueHandlerBuilder<'a, F>
     where
         F: Fn(QueueMessage) -> Fut + Send + Sync + 'static,
@@ -258,9 +275,4 @@ where
         }
         Ok(())
     }
-}
-
-/// Create a new dequeue builder
-pub fn dequeue() -> DequeueBuilder<'static> {
-    DequeueBuilder::new()
 }
