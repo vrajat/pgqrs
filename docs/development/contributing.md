@@ -25,17 +25,18 @@ git remote add upstream https://github.com/vrajat/pgqrs.git
 **Prerequisites:**
 
 - Rust 1.70+ (`rustup update stable`)
-- PostgreSQL 14+
-- Docker (for integration tests)
+- PostgreSQL 14+ (for Postgres backend tests)
+- Docker (for Postgres + PgBouncer test containers)
+- uv (Python packaging)
 
 **Build:**
 
 ```bash
-# Build all crates
-cargo build
+# Install Python + docs deps
+make requirements
 
-# Build in release mode
-cargo build --release
+# Build Rust + Python bindings
+make build
 ```
 
 ### 3. Set Up PostgreSQL
@@ -57,14 +58,17 @@ export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
 ### 4. Run Tests
 
 ```bash
-# Run all tests
-cargo test
+# Full suite on Postgres (Docker + PgBouncer)
+make test-postgres
 
-# Run specific test
-cargo test test_name
+# Full suite on SQLite
+make test-sqlite
 
-# Run with logging
-RUST_LOG=debug cargo test
+# Rust-only tests (nextest)
+make test-rust
+
+# Python-only tests
+make test-py PGQRS_TEST_BACKEND=sqlite
 ```
 
 ## Development Workflow

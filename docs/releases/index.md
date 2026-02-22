@@ -70,24 +70,6 @@ queue.enqueue(&payload).await?;
 let msg = queue.dequeue().await?;
 ```
 
-**After (0.3.0):**
-
-```rust
-// New: Separated Producer and Consumer
-let producer = pgqrs::producer(pool.clone(), &queue, host, port, &config).await?;
-producer.enqueue(&payload).await?;
-
-let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?;
-let messages = consumer.dequeue().await?;
-```
-
-**Migration Steps:**
-
-1. Update your `Cargo.toml` to `pgqrs = "0.3"`
-2. Replace `Queue` usage with `Producer` and/or `Consumer`
-3. Update method calls to match new signatures
-4. Run the schema migration (automatic with `pgqrs install`)
-
 ## Getting Updates
 
 ### Watch Repository

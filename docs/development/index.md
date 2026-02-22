@@ -44,11 +44,14 @@ Resources for contributors and developers working on pgqrs.
 git clone https://github.com/vrajat/pgqrs.git
 cd pgqrs
 
-# Build all crates
-cargo build
+# Install Python + docs dependencies
+make requirements
 
-# Run tests (requires PostgreSQL)
-cargo test
+# Build Rust + Python bindings
+make build
+
+# Run full test suite on SQLite
+make test-sqlite
 ```
 
 ### Project Structure

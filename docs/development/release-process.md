@@ -89,17 +89,29 @@ Add release notes to `CHANGELOG.md`:
 ### 4. Run Tests
 
 ```bash
-# Full test suite
-cargo test
+# Full test suite on Postgres
+make test-postgres
 
-# Python tests
-cd py-pgqrs && maturin develop && pytest
+# Full test suite on SQLite
+make test-sqlite
 
-# Build release
-cargo build --release
+# Python tests only
+make test-py PGQRS_TEST_BACKEND=postgres
 ```
 
-### 5. Create Pull Request
+### 5. Release Build Dry Run
+
+```bash
+make release-dry-run LEVEL=minor
+```
+
+### 6. Execute Release
+
+```bash
+make release LEVEL=minor
+```
+
+### 7. Create Pull Request
 
 ```bash
 git add -A
@@ -109,7 +121,7 @@ git push origin release/v1.2.3
 
 Create PR and get approval.
 
-### 6. Merge and Tag
+### 8. Merge and Tag
 
 ```bash
 # After PR approval
@@ -121,7 +133,7 @@ git tag -a v1.2.3 -m "Release v1.2.3"
 git push origin v1.2.3
 ```
 
-### 7. Publish
+### 9. Publish
 
 **Rust crate:**
 

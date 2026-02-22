@@ -10,85 +10,82 @@ How to run and write tests for pgqrs.
 
 ## Running Tests
 
-### Quick Start
+### Quick Start (Make Targets)
 
 ```bash
-# Set database connection
-export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
+# Install dependencies and build bindings
+make requirements
 
-# Run all tests
-cargo test
+# Build Rust + Python bindings
+make build
 
-# Run with logging
-RUST_LOG=debug cargo test -- --nocapture
+# Run full test suite on SQLite
+make test-sqlite
+
+# Run Python tests only (SQLite backend)
+make test-py PGQRS_TEST_BACKEND=sqlite
 ```
 
 ### Test Categories
 
-#### Unit Tests
-
-Run fast, in-memory tests:
+#### Rust Tests (nextest)
 
 ```bash
-cargo test --lib
+# Run all Rust tests (uses PGQRS_TEST_BACKEND)
+make test-rust
+
+# Run a specific test file
+make test-rust TEST=workflow_tests
+
+# Run a specific test inside a file
+make test-rust TEST=workflow_tests FILTER="test_workflow_scenario_success"
 ```
 
-#### Integration Tests
-
-Run tests that require PostgreSQL:
+#### Python Tests (pytest)
 
 ```bash
-cargo test --test '*'
-```
+# Run all Python tests (uses PGQRS_TEST_BACKEND)
+make test-py PGQRS_TEST_BACKEND=postgres
 
-#### Specific Test File
-
-```bash
-cargo test --test integration_tests
-```
-
-#### Pattern Matching
-
-```bash
-# Run tests containing "queue"
-cargo test queue
-
-# Run tests containing "producer"
-cargo test producer
+# Run a specific test file
+PGQRS_TEST_BACKEND=sqlite uv run pytest py-pgqrs/tests/test_concurrency.py
 ```
 
 ## Test Database Setup
 
-### Option 1: Docker
+### Postgres (Docker + PgBouncer)
 
 ```bash
-# Start PostgreSQL
-docker run -d \
-  --name pgqrs-test \
-  -e POSTGRES_PASSWORD=postgres \
-  -p 5432:5432 \
-  postgres:16
+# Start local Postgres + PgBouncer containers
+make start-pgbouncer
 
-# Set connection
-export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
+# Provision test schemas
+make test-setup-postgres
 ```
 
-### Option 2: Local PostgreSQL
+### Postgres (CI)
 
 ```bash
-# Create test database
-createdb pgqrs_test
+# Use an existing CI Postgres instance
+export CI_POSTGRES_RUNNING=true
+export PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5432/postgres"
+export PGBOUNCER_TEST_DSN="postgres://postgres@localhost:6432/postgres"
 
-# Set connection
-export PGQRS_DSN="postgresql://localhost/pgqrs_test"
+make test-postgres
 ```
 
-### Option 3: Separate Test Schema
-
-Use a dedicated schema to avoid conflicts:
+### SQLite
 
 ```bash
-export PGQRS_SCHEMA="pgqrs_test"
+# Use the SQLite backend (no external DB required)
+make test-sqlite
+```
+
+### Turso
+
+```bash
+# Use the Turso backend (requires Turso credentials)
+make test-turso
 ```
 
 ## Writing Tests
@@ -217,33 +214,21 @@ async fn test_concurrent_operations() {
 ### Setup
 
 ```bash
-cd py-pgqrs
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
-
-# Install dev dependencies
-pip install maturin pytest pytest-asyncio
-
-# Build and install
-maturin develop
+# Install Python deps and editable bindings
+make requirements
 ```
 
 ### Running Python Tests
 
 ```bash
-# Run all tests
-pytest
+# Run all Python tests (uses PGQRS_TEST_BACKEND)
+make test-py PGQRS_TEST_BACKEND=postgres
 
-# Run specific test
-pytest tests/test_basic.py::test_enqueue
+# Run a specific test file
+PGQRS_TEST_BACKEND=sqlite uv run pytest py-pgqrs/tests/test_concurrency.py
 
 # With verbose output
-pytest -v
-
-# With coverage
-pytest --cov=pgqrs
+PGQRS_TEST_BACKEND=sqlite uv run pytest -v py-pgqrs/tests/test_concurrency.py
 ```
 
 ### Writing Python Tests
