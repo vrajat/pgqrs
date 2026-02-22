@@ -1,3 +1,5 @@
+//! Workflow helpers and handler utilities.
+
 use crate::error::{Error, Result};
 use crate::store::Store;
 use crate::types::QueueMessage;
@@ -9,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+/// Create a pause error for a workflow run.
 pub fn pause_error(duration: Duration, message: &str) -> Error {
     Error::Paused {
         message: message.to_string(),
@@ -16,6 +19,7 @@ pub fn pause_error(duration: Duration, message: &str) -> Error {
     }
 }
 
+/// Execute or replay a named workflow step.
 pub async fn workflow_step<F, Fut, T>(run: &Run, name: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send,
@@ -81,6 +85,7 @@ where
     }
 }
 
+/// Build a queue handler that runs a workflow with typed input.
 pub fn workflow_handler<S, F, Fut, T, R>(
     store: S,
     handler: F,
@@ -99,6 +104,7 @@ where
     workflow_handler_impl(store, handler, None)
 }
 
+/// Build a workflow handler with a fixed current time (tests only).
 #[cfg(any(test, feature = "test-utils"))]
 pub fn workflow_handler_with_time<S, F, Fut, T, R>(
     store: S,

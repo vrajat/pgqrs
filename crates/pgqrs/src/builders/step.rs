@@ -2,7 +2,39 @@ use crate::error::Result;
 use crate::store::Store;
 use crate::workers::{Run, Step};
 
+/// Start a step builder.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// let run = pgqrs::run()
+///     .message(message)
+///     .store(&store)
+///     .execute()
+///     .await?;
+/// let step = pgqrs::step()
+///     .run(&run)
+///     .name("list_files")
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn step() -> StepBuilder<'static> {
+    StepBuilder::new()
+}
+
 /// Builder for acquiring and managing workflow steps.
+///
+/// Use `.run()` and `.name()` before calling `.execute()`.
+///
+/// Use `.run()` and `.name()` before calling `.execute()`.
 pub struct StepBuilder<'a> {
     run: Option<&'a Run>,
     name: Option<String>,

@@ -90,7 +90,7 @@ impl AnyStore {
     /// Connect to a database using just a DSN string (simple connection).
     ///
     /// This method uses default configuration and the "public" schema.
-    /// For custom schemas or advanced configuration, use [`connect`](Self::connect) instead.
+    /// For custom schemas or advanced configuration, use `pgqrs::connect()` instead.
     ///
     /// The DSN format determines which backend is used:
     /// - `postgres://` or `postgresql://` → PostgreSQL

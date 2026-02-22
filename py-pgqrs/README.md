@@ -19,15 +19,14 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 ## Installation
 
-py-pgqrs can be installed using `pip` (requires Rust toolchain installed):
-
 ```bash
-pip install .
+pip install pgqrs
 ```
 
-Or for development:
+For local development:
+
 ```bash
-maturin develop
+make requirements
 ```
 
 ## Backend Support
@@ -47,69 +46,79 @@ store = await pgqrs.connect("turso:///path/to/database.db")
 
 ## Usage
 
-### Producer
+### Producer + Consumer
 
 ```python
-import pgqrs
 import asyncio
+import pgqrs
 
-async def produce():
-    dsn = "postgres://user:pass@localhost:5432/db"
-    producer = pgqrs.Producer(dsn, "my_queue", "producer-host", 1234)
+async def main():
+    store = await pgqrs.connect("postgresql://localhost/mydb")
 
+    admin = pgqrs.admin(store)
+    await admin.install()
+    await store.queue("tasks")
+
+    producer = await store.producer("tasks")
     msg_id = await producer.enqueue({"task": "process_image", "url": "..."})
     print(f"Enqueued job {msg_id}")
 
-asyncio.run(produce())
-```
-
-### Consumer
-
-```python
-import pgqrs
-import asyncio
-
-async def consume():
-    dsn = "postgres://user:pass@localhost:5432/db"
-    consumer = pgqrs.Consumer(dsn, "my_queue", "consumer-host", 5678)
-
-    messages = await consumer.dequeue()
+    consumer = await store.consumer("tasks")
+    messages = await consumer.dequeue(batch_size=1)
     for msg in messages:
         print(f"Processing {msg.id}: {msg.payload}")
-        # Process...
         await consumer.archive(msg.id)
 
-asyncio.run(consume())
+asyncio.run(main())
 ```
 
-### Administration
+### Durable Workflow (Python)
 
 ```python
-import pgqrs
 import asyncio
+import pgqrs
 
-async def admin_tasks():
-    dsn = "postgres://user:pass@localhost:5432/db"
-    admin = pgqrs.Admin(dsn)
-
-    # Setup
+async def main():
+    store = await pgqrs.connect("postgresql://localhost/mydb")
+    admin = pgqrs.admin(store)
     await admin.install()
-    await store.queue("my_queue")
 
-    # Monitoring
-    queues = await admin.get_queues()
-    print(f"Queue Count: {await queues.count()}")
+    await pgqrs.workflow().name("archive_files").store(store).create()
+    consumer = await pgqrs.consumer("worker-1", 8080, "archive_files").create(store)
 
-asyncio.run(admin_tasks())
+    await pgqrs.workflow() \
+        .name("archive_files") \
+        .store(store) \
+        .trigger({"path": "/tmp/report.csv"}) \
+        .execute()
+
+    messages = await consumer.dequeue(batch_size=1)
+    msg = messages[0]
+
+    run = await pgqrs.run().message(msg).store(store).execute()
+    step = await run.acquire_step("list_files", current_time=run.current_time)
+    if step.status == "EXECUTE":
+        await step.guard.success([msg.payload["path"]])
+
+    step = await run.acquire_step("create_archive", current_time=run.current_time)
+    if step.status == "EXECUTE":
+        await step.guard.success(f"{msg.payload['path']}.zip")
+
+    await run.complete({"archive": f"{msg.payload['path']}.zip"})
+    await consumer.archive(msg.id)
+
+asyncio.run(main())
 ```
 
 ## Testing
 
-Python tests use `pytest` and `testcontainers` to run against a real Postgres instance.
-
-**Note:** Rust tests use external PostgreSQL instances (no testcontainers). Python tests continue to use testcontainers for isolated testing.
-
 ```bash
-pip install pytest pytest-asyncio testcontainers psycopg[binary]
-pytest
+make test-py PGQRS_TEST_BACKEND=postgres
 ```
+
+## Documentation
+
+- **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
+- **[Docs Home](../docs/index.md)** - Master documentation source
+- **[Python Examples](tests/test_pgqrs.py)** - Python test suite with examples
+- **[API Reference](../docs/user-guide/api/consumer.md)** - Consumer/producer API details

@@ -1,9 +1,22 @@
-//! Consumer builder for creating managed consumer workers
+//! Consumer builder for creating managed consumer workers.
 
 use crate::error::Result;
 use crate::store::Store;
 
-/// Builder for creating a managed consumer worker
+/// Create a managed consumer worker.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let consumer = pgqrs::consumer("localhost", 3000, "orders").create(&store).await?;
+/// # Ok(()) }
+/// ```
+pub fn consumer<'a>(hostname: &'a str, port: i32, queue: &'a str) -> ConsumerBuilder<'a> {
+    ConsumerBuilder::new(hostname, port, queue)
+}
+
+/// Builder for creating a managed consumer worker.
 pub struct ConsumerBuilder<'a> {
     hostname: &'a str,
     port: i32,
@@ -25,22 +38,4 @@ impl<'a> ConsumerBuilder<'a> {
             .consumer(self.queue, self.hostname, self.port, store.config())
             .await
     }
-}
-
-/// Create a managed consumer worker
-///
-/// # Example
-/// ```rust,no_run
-/// # use pgqrs;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// use pgqrs::Config;
-/// use pgqrs::store::AnyStore;
-/// let config = Config::from_dsn("postgres://localhost/mydb");
-/// let store = pgqrs::connect_with_config(&config).await?;
-/// let consumer = pgqrs::consumer("localhost", 3000, "orders").create(&store).await?;
-/// # Ok(())
-/// # }
-/// ```
-pub fn consumer<'a>(hostname: &'a str, port: i32, queue: &'a str) -> ConsumerBuilder<'a> {
-    ConsumerBuilder::new(hostname, port, queue)
 }

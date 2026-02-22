@@ -1,16 +1,25 @@
-//! AdminBuilder for admin operations
+//! Admin builder for administrative operations.
 
 use crate::error::Result;
 use crate::store::Store;
 use crate::types::QueueRecord;
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
+/// Start an admin builder.
+///
+/// ```rust,no_run
+/// # use pgqrs::store::AnyStore;
+/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
+/// pgqrs::admin(&store).install().await?;
+/// # Ok(()) }
+/// ```
+pub fn admin<S: Store>(store: &S) -> AdminBuilder<'_, S> {
+    AdminBuilder::new(store)
+}
+
 /// Builder for admin operations.
 ///
-/// Provides a fluent API for administrative tasks:
-/// - Queue management: delete_queue, purge_queue
-/// - Worker management: delete_worker
-/// - System operations: install, verify
+/// Provides a fluent API for administrative tasks.
 pub struct AdminBuilder<'a, S: Store> {
     store: &'a S,
     hostname: Option<String>,
@@ -179,29 +188,4 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         let admin = self.get_admin().await?;
         admin.release_worker_messages(worker_id).await
     }
-}
-
-/// Create an admin builder for administrative operations
-///
-/// # Example
-/// ```no_run
-/// # use pgqrs::store::AnyStore;
-/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
-/// // Create a queue
-/// let queue = store.queue("my_queue").await?;
-///
-/// // Purge a queue
-/// pgqrs::admin(&store)
-///     .purge_queue("my_queue")
-///     .await?;
-///
-/// // Delete a queue
-/// pgqrs::admin(&store)
-///     .delete_queue(&queue)
-///     .await?;
-/// # Ok(())
-/// # }
-/// ```
-pub fn admin<S: Store>(store: &S) -> AdminBuilder<'_, S> {
-    AdminBuilder::new(store)
 }

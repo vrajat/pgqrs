@@ -1,26 +1,6 @@
-//! Error types and result handling for pgqrs.
+//! Error types and fallible results for pgqrs.
 //!
-//! This module defines the core error type [`Error`] used throughout the crate, as well as the [`Result`] alias for fallible operations.
-//!
-//! ## What
-//!
-//! - [`Error`] enumerates all error cases that can occur in pgqrs, including database, pool, serialization, configuration, and queue-specific errors.
-//! - [`Result<T>`] is a convenient alias for `Result<T, Error>`.
-//!
-//! ## How
-//!
-//! Use [`Error`] for error handling in your application code and when matching on error cases. Most crate APIs return [`Result<T>`].
-//!
-//! ### Example
-//!
-//! ```rust
-//! use pgqrs::error::{Error, Result};
-//!
-//! fn do_something() -> Result<()> {
-//!     // ...
-//!     Err(Error::QueueNotFound { name: "jobs".to_string() })
-//! }
-//! ```
+//! Use [`enum@Error`] for matching on failures and [`Result<T>`] for return types.
 use thiserror::Error;
 
 /// Result type for pgqrs operations
@@ -29,33 +9,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Boxed error type for heterogeneous error sources
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Represents a transient error that should trigger automatic step retry.
+/// Transient step error that triggers retry logic.
 ///
-/// Use this type to indicate that a workflow step failed due to a temporary issue
-/// (network timeout, rate limit, temporary resource unavailability) and should be
-/// retried automatically according to the configured retry policy.
-///
-/// ## What
-///
-/// `TransientStepError` wraps transient failures with metadata to support automatic retry:
-/// - `code`: Error classification (e.g., "TIMEOUT", "RATE_LIMITED")
-/// - `message`: Human-readable error description
-/// - `source`: Optional original error for debugging
-/// - `retry_after`: Optional custom delay before retry
-///
-/// ## How
-///
-/// Create using the builder pattern:
+/// Use for temporary failures (timeouts, rate limits) that should be retried.
 ///
 /// ```rust
 /// use pgqrs::error::TransientStepError;
 /// use std::time::Duration;
 ///
-/// // Basic transient error
-/// let err = TransientStepError::new("TIMEOUT", "Connection timeout");
-///
-/// // With custom retry delay (e.g., from Retry-After header)
-/// let err = TransientStepError::new("RATE_LIMITED", "Too many requests")
+/// let err = TransientStepError::new("TIMEOUT", "Connection timeout")
 ///     .with_delay(Duration::from_secs(60));
 /// ```
 #[derive(Debug, Clone)]
@@ -113,10 +75,6 @@ impl From<TransientStepError> for Error {
 }
 
 /// Error types for pgqrs operations.
-///
-/// This enum covers all error cases that can occur when using pgqrs,
-/// including database connectivity, configuration, serialization, and
-/// queue-specific operations.
 #[derive(Error, Debug)]
 pub enum Error {
     /// Database operation failed (SQLx errors)
@@ -283,39 +241,7 @@ pub enum Error {
         attempts: u32,
     },
 
-    /// Step not ready for execution (retry scheduled)
-    ///
-    /// # Worker Behavior
-    ///
-    /// When a worker receives `StepNotReady`, it should:
-    /// 1. **Not retry immediately** - the step is scheduled for future retry
-    /// 2. Move on to other work (poll other workflows/steps)
-    /// 3. Come back after `retry_at` has passed
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use pgqrs::error::Error;
-    /// # use pgqrs::store::{StepResult, Store};
-    /// # async fn example(store: &impl Store, workflow_id: i64, step_id: &str) -> pgqrs::error::Result<()> {
-    /// let now = chrono::Utc::now();
-    /// match store.acquire_step(workflow_id, step_id, now).await {
-    ///     Err(Error::StepNotReady { retry_at, .. }) => {
-    ///         // Don't sleep! Do other work and poll again after retry_at
-    ///         tracing::info!("Step scheduled for retry at {}", retry_at);
-    ///         return Ok(()); // Move to next workflow
-    ///     }
-    ///     Ok(StepResult::Execute(guard)) => {
-    ///         // Execute the step
-    ///     }
-    ///     Ok(StepResult::Skipped(output)) => {
-    ///         // Step already completed
-    ///     }
-    ///     Err(e) => return Err(e),
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Step not ready for execution (retry scheduled).
     #[error("Step not ready for execution (retry scheduled for {retry_at})")]
     StepNotReady {
         retry_at: chrono::DateTime<chrono::Utc>,

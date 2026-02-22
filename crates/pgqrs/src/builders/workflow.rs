@@ -3,7 +3,33 @@ use crate::store::Store;
 use crate::types::{QueueMessage, WorkflowRecord};
 use serde::Serialize;
 
+/// Start a workflow builder.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # use serde_json::json;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .create()
+///     .await?;
+/// let message = pgqrs::workflow()
+///     .name("archive_files")
+///     .store(&store)
+///     .trigger(&json!({"path": "/tmp/report.csv"}))?
+///     .execute()
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn workflow() -> WorkflowBuilder<'static, crate::store::AnyStore> {
+    WorkflowBuilder::new()
+}
+
 /// Workflow definition handle builder.
+///
+/// Use `.name()` plus `.store()` before `.create()` or `.trigger()`.
 pub struct WorkflowBuilder<'a, S: Store> {
     pub(crate) store: Option<&'a S>,
     pub(crate) name: Option<String>,
@@ -76,6 +102,10 @@ impl<'a, S: Store> Default for WorkflowBuilder<'a, S> {
 }
 
 /// Builder for triggering workflow runs.
+///
+/// Use `.execute()` to enqueue the workflow message.
+///
+/// Use `.execute()` to enqueue the workflow message.
 pub struct WorkflowTriggerBuilder<'a, S: Store> {
     store: Option<&'a S>,
     name: Option<String>,

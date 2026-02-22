@@ -5,11 +5,11 @@
 //!
 //! ## What
 //!
-//! - [`Worker`] trait defines the interface for all worker types (Producer, Consumer, Admin)
+//! - [`Worker`] trait defines the interface for all worker types (producer, consumer, admin)
 //! - [`WorkerHandle`] is a generic worker reference that implements [`Worker`] for any worker ID
 //! - [`Admin`] provides administrative functions for managing queues and workers
-//! - [`Producer`] handles message production (enqueueing)
-//! - [`Consumer`] handles message consumption (dequeueing)
+//! - Producer handles message production (enqueueing)
+//! - Consumer handles message consumption (dequeueing)
 //!
 //! ## Worker Lifecycle
 //!

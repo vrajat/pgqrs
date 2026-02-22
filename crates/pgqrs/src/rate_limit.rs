@@ -1,55 +1,9 @@
-//! In-memory rate limiting for service protection.
-//!
-//! This module provides a token bucket implementation for rate limiting
-//! enqueue operations to protect services from abuse.
-//!
-//! ## What
-//!
-//! - [`TokenBucket`] implements a thread-safe token bucket algorithm
-//! - [`RateLimitStatus`] provides debugging information about rate limit state
-//!
-//! ## How
-//!
-//! Rate limiting is configured through the [`ValidationConfig`] in the main [`Config`] struct.
-//! It's automatically applied to all enqueue operations.
-//!
-//! ### Example
-//!
-//! ```rust
-//! use pgqrs::{Config, Admin, Producer, ValidationConfig};
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut config = Config::from_dsn("postgresql://localhost/test");
-//! config.validation_config.max_enqueue_per_second = Some(100); // 100/second
-//! config.validation_config.max_enqueue_burst = Some(10);       // 10 burst capacity
-//!
-//! let store = pgqrs::connect_with_config(&config).await?;
-//! pgqrs::admin(&store).install().await?;
-//! store.queue("my_queue").await?;
-//!
-//! let producer = pgqrs::producer("localhost", 8080, "my_queue")
-//!     .create(&store)
-//!     .await?;
-//!
-//! // Rate limiting is automatically applied
-//! for i in 0..200 {
-//!     match producer.enqueue(&serde_json::json!({"id": i})).await {
-//!         Ok(_) => println!("Enqueued message {}", i),
-//!         Err(e) => println!("Rate limited: {}", e),
-//!     }
-//! }
-//! # Ok(())
-//! # }
-//! ```
+//! In-memory token bucket rate limiter.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Thread-safe token bucket for rate limiting.
-///
-/// Implements a token bucket algorithm where tokens are refilled at a constant rate
-/// up to a maximum burst capacity. Operations consume tokens and are blocked when
-/// no tokens are available.
 #[derive(Debug)]
 pub struct TokenBucket {
     /// Maximum tokens per second to add
@@ -74,25 +28,10 @@ impl Clone for TokenBucket {
 }
 
 impl TokenBucket {
-    /// Create a new TokenBucket with the specified rate and burst capacity.
-    ///
-    /// # Arguments
-    /// * `max_per_second` - Maximum number of tokens to add per second
-    /// * `burst_capacity` - Maximum number of tokens that can be stored (must be at least 1)
+    /// Create a new token bucket.
     ///
     /// # Panics
-    /// Panics if `burst_capacity` is 0, which would cause division by zero in rate limit calculations.
-    ///
-    /// # Example
-    /// ```rust
-    /// // This is an internal implementation detail.
-    /// // Configure rate limiting through ValidationConfig instead:
-    /// use pgqrs::{Config, ValidationConfig};
-    ///
-    /// let mut config = Config::from_dsn("postgresql://localhost/test");
-    /// config.validation_config.max_enqueue_per_second = Some(1000);
-    /// config.validation_config.max_enqueue_burst = Some(50);
-    /// ```
+    /// Panics if `burst_capacity` is 0.
     pub fn new(max_per_second: u32, burst_capacity: u32) -> Self {
         if burst_capacity == 0 {
             panic!("burst_capacity must be at least 1 to prevent division by zero");
@@ -111,29 +50,12 @@ impl TokenBucket {
         }
     }
 
-    /// Try to acquire a token (non-blocking).
-    ///
-    /// This method attempts to consume one token from the bucket. If no tokens
-    /// are available, it returns false immediately without blocking.
-    ///
-    /// # Returns
-    /// * `true` if a token was successfully acquired
-    /// * `false` if no tokens are available (rate limited)
+    /// Try to acquire a single token (non-blocking).
     pub fn try_acquire(&self) -> bool {
         self.try_acquire_multiple(1)
     }
 
     /// Try to acquire multiple tokens atomically (non-blocking).
-    ///
-    /// This method attempts to consume the specified number of tokens from the bucket.
-    /// If insufficient tokens are available, it returns false without consuming any.
-    ///
-    /// # Arguments
-    /// * `count` - Number of tokens to acquire
-    ///
-    /// # Returns
-    /// * `true` if all tokens were successfully acquired
-    /// * `false` if insufficient tokens are available (rate limited)
     pub fn try_acquire_multiple(&self, count: u32) -> bool {
         self.refill_tokens();
 
@@ -161,9 +83,6 @@ impl TokenBucket {
     }
 
     /// Refill tokens based on elapsed time.
-    ///
-    /// This method calculates how many tokens should be added based on the
-    /// time elapsed since the last refill and updates the token count atomically.
     fn refill_tokens(&self) {
         // Guard against division by zero
         if self.max_per_second == 0 {
@@ -224,13 +143,7 @@ impl TokenBucket {
         }
     }
 
-    /// Get current rate limit status for debugging.
-    ///
-    /// This method provides a snapshot of the current token bucket state,
-    /// useful for monitoring and debugging rate limiting behavior.
-    ///
-    /// # Returns
-    /// Current rate limiting status
+    /// Return the current rate limit status.
     pub fn status(&self) -> RateLimitStatus {
         self.refill_tokens();
 
@@ -242,7 +155,7 @@ impl TokenBucket {
     }
 }
 
-/// Current status of a token bucket for debugging and monitoring.
+/// Current token bucket status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RateLimitStatus {
     /// Number of tokens currently available
@@ -254,20 +167,17 @@ pub struct RateLimitStatus {
 }
 
 impl RateLimitStatus {
-    /// Calculate the percentage of burst capacity currently available.
-    ///
-    /// # Returns
-    /// Percentage (0-100) of burst capacity available
+    /// Return percentage of burst capacity available.
     pub fn utilization_percentage(&self) -> f64 {
         (self.available_tokens as f64 / self.burst_capacity as f64) * 100.0
     }
 
-    /// Check if the bucket is near empty (10% or less capacity).
+    /// Return true when bucket is <= 10% full.
     pub fn is_near_empty(&self) -> bool {
         self.utilization_percentage() <= 10.0
     }
 
-    /// Check if the bucket is full.
+    /// Return true when the bucket is full.
     pub fn is_full(&self) -> bool {
         self.available_tokens == self.burst_capacity
     }

@@ -52,7 +52,7 @@ A message is **locked** when a consumer has dequeued it and is processing it.
 
 ### Archived
 
-A message is **archived** when processing completed successfully and the message was marked as archived in the messages table.
+A message is **archived** when it either completes successfully or exceeds the maximum retry limit and is marked as archived for inspection.
 
 **Characteristics:**
 - `archived_at` column is set to a non-NULL value
@@ -245,7 +245,7 @@ The `read_ct` field tracks how many times a message has been dequeued:
 
 By default, messages with `read_ct > 3` are widely considered "poison messages" and will **NOT** be returned by `dequeue()`. This prevents a single bad message from crashing consumers repeatedly forever.
 
-To handle these messages, you must use administrative tools to move them to the archive (Dead Letter Queue processing).
+To handle these messages, use administrative tools to mark them as archived for inspection (Dead Letter Queue processing).
 
 ### Handling Poison Messages
 
@@ -260,10 +260,10 @@ To handle these messages, you must use administrative tools to move them to the 
         }
     }
 
-    // 2. Move all poison messages (read_ct > 3) to archive
-    // This cleans up the queue and preserves the messages for inspection
-    let moved_ids = admin.dlq().await?;
-    println!("Moved {} messages to DLQ archive", moved_ids.len());
+    // 2. Mark all poison messages (read_ct > 3) as archived
+    // This removes them from dequeue while preserving them for inspection
+    let archived_ids = admin.dlq().await?;
+    println!("Archived {} poison messages for review", archived_ids.len());
     ```
 
 === "Python"
@@ -273,7 +273,7 @@ To handle these messages, you must use administrative tools to move them to the 
 
         **Workaround:** Use the CLI to manage poison messages:
         ```bash
-        # Move all poison messages to archive
+        # Mark all poison messages as archived
         pgqrs queue archive-dlq
         ```
 

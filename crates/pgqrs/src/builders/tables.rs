@@ -1,34 +1,20 @@
-//! TablesBuilder for accessing store tables through a high-level API
+//! Tables builder for accessing store tables.
 
 use crate::store::Store;
 
-/// Builder for accessing store tables.
+/// Start a tables builder.
 ///
-/// Provides a fluent API for table operations:
-/// - `messages()` - Access message table operations
-/// - `queues()` - Access queue table operations
-/// - `workers()` - Access worker table operations
-/// - `workflows()` - Access workflow table operations
-///
-/// # Example
-/// ```no_run
+/// ```rust,no_run
 /// # use pgqrs::store::AnyStore;
 /// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
-/// // Count pending messages
-/// # let queue_id = 1;
-/// let count = pgqrs::tables(&store)
-///     .messages()
-///     .count_pending(queue_id)
-///     .await?;
-///
-/// // List all workers
-/// let workers = pgqrs::tables(&store)
-///     .workers()
-///     .list()
-///     .await?;
-/// # Ok(())
-/// # }
+/// let workers = pgqrs::tables(&store).workers().list().await?;
+/// # Ok(()) }
 /// ```
+pub fn tables<S: Store>(store: &S) -> TablesBuilder<'_, S> {
+    TablesBuilder::new(store)
+}
+
+/// Builder for accessing store tables.
 pub struct TablesBuilder<'a, S: Store> {
     store: &'a S,
 }
@@ -62,9 +48,4 @@ impl<'a, S: Store> TablesBuilder<'a, S> {
     pub fn workflow_runs(self) -> &'a dyn crate::store::RunRecordTable {
         self.store.workflow_runs()
     }
-}
-
-/// Create a TablesBuilder
-pub fn tables<S: Store>(store: &S) -> TablesBuilder<'_, S> {
-    TablesBuilder::new(store)
 }

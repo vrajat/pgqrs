@@ -1,11 +1,31 @@
-//! EnqueueBuilder for advanced enqueue options
+//! Builder for enqueue operations with optional delays and batching.
 
 use crate::error::Result;
 use crate::store::Store;
 use crate::workers::Producer;
 use serde::Serialize;
 
+/// Start an enqueue operation.
+///
+/// ```rust,no_run
+/// # use pgqrs;
+/// # use serde_json::json;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// let ids = pgqrs::enqueue()
+///     .message(&json!({"task": "send_email"}))
+///     .to("tasks")
+///     .execute(&store)
+///     .await?;
+/// # Ok(()) }
+/// ```
+pub fn enqueue() -> EnqueueBuilder<'static, ()> {
+    EnqueueBuilder::new()
+}
+
 /// Builder for enqueue operations.
+///
+/// Use `.message()` or `.messages()` with either `.to(queue)` or `.worker(&producer)`.
 pub struct EnqueueBuilder<'a, T> {
     messages: Vec<&'a T>,
     queue: Option<String>,
@@ -31,7 +51,7 @@ impl EnqueueBuilder<'static, ()> {
         }
     }
 
-    /// Set the message payload to enqueue.
+    /// Set a single message payload to enqueue.
     pub fn message<'a, T: Serialize + Send + Sync>(self, message: &'a T) -> EnqueueBuilder<'a, T> {
         EnqueueBuilder {
             messages: vec![message],
@@ -58,13 +78,13 @@ impl EnqueueBuilder<'static, ()> {
 }
 
 impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
-    /// Specify target queue (for ephemeral worker mode)
+    /// Specify target queue (ephemeral producer mode).
     pub fn to(mut self, queue: &str) -> Self {
         self.queue = Some(queue.to_string());
         self
     }
 
-    /// Use a managed worker instead of ephemeral
+    /// Use a managed producer instead of an ephemeral one.
     pub fn worker(mut self, producer: &'a Producer) -> Self {
         self.worker = Some(producer);
         self
@@ -82,17 +102,15 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
         self
     }
 
-    /// Set a custom reference time for the enqueue operation (useful for testing delays).
-    ///
-    /// This allows tests to control time for deterministic behavior when testing
-    /// message delays and visibility timeouts.
+    /// Set a custom reference time for enqueue (test helper).
     pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
         self.at = Some(time);
         self
     }
 
     /// Execute the enqueue operation.
-    /// Returns a vector of message IDs (even for single message).
+    ///
+    /// Returns message IDs for all payloads.
     pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<Vec<i64>> {
         if self.messages.is_empty() {
             return Err(crate::error::Error::ValidationFailed {
@@ -149,9 +167,4 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
             }
         }
     }
-}
-
-/// Start an enqueue operation.
-pub fn enqueue() -> EnqueueBuilder<'static, ()> {
-    EnqueueBuilder::new()
 }

@@ -10,214 +10,247 @@ Traditional job queues process individual messages independently. Durable workfl
 - **Exactly-once semantics**: Completed steps are never re-executed
 - **Persistent state**: All progress is stored in PostgreSQL
 - **Code-first approach**: Define workflows using native language constructs
+- **Trigger/Worker separation**: Decouple workflow submission from execution
+
+## Trigger/Worker Model
+
+In v0.14, pgqrs introduces a clear separation between **Triggers** and **Workers**:
+
+- **Triggers**: Submit workflow runs by enqueuing an input payload. Triggers can be HTTP handlers, cron jobs, or event listeners.
+- **Workers**: Centralized processes that poll for work, create execution runs, and process steps.
+- **Queues**: Each workflow name maps 1:1 to a PostgreSQL queue.
+
+This separation allows for fast-fail validation at trigger time and centralized management of execution logic.
 
 ## Key Concepts
 
-### Workflow
+### Workflow Definition
 
-A workflow is a durable, interruptible execution of code composed of multiple steps. It has a unique ID and tracks overall execution status.
+A workflow definition is a named template (e.g., `zip_files`) that maps to a specific queue. It is created once during setup.
 
 | Property | Description |
 |----------|-------------|
-| `workflow_id` | Unique identifier for the execution |
-| `name` | Workflow type name |
-| `status` | Current state: `PENDING`, `RUNNING`, `SUCCESS`, or `ERROR` |
+| `workflow_id` | Unique identifier for the definition |
+| `name` | Unique name (e.g., `process_order_v1`) |
+| `queue_id` | Reference to the associated pgqrs queue |
+
+### Workflow Run
+
+A workflow run is a specific execution instance of a definition. It tracks the overall status and stores the input/output for that specific execution.
+
+| Property | Description |
+|----------|-------------|
+| `run_id` | Unique identifier for the execution instance |
+| `workflow_id` | Reference to the workflow definition |
+| `status` | Current state: `QUEUED`, `RUNNING`, `PAUSED`, `SUCCESS`, or `ERROR` |
 | `input` | Initial input payload (JSON) |
 | `output` | Final result if successful (JSON) |
 | `error` | Error details if failed (JSON) |
 
 ### Step
 
-A step is a single, atomic unit of execution within a workflow. Each step is identified by a unique `step_id` and tracked independently.
+A step is a single, atomic unit of execution within a workflow run. Each step is identified by a unique `step_id` and tracked independently for crash recovery.
 
 | Property | Description |
 |----------|-------------|
-| `step_id` | Unique identifier within the workflow |
-| `status` | Current state: `PENDING`, `RUNNING`, `SUCCESS`, or `ERROR` |
+| `run_id` | Reference to the workflow run |
+| `step_id` | Unique identifier within the run |
+| `status` | Current state: `RUNNING`, `PAUSED`, `SUCCESS`, or `ERROR` |
 | `output` | Step result if successful (JSON) |
 | `error` | Error details if failed (JSON) |
 
-### Workflow Status Transitions
+## Workflow Lifecycle
+
+Workflow runs transition through several states during their lifecycle:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: create
-    PENDING --> RUNNING: start
+    [*] --> QUEUED: trigger()
+    QUEUED --> RUNNING: dequeue
     RUNNING --> SUCCESS: complete
-    RUNNING --> ERROR: fail
+    RUNNING --> ERROR: permanent failure
+    RUNNING --> PAUSED: wait for event
+    PAUSED --> RUNNING: resume
+    RUNNING --> RUNNING: transient retry
     ERROR --> [*]
     SUCCESS --> [*]
 ```
 
+- **QUEUED**: The trigger has enqueued the input; no worker has picked it up yet.
+- **RUNNING**: A worker is currently executing the workflow steps.
+- **PAUSED**: The workflow is waiting for an external event or a scheduled interval.
+- **SUCCESS**: The workflow completed all steps successfully (Terminal).
+- **ERROR**: The workflow encountered a permanent failure (Terminal).
+
 ## Architecture
 
-Durable workflows leverage pgqrs's PostgreSQL foundation to persist state.
+Durable workflows leverage pgqrs's PostgreSQL foundation to persist state across three primary tables.
 
 ### Database Schema
 
-Two tables track workflow execution:
-
-**`pgqrs_workflows`** - Stores workflow-level state:
+**`pgqrs_workflows`** - Stores workflow definitions:
 
 ```sql
 CREATE TABLE pgqrs_workflows (
     workflow_id BIGSERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    status pgqrs_workflow_status NOT NULL,
+    name VARCHAR(255) NOT NULL UNIQUE,
+    queue_id BIGINT NOT NULL REFERENCES pgqrs_queues(queue_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**`pgqrs_workflow_runs`** - Stores execution instances:
+
+```sql
+CREATE TABLE pgqrs_workflow_runs (
+    run_id BIGSERIAL PRIMARY KEY,
+    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id),
+    status VARCHAR(50) NOT NULL, -- QUEUED, RUNNING, PAUSED, SUCCESS, ERROR
     input JSONB,
     output JSONB,
     error JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    executor_id VARCHAR(255)
+    started_at TIMESTAMPTZ,
+    paused_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    worker_id BIGINT REFERENCES pgqrs_workers(worker_id)
 );
 ```
 
-**`pgqrs_workflow_steps`** - Stores step-level state:
+**`pgqrs_workflow_steps`** - Stores step-level state for recovery:
 
 ```sql
 CREATE TABLE pgqrs_workflow_steps (
-    workflow_id BIGINT NOT NULL REFERENCES pgqrs_workflows(workflow_id),
+    run_id BIGINT NOT NULL REFERENCES pgqrs_workflow_runs(run_id),
     step_id VARCHAR(255) NOT NULL,
-    status pgqrs_workflow_status NOT NULL,
+    status VARCHAR(50) NOT NULL, -- RUNNING, PAUSED, SUCCESS, ERROR
     input JSONB,
     output JSONB,
     error JSONB,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-    PRIMARY KEY (workflow_id, step_id)
+    PRIMARY KEY (run_id, step_id)
 );
 ```
 
 ### Execution Model
 
+The execution flow ensures that triggers only interact with the queue, while workers manage the run lifecycle.
+
 ```mermaid
 sequenceDiagram
-    participant App as Application
-    participant WF as Workflow
-    participant Step as StepGuard
+    participant Trigger as Trigger (API/Cron)
+    participant Queue as pgqrs Queue
+    participant Worker as Workflow Worker
     participant DB as PostgreSQL
 
-    App->>WF: create_workflow(name, input)
-    WF->>DB: INSERT INTO pgqrs_workflows
-    DB-->>WF: workflow_id
+    Trigger->>DB: Lookup workflow/queue
+    Trigger->>Queue: Enqueue(input)
+    Queue-->>Trigger: message_id
 
-    App->>WF: start()
-    WF->>DB: UPDATE status = RUNNING
-
+    Worker->>Queue: Dequeue()
+    Queue-->>Worker: message(input)
+    
+    Worker->>DB: Create Run (status=RUNNING)
+    
     loop For each step
-        App->>Step: acquire(step_id)
-        Step->>DB: Check/insert step
+        Worker->>DB: Check step status
         alt Step already SUCCESS
-            DB-->>Step: status=SUCCESS, output
-            Step-->>App: Skipped(cached_output)
+            DB-->>Worker: cached_output
         else Step needs execution
-            DB-->>Step: status=RUNNING
-            Step-->>App: Execute(guard)
-            App->>App: Execute step logic
-            App->>Step: guard.success(output)
-            Step->>DB: UPDATE status=SUCCESS
+            Worker->>Worker: Execute step logic
+            Worker->>DB: Update step (status=SUCCESS, output)
         end
     end
 
-    App->>WF: success(final_output)
-    WF->>DB: UPDATE status = SUCCESS
+    Worker->>DB: Update Run (status=SUCCESS, output)
+    Worker->>Queue: Archive message
 ```
 
 ## Crash Recovery
 
-The key feature of durable workflows is automatic recovery after crashes.
+The key feature of durable workflows is automatic recovery after worker crashes.
 
 ### How It Works
 
-1. **Step completion is atomic**: Each step's output is persisted to PostgreSQL before returning
-2. **Step checking is idempotent**: When acquiring a step, the system checks if it's already complete
-3. **Skipping completed steps**: If a step was already successful, its cached output is returned immediately
+1. **Step completion is atomic**: Each step's output is persisted to PostgreSQL before the next step begins.
+2. **Message Visibility**: When a worker dequeues a message, it becomes invisible to other workers. If the worker crashes, the message becomes visible again after a timeout.
+3. **Resumption**: A new worker dequeues the same message, recreates the run context, and re-executes the handler.
+4. **Skipping completed steps**: The `ctx.step()` method checks the database. If a step was already successful, it returns the cached output immediately without re-running the logic.
 
-### Recovery Scenario
+## Retry and Pause
 
-```
-RUN 1 (crashes after Step 2):
-├── Step 1: Execute → SUCCESS ✓
-├── Step 2: Execute → SUCCESS ✓
-├── Step 3: Execute → CRASH! ✗
-└── Workflow status: RUNNING
+### DRY Retry Principle
 
-RUN 2 (resumes):
-├── Step 1: Check → SKIPPED (cached) ✓
-├── Step 2: Check → SKIPPED (cached) ✓
-├── Step 3: Execute → SUCCESS ✓
-└── Workflow status: SUCCESS
-```
+pgqrs uses the **DRY (Don't Repeat Yourself) Retry** principle. Retry timing is managed entirely by the message queue's visibility, not by separate columns in the workflow tables.
 
-## Exactly-Once Semantics
+- **Transient Errors**: If a step fails with a retryable error, the worker updates the message's `visible_after` timestamp. The worker then moves on to other work. When the timestamp elapses, the message is redelivered and the workflow resumes.
+- **No `retry_at`**: There is no `retry_at` column in the steps table. The message queue is the single source of truth for when work should resume.
 
-pgqrs provides **exactly-once logical execution** of workflow steps:
+### Pause and Resume
 
-!!! note "Important Distinction"
-    Exactly-once applies to the *logical execution* of steps. External side effects (API calls, file writes) may still need additional idempotency handling.
+Workflows can enter a `PAUSED` state when waiting for external events (e.g., human approval or a webhook).
 
-### Guarantees
+1. The handler returns a `Pause` signal with a check interval.
+2. The worker updates the run status to `PAUSED` and sets the message visibility to the next check time.
+3. External systems can resume a workflow by updating the step status in the database or making the message visible immediately.
 
-- A step that returned `SUCCESS` will never execute again
-- The cached output from successful steps is always returned
-- A step in `ERROR` state is terminal and blocks re-execution
+## API Patterns
 
-### Implementation
+### Triggering a Workflow
 
-The `StepGuard` uses PostgreSQL's `INSERT ... ON CONFLICT` to atomically:
-
-1. Check if the step exists and its status
-2. Insert or update the step record
-3. Return the appropriate state to the caller
-
-## Dynamic Workflows
-
-Since workflows are code-first, dynamic execution patterns are supported naturally:
+Triggers use a noun-verb pattern to submit work.
 
 === "Rust"
 
     ```rust
-    #[pgqrs_workflow]
-    async fn dynamic_flow(ctx: &Workflow, condition: bool) -> Result<String, anyhow::Error> {
-        let result = step_a(ctx).await?;
+    let message = workflow("zip_files")
+        .trigger(&ZipParams { bucket, prefix })?
+        .execute(&store)
+        .await?;
+    ```
 
-        if condition {
-            // Only executed if condition is True
-            step_b(ctx, result).await
-        } else {
-            // Alternative path
-            step_c(ctx, result).await
-        }
+=== "Python"
+
+    ```python
+    message = await workflow("zip_files") \
+        .trigger(ZipParams(bucket=bucket, prefix=prefix)) \
+        .execute(store)
+    ```
+
+### Defining Steps
+
+Handlers use the `ctx.step()` method to wrap atomic units of work.
+
+=== "Rust"
+
+    ```rust
+    async fn zip_files_handler(ctx: &mut dyn Workflow, params: ZipParams) -> Result<ZipResult, Error> {
+        let files = ctx.step("list_files", || async {
+            s3::list_objects(&params.bucket, &params.prefix).await
+        }).await?;
+        
+        // ...
     }
     ```
 
 === "Python"
 
     ```python
-    @workflow
-    async def dynamic_flow(ctx, condition: bool):
-        result = await step_a(ctx)
-
-        if condition:
-            # Only executed if condition is True
-            await step_b(ctx, result)
-        else:
-            # Alternative path
-            await step_c(ctx, result)
+    async def zip_files_handler(ctx, params: ZipParams):
+        files = await ctx.step("list_files", lambda: s3.list_objects(params.bucket, params.prefix))
+        # ...
     ```
 
-The workflow structure is determined at runtime, with each execution potentially taking different paths based on inputs or intermediate results.
+## Versioning
 
-## Comparison with Other Systems
+pgqrs identifies workflows by name. To support multiple versions of a workflow, include the version in the name.
 
-| Feature | pgqrs | Temporal | Airflow |
-|---------|-------|----------|---------|
-| Definition | Code-first | Code-first | DAG object |
-| State storage | PostgreSQL | Dedicated cluster (Cassandra/PostgreSQL) | PostgreSQL/MySQL |
-| Dynamic flows | Native | Native | Limited |
-| Dependencies | PostgreSQL only | Temporal server + DB | Scheduler + DB |
-| Language | Rust, Python | Multiple | Python |
+**Recommended Naming Convention**: `{workflow_name}_v{version}` (e.g., `process_invoice_v1`, `process_invoice_v2`).
+
+This allows you to:
+- Run multiple versions of a worker simultaneously.
+- Route new triggers to the latest version while allowing old runs to complete on the previous version.
 
 ## Best Practices
 
@@ -225,117 +258,17 @@ The workflow structure is determined at runtime, with each execution potentially
 
 Design steps at the right level of granularity:
 
-- **Too fine**: Excessive database overhead
-- **Too coarse**: Lost progress on failure
-
-=== "Rust"
-
-    ```rust
-    // Good: Logical units of work
-    #[pgqrs_step]
-    async fn fetch_user_data(ctx: &Workflow, user_id: i64) -> Result<User, anyhow::Error> {
-        api::get_user(user_id).await
-    }
-
-    #[pgqrs_step]
-    async fn process_user(ctx: &Workflow, user_data: User) -> Result<ProcessedUser, anyhow::Error> {
-        Ok(transform(user_data))
-    }
-
-    // Bad: Too granular
-    #[pgqrs_step]
-    async fn get_user_name(ctx: &Workflow, user_id: i64) -> Result<String, anyhow::Error> {
-        Ok(user_data.name.clone())  // Too small
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    # Good: Logical units of work
-    @step
-    async def fetch_user_data(ctx, user_id):
-        return await api.get_user(user_id)
-
-    @step
-    async def process_user(ctx, user_data):
-        return transform(user_data)
-
-    # Bad: Too granular
-    @step
-    async def get_user_name(ctx, user_id):
-        return user_data["name"]  # Too small
-    ```
+- **Too fine**: Excessive database overhead for small operations.
+- **Too coarse**: Large amounts of work lost on failure; harder to ensure idempotency.
 
 ### Idempotent External Calls
 
-For external side effects, implement idempotency:
+Exactly-once semantics apply to the *logical execution* of steps. External side effects (API calls, file writes) should be idempotent, as a step might be partially executed before a crash.
 
-=== "Rust"
+### Error Classification
 
-    ```rust
-    #[pgqrs_step]
-    async fn charge_payment(ctx: &Workflow, order_id: &str, amount: f64) -> Result<PaymentResult, anyhow::Error> {
-        // Use idempotency key to prevent double charges
-        let idempotency_key = format!("order-{}", order_id);
-        payment_api::charge(&idempotency_key, amount).await
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    @step
-    async def charge_payment(ctx, order_id, amount):
-        # Use idempotency key to prevent double charges
-        return await payment_api.charge(
-            idempotency_key=f"order-{order_id}",
-            amount=amount
-        )
-    ```
-
-### Error Handling
-
-Steps that fail are marked as `ERROR` and are terminal. Design accordingly:
-
-=== "Rust"
-
-    ```rust
-    use std::io;
-
-    #[pgqrs_step]
-    async fn risky_operation(ctx: &Workflow, data: &str) -> Result<ApiResponse, anyhow::Error> {
-        match external_api::call(data).await {
-            Ok(response) => Ok(response),
-            Err(e) => {
-                // Check for transient errors (e.g., timeout)
-                if let Some(io_err) = e.downcast_ref::<io::Error>() {
-                    if io_err.kind() == io::ErrorKind::TimedOut {
-                        // Re-raise to retry on next workflow run
-                        return Err(e);
-                    }
-                }
-                // Return permanent errors as data instead of failing
-                Ok(ApiResponse { error: Some(e.to_string()), data: None })
-            }
-        }
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    @step
-    async def risky_operation(ctx, data):
-        try:
-            return await external_api.call(data)
-        except RetryableError:
-            # Re-raise to retry on next workflow run
-            raise
-        except PermanentError as e:
-            # Return error as data instead of failing
-            return {"error": str(e), "data": None}
-    ```
+- **Permanent Errors**: Return an `ERROR` status. The message is archived, and the run is marked as failed.
+- **Transient Errors**: Raise a retryable error. The message stays in the queue for redelivery.
 
 ## Next Steps
 

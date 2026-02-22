@@ -13,7 +13,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.3.0] - 2024-11-13
+## [0.14.0] - 2026-02-21 {#0140---2026-02-21}
+
+### Added
+
+- **Trigger/Worker workflow architecture** with explicit workflow definitions and run execution
+- **Durable workflow lifecycle states** including `QUEUED`, `PAUSED`, `SUCCESS`, and `ERROR`
+- **Retry and pause semantics** using message visibility for backoff and external-event pauses
+- **Result retrieval APIs** for non-blocking status checks and blocking waits
+- **Python workflow bindings** aligned with the new workflow API patterns
+
+### Changed
+
+!!! warning "Breaking Changes"
+    - Replaced legacy workflow creation APIs with `workflow("name").trigger(...).execute(...)`
+    - Replaced global step acquisition with `ctx.step("id", ...)` on workflow handlers
+    - Updated workflow schema to use definitions, runs, and step state tables
+
+- **Workflow documentation overhaul** to match the v0.14 API and retry model
+- **Worker registration** now uses fluent `consumer().handler().create()` pattern
+
+### Fixed
+
+- **Turso retry safety** to prevent duplicate inserts during visibility-based retries
+- **Runtime initialization safety** to avoid panic in Python bindings
+
+---
+
+## [0.13.0] - 2025-10-03
+
+### Added
+
+- **Turso backend support** for distributed SQLite deployments
+- **Turso backend documentation** covering configuration and usage
+
+### Changed
+
+- **Test infrastructure refactor** to support Turso integration
+
+---
+
+## [0.3.0] - 2024-11-13 {#030---2024-11-13}
 
 ### Added
 
@@ -58,7 +98,7 @@ let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?
 
 ---
 
-## [0.2.0] - Previous Release
+## [0.2.0] - Previous Release {#020---previous-release}
 
 ### Added
 
@@ -70,7 +110,7 @@ let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?
 
 ---
 
-## [0.1.0] - Initial Release
+## [0.1.0] - Initial Release {#010---initial-release}
 
 ### Added
 
@@ -83,7 +123,9 @@ let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?
 
 ## Links
 
-- [Unreleased]: https://github.com/vrajat/pgqrs/compare/v0.3.0...HEAD
+- [Unreleased]: https://github.com/vrajat/pgqrs/compare/v0.14.0...HEAD
+- [0.14.0]: https://github.com/vrajat/pgqrs/compare/v0.13.0...v0.14.0
+- [0.13.0]: https://github.com/vrajat/pgqrs/compare/v0.12.0...v0.13.0
 - [0.3.0]: https://github.com/vrajat/pgqrs/compare/v0.2.0...v0.3.0
 - [0.2.0]: https://github.com/vrajat/pgqrs/compare/v0.1.0...v0.2.0
 - [0.1.0]: https://github.com/vrajat/pgqrs/releases/tag/v0.1.0

@@ -6,13 +6,13 @@ Version history and release notes for pgqrs.
 
 <div class="grid cards" markdown>
 
--   :material-tag:{ .lg .middle } **v0.3.0**
+-   :material-tag:{ .lg .middle } **v0.14.0**
 
     ---
 
-    Producer/Consumer architecture, unified Table trait, enhanced schema design.
+    Workflow trigger/worker redesign, retries and pausing, and docs overhaul.
 
-    [:octicons-arrow-right-24: Release Notes](changelog.md#030---2024-11-13)
+    [:octicons-arrow-right-24: Release Notes](changelog.md#0140---2026-02-21)
 
 </div>
 
@@ -50,6 +50,7 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| [0.14.0](changelog.md#0140---2026-02-21) | 2026-02-21 | Workflow trigger/worker redesign, retries, pausing |
 | [0.3.0](changelog.md#030---2024-11-13) | 2024-11-13 | Producer/Consumer architecture |
 | [0.2.0](changelog.md#020---previous-release) | - | Initial queue implementation |
 | [0.1.0](changelog.md#010---initial-release) | - | Project inception |
@@ -68,24 +69,6 @@ let queue = Queue::new(&pool, "my_queue").await?;
 queue.enqueue(&payload).await?;
 let msg = queue.dequeue().await?;
 ```
-
-**After (0.3.0):**
-
-```rust
-// New: Separated Producer and Consumer
-let producer = pgqrs::producer(pool.clone(), &queue, host, port, &config).await?;
-producer.enqueue(&payload).await?;
-
-let consumer = pgqrs::consumer(pool.clone(), &queue, host, port, &config).await?;
-let messages = consumer.dequeue().await?;
-```
-
-**Migration Steps:**
-
-1. Update your `Cargo.toml` to `pgqrs = "0.3"`
-2. Replace `Queue` usage with `Producer` and/or `Consumer`
-3. Update method calls to match new signatures
-4. Run the schema migration (automatic with `pgqrs install`)
 
 ## Getting Updates
 
