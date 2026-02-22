@@ -1,116 +1,24 @@
 # pgqrs-macros
 
 > [!CAUTION]
-> **Internal Crate**: This crate (`pgqrs-macros`) is a support crate containing procedural macros for the main `pgqrs` library.
-> You should likely use the `pgqrs` crate directly, which re-exports these macros.
+> **Internal Crate**: This crate (`pgqrs-macros`) contains procedural macros for the main `pgqrs` library.
+> Prefer using `pgqrs`, which re-exports these macros.
 >
-> See the [pgqrs crate](https://crates.io/crates/pgqrs) for the main documentation.
+> See the [pgqrs crate](https://crates.io/crates/pgqrs) for full documentation.
 
----
+## What is pgqrs-macros?
 
-# pgqrs
+`pgqrs-macros` provides the `#[pgqrs_workflow]` and `#[pgqrs_step]` macros used by the Rust workflow API. It does not include runtime logic or queue storage—those live in `pgqrs`.
 
-[![Rust](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml/badge.svg)](https://github.com/vrajat/pgqrs/actions/workflows/ci.yml)
-[![PyPI version](https://badge.fury.io/py/pgqrs.svg)](https://badge.fury.io/py/pgqrs)
+## Installation
 
-**pgqrs is a postgres-native, library-only durable execution engine.**
-
-Written in Rust with Python bindings. Built for Postgres. Also supports SQLite and Turso.
-
-## What is Durable Execution?
-
-A durable execution engine ensures workflows resume from application crashes or pauses. 
-Each step executes exactly once. State persists in the database. Processes resume from the last completed step.
-
-## Key Properties
-
-- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
-- **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
-- **Type-safe:** Rust core with idiomatic Python bindings
-- **Transaction-safe:** Exactly-once step execution within database transactions
-
-## Quick Start
-
-### Job Queue
-
-Simple, reliable message queue for background processing:
-
-#### Rust
-
-```rust
-use pgqrs;
-use serde_json::json;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to PostgreSQL
-    let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-    // Setup (run once)
-    pgqrs::admin(&store).install().await?;
-    store.queue("tasks").await?;
-
-    // Producer: enqueue a job
-    let ids = pgqrs::enqueue()
-        .message(&json!({"task": "send_email", "to": "user@example.com"}))
-        .to("tasks")
-        .execute(&store)
-        .await?;
-    println!("Enqueued: {:?}", ids);
-
-    // Consumer: process jobs
-    pgqrs::dequeue()
-        .from("tasks")
-        .handle(|msg| async move {
-            println!("Processing: {:?}", msg.payload);
-            // Your processing logic here
-            Ok(())
-        })
-        .execute(&store)
-        .await?;
-
-    Ok(())
-}
+```toml
+[dependencies]
+pgqrs = "0.14.0"
+pgqrs-macros = "0.14.0"
 ```
 
-#### Python
-
-```python
-import pgqrs
-import asyncio
-
-async def main():
-    # Connect to PostgreSQL
-    store = await pgqrs.connect("postgresql://localhost/mydb")
-
-    # Setup (run once)
-    admin = pgqrs.admin(store)
-    await admin.install()
-    await store.queue("tasks")
-
-    # Producer: enqueue a job
-    msg_id = await pgqrs.produce(store, "tasks", {
-        "task": "send_email",
-        "to": "user@example.com"
-    })
-    print(f"Enqueued: {msg_id}")
-
-    # Consumer: process jobs
-    async def handler(msg):
-        print(f"Processing: {msg.payload}")
-        return True
-
-    await pgqrs.consume(store, "tasks", handler)
-
-asyncio.run(main())
-```
-
-### Durable Workflows
-
-Orchestrate multi-step processes that survive crashes:
-
-#### Rust
+## Usage (Rust)
 
 ```rust
 use pgqrs;
@@ -121,114 +29,17 @@ async fn fetch_data(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::
     Ok(reqwest::get(url).await?.text().await?)
 }
 
-#[pgqrs_step]
-async fn process_data(ctx: &pgqrs::Workflow, data: String) -> Result<i32, anyhow::Error> {
-    Ok(data.lines().count() as i32)
-}
-
 #[pgqrs_workflow]
 async fn data_pipeline(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
     let data = fetch_data(ctx, url).await?;
-    let count = process_data(ctx, data).await?;
-    Ok(format!("Processed {} lines", count))
+    Ok(format!("Processed {} bytes", data.len()))
 }
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-    pgqrs::admin(&store).install().await?;
-
-    let url = "https://example.com/data.txt";
-    let workflow = pgqrs::admin(&store)
-        .create_workflow("data_pipeline", &url)
-        .await?;
-
-    let result = data_pipeline(&workflow, url).await?;
-    println!("Result: {}", result);
-    Ok(())
-}
-```
-
-#### Python
-
-```python
-import pgqrs
-from pgqrs.decorators import workflow, step
-
-@step
-async def fetch_data(ctx, url: str) -> dict:
-    # Fetch data from API
-    return {"lines": 100, "data": "..."}
-
-@step
-async def process_data(ctx, data: dict) -> dict:
-    return {"processed": True, "count": data["lines"]}
-
-@workflow
-async def data_pipeline(ctx, url: str):
-    data = await fetch_data(ctx, url)
-    result = await process_data(ctx, data)
-    return result
-
-async def main():
-    store = await pgqrs.connect("postgresql://localhost/mydb")
-    admin = pgqrs.admin(store)
-    await admin.install()
-
-    url = "https://example.com/data"
-    ctx = await admin.create_workflow("data_pipeline", url)
-    result = await data_pipeline(ctx, url)
-    print(f"Result: {result}")
-
-import asyncio
-asyncio.run(main())
-```
-
-## Installation
-
-### Python
-
-```bash
-pip install pgqrs
-```
-
-### Rust
-
-```toml
-[dependencies]
-pgqrs = "0.5"
-pgqrs-macros = "0.5"  # For workflow macros
 ```
 
 ## Documentation
 
 - **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
 - **[Rust API Docs](https://docs.rs/pgqrs)** - Rust crate documentation
-- **[Python Examples](py-pgqrs/tests/test_pgqrs.py)** - Python test suite with examples
-
-## Development
-
-Prerequisites:
-- **Rust**: 1.70+
-- **Python**: 3.8+
-- **PostgreSQL**: 12+
-
-### Setup
-
-```bash
-# Setup environment and install dependencies
-make requirements
-```
-
-### Build & Test
-
-```bash
-# Build both Rust core and Python bindings
-make build
-
-# Run all tests (Rust + Python)
-make test
-```
 
 ## License
 

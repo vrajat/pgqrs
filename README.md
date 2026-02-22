@@ -14,7 +14,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 ## Key Properties
 
-- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions, and in-place archival
+- **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
 - **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
 - **Type-safe:** Rust core with idiomatic Python bindings
@@ -68,7 +68,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .from("tasks")
         .handle(|msg| async move {
             println!("Processing: {:?}", msg.payload);
-            // Your processing logic here
             Ok(())
         })
         .execute(&store)
@@ -81,8 +80,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Python
 
 ```python
-import pgqrs
 import asyncio
+import pgqrs
 
 async def main():
     # Connect to PostgreSQL
@@ -94,18 +93,19 @@ async def main():
     await store.queue("tasks")
 
     # Producer: enqueue a job
-    msg_id = await pgqrs.produce(store, "tasks", {
+    producer = await store.producer("tasks")
+    msg_id = await producer.enqueue({
         "task": "send_email",
         "to": "user@example.com"
     })
     print(f"Enqueued: {msg_id}")
 
     # Consumer: process jobs
-    async def handler(msg):
+    consumer = await store.consumer("tasks")
+    messages = await consumer.dequeue(batch_size=1)
+    for msg in messages:
         print(f"Processing: {msg.payload}")
-        return True
-
-    await pgqrs.consume(store, "tasks", handler)
+        await consumer.archive(msg.id)
 
 asyncio.run(main())
 ```
@@ -118,23 +118,20 @@ Orchestrate multi-step processes that survive crashes:
 
 ```rust
 use pgqrs;
-use pgqrs_macros::{pgqrs_workflow, pgqrs_step};
+use serde_json::json;
 
-#[pgqrs_step]
-async fn fetch_data(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
-    Ok(reqwest::get(url).await?.text().await?)
-}
+async fn app_workflow(run: pgqrs::Run, input: serde_json::Value) -> Result<serde_json::Value, pgqrs::Error> {
+    let files = pgqrs::workflow_step(&run, "list_files", || async {
+        Ok::<_, pgqrs::Error>(vec![input["path"].as_str().unwrap().to_string()])
+    })
+    .await?;
 
-#[pgqrs_step]
-async fn process_data(ctx: &pgqrs::Workflow, data: String) -> Result<i32, anyhow::Error> {
-    Ok(data.lines().count() as i32)
-}
+    let archive = pgqrs::workflow_step(&run, "create_archive", || async {
+        Ok::<_, pgqrs::Error>(format!("{}.zip", files[0]))
+    })
+    .await?;
 
-#[pgqrs_workflow]
-async fn data_pipeline(ctx: &pgqrs::Workflow, url: &str) -> Result<String, anyhow::Error> {
-    let data = fetch_data(ctx, url).await?;
-    let count = process_data(ctx, data).await?;
-    Ok(format!("Processed {} lines", count))
+    Ok(json!({"archive": archive}))
 }
 
 #[tokio::main]
@@ -142,13 +139,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
     pgqrs::admin(&store).install().await?;
 
-    let url = "https://example.com/data.txt";
-    let workflow = pgqrs::admin(&store)
-        .create_workflow("data_pipeline", &url)
+    pgqrs::workflow()
+        .name("archive_files")
+        .store(&store)
+        .create()
         .await?;
 
-    let result = data_pipeline(&workflow, url).await?;
-    println!("Result: {}", result);
+    let consumer = pgqrs::consumer("worker-1", 8080, "archive_files")
+        .create(&store)
+        .await?;
+
+    let handler = pgqrs::workflow_handler(store.clone(), move |run, input| async move {
+        app_workflow(run, input).await
+    });
+    let handler = { let handler = handler.clone(); move |msg| (handler)(msg) };
+
+    pgqrs::workflow()
+        .name("archive_files")
+        .store(&store)
+        .trigger(&json!({"path": "/tmp/report.csv"}))?
+        .execute()
+        .await?;
+
+    pgqrs::dequeue()
+        .worker(&consumer)
+        .handle(handler)
+        .execute(&store)
+        .await?;
+
     Ok(())
 }
 ```
@@ -156,35 +174,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Python
 
 ```python
+import asyncio
 import pgqrs
-from pgqrs.decorators import workflow, step
-
-@step
-async def fetch_data(ctx, url: str) -> dict:
-    # Fetch data from API
-    return {"lines": 100, "data": "..."}
-
-@step
-async def process_data(ctx, data: dict) -> dict:
-    return {"processed": True, "count": data["lines"]}
-
-@workflow
-async def data_pipeline(ctx, url: str):
-    data = await fetch_data(ctx, url)
-    result = await process_data(ctx, data)
-    return result
 
 async def main():
     store = await pgqrs.connect("postgresql://localhost/mydb")
     admin = pgqrs.admin(store)
     await admin.install()
 
-    url = "https://example.com/data"
-    ctx = await admin.create_workflow("data_pipeline", url)
-    result = await data_pipeline(ctx, url)
-    print(f"Result: {result}")
+    await pgqrs.workflow().name("archive_files").store(store).create()
 
-import asyncio
+    consumer = await pgqrs.consumer("worker-1", 8080, "archive_files").create(store)
+    await pgqrs.workflow() \
+        .name("archive_files") \
+        .store(store) \
+        .trigger({"path": "/tmp/report.csv"}) \
+        .execute()
+
+    messages = await consumer.dequeue(batch_size=1)
+    msg = messages[0]
+
+    run = await pgqrs.run().message(msg).store(store).execute()
+    step = await run.acquire_step("list_files", current_time=run.current_time)
+    if step.status == "EXECUTE":
+        await step.guard.success([msg.payload["path"]])
+
+    step = await run.acquire_step("create_archive", current_time=run.current_time)
+    if step.status == "EXECUTE":
+        await step.guard.success(f"{msg.payload['path']}.zip")
+
+    await run.complete({"archive": f"{msg.payload['path']}.zip"})
+    await consumer.archive(msg.id)
+
 asyncio.run(main())
 ```
 
@@ -201,19 +222,19 @@ pip install pgqrs
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.13.0"
+pgqrs = "0.14.0"
 
 # SQLite only
-pgqrs = { version = "0.13.0", default-features = false, features = ["sqlite"] }
+pgqrs = { version = "0.14.0", default-features = false, features = ["sqlite"] }
 
 # Turso only
-pgqrs = { version = "0.13.0", default-features = false, features = ["turso"] }
+pgqrs = { version = "0.14.0", default-features = false, features = ["turso"] }
 
 # All backends
-pgqrs = { version = "0.13.0", features = ["full"] }
+pgqrs = { version = "0.14.0", features = ["full"] }
 
 # Workflow macros (optional)
-pgqrs-macros = "0.13.0"
+pgqrs-macros = "0.14.0"
 ```
 
 ## Documentation
@@ -221,6 +242,7 @@ pgqrs-macros = "0.13.0"
 - **[Full Documentation](https://pgqrs.vrajat.com)** - Complete guides and API reference
 - **[Rust API Docs](https://docs.rs/pgqrs)** - Rust crate documentation
 - **[Python Examples](py-pgqrs/tests/test_pgqrs.py)** - Python test suite with examples
+- **[Docs Home](docs/index.md)** - Master documentation source
 
 ## Development
 
