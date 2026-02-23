@@ -328,6 +328,10 @@ impl Consumer {
         self.worker_record.id
     }
 
+    pub(crate) fn store(&self) -> &AnyStore {
+        &self.store
+    }
+
     /// Return the worker record for this consumer.
     pub fn worker_record(&self) -> &WorkerRecord {
         &self.worker_record
@@ -341,6 +345,16 @@ impl Consumer {
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
         self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    /// Mark this consumer as polling.
+    pub async fn poll(&self) -> crate::error::Result<()> {
+        self.store.workers().poll(self.worker_record.id).await
+    }
+
+    /// Interrupt this consumer's poll loop.
+    pub async fn interrupt(&self) -> crate::error::Result<()> {
+        self.store.workers().interrupt(self.worker_record.id).await
     }
 
     /// Resume this worker.

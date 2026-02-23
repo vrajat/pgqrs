@@ -173,9 +173,11 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
         'Global' as queue_name,
         COUNT(*) as total_workers,
         COUNT(*) FILTER (WHERE status = 'ready') as ready_workers,
+        COUNT(*) FILTER (WHERE status = 'polling') as polling_workers,
+        COUNT(*) FILTER (WHERE status = 'interrupted') as interrupted_workers,
         COUNT(*) FILTER (WHERE status = 'suspended') as suspended_workers,
         COUNT(*) FILTER (WHERE status = 'stopped') as stopped_workers,
-        COUNT(*) FILTER (WHERE status = 'ready' AND heartbeat_at < NOW() - $1::interval) as stale_workers
+        COUNT(*) FILTER (WHERE status IN ('ready', 'polling') AND heartbeat_at < NOW() - $1::interval) as stale_workers
     FROM pgqrs_workers
 "#;
 
@@ -184,9 +186,11 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         COALESCE(q.queue_name, 'Admin') as queue_name,
         COUNT(w.id) as total_workers,
         COUNT(w.id) FILTER (WHERE w.status = 'ready') as ready_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'polling') as polling_workers,
+        COUNT(w.id) FILTER (WHERE w.status = 'interrupted') as interrupted_workers,
         COUNT(w.id) FILTER (WHERE w.status = 'suspended') as suspended_workers,
         COUNT(w.id) FILTER (WHERE w.status = 'stopped') as stopped_workers,
-        COUNT(w.id) FILTER (WHERE w.status = 'ready' AND w.heartbeat_at < NOW() - $1::interval) as stale_workers
+        COUNT(w.id) FILTER (WHERE w.status IN ('ready', 'polling') AND w.heartbeat_at < NOW() - $1::interval) as stale_workers
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
     GROUP BY q.queue_name
@@ -506,9 +510,17 @@ impl crate::store::Admin for Admin {
             .iter()
             .filter(|w| w.status == crate::types::WorkerStatus::Stopped)
             .count() as u32;
+        let polling_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Polling)
+            .count() as u32;
+        let interrupted_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Interrupted)
+            .count() as u32;
         let suspended_workers = workers
             .iter()
-            .filter(|w| w.status == crate::types::WorkerStatus::Suspended)
+            .filter(|w| w.status == WorkerStatus::Suspended)
             .count() as u32;
 
         // Get message counts per worker
@@ -541,6 +553,8 @@ impl crate::store::Admin for Admin {
         Ok(WorkerStats {
             total_workers,
             ready_workers,
+            polling_workers,
+            interrupted_workers,
             suspended_workers,
             stopped_workers,
             average_messages_per_worker,

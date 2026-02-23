@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS pgqrs_workers (
     heartbeat_at TEXT DEFAULT (datetime('now')) NOT NULL,
     shutdown_at TEXT,
     status TEXT DEFAULT 'ready' NOT NULL
+        CHECK(status IN ('ready', 'polling', 'suspended', 'interrupted', 'stopped'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_workers_queue_id ON pgqrs_workers(queue_id);

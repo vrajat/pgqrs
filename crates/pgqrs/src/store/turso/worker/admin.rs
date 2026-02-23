@@ -122,9 +122,11 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
         'Global',
         COUNT(*),
         SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'polling' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END),
         SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END),
         SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END),
-        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+        SUM(CASE WHEN status IN ('ready', 'polling') AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
     FROM pgqrs_workers
 "#;
 
@@ -133,12 +135,13 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         COALESCE(q.queue_name, 'Admin'),
         COUNT(w.id),
         SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'polling' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'interrupted' THEN 1 ELSE 0 END),
         SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END),
         SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END),
-        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+        SUM(CASE WHEN w.status IN ('ready', 'polling') AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
-    GROUP BY q.queue_name
 "#;
 
 #[derive(Debug, Clone)]
@@ -233,12 +236,14 @@ impl TursoAdmin {
 
     fn map_worker_health_row(row: &turso::Row) -> Result<WorkerHealthStats> {
         Ok(WorkerHealthStats {
-            queue_name: row.get(0)?,
-            total_workers: row.get(1)?,
-            ready_workers: row.get(2)?,
-            suspended_workers: row.get(3)?,
-            stopped_workers: row.get(4)?,
-            stale_workers: row.get(5)?,
+            queue_name: row.try_get(0)?,
+            total_workers: row.try_get(1)?,
+            ready_workers: row.try_get(2)?,
+            polling_workers: row.try_get(3)?,
+            interrupted_workers: row.try_get(4)?,
+            suspended_workers: row.try_get(5)?,
+            stopped_workers: row.try_get(6)?,
+            stale_workers: row.try_get(7)?,
         })
     }
 }
@@ -482,6 +487,14 @@ impl Admin for TursoAdmin {
             .iter()
             .filter(|w| w.status == WorkerStatus::Ready)
             .count() as u32;
+        let polling_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Polling)
+            .count() as u32;
+        let interrupted_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Interrupted)
+            .count() as u32;
         let stopped_workers = workers
             .iter()
             .filter(|w| w.status == WorkerStatus::Stopped)
@@ -518,6 +531,8 @@ impl Admin for TursoAdmin {
         Ok(WorkerStats {
             total_workers,
             ready_workers,
+            polling_workers,
+            interrupted_workers,
             suspended_workers,
             stopped_workers,
             average_messages_per_worker,

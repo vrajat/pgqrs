@@ -127,6 +127,10 @@ pub enum Error {
     #[error("Operation timeout: {operation}")]
     Timeout { operation: String },
 
+    /// Operation suspended (e.g., worker interrupted)
+    #[error("Operation suspended: {reason}")]
+    Suspended { reason: String },
+
     /// Database connection failed or was lost
     #[error("Database connection failed: {source}. Context: {context}")]
     ConnectionFailed { source: BoxError, context: String },

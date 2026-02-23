@@ -128,8 +128,12 @@ impl fmt::Display for WorkerRecord {
 pub enum WorkerStatus {
     /// Worker is ready to process messages
     Ready,
+    /// Worker is polling (waiting for messages with cancellation support)
+    Polling,
     /// Worker is suspended (not accepting new work, can be resumed or shut down)
     Suspended,
+    /// Worker is interrupted (poll loop should exit immediately)
+    Interrupted,
     /// Worker has stopped
     Stopped,
 }
@@ -138,7 +142,9 @@ impl fmt::Display for WorkerStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WorkerStatus::Ready => write!(f, "ready"),
+            WorkerStatus::Polling => write!(f, "polling"),
             WorkerStatus::Suspended => write!(f, "suspended"),
+            WorkerStatus::Interrupted => write!(f, "interrupted"),
             WorkerStatus::Stopped => write!(f, "stopped"),
         }
     }
@@ -150,7 +156,9 @@ impl std::str::FromStr for WorkerStatus {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "ready" => Ok(WorkerStatus::Ready),
+            "polling" => Ok(WorkerStatus::Polling),
             "suspended" => Ok(WorkerStatus::Suspended),
+            "interrupted" => Ok(WorkerStatus::Interrupted),
             "stopped" => Ok(WorkerStatus::Stopped),
             _ => Err(format!("Invalid worker status: {}", s)),
         }

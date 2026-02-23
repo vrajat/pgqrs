@@ -127,6 +127,10 @@ pub struct WorkerHealthStats {
     pub total_workers: i64,
     /// Active (Ready) workers
     pub ready_workers: i64,
+    /// Polling workers
+    pub polling_workers: i64,
+    /// Interrupted workers
+    pub interrupted_workers: i64,
     /// Suspended workers
     pub suspended_workers: i64,
     /// Stopped workers
@@ -136,13 +140,15 @@ pub struct WorkerHealthStats {
 }
 
 impl Tabled for WorkerHealthStats {
-    const LENGTH: usize = 6;
+    const LENGTH: usize = 8;
 
     fn fields(&self) -> Vec<std::borrow::Cow<'static, str>> {
         vec![
             self.queue_name.clone().into(),
             self.total_workers.to_string().into(),
             self.ready_workers.to_string().into(),
+            self.polling_workers.to_string().into(),
+            self.interrupted_workers.to_string().into(),
             self.suspended_workers.to_string().into(),
             self.stopped_workers.to_string().into(),
             self.stale_workers.to_string().into(),
@@ -154,6 +160,8 @@ impl Tabled for WorkerHealthStats {
             "queue_name",
             "total_workers",
             "ready_workers",
+            "polling_workers",
+            "interrupted_workers",
             "suspended_workers",
             "stopped_workers",
             "stale_workers",
@@ -171,6 +179,10 @@ pub struct WorkerStats {
     pub total_workers: u32,
     /// Number of ready workers
     pub ready_workers: u32,
+    /// Number of polling workers
+    pub polling_workers: u32,
+    /// Number of interrupted workers
+    pub interrupted_workers: u32,
     /// Number of suspended workers
     pub suspended_workers: u32,
     /// Number of stopped workers
@@ -187,9 +199,16 @@ impl fmt::Display for WorkerStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WorkerStats {{ total: {}, ready: {}, suspended: {}, stopped: {}, avg_messages: {:.2} }}",
-            self.total_workers, self.ready_workers, self.suspended_workers,
-            self.stopped_workers, self.average_messages_per_worker
+            "WorkerStats {{ total: {}, ready: {}, polling: {}, interrupted: {}, suspended: {}, stopped: {}, avg_messages: {:.2}, oldest: {:?}, newest: {:?} }}",
+            self.total_workers,
+            self.ready_workers,
+            self.polling_workers,
+            self.interrupted_workers,
+            self.suspended_workers,
+            self.stopped_workers,
+            self.average_messages_per_worker,
+            self.oldest_worker_age,
+            self.newest_heartbeat_age
         )
     }
 }

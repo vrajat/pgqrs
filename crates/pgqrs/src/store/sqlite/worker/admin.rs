@@ -131,9 +131,11 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
         'Global' as queue_name,
         COUNT(*) as total_workers,
         SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
+        SUM(CASE WHEN status = 'polling' THEN 1 ELSE 0 END) as polling_workers,
+        SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END) as interrupted_workers,
         SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
         SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
-        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
+        SUM(CASE WHEN status IN ('ready', 'polling') AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
     FROM pgqrs_workers
 "#;
 
@@ -142,9 +144,11 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         COALESCE(q.queue_name, 'Admin') as queue_name,
         COUNT(w.id) as total_workers,
         SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
+        SUM(CASE WHEN w.status = 'polling' THEN 1 ELSE 0 END) as polling_workers,
+        SUM(CASE WHEN w.status = 'interrupted' THEN 1 ELSE 0 END) as interrupted_workers,
         SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
         SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
-        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
+        SUM(CASE WHEN w.status IN ('ready', 'polling') AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END) as stale_workers
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
     GROUP BY q.queue_name
@@ -257,6 +261,8 @@ fn map_worker_health_row(row: SqliteRow) -> Result<WorkerHealthStats> {
         queue_name: row.try_get("queue_name")?,
         total_workers: row.try_get("total_workers")?,
         ready_workers: row.try_get("ready_workers")?,
+        polling_workers: row.try_get("polling_workers")?,
+        interrupted_workers: row.try_get("interrupted_workers")?,
         suspended_workers: row.try_get("suspended_workers")?,
         stopped_workers: row.try_get("stopped_workers")?,
         stale_workers: row.try_get("stale_workers")?,
@@ -536,6 +542,14 @@ impl crate::store::Admin for SqliteAdmin {
             .iter()
             .filter(|w| w.status == WorkerStatus::Ready)
             .count() as u32;
+        let polling_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Polling)
+            .count() as u32;
+        let interrupted_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Interrupted)
+            .count() as u32;
         let stopped_workers = workers
             .iter()
             .filter(|w| w.status == WorkerStatus::Stopped)
@@ -572,6 +586,8 @@ impl crate::store::Admin for SqliteAdmin {
         Ok(WorkerStats {
             total_workers,
             ready_workers,
+            polling_workers,
+            interrupted_workers,
             suspended_workers,
             stopped_workers,
             average_messages_per_worker,
