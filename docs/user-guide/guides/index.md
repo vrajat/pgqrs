@@ -7,6 +7,14 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
 <div class="grid cards" markdown>
 
+-   :material-play-circle:{ .lg .middle } **Basic Queue**
+
+    ---
+
+    The smallest producer-consumer setup using queue primitives.
+
+    [:octicons-arrow-right-24: Basic Queue](basic-queue.md)
+
 -   :material-play-circle:{ .lg .middle } **Basic Workflow**
 
     ---
@@ -69,6 +77,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
 | Guide | Use Case |
 |-------|----------|
+| [Basic Queue](basic-queue.md) | Minimal producer-consumer queue usage |
 | [Basic Workflow](basic-workflow.md) | Getting started, understanding the basics |
 | [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
 | [Retry Strategies](durable-workflows.md) | Error handling, backoff |

@@ -64,30 +64,38 @@ impl<'a> Poller<'a> {
         heartbeat_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            let status = self.consumer.status().await?;
-            if status == crate::types::WorkerStatus::Interrupted {
-                // Consumer-only states: Interrupted -> Suspended
-                self.consumer.suspend().await?;
-                return Err(Error::Suspended {
-                    reason: "worker interrupted".to_string(),
-                });
-            }
-
             let messages = self.dequeue().await?;
             if !messages.is_empty() {
                 return Ok(messages);
             }
 
             tokio::select! {
-                _ = poll_interval.tick() => {}
+                _ = poll_interval.tick() => {
+                    let status = self.consumer.status().await?;
+                    if status == crate::types::WorkerStatus::Interrupted {
+                        // Consumer-only states: Interrupted -> Suspended
+                        self.consumer.suspend().await?;
+                        return Err(Error::Suspended {
+                            reason: "worker interrupted".to_string(),
+                        });
+                    }
+                }
                 _ = heartbeat_interval.tick() => {
+                    // Heartbeat implies liveness checks too.
                     self.consumer.heartbeat().await?;
+                    let status = self.consumer.status().await?;
+                    if status == crate::types::WorkerStatus::Interrupted {
+                        self.consumer.suspend().await?;
+                        return Err(Error::Suspended {
+                            reason: "worker interrupted".to_string(),
+                        });
+                    }
                 }
             }
         }
     }
 
-    async fn poll_and_handle_one<F, Fut>(&mut self, handler: F) -> Result<()>
+    async fn handle_one<F, Fut>(&mut self, handler: F) -> Result<()>
     where
         F: Fn(QueueMessage) -> Fut + Send + Sync,
         Fut: Future<Output = Result<()>> + Send,
@@ -115,7 +123,7 @@ impl<'a> Poller<'a> {
         }
     }
 
-    async fn poll_and_handle_batch<F, Fut>(&mut self, handler: F) -> Result<()>
+    async fn handle_batch<F, Fut>(&mut self, handler: F) -> Result<()>
     where
         F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync,
         Fut: Future<Output = Result<()>> + Send,
@@ -132,6 +140,26 @@ impl<'a> Poller<'a> {
                 self.consumer.release_messages(&msg_ids).await?;
                 Err(e)
             }
+        }
+    }
+
+    async fn run_forever_one<F, Fut>(&mut self, handler: F) -> Result<()>
+    where
+        F: Fn(QueueMessage) -> Fut + Send + Sync + Clone,
+        Fut: Future<Output = Result<()>> + Send,
+    {
+        loop {
+            self.handle_one(handler.clone()).await?;
+        }
+    }
+
+    async fn run_forever_batch<F, Fut>(&mut self, handler: F) -> Result<()>
+    where
+        F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone,
+        Fut: Future<Output = Result<()>> + Send,
+    {
+        loop {
+            self.handle_batch(handler.clone()).await?;
         }
     }
 }
@@ -391,7 +419,7 @@ where
             poll_interval: base.poll_interval,
         };
 
-        poller.poll_and_handle_one(|msg| handler(msg)).await
+        poller.run_forever_one(|msg| handler(msg)).await
     }
 }
 
@@ -455,6 +483,6 @@ where
             poll_interval: base.poll_interval,
         };
 
-        poller.poll_and_handle_batch(|msgs| handler(msgs)).await
+        poller.run_forever_batch(|msgs| handler(msgs)).await
     }
 }

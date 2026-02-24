@@ -9,6 +9,8 @@ from testcontainers.postgres import PostgresContainer
 
 
 class TestBackend(Enum):
+    __test__ = False  # prevent pytest from collecting this as a test class
+
     POSTGRES = "postgres"
     SQLITE = "sqlite"
     TURSO = "turso"
@@ -40,7 +42,9 @@ def base_dsn(test_backend: TestBackend) -> Generator[str | None, None, None]:
     - SQLite/Turso: Returns env DSN if set, else None (to trigger per-test isolation).
     """
     if test_backend == TestBackend.POSTGRES:
-        dsn = os.environ.get("PGQRS_TEST_POSTGRES_DSN") or os.environ.get("PGQRS_TEST_DSN")
+        dsn = os.environ.get("PGQRS_TEST_POSTGRES_DSN") or os.environ.get(
+            "PGQRS_TEST_DSN"
+        )
         if dsn:
             yield dsn
         else:
@@ -60,8 +64,7 @@ def base_dsn(test_backend: TestBackend) -> Generator[str | None, None, None]:
 def requires_backend(backend: TestBackend):
     """Skip test unless running on specified backend."""
     return pytest.mark.skipif(
-        get_backend() != backend,
-        reason=f"Test requires {backend.value} backend"
+        get_backend() != backend, reason=f"Test requires {backend.value} backend"
     )
 
 
@@ -69,12 +72,14 @@ def skip_on_backend(backend: TestBackend):
     """Skip test when running on specified backend."""
     return pytest.mark.skipif(
         get_backend() == backend,
-        reason=f"Test not supported on {backend.value} backend"
+        reason=f"Test not supported on {backend.value} backend",
     )
 
 
 @pytest.fixture(scope="function")
-def test_dsn(test_backend: TestBackend, base_dsn: str | None) -> Generator[str, None, None]:
+def test_dsn(
+    test_backend: TestBackend, base_dsn: str | None
+) -> Generator[str, None, None]:
     """
     Provides a per-test DSN.
     - Postgres: Returns the shared base DSN.
@@ -87,7 +92,7 @@ def test_dsn(test_backend: TestBackend, base_dsn: str | None) -> Generator[str, 
 
     elif test_backend == TestBackend.SQLITE:
         if base_dsn:
-             yield base_dsn
+            yield base_dsn
         else:
             # Create a unique temporary file
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -99,13 +104,15 @@ def test_dsn(test_backend: TestBackend, base_dsn: str | None) -> Generator[str, 
             # Cleanup
             try:
                 os.remove(tmp_path)
-                if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
-                if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+                if os.path.exists(f"{tmp_path}-shm"):
+                    os.remove(f"{tmp_path}-shm")
+                if os.path.exists(f"{tmp_path}-wal"):
+                    os.remove(f"{tmp_path}-wal")
             except OSError:
                 pass
     elif test_backend == TestBackend.TURSO:
         if base_dsn:
-             yield base_dsn
+            yield base_dsn
         else:
             # Create a unique temporary file
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -117,13 +124,18 @@ def test_dsn(test_backend: TestBackend, base_dsn: str | None) -> Generator[str, 
             # Cleanup
             try:
                 os.remove(tmp_path)
-                if os.path.exists(f"{tmp_path}-shm"): os.remove(f"{tmp_path}-shm")
-                if os.path.exists(f"{tmp_path}-wal"): os.remove(f"{tmp_path}-wal")
+                if os.path.exists(f"{tmp_path}-shm"):
+                    os.remove(f"{tmp_path}-shm")
+                if os.path.exists(f"{tmp_path}-wal"):
+                    os.remove(f"{tmp_path}-wal")
             except OSError:
                 pass
 
+
 @pytest.fixture(scope="function")
-def schema(test_backend: TestBackend, test_dsn: str, request) -> Generator[str | None, None, None]:
+def schema(
+    test_backend: TestBackend, test_dsn: str, request
+) -> Generator[str | None, None, None]:
     """
     Creates a unique schema for the test module (Postgres) or returns None (SQLite).
     """

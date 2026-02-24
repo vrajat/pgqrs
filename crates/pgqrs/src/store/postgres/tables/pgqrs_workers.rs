@@ -275,13 +275,13 @@ impl Workers {
 
     /// Transition worker from Ready to Polling.
     pub async fn poll(&self, worker_id: i64) -> Result<()> {
-        const TRANSITION_READY_TO_POLLING: &str = r#"
+        const TRANSITION_READY_OR_INTERRUPTED_TO_POLLING: &str = r#"
             UPDATE pgqrs_workers
             SET status = 'polling'
-            WHERE id = $1 AND status = 'ready'
+            WHERE id = $1 AND status IN ('ready', 'interrupted', 'polling')
             RETURNING id
         "#;
-        let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_TO_POLLING)
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_OR_INTERRUPTED_TO_POLLING)
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
@@ -299,7 +299,7 @@ impl Workers {
         Err(crate::error::Error::InvalidStateTransition {
             from: current_status.to_string(),
             to: "polling".to_string(),
-            reason: "Worker must be in Ready state to start polling".to_string(),
+            reason: "Worker must be Ready or Interrupted to start polling".to_string(),
         })
     }
 

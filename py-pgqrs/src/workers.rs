@@ -119,6 +119,22 @@ impl PyConsumer {
         self.inner.worker_id()
     }
 
+    fn status<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let status = inner.status().await.map_err(to_py_err)?;
+            Ok(status.to_string().to_uppercase())
+        })
+    }
+
+    fn interrupt<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            inner.interrupt().await.map_err(to_py_err)?;
+            Ok(())
+        })
+    }
+
     fn dequeue<'a>(&self, py: Python<'a>, batch_size: Option<usize>) -> PyResult<&'a PyAny> {
         let inner = self.inner.clone();
         let batch_size = batch_size.unwrap_or(1);

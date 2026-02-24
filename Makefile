@@ -60,8 +60,15 @@ test: build-python check-nextest  ## Run all tests
 	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) $(TEST_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
+# Optional selectors for Python tests
+# Usage examples:
+#   make test-py PGQRS_TEST_BACKEND=sqlite PYTEST_TARGET=py-pgqrs/tests/test_guides.py
+#   make test-py PYTEST_ARGS='-k guides -q'
+PYTEST_TARGET ?= py-pgqrs
+PYTEST_ARGS ?=
+
 test-py: build-python  ## Run Python tests only
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest $(PYTEST_ARGS) $(PYTEST_TARGET)
 
 # Convenience targets for each backend
 start-postgres: ## Start global Postgres container (skipped if CI_POSTGRES_RUNNING=true)

@@ -10,10 +10,12 @@ use std::future::Future;
 use std::sync::{Arc, LazyLock};
 use tokio::runtime::Runtime;
 
+mod builder;
 mod tables;
 mod workers;
 mod workflow;
 
+use builder::*;
 use tables::*;
 use workers::*;
 use workflow::*;
@@ -587,6 +589,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWorkflowTriggerBuilder>()?;
     m.add_class::<PyRunBuilder>()?;
     m.add_class::<PyStepBuilder>()?;
+    m.add_class::<PyDequeueBuilder>()?;
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;
@@ -631,6 +634,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enqueue, m)?)?;
     m.add_function(wrap_pyfunction!(enqueue_batch, m)?)?;
     m.add_function(wrap_pyfunction!(dequeue, m)?)?;
+    m.add_function(wrap_pyfunction!(dequeue_builder, m)?)?;
     m.add_function(wrap_pyfunction!(archive, m)?)?;
     m.add_function(wrap_pyfunction!(archive_batch, m)?)?;
     m.add_function(wrap_pyfunction!(delete, m)?)?;
