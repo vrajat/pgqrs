@@ -52,6 +52,7 @@ async fn wait_for_archived_count(
 
 #[tokio::test]
 async fn test_basic_queue_single_consumer_handler_poll() {
+    // --8<-- [start:basic_queue_setup]
     let store = create_store("guide_basic_queue_single").await;
 
     let queue = "guide_basic_queue_single";
@@ -66,7 +67,10 @@ async fn test_basic_queue_single_consumer_handler_poll() {
         .create(&store)
         .await
         .unwrap();
+    // --8<-- [end:basic_queue_setup]
 
+    // --8<-- [start:basic_queue_worker_poll]
+    // Assumes `store` and `consumer` already exist.
     let store_task = store.clone();
     let consumer_task_handle = consumer.clone();
 
@@ -78,7 +82,9 @@ async fn test_basic_queue_single_consumer_handler_poll() {
             .poll(&store_task)
             .await
     });
+    // --8<-- [end:basic_queue_worker_poll]
 
+    // --8<-- [start:basic_queue_enqueue_one]
     let payload = json!({"k": "v"});
     let ids = pgqrs::enqueue()
         .message(&payload)
@@ -86,7 +92,9 @@ async fn test_basic_queue_single_consumer_handler_poll() {
         .execute(&store)
         .await
         .unwrap();
+    // --8<-- [end:basic_queue_enqueue_one]
 
+    // --8<-- [start:basic_queue_assert_and_shutdown]
     let msg = wait_for_message(&store, ids[0], Duration::from_secs(5), |m| {
         m.archived_at.is_some() && m.consumer_worker_id.is_some()
     })
@@ -94,6 +102,7 @@ async fn test_basic_queue_single_consumer_handler_poll() {
     assert_eq!(msg.payload, payload);
     assert_eq!(msg.consumer_worker_id, Some(consumer.worker_id()));
 
+    // --8<-- [start:basic_queue_interrupt_and_shutdown]
     consumer.interrupt().await.unwrap();
 
     let res = timeout(Duration::from_secs(5), consumer_task)
@@ -105,6 +114,8 @@ async fn test_basic_queue_single_consumer_handler_poll() {
         consumer.status().await.unwrap(),
         pgqrs::types::WorkerStatus::Suspended
     );
+    // --8<-- [end:basic_queue_interrupt_and_shutdown]
+    // --8<-- [end:basic_queue_assert_and_shutdown]
 }
 
 #[tokio::test]
@@ -129,6 +140,8 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
         .await
         .unwrap();
 
+    // --8<-- [start:basic_queue_handoff_start_consumer_a]
+    // Assumes `store` and `consumer_a` already exist.
     let store_a = store.clone();
     let consumer_a_task_handle = consumer_a.clone();
     let task_a = tokio::spawn(async move {
@@ -139,6 +152,7 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
             .poll(&store_a)
             .await
     });
+    // --8<-- [end:basic_queue_handoff_start_consumer_a]
 
     let payload1 = json!({"n": 1});
     let ids1 = pgqrs::enqueue()
@@ -154,6 +168,8 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
     .await;
     assert_eq!(msg1.payload, payload1);
 
+    // --8<-- [start:basic_queue_handoff_interrupt_consumer_a]
+    // Assumes `consumer_a` and `task_a` exist.
     consumer_a.interrupt().await.unwrap();
     let res_a = timeout(Duration::from_secs(5), task_a)
         .await
@@ -164,7 +180,10 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
         consumer_a.status().await.unwrap(),
         pgqrs::types::WorkerStatus::Suspended
     );
+    // --8<-- [end:basic_queue_handoff_interrupt_consumer_a]
 
+    // --8<-- [start:basic_queue_handoff_start_consumer_b]
+    // Assumes `store` and `consumer_b` already exist.
     let store_b = store.clone();
     let consumer_b_task_handle = consumer_b.clone();
     let task_b = tokio::spawn(async move {
@@ -175,6 +194,7 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
             .poll(&store_b)
             .await
     });
+    // --8<-- [end:basic_queue_handoff_start_consumer_b]
 
     let payload2 = json!({"n": 2});
     let ids2 = pgqrs::enqueue()
@@ -190,6 +210,8 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
     .await;
     assert_eq!(msg2.payload, payload2);
 
+    // --8<-- [start:basic_queue_handoff_interrupt_consumer_b]
+    // Assumes `consumer_b` and `task_b` exist.
     consumer_b.interrupt().await.unwrap();
     let res_b = timeout(Duration::from_secs(5), task_b)
         .await
@@ -200,6 +222,7 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
         consumer_b.status().await.unwrap(),
         pgqrs::types::WorkerStatus::Suspended
     );
+    // --8<-- [end:basic_queue_handoff_interrupt_consumer_b]
 }
 
 #[tokio::test]
@@ -225,6 +248,8 @@ async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
         .await
         .unwrap();
 
+    // --8<-- [start:basic_queue_continuous_start_two_consumers]
+    // Assumes `store`, `consumer_a`, and `consumer_b` already exist.
     let store_a = store.clone();
     let consumer_a_task_handle = consumer_a.clone();
     let task_a = tokio::spawn(async move {
@@ -246,6 +271,7 @@ async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
             .poll(&store_b)
             .await
     });
+    // --8<-- [end:basic_queue_continuous_start_two_consumers]
 
     let payloads: Vec<serde_json::Value> = (0..40).map(|i| json!({"i": i})).collect();
 
@@ -267,6 +293,8 @@ async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
 
     wait_for_archived_count(&store, queue_id, 40, Duration::from_secs(10)).await;
 
+    // --8<-- [start:basic_queue_continuous_interrupt_two_consumers]
+    // Assumes `consumer_a`, `consumer_b`, `task_a`, and `task_b` exist.
     consumer_a.interrupt().await.unwrap();
     consumer_b.interrupt().await.unwrap();
 
@@ -290,4 +318,6 @@ async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
         consumer_b.status().await.unwrap(),
         pgqrs::types::WorkerStatus::Suspended
     );
+    // --8<-- [end:basic_queue_continuous_interrupt_two_consumers]
 }
+// --8<-- [end:basic_queue_two_consumers_continuous]
