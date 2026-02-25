@@ -1,5 +1,5 @@
 from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator
-from .decorators import workflow as workflow, step as step
+from .decorators import WorkflowDef, workflow as workflow, step as step
 
 class PgqrsError(Exception): ...
 class PgqrsConnectionError(PgqrsError): ...

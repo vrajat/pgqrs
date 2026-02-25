@@ -4,10 +4,11 @@ from typing import Any
 
 from . import _pgqrs
 from ._pgqrs import *  # noqa: F403
+from .decorators import WorkflowDef
 
 __doc__ = _pgqrs.__doc__
-if hasattr(_pgqrs, "__all__"):
-    __all__ = _pgqrs.__all__
+__all__ = list(getattr(_pgqrs, "__all__", []))
+__all__.append("WorkflowDef")
 
 
 class DequeueBuilder:

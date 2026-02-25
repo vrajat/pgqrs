@@ -90,7 +90,7 @@ async def verify_connectivity(ctx: Run, config: dict) -> dict:
 # ============================================================================
 
 
-@workflow
+@workflow(name="integration_development_flow")
 async def integration_development_flow(ctx: Run, initial_config: dict) -> dict:
     """
     Main orchestration workflow that coordinates all tasks.
@@ -253,7 +253,7 @@ async def test_workflow_with_conditional_steps(test_dsn, schema):
         """Only runs for simple services"""
         return {**cfg, "basic_auth_configured": True}
 
-    @workflow
+    @workflow(name="conditional_flow")
     async def conditional_flow(ctx: Run, cfg: dict) -> dict:
         cfg = await determine_service_type(ctx, cfg)
 
@@ -302,7 +302,7 @@ async def test_workflow_error_handling(test_dsn, schema):
         """A task that always fails"""
         raise ValueError(f"Intentional failure: {msg}")
 
-    @workflow
+    @workflow(name="error_workflow")
     async def error_workflow(ctx: Run, input_data: dict) -> dict:
         # This task will fail
         await failing_task(ctx, input_data["error_msg"])

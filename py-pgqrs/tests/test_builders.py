@@ -1,7 +1,10 @@
 import pytest
-import pgqrs
 import asyncio
-from pgqrs.decorators import workflow, step
+
+import pytest
+
+import pgqrs
+from pgqrs.decorators import WorkflowDef, workflow, step
 
 
 @pytest.mark.asyncio
@@ -74,7 +77,7 @@ async def test_workflow_decorators_with_builders(test_dsn, schema):
         step_called += 1
         return f"echo_{val}"
 
-    @workflow
+    @workflow(name="decorated_wf")
     async def my_workflow(ctx, val):
         return await my_step(ctx, val)
 
