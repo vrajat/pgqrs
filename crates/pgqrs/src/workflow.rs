@@ -11,6 +11,41 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+/// Future returned by macro-generated workflow runners.
+pub type WorkflowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
+
+/// A workflow definition that pairs the canonical workflow name with a runner.
+#[derive(Clone, Copy)]
+pub struct WorkflowDef<TInput, TOutput> {
+    name: &'static str,
+    runner: fn(Run, TInput) -> WorkflowFuture<TOutput>,
+}
+
+impl<TInput, TOutput> WorkflowDef<TInput, TOutput> {
+    /// Create a workflow definition from a name and runner.
+    pub const fn new(
+        name: &'static str,
+        runner: fn(Run, TInput) -> WorkflowFuture<TOutput>,
+    ) -> Self {
+        Self { name, runner }
+    }
+
+    /// Canonical workflow name used for stores/queues.
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Runner function that can be used with [`workflow_handler`].
+    pub fn runner(&self) -> fn(Run, TInput) -> WorkflowFuture<TOutput> {
+        self.runner
+    }
+
+    /// Execute the workflow runner directly.
+    pub fn run(&self, run: Run, input: TInput) -> WorkflowFuture<TOutput> {
+        (self.runner)(run, input)
+    }
+}
+
 /// Create a pause error for a workflow run.
 pub fn pause_error(duration: Duration, message: &str) -> Error {
     Error::Paused {

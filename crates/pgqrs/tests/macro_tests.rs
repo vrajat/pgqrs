@@ -1,9 +1,15 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store, WorkflowFuture};
 use serde::{Deserialize, Serialize};
 
 mod common;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[pgqrs_workflow(name = "core_sample_workflow")]
+async fn core_sample_workflow(ctx: &Run, input: TestData) -> anyhow::Result<TestData> {
+    let result = my_workflow.run(ctx.clone(), input).await?;
+    Ok(result)
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 struct TestData {
     msg: String,
 }
@@ -38,7 +44,7 @@ async fn step_fail(ctx: &Run, _input: &str) -> anyhow::Result<TestData> {
 }
 
 #[pgqrs_workflow]
-async fn my_workflow(ctx: &Run, input: &TestData) -> anyhow::Result<TestData> {
+async fn my_workflow(ctx: &Run, input: TestData) -> anyhow::Result<TestData> {
     // Step 1
     let s1 = step_one(ctx, "input").await?;
 
@@ -52,7 +58,7 @@ async fn my_workflow(ctx: &Run, input: &TestData) -> anyhow::Result<TestData> {
 }
 
 #[pgqrs_workflow]
-async fn workflow_with_failing_step(ctx: &Run, _input: &TestData) -> anyhow::Result<TestData> {
+async fn workflow_with_failing_step(ctx: &Run, _input: TestData) -> anyhow::Result<TestData> {
     let _ = step_fail(ctx, "fail").await?;
     Ok(TestData {
         msg: "should not happen".to_string(),
@@ -60,7 +66,7 @@ async fn workflow_with_failing_step(ctx: &Run, _input: &TestData) -> anyhow::Res
 }
 
 #[pgqrs_workflow]
-async fn workflow_fail_at_end(ctx: &Run, _input: &TestData) -> anyhow::Result<TestData> {
+async fn workflow_fail_at_end(_ctx: &Run, _input: TestData) -> anyhow::Result<TestData> {
     anyhow::bail!("workflow failed intentionally")
 }
 
@@ -116,14 +122,17 @@ async fn test_successful_workflow() -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    let run_msg = run_msg;
+
+    // Execute via the workflow engine (run lifecycle + persistence).
+    let handler = pgqrs::workflow_handler(store.clone(), my_workflow.runner());
+    handler(run_msg.clone()).await?;
+
     let my_wf_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-
-    let res = my_workflow(&my_wf_run, &input).await?;
-    assert_eq!(res.msg, "start, step1_done, multi: arg");
 
     // Verify persisting SUCCESS
     let record = pgqrs::tables(&store)
@@ -205,15 +214,17 @@ async fn test_step_failure() -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    let run_msg = run_msg;
+
+    let handler = pgqrs::workflow_handler(store.clone(), workflow_with_failing_step.runner());
+    let res = handler(run_msg.clone()).await;
+    assert!(res.is_ok());
+
     let wf_failing_step_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-
-    let res = workflow_with_failing_step(&wf_failing_step_run, &input).await;
-    assert!(res.is_err());
-    assert_eq!(res.unwrap_err().to_string(), "step failed intentionally");
 
     // Verify persistence
     let record = pgqrs::tables(&store)
@@ -223,8 +234,8 @@ async fn test_step_failure() -> anyhow::Result<()> {
     assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
     let error_val = record.error.expect("Should have error");
     let error_str = error_val
-        .get("message")
-        .and_then(|v| v.as_str())
+        .as_str()
+        .or_else(|| error_val.get("message").and_then(|v| v.as_str()))
         .unwrap_or("");
     assert!(error_str.contains("step failed intentionally"));
     Ok(())
@@ -248,18 +259,17 @@ async fn test_workflow_failure() -> anyhow::Result<()> {
         .execute()
         .await?;
 
+    let run_msg = run_msg;
+
+    let handler = pgqrs::workflow_handler(store.clone(), workflow_fail_at_end.runner());
+    let res = handler(run_msg.clone()).await;
+    assert!(res.is_ok());
+
     let wf_fail_run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-
-    let res = workflow_fail_at_end(&wf_fail_run, &input).await;
-    assert!(res.is_err());
-    assert_eq!(
-        res.unwrap_err().to_string(),
-        "workflow failed intentionally"
-    );
 
     // Verify persistence
     let record = pgqrs::tables(&store)
@@ -269,9 +279,9 @@ async fn test_workflow_failure() -> anyhow::Result<()> {
     assert_eq!(record.status, pgqrs::WorkflowStatus::Error);
     let error_val = record.error.expect("Should have error");
     let error_str = error_val
-        .get("message")
-        .and_then(|v| v.as_str())
+        .as_str()
+        .or_else(|| error_val.get("message").and_then(|v| v.as_str()))
         .unwrap_or("");
-    assert_eq!(error_str, "workflow failed intentionally");
+    assert!(error_str.contains("workflow failed intentionally"));
     Ok(())
 }

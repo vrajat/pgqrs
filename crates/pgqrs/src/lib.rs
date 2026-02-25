@@ -103,7 +103,9 @@ pub use crate::tables::{
 pub use crate::workers::{Admin, Consumer, Producer, Run, Step, Worker};
 #[cfg(any(test, feature = "test-utils"))]
 pub use crate::workflow::workflow_handler_with_time;
-pub use crate::workflow::{pause_error, workflow_handler, workflow_step};
+pub use crate::workflow::{
+    pause_error, workflow_handler, workflow_step, WorkflowDef, WorkflowFuture,
+};
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result, TransientStepError};

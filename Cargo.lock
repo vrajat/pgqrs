@@ -1664,6 +1664,7 @@ dependencies = [
 name = "pgqrs-macros"
 version = "0.13.0"
 dependencies = [
+ "proc-macro2",
  "quote",
  "syn",
 ]

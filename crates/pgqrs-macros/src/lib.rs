@@ -1,6 +1,24 @@
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, ItemFn};
+use proc_macro2::Span;
+use quote::{format_ident, quote};
+use syn::spanned::Spanned;
+use syn::{
+    parse::Parse, parse_macro_input, punctuated::Punctuated, token::Comma, Error, Expr, ExprLit,
+    FnArg, GenericArgument, Ident, ItemFn, Lit, LitStr, Meta, PathArguments, ReturnType, Type,
+};
+
+struct WorkflowArgs {
+    metas: Vec<Meta>,
+}
+
+impl Parse for WorkflowArgs {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let punct: Punctuated<Meta, Comma> = Punctuated::parse_terminated(input)?;
+        Ok(Self {
+            metas: punct.into_iter().collect(),
+        })
+    }
+}
 
 /// Attribute macro for defining a **workflow step** with automatic retry / resume semantics.
 ///
@@ -255,92 +273,135 @@ pub fn pgqrs_step(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// // process_order(&workflow, order_id).await?;
 /// ```
 #[proc_macro_attribute]
-pub fn pgqrs_workflow(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let input_fn = parse_macro_input!(input as ItemFn);
-    let attrs = &input_fn.attrs;
-    let visibility = &input_fn.vis;
-    let sig = &input_fn.sig;
+pub fn pgqrs_workflow(attr_args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr_args as WorkflowArgs);
+    let mut workflow_fn = parse_macro_input!(item as ItemFn);
+    workflow_fn
+        .attrs
+        .retain(|attr| !attr.path().is_ident("pgqrs_workflow"));
 
-    let first_arg_name = if let Some(syn::FnArg::Typed(pat_type)) = input_fn.sig.inputs.first() {
-        if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-            &pat_ident.ident
-        } else {
-            return syn::Error::new_spanned(
-                pat_type,
-                "First argument must be a named parameter of type &Run (e.g., workflow: &Run)",
-            )
-            .to_compile_error()
-            .into();
-        }
-    } else {
-        return syn::Error::new_spanned(
-            &input_fn.sig,
-            "Workflow function must take at least one argument (workflow context)",
+    let fn_name = workflow_fn.sig.ident.clone();
+    let workflow_name = match resolve_workflow_name(&args.metas, &fn_name) {
+        Ok(name) => name,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    if workflow_fn.sig.inputs.len() != 2 {
+        return Error::new_spanned(
+            &workflow_fn.sig.inputs,
+            "Workflow functions must take exactly one workflow handle and one payload argument",
         )
         .to_compile_error()
         .into();
-    };
+    }
 
-    let block = &input_fn.block;
-
-    let output_type = match &sig.output {
-        syn::ReturnType::Type(_, ty) => {
-            let is_result = if let syn::Type::Path(type_path) = &**ty {
-                type_path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|s| s.ident == "Result")
-            } else {
-                false
-            };
-
-            if !is_result {
-                return syn::Error::new_spanned(
-                    &sig.output,
-                    "Workflow function must return a Result type (e.g. Result<T, E>)",
-                )
+    let data_arg = workflow_fn.sig.inputs.iter().nth(1).unwrap();
+    let data_ty = match data_arg {
+        FnArg::Typed(pat_type) => (*pat_type.ty).clone(),
+        FnArg::Receiver(_) => {
+            return Error::new_spanned(data_arg, "Workflow payload argument must be typed")
                 .to_compile_error()
                 .into();
-            }
-            quote! { #ty }
-        }
-        syn::ReturnType::Default => {
-            return syn::Error::new_spanned(
-                &sig.output,
-                "Workflow function must return a Result type (e.g. Result<T, E>)",
-            )
-            .to_compile_error()
-            .into();
         }
     };
 
+    let output_type = match extract_workflow_output(&workflow_fn.sig.output) {
+        Ok(ty) => ty,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let inner_ident = format_ident!("{}_inner", fn_name);
+    let runner_ident = format_ident!("{}_runner", fn_name);
+    let visibility = workflow_fn.vis.clone();
+    workflow_fn.sig.ident = inner_ident.clone();
+
     let expanded = quote! {
-        #(#attrs)*
-        #visibility #sig {
-            // Start workflow
-            let run = #first_arg_name.start().await?;
+        #workflow_fn
 
-            // Execute body
-            let result: #output_type = async { #block }.await;
-
-            // Handle terminal state
-            match &result {
-                Ok(val) => {
-                    let _run = run.success(val).await?;
+        fn #runner_ident(run: Run, input: #data_ty) -> pgqrs::WorkflowFuture<#output_type> {
+            Box::pin(async move {
+                match #inner_ident(&run, input).await {
+                    Ok(value) => Ok(value),
+                    Err(err) => Err(pgqrs::Error::Internal {
+                        message: err.to_string(),
+                    }),
                 }
-                Err(e) => {
-                    let error_val = serde_json::json!({
-                        "message": e.to_string(),
-                        "is_transient": false
-                    });
-                    let _run = run.fail_with_json(error_val).await?;
-                }
-            }
-
-            result
+            })
         }
+
+        #[allow(non_upper_case_globals)]
+        #visibility const #fn_name: pgqrs::WorkflowDef<#data_ty, #output_type> =
+            pgqrs::WorkflowDef::new(#workflow_name, #runner_ident);
     };
 
     TokenStream::from(expanded)
+}
+
+fn resolve_workflow_name(args: &[syn::Meta], default: &Ident) -> Result<LitStr, Error> {
+    let mut name: Option<LitStr> = None;
+
+    for meta in args {
+        match meta {
+            Meta::NameValue(nv) if nv.path.is_ident("name") => {
+                let litstr = match &nv.value {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(litstr),
+                        ..
+                    }) => litstr.clone(),
+                    other => {
+                        return Err(Error::new_spanned(
+                            other,
+                            "`name` argument must be a string literal",
+                        ));
+                    }
+                };
+
+                if name.is_some() {
+                    return Err(Error::new_spanned(nv, "Duplicate `name` argument"));
+                }
+
+                name = Some(litstr);
+            }
+            other => {
+                return Err(Error::new_spanned(
+                    other,
+                    "Unexpected attribute argument: expected `name = \"...\"`",
+                ));
+            }
+        }
+    }
+
+    Ok(name.unwrap_or_else(|| LitStr::new(&default.to_string(), default.span())))
+}
+
+fn extract_workflow_output(output: &ReturnType) -> Result<Type, Error> {
+    match output {
+        ReturnType::Type(_, ty) => {
+            if let Type::Path(type_path) = &**ty {
+                if let Some(segment) = type_path.path.segments.last() {
+                    if segment.ident != "Result" {
+                        return Err(Error::new_spanned(
+                            output,
+                            "Workflow function must return `Result<Output, Error>`",
+                        ));
+                    }
+
+                    if let PathArguments::AngleBracketed(angle) = &segment.arguments {
+                        if let Some(GenericArgument::Type(output_ty)) = angle.args.first() {
+                            return Ok(output_ty.clone());
+                        }
+                    }
+                }
+            }
+
+            Err(Error::new_spanned(
+                output,
+                "Workflow function must return `Result<Output, Error>`",
+            ))
+        }
+        ReturnType::Default => Err(Error::new_spanned(
+            output,
+            "Workflow function must return a Result type",
+        )),
+    }
 }
