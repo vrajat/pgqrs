@@ -7,8 +7,8 @@ use tokio::time::{sleep, timeout, Duration};
 
 mod common;
 
-async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
-    common::create_store(schema).await
+async fn create_store() -> pgqrs::store::AnyStore {
+    common::create_store("guide_tests").await
 }
 
 async fn wait_for_message(
@@ -92,7 +92,7 @@ async fn wait_for_workflow_complete(
 #[serial]
 async fn test_basic_queue_single_consumer_handler_poll() {
     // --8<-- [start:basic_queue_setup]
-    let store = create_store("guide_basic_queue_single").await;
+    let store = create_store().await;
 
     let queue = "guide_basic_queue_single";
     pgqrs::admin(&store).create_queue(queue).await.unwrap();
@@ -160,7 +160,7 @@ async fn test_basic_queue_single_consumer_handler_poll() {
 #[tokio::test]
 #[serial]
 async fn test_basic_queue_two_consumers_poll_batch_handoff() {
-    let store = create_store("guide_basic_queue_handoff").await;
+    let store = create_store().await;
 
     let queue = "guide_basic_queue_handoff";
     pgqrs::admin(&store).create_queue(queue).await.unwrap();
@@ -268,7 +268,7 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
 #[tokio::test]
 #[serial]
 async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
-    let store = create_store("guide_basic_queue_continuous").await;
+    let store = create_store().await;
 
     let queue = "guide_basic_queue_continuous";
     pgqrs::admin(&store).create_queue(queue).await.unwrap();
@@ -375,7 +375,7 @@ use pgqrs::Run;
 #[serial]
 async fn test_basic_workflow_ephemeral_trigger() {
     // --8<-- [start:basic_workflow_setup]
-    let store = create_store("guide_basic_workflow").await;
+    let store = create_store().await;
 
     // Create workflow definition using macro (idempotent)
     // --8<-- [start:basic_workflow_define]
@@ -466,7 +466,7 @@ async fn test_basic_workflow_ephemeral_trigger() {
 #[tokio::test]
 #[serial]
 async fn test_durable_workflow_crash_recovery() {
-    let store = create_store("guide_durable_workflow").await;
+    let store = create_store().await;
 
     static CRASH_RECOVERY_HAS_CRASHED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
@@ -635,7 +635,7 @@ async fn test_durable_workflow_crash_recovery() {
 #[tokio::test]
 #[serial]
 async fn test_durable_workflow_transient_error() {
-    let store = create_store("guide_crash_recovery").await;
+    let store = create_store().await;
 
     // --8<-- [start:durable_workflow_transient_define]
     #[pgqrs_workflow(name = "transient_error_wf")]
@@ -752,13 +752,13 @@ async fn test_durable_workflow_transient_error() {
 #[tokio::test]
 #[serial]
 async fn test_durable_workflow_pause() {
-    let store = create_store("guide_pause").await;
+    let store = create_store().await;
 
     // --8<-- [start:durable_workflow_pause_define]
     #[pgqrs_workflow(name = "pause_wf")]
     async fn pause_wf(run: &Run, _input: serde_json::Value) -> Result<serde_json::Value> {
         // Step 1: Pause execution
-        pgqrs::workflow_step(run, "step1", || async {
+        pgqrs::workflow_step(run, "pause_wf_step_1", || async {
             if true {
                 return Err(pgqrs::Error::Paused {
                     message: "Waiting for approval".to_string(),
@@ -813,7 +813,7 @@ async fn test_durable_workflow_pause() {
     timeout(Duration::from_secs(15), async {
         loop {
             let steps = store.workflow_steps().list().await.unwrap();
-            let step = steps.iter().find(|s| s.step_name == "step1");
+            let step = steps.iter().find(|s| s.step_name == "pause_wf_step_1");
             if let Some(s) = step {
                 if s.status == pgqrs::WorkflowStatus::Error {
                     break;

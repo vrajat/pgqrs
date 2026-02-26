@@ -34,14 +34,7 @@ const TEST_SCHEMAS: &[&str] = &[
     "workflow_error_polling_tests",
     "workflow_fk_tests",
     "workflow_retry_integration_tests",
-    "guide_basic_queue_single",
-    "guide_basic_queue_handoff",
-    "guide_basic_queue_continuous",
-    "guide_basic_workflow",
-    "guide_durable_workflow",
-    "guide_crash_recovery",
-    "guide_transient_error",
-    "guide_pause",
+    "guide_tests",
 ];
 
 #[tokio::main]
