@@ -1632,7 +1632,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pgqrs"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "pgqrs-macros"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "quote",
  "syn",
@@ -1859,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "py-pgqrs"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "gethostname",
