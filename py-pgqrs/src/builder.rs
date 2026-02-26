@@ -13,6 +13,7 @@ pub struct PyDequeueBuilder {
     poll_interval_ms: Option<u64>,
     handle_one: Option<PyObject>,
     handle_batch: Option<PyObject>,
+    handle_workflow: Option<PyObject>,
 }
 
 impl Default for PyDequeueBuilder {
@@ -24,6 +25,7 @@ impl Default for PyDequeueBuilder {
             poll_interval_ms: None,
             handle_one: None,
             handle_batch: None,
+            handle_workflow: None,
         }
     }
 }
@@ -87,20 +89,29 @@ impl PyDequeueBuilder {
         slf
     }
 
+    pub fn handle_workflow(mut slf: PyRefMut<'_, Self>, handler: PyObject) -> PyRefMut<'_, Self> {
+        slf.handle_workflow = Some(handler);
+        slf
+    }
+
     pub fn poll<'a>(&self, py: Python<'a>, store: PyStore) -> PyResult<&'a PyAny> {
         let worker = self.worker.clone();
         let batch_size = self.batch_size;
         let poll_interval = Duration::from_millis(self.poll_interval_ms.unwrap_or(50));
         let handle_one = self.handle_one.clone();
         let handle_batch = self.handle_batch.clone();
+        let handle_workflow = self.handle_workflow.clone();
 
         pyo3_asyncio::tokio::future_into_py::<_, ()>(py, async move {
             let worker = worker
                 .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("worker is required"))?;
 
-            if handle_one.is_some() == handle_batch.is_some() {
+            let num_handlers = handle_one.is_some() as u8
+                + handle_batch.is_some() as u8
+                + handle_workflow.is_some() as u8;
+            if num_handlers != 1 {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    "exactly one of handle() or handle_batch() is required",
+                    "exactly one of handle(), handle_batch() or handle_workflow() is required",
                 ));
             }
 
@@ -172,6 +183,46 @@ impl PyDequeueBuilder {
                                 .await
                                 .map_err(to_py_err)?;
                             return Err(e);
+                        }
+                    }
+                } else if let Some(handler) = &handle_workflow {
+                    for msg in msgs {
+                        let inner_msg = msg.clone();
+                        let handler = handler.clone();
+                        let store_clone = _store.clone();
+                        let workflow_id = inner_msg.id; // workflow run ID corresponds to msg.id
+
+                        let rust_run = ::pgqrs::run()
+                            .store(&store_clone)
+                            .message(inner_msg.clone())
+                            .execute()
+                            .await
+                            .map_err(to_py_err)?;
+
+                        let py_run = crate::workflow::PyRun {
+                            inner: Arc::new(rust_run),
+                            store: store_clone,
+                            workflow_id,
+                        };
+
+                        let res = Python::with_gil(|py| -> PyResult<_> {
+                            let fut = handler.call1(py, (py_run.into_py(py),))?;
+                            pyo3_asyncio::tokio::into_future(fut.as_ref(py))
+                        })?
+                        .await;
+
+                        match res {
+                            Ok(_) => {
+                                // The work is done by the wrapper, but we need to archive it from the queue
+                                consumer.archive(msg.id).await.map_err(to_py_err)?;
+                            }
+                            Err(e) => {
+                                consumer
+                                    .release_messages(&[msg.id])
+                                    .await
+                                    .map_err(to_py_err)?;
+                                return Err(e);
+                            }
                         }
                     }
                 }

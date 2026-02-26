@@ -49,12 +49,24 @@ def workflow(*, name: str):
                     raise
 
             try:
+                # If invoked by the DequeueBuilder wrapper, args/kwargs might be empty
+                # We can extract the input payload from the context's record
+                if not args and not kwargs and hasattr(ctx, "input") and ctx.input:
+                    payload = ctx.input
+                    if isinstance(payload, dict) and "input" in payload:
+                        args = (payload["input"],)
+                    else:
+                        args = (payload,)
+
                 result = await func(ctx, *args, **kwargs)
                 await ctx.success(result)
                 return result
-            except pgqrs.TransientStepError:
-                raise
-            except (pgqrs.StepNotReadyError, pgqrs.RetriesExhaustedError):
+            except (
+                pgqrs.TransientStepError,
+                pgqrs.StepNotReadyError,
+                pgqrs.RetriesExhaustedError,
+                pgqrs.PausedError,
+            ):
                 raise
             except Exception as exc:
                 await ctx.fail(str(exc))
@@ -90,9 +102,15 @@ def step(func):
                 await guard.success(result)
                 return result
             except pgqrs.TransientStepError as e:
-                await guard.fail_transient("TRANSIENT_ERROR", str(e))
+                code = getattr(e, "code", "TRANSIENT_ERROR")
+                retry_after = getattr(e, "retry_after", None)
+                await guard.fail_transient(code, str(e), retry_after)
                 raise
-            except (pgqrs.StepNotReadyError, pgqrs.RetriesExhaustedError):
+            except (
+                pgqrs.StepNotReadyError,
+                pgqrs.RetriesExhaustedError,
+                pgqrs.PausedError,
+            ):
                 raise
             except Exception as e:
                 await guard.fail(str(e))

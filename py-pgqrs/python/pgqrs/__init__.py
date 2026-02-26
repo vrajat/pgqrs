@@ -39,6 +39,10 @@ class DequeueBuilder:
         self._inner.handle_batch(handler)
         return self
 
+    def handle_workflow(self, handler: Any) -> "DequeueBuilder":
+        self._inner.handle_workflow(handler)
+        return self
+
     @property
     def queue(self) -> Any:
         return self._inner.queue

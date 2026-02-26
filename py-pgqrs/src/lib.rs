@@ -37,6 +37,7 @@ pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
 pyo3::create_exception!(pgqrs, TransientStepError, PgqrsError);
 pyo3::create_exception!(pgqrs, RetriesExhaustedError, PgqrsError);
 pyo3::create_exception!(pgqrs, StepNotReadyError, PgqrsError);
+pyo3::create_exception!(pgqrs, PausedError, PgqrsError);
 
 pub(crate) fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     match err {
@@ -80,6 +81,7 @@ pub(crate) fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
             RetriesExhaustedError::new_err(err.to_string())
         }
         rust_pgqrs::Error::StepNotReady { .. } => StepNotReadyError::new_err(err.to_string()),
+        rust_pgqrs::Error::Paused { .. } => PausedError::new_err(err.to_string()),
         _ => PgqrsError::new_err(err.to_string()),
     }
 }
@@ -621,6 +623,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
         py.get_type::<RetriesExhaustedError>(),
     )?;
     m.add("StepNotReadyError", py.get_type::<StepNotReadyError>())?;
+    m.add("PausedError", py.get_type::<PausedError>())?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;

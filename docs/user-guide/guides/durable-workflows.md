@@ -45,6 +45,12 @@ Use `pgqrs::workflow_step()` wrappers alongside `#[pgqrs_workflow]` to automatic
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_define"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_define"
+    ```
+
 #### 2. Execute and Simulate Crash
 
 When the workflow begins executing on the first consumer, it processes `step1` and saves the output (e.g., `{"data": "from step 1"}`).
@@ -59,6 +65,16 @@ When the workflow begins executing on the first consumer, it processes `step1` a
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_first_run"
     ```
 
+=== "Python"
+
+    ```python
+    # Trigger the workflow run
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_trigger"
+
+    # Start processing
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_first_run"
+    ```
+
 If the consumer process crashes before finishing `step2`, the in-memory execution halts. The `run` status remains active in the database.
 
 #### 3. Release and Recover
@@ -71,12 +87,24 @@ Usually, the orchestrator detects crashed workers via timeouts and releases the 
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_simulate"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_simulate"
+    ```
+
 A new consumer picks up the workflow run. When the execution hits `step1` again, pgqrs sees it is already cached, skips executing the closure, and returns the cached result immediately. The execution smoothly resumes at `step2`.
 
 === "Rust"
 
     ```rust
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_recovery"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_recovery"
     ```
 
 ### Transient Errors
@@ -93,6 +121,12 @@ If a closure inside `pgqrs::workflow_step()` returns a `pgqrs::Error::Transient`
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_define"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_define"
+    ```
+
 #### 2. Execute the Workflow
 
 When the worker encounters the transient error, it will halt execution but automatically schedule the run to retry in the background.
@@ -103,6 +137,12 @@ When the worker encounters the transient error, it will halt execution but autom
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_run"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_run"
+    ```
+
 #### 3. Inspect the Paused Status
 
 The workflow run remains in the `Running` state, while the specific step is marked with `Error` and is assigned a `retry_at` timestamp in the database.
@@ -111,6 +151,12 @@ The workflow run remains in the `Running` state, while the specific step is mark
 
     ```rust
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_inspect"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_inspect"
     ```
 
 ### Pausing for External Events
@@ -127,6 +173,12 @@ Returning `pgqrs::Error::Paused` tells the workflow to stop its execution until 
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_define"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_define"
+    ```
+
 #### 2. Process Output
 
 Just like transient errors, when the worker runs into the pause signal, it releases the workflow run smoothly.
@@ -137,6 +189,12 @@ Just like transient errors, when the worker runs into the pause signal, it relea
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_run"
     ```
 
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_run"
+    ```
+
 #### 3. Inspect Status
 
 The overall workflow run transitions into a `Paused` state. It won't execute further until the `resume_after` duration expires or an admin resumes it manually.
@@ -145,6 +203,12 @@ The overall workflow run transitions into a `Paused` state. It won't execute fur
 
     ```rust
     --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_inspect"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_inspect"
     ```
 
 ## Step-by-Step: Basic Workflow

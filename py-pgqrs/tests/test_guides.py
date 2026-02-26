@@ -263,3 +263,297 @@ async def test_basic_queue_two_consumers_continuous_handler_poll_interrupt(
     assert await consumer_a.status() == "SUSPENDED"
     assert await consumer_b.status() == "SUSPENDED"
     # --8<-- [end:basic_queue_py_continuous_interrupt_two_consumers]
+
+from pgqrs import run as pgqrs_run, step as pgqrs_step, workflow as pgqrs_workflow
+from pgqrs.decorators import workflow as workflow_def, step as step_def
+
+# --8<-- [start:wait_for_workflow_complete]
+async def wait_for_workflow_complete(store, message_id: int, timeout: float = 10.0):
+    async def poll():
+        while True:
+            try:
+                runs = await (await store.get_workflow_runs()).list()
+                record = next((r for r in runs if r.id == message_id), None)
+                if not record:
+                    # In this version workflows list run by passing the trigger msg_id
+                    # Actually getting run_id via run().result() is easier.
+                    continue
+                if record and record.status in ("SUCCESS", "ERROR", "PAUSED"):
+                    return record
+            except Exception:
+                pass
+            await asyncio.sleep(POLL_INTERVAL)
+
+    return await asyncio.wait_for(poll(), timeout=timeout)
+# --8<-- [end:wait_for_workflow_complete]
+
+@pytest.mark.asyncio
+async def test_basic_workflow_ephemeral_trigger(test_dsn, schema):
+    # --8<-- [start:basic_workflow_setup]
+    config = pgqrs.Config(test_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    # --8<-- [start:basic_workflow_define]
+    @workflow_def(name="process_task")
+    async def process_task_wf(ctx, input_data: dict) -> dict:
+        # --8<-- [start:basic_workflow_step_call]
+        @step_def
+        async def process_item_step(step_ctx):
+            return {"processed": "task_data", "status": "done"}
+
+        result = await process_item_step(ctx)
+        # --8<-- [end:basic_workflow_step_call]
+        return result
+    # --8<-- [end:basic_workflow_define]
+
+    await pgqrs.workflow().name("process_task").store(store).create()
+    # --8<-- [end:basic_workflow_setup]
+
+    # --8<-- [start:basic_workflow_trigger_ephemeral]
+    input_data = {"id": 1, "payload": "Hello pgqrs"}
+    msg_trigger = pgqrs.workflow().name("process_task").store(store).trigger(input_data)
+    msg = await msg_trigger.execute()
+    # --8<-- [end:basic_workflow_trigger_ephemeral]
+
+    assert msg.id > 0
+    assert msg.payload == input_data
+
+    # --8<-- [start:basic_workflow_consumer_start]
+    consumer = await store.consumer("process_task")
+    consumer_task = asyncio.create_task(
+        pgqrs.dequeue().worker(consumer).handle_workflow(process_task_wf).poll(store)
+    )
+    # --8<-- [end:basic_workflow_consumer_start]
+
+    # --8<-- [start:basic_workflow_get_result]
+    result = await pgqrs.run().message(msg).store(store).result()
+    print(f"Workflow Result: {result}")
+    # --8<-- [end:basic_workflow_get_result]
+
+    assert result["processed"] == "task_data"
+
+    try:
+        await consumer.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(consumer_task, timeout=5)
+
+@pytest.mark.asyncio
+async def test_durable_workflow_crash_recovery(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    crash_state = {"has_crashed": False}
+
+    # --8<-- [start:durable_workflow_crash_define]
+    @workflow_def(name="crash_recovery_wf")
+    async def crash_recovery_wf(run_ctx, input_data: dict) -> dict:
+        @step_def
+        async def step1(step_ctx):
+            return {"data": "from step 1"}
+
+        await step1(run_ctx)
+
+        if not crash_state["has_crashed"]:
+            crash_state["has_crashed"] = True
+            raise BaseException("TestCrash")
+
+        @step_def
+        async def step2(step_ctx):
+            return "step2_done"
+
+        await step2(run_ctx)
+
+        return {"done": True}
+    # --8<-- [end:durable_workflow_crash_define]
+
+    await pgqrs.workflow().name("crash_recovery_wf").store(store).create()
+    consumer = await store.consumer("crash_recovery_wf")
+
+    # --8<-- [start:durable_workflow_crash_first_run]
+    consumer_task = asyncio.create_task(
+        pgqrs.dequeue().worker(consumer).handle_workflow(crash_recovery_wf).poll(store)
+    )
+    # --8<-- [end:durable_workflow_crash_first_run]
+
+    # --8<-- [start:durable_workflow_crash_trigger]
+    input_data = {"test": True}
+    msg_trigger = pgqrs.workflow().name("crash_recovery_wf").store(store).trigger(input_data)
+    msg = await msg_trigger.execute()
+    # --8<-- [end:durable_workflow_crash_trigger]
+
+    # --8<-- [start:durable_workflow_crash_simulate]
+    async def wait_for_step1_success():
+        while True:
+            steps = await (await store.get_workflow_steps()).list()
+            step = next((s for s in steps if s.step_name == "step1" and s.status == "SUCCESS"), None)
+            if step:
+                return step
+            await asyncio.sleep(POLL_INTERVAL)
+
+    await asyncio.wait_for(wait_for_step1_success(), timeout=10.0)
+
+    try:
+        await consumer.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(BaseException, match="TestCrash"):
+         await asyncio.wait_for(consumer_task, timeout=5)
+
+    await pgqrs.admin(store).release_worker_messages(consumer.worker_id)
+    # --8<-- [end:durable_workflow_crash_simulate]
+
+    await asyncio.sleep(0.1)
+
+    # --8<-- [start:durable_workflow_crash_recovery]
+    consumer_2 = await store.consumer("crash_recovery_wf")
+    consumer_task_2 = asyncio.create_task(
+        pgqrs.dequeue().worker(consumer_2).handle_workflow(crash_recovery_wf).poll(store)
+    )
+
+    result = await pgqrs.run().message(msg).store(store).result()
+    # --8<-- [end:durable_workflow_crash_recovery]
+
+    assert result["done"] is True
+
+    try:
+        await consumer_2.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(consumer_task_2, timeout=5)
+
+@pytest.mark.asyncio
+async def test_durable_workflow_transient_error(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    # --8<-- [start:durable_workflow_transient_define]
+    @workflow_def(name="transient_error_wf")
+    async def transient_error_wf(run_ctx, input_data: dict) -> dict:
+        @step_def
+        async def api_call(step_ctx):
+            if True:
+                err = pgqrs.TransientStepError("Connection timed out")
+                err.code = "TIMEOUT"
+                err.retry_after = 30.0
+                raise err
+
+        await api_call(run_ctx)
+        return {"done": True}
+    # --8<-- [end:durable_workflow_transient_define]
+
+    await pgqrs.workflow().name("transient_error_wf").store(store).create()
+    consumer = await store.consumer("transient_error_wf")
+
+    msg_trigger = pgqrs.workflow().name("transient_error_wf").store(store).trigger(True)
+    msg = await msg_trigger.execute()
+
+    # --8<-- [start:durable_workflow_transient_run]
+    consumer_task = asyncio.create_task(
+        pgqrs.dequeue().worker(consumer).handle_workflow(transient_error_wf).poll(store)
+    )
+    # --8<-- [end:durable_workflow_transient_run]
+
+    async def wait_for_api_call_error():
+        while True:
+            steps = await (await store.get_workflow_steps()).list()
+            step = next((s for s in steps if s.step_name == "api_call" and s.status == "ERROR"), None)
+            if step:
+                return step
+            await asyncio.sleep(POLL_INTERVAL)
+
+    await asyncio.wait_for(wait_for_api_call_error(), timeout=15.0)
+
+    try:
+        await consumer.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(consumer_task, timeout=5)
+
+    # --8<-- [start:durable_workflow_transient_inspect]
+    workflow = await (await store.get_workflows()).get_by_name("transient_error_wf")
+    runs = await (await store.get_workflow_runs()).list()
+    run_rec = next((r for r in runs if r.workflow_id == workflow.id), None)
+
+    assert run_rec.status == "RUNNING"
+
+    steps = await (await store.get_workflow_steps()).list()
+    step_rec = next((s for s in steps if s.run_id == run_rec.id), None)
+
+    assert step_rec.status == "ERROR"
+    assert step_rec.retry_at is not None
+    # --8<-- [end:durable_workflow_transient_inspect]
+
+    archived = await (await store.get_messages()).list_archived_by_queue(msg.queue_id)
+    assert len(archived) == 0
+
+@pytest.mark.asyncio
+async def test_durable_workflow_pause(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    # --8<-- [start:durable_workflow_pause_define]
+    @workflow_def(name="pause_wf")
+    async def pause_wf(run_ctx, input_data: dict) -> dict:
+        @step_def
+        async def step1(step_ctx):
+                # We can achieve pause by using the run context pause
+                await run_ctx.pause("Waiting for approval", 60)
+                raise pgqrs.PausedError("Waiting for approval")
+
+        await step1(run_ctx)
+        return {"done": True}
+    # --8<-- [end:durable_workflow_pause_define]
+
+    await pgqrs.workflow().name("pause_wf").store(store).create()
+    consumer = await store.consumer("pause_wf")
+
+    msg_trigger = pgqrs.workflow().name("pause_wf").store(store).trigger(True)
+    msg = await msg_trigger.execute()
+
+    # --8<-- [start:durable_workflow_pause_run]
+    consumer_task = asyncio.create_task(
+        pgqrs.dequeue().worker(consumer).handle_workflow(pause_wf).poll(store)
+    )
+    # --8<-- [end:durable_workflow_pause_run]
+
+    async def wait_for_pause():
+        while True:
+            runs = await (await store.get_workflow_runs()).list()
+            run_rec = next((r for r in runs if r.id == msg.id), None)
+            if run_rec and run_rec.status == "PAUSED":
+                return run_rec
+            await asyncio.sleep(POLL_INTERVAL)
+
+    await asyncio.wait_for(wait_for_pause(), timeout=15.0)
+
+    try:
+        await consumer.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(consumer_task, timeout=5)
+
+    # --8<-- [start:durable_workflow_pause_inspect]
+    workflow = await (await store.get_workflows()).get_by_name("pause_wf")
+    runs = await (await store.get_workflow_runs()).list()
+    run_rec = next((r for r in runs if r.workflow_id == workflow.id), None)
+
+    assert run_rec.status == "PAUSED"
+    # --8<-- [end:durable_workflow_pause_inspect]

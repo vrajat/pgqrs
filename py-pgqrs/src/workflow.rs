@@ -61,6 +61,17 @@ impl PyRun {
         self.inner.current_time().map(|dt| dt.to_rfc3339())
     }
 
+    #[getter]
+    fn input<'a>(&self, py: Python<'a>) -> PyResult<PyObject> {
+        let input = self
+            .inner
+            .record()
+            .input
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
+        crate::json_to_py(py, &input)
+    }
+
     fn with_time(&self, time: String) -> PyResult<Self> {
         let dt = chrono::DateTime::parse_from_rfc3339(&time)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?
