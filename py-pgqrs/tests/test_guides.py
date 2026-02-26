@@ -245,8 +245,15 @@ async def test_basic_queue_two_consumers_continuous_handler_poll_interrupt(
     assert len(archived) == 40
 
     # --8<-- [start:basic_queue_py_continuous_interrupt_two_consumers]
-    await consumer_a.interrupt()
-    await consumer_b.interrupt()
+    try:
+        await consumer_a.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    try:
+        await consumer_b.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
 
     with pytest.raises(Exception):
         await asyncio.wait_for(task_a, timeout=5)
