@@ -237,9 +237,9 @@ async fn test_dequeue_with_vt_duration() {
 }
 
 #[tokio::test]
-async fn test_dequeue_limit() {
+async fn test_dequeue_batch() {
     let store = create_ergonomics_store().await;
-    let queue_name = "test_limit";
+    let queue_name = "test_dequeue_batch";
 
     let queue_info = pgqrs::admin(&store)
         .create_queue(queue_name)
@@ -266,13 +266,13 @@ async fn test_dequeue_limit() {
             .expect("Failed to enqueue");
     }
 
-    // Test limit() method (alias for batch())
+    // Test batch() method
     let messages = pgqrs::dequeue()
         .worker(&consumer)
-        .limit(5)
+        .batch(5)
         .fetch_all(&store)
         .await
-        .expect("Failed to dequeue with limit");
+        .expect("Failed to dequeue with batch");
 
     assert_eq!(messages.len(), 5);
 
@@ -336,7 +336,7 @@ async fn test_builder_method_chaining() {
     // Dequeue with chained ergonomic methods and custom time
     let messages = pgqrs::dequeue()
         .worker(&consumer)
-        .limit(1)
+        .batch(1)
         .with_vt(Duration::from_secs(30))
         .at(dequeue_time) // Use time that ensures message is visible
         .fetch_all(&store)
@@ -693,7 +693,7 @@ async fn test_builder_vt_offset_behavior() {
     // Dequeue with 5 second vt_offset
     let msg = pgqrs::dequeue()
         .from(queue_name)
-        .vt_offset(5)
+        .with_vt(Duration::from_secs(5))
         .fetch_one(&store)
         .await
         .expect("Failed to fetch")

@@ -16,30 +16,27 @@ A simple task queue system where:
 - PostgreSQL running
 - Database connection string (DSN)
 
-## Step 1: Set Up the Workflow
+## Setup
+
+The snippets in this page focus on the workflow patterns.
+
+They assume you already have:
+
+- `store` (connected + bootstrapped)
+
+If you want fully runnable examples end-to-end, use the guide tests directly:
+
+- Rust: `crates/pgqrs/tests/guide_tests.rs`
+
+
+## Step 1: Define and Create the Workflow
 
 In pgqrs v0.14, workflows must be defined before they can be triggered. This is an idempotent operation that sets up the necessary queues and metadata.
 
 === "Rust"
 
     ```rust
-    use pgqrs;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        // Install schema (idempotent)
-        pgqrs::admin(&store).install().await?;
-        println!("✓ Schema installed");
-
-        // Create workflow definition (idempotent)
-        // This automatically creates a 1:1 mapped queue named "process_task"
-        store.create_workflow("process_task").await?;
-        println!("✓ Workflow 'process_task' defined");
-
-        Ok(())
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:basic_workflow_define"
     ```
 
 === "Python"
@@ -62,37 +59,14 @@ In pgqrs v0.14, workflows must be defined before they can be triggered. This is 
     asyncio.run(setup())
     ```
 
-## Step 2: Create the Trigger (Producer)
+## Step 2: Trigger the Workflow
 
 The trigger submits a "run" of the workflow. It doesn't execute the work itself; it enqueues the input for a worker to pick up.
 
 === "Rust"
 
     ```rust
-    use pgqrs::workflow;
-    use serde::{Serialize, Deserialize};
-
-    #[derive(Serialize, Deserialize)]
-    struct TaskParams {
-        id: i32,
-        payload: String,
-    }
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        let params = TaskParams { id: 1, payload: "Hello pgqrs".to_string() };
-
-        // Trigger the workflow
-        let run_id = workflow("process_task")
-            .trigger(&params)?
-            .execute(&store)
-            .await?;
-
-        println!("✓ Triggered workflow run: {}", run_id);
-        Ok(())
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:basic_workflow_trigger_ephemeral"
     ```
 
 === "Python"
@@ -116,67 +90,14 @@ The trigger submits a "run" of the workflow. It doesn't execute the work itself;
     asyncio.run(main())
     ```
 
-## Step 3: Create the Worker (Consumer)
+## Step 3: Create a Worker to Process the Workflow
 
-The worker registers for a workflow queue, explicitly dequeues messages, and drives the run lifecycle.
+The worker registers for a workflow queue and polls for messages. The workflow builder handles the run lifecycle automatically.
 
 === "Rust"
 
     ```rust
-    use pgqrs::consumer;
-    use serde::{Serialize, Deserialize};
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct TaskParams {
-        id: i32,
-        payload: String,
-    }
-
-    async fn process_task(params: TaskParams) -> anyhow::Result<()> {
-        println!("Processing task {} with payload: {}", params.id, params.payload);
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        println!("✓ Task {} complete", params.id);
-        Ok(())
-    }
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        // Register worker for the workflow queue
-        let consumer = consumer("worker-1", 8080, "process_task")
-            .create(&store)
-            .await?;
-
-        println!("Worker started. Waiting for runs...");
-        loop {
-            let messages = consumer.dequeue(1).await?;
-            if messages.is_empty() {
-                continue;
-            }
-
-            let msg = &messages[0];
-            let run = pgqrs::run()
-                .message(msg.clone())
-                .store(&store)
-                .execute()
-                .await?;
-
-            let step = pgqrs::step()
-                .run(&run)
-                .name("process_task")
-                .execute()
-                .await?;
-
-            if step.should_execute() {
-                process_task(serde_json::from_value(msg.payload.clone())?).await?;
-                run.complete_step("process_task", serde_json::json!({"status": "success"})).await?;
-            }
-
-            run.complete(serde_json::json!({"status": "success"})).await?;
-            consumer.archive(msg.id).await?;
-        }
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:basic_workflow_consumer_start"
     ```
 
 === "Python"
@@ -184,12 +105,6 @@ The worker registers for a workflow queue, explicitly dequeues messages, and dri
     ```python
     import asyncio
     import pgqrs
-
-    async def process_task(params):
-        print(f"Processing task {params['id']} with payload: {params['payload']}")
-        await asyncio.sleep(1)
-        print(f"✓ Task {params['id']} complete")
-        return {"status": "success"}
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
@@ -219,29 +134,12 @@ The worker registers for a workflow queue, explicitly dequeues messages, and dri
 
 ## Step 4: Check Results
 
-You can retrieve the status and output of a workflow run at any time using its `run_id`.
+You can retrieve the status and output of a workflow run at any time using its message ID.
 
 === "Rust"
 
     ```rust
-    use pgqrs::workflow;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-        let run_id = 1; // Use the ID from Step 2
-
-        let run = workflow("process_task")
-            .get_run(run_id, &store)
-            .await?;
-
-        println!("Run Status: {:?}", run.status);
-        if let Some(output) = run.output {
-            println!("Output: {:?}", output);
-        }
-
-        Ok(())
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:basic_workflow_get_result"
     ```
 
 === "Python"
@@ -252,9 +150,9 @@ You can retrieve the status and output of a workflow run at any time using its `
 
     async def main():
         store = await pgqrs.connect("postgresql://localhost/mydb")
-        run_id = 1
+        message_id = 1
 
-        run = await pgqrs.workflow("process_task").get_run(run_id, store)
+        run = await pgqrs.workflow("process_task").get_run(message_id, store)
 
         print(f"Run Status: {run.status}")
         print(f"Output: {run.output}")
@@ -268,8 +166,9 @@ You can retrieve the status and output of a workflow run at any time using its `
 - **Workflow Run**: A specific execution instance with its own `run_id`, input, and output.
 - **Trigger**: The client that submits a run (noun-verb API: `workflow().trigger()`).
 - **Worker**: The process that executes the handler (fluent API: `consumer().handler().create()`).
+- **workflow_step**: Wraps step execution for durability (crash recovery).
 
 ## Next Steps
 
-- [Durable Workflows](durable-workflows.md) - Learn how to build multi-step, crash-resistant workflows using `ctx.step()`.
+- [Durable Workflows](durable-workflows.md) - Learn how to build multi-step, crash-resistant workflows using `pgqrs::workflow_step()`.
 - [Workflow API Reference](../api/workflows.md) - Detailed API documentation.

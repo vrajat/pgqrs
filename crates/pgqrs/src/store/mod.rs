@@ -127,16 +127,6 @@ pub trait Store: Send + Sync + 'static {
     /// Get a workflow definition handle.
     async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord>;
 
-    /// Trigger a workflow run.
-    ///
-    /// This enqueues a message with the workflow input. The run record is created
-    /// when the worker starts processing the message.
-    async fn trigger(
-        &self,
-        name: &str,
-        input: Option<serde_json::Value>,
-    ) -> crate::error::Result<crate::types::QueueMessage>;
-
     /// Create a local run handle from a message.
     ///
     /// This should parse the message payload and either create a new RunRecord

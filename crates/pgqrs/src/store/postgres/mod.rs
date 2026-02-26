@@ -17,7 +17,6 @@ use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
 use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
 use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
-use crate::types::NewQueueMessage;
 
 use self::worker::admin::Admin as PostgresAdmin;
 
@@ -242,32 +241,6 @@ impl Store for PostgresStore {
             })?;
 
         Ok(workflow_record)
-    }
-
-    async fn trigger(
-        &self,
-        name: &str,
-        input: Option<serde_json::Value>,
-    ) -> crate::error::Result<crate::types::QueueMessage> {
-        let queue = self.queues.get_by_name(name).await?;
-        let now = chrono::Utc::now();
-
-        let payload = input.unwrap_or(serde_json::Value::Null);
-
-        let msg = self
-            .messages
-            .insert(NewQueueMessage {
-                queue_id: queue.id,
-                payload,
-                read_ct: 0,
-                enqueued_at: now,
-                vt: now,
-                producer_worker_id: None,
-                consumer_worker_id: None,
-            })
-            .await?;
-
-        Ok(msg)
     }
 
     async fn run(

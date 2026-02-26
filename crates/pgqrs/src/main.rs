@@ -537,6 +537,8 @@ pub async fn handle_worker_commands(
             writeln!(out, "Worker Statistics for Queue '{}':", queue)?;
             writeln!(out, "  Total Workers: {}", stats.total_workers)?;
             writeln!(out, "  Ready Workers: {}", stats.ready_workers)?;
+            writeln!(out, "  Polling Workers: {}", stats.polling_workers)?;
+            writeln!(out, "  Interrupted Workers: {}", stats.interrupted_workers)?;
             writeln!(out, "  Suspended Workers: {}", stats.suspended_workers)?;
             writeln!(out, "  Stopped Workers: {}", stats.stopped_workers)?;
             writeln!(

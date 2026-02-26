@@ -10,291 +10,238 @@ This guide walks you through building a **durable workflow** with pgqrs v0.14. D
 
 ## What We'll Build
 
-We'll create a data processing pipeline that:
+We'll create data processing workflows that demonstrate:
 
-1. **Fetches data** from an external source.
-2. **Transforms the data** (simulating a crash-prone step).
-3. **Saves results** to a destination.
+1. **Successful execution** - basic workflow completion
+2. **Crash recovery** - workflow resumes from cached step results
+3. **Transient errors** - automatic retry with backoff
+4. **Pausing** - wait for external events (human approval, webhooks)
 
-The workflow will use the `ctx.step()` API to ensure each step is recorded in the database, allowing it to resume from where it left off if interrupted.
+## Setup
 
-## Step 1: Define the Workflow Handler
+The snippets in this page focus on the durable workflow patterns.
 
-In pgqrs v0.14, the workflow logic is encapsulated in a handler function. Each atomic unit of work is wrapped in a `ctx.step()` call.
+They assume you already have:
+
+- `store` (connected + bootstrapped)
+
+If you want fully runnable examples end-to-end, use the guide tests directly:
+
+- Rust: `crates/pgqrs/tests/concurrent_tests.rs`
+
+## Workflow Patterns
+
+### Crash Recovery
+
+When a worker crashes mid-execution, the workflow can resume from the last completed step. Step results are cached in the database to avoid repeating work.
+
+#### 1. Define the Workflow with Durable Steps
+
+Use `pgqrs::workflow_step()` wrappers alongside `#[pgqrs_workflow]` to automatically track the completion status and cached results for each step.
 
 === "Rust"
 
     ```rust
-    use pgqrs::{Workflow, TransientError, Step};
-    use serde::{Serialize, Deserialize};
-    use std::time::Duration;
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct PipelineParams {
-        url: String,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    struct PipelineResult {
-        processed_count: usize,
-    }
-
-    // The workflow handler
-    async fn data_pipeline_handler(
-        ctx: &mut dyn Workflow,
-        params: PipelineParams,
-    ) -> Result<PipelineResult, anyhow::Error> {
-        println!("[workflow] Starting pipeline for {}", params.url);
-
-        // Step 1: Fetch data (with transient error handling)
-        let data = ctx.step("fetch_data", || async {
-            match fetch_from_api(&params.url).await {
-                Ok(d) => Ok(d),
-                Err(e) if e.is_transient() => {
-                    // This will update message visibility and retry later
-                    Err(TransientError::with_backoff(30).into())
-                }
-                Err(e) => Err(e.into()),
-            }
-        }).await?;
-
-        // Step 2: Transform data (cached result if worker crashes after this)
-        let transformed = ctx.step("transform_data", || async {
-            println!("[transform_data] Processing {} records", data.len());
-            Ok(transform_logic(data))
-        }).await?;
-
-        // Step 3: Save results
-        ctx.step("save_results", || async {
-            println!("[save_results] Saving {} records", transformed.len());
-            save_to_db(transformed).await?;
-            Ok(())
-        }).await?;
-
-        Ok(PipelineResult { processed_count: transformed.len() })
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_define"
     ```
 
 === "Python"
 
     ```python
-    import asyncio
-    import pgqrs
-    from pgqrs import TransientError, Step
-
-    # The workflow handler
-    async def data_pipeline_handler(ctx, params):
-        print(f"[workflow] Starting pipeline for {params['url']}")
-
-        # Step 1: Fetch data
-        async def fetch():
-            try:
-                return await fetch_from_api(params['url'])
-            except Exception as e:
-                if is_transient(e):
-                    # Retry in 30 seconds
-                    raise TransientError(retry_after=30)
-                raise e
-
-        data = await ctx.step("fetch_data", fetch)
-
-        # Step 2: Transform data
-        async def transform():
-            print(f"[transform_data] Processing {len(data)} records")
-            return transform_logic(data)
-
-        transformed = await ctx.step("transform_data", transform)
-
-        # Step 3: Save results
-        async def save():
-            print(f"[save_results] Saving {len(transformed)} records")
-            await save_to_db(transformed)
-
-        await ctx.step("save_results", save)
-
-        return {"processed_count": len(transformed)}
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_define"
     ```
 
-## Step 2: Register the Worker
+#### 2. Execute and Simulate Crash
 
-The worker registers for a workflow queue and explicitly dequeues messages to execute runs.
+When the workflow begins executing on the first consumer, it processes `step1` and saves the output (e.g., `{"data": "from step 1"}`).
 
 === "Rust"
 
     ```rust
-    use pgqrs::consumer;
+    // Trigger the workflow run
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_trigger"
 
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        // Setup workflow definition (idempotent)
-        pgqrs::workflow()
-            .name("data_pipeline")
-            .store(&store)
-            .create()
-            .await?;
-
-        // Register worker
-        let consumer = consumer("worker-1", 8080, "data_pipeline")
-            .create(&store)
-            .await?;
-
-        println!("Worker started. Waiting for runs...");
-        loop {
-            let messages = consumer.dequeue(1).await?;
-            if messages.is_empty() {
-                continue;
-            }
-
-            let msg = &messages[0];
-            let run = pgqrs::run()
-                .message(msg.clone())
-                .store(&store)
-                .execute()
-                .await?;
-
-            // Execute steps with workflow_step or step acquisition
-            let step = pgqrs::step()
-                .run(&run)
-                .name("fetch_data")
-                .execute()
-                .await?;
-
-            if step.should_execute() {
-                run.complete_step("fetch_data", serde_json::json!({"status": "ok"}))
-                    .await?;
-            }
-
-            run.complete(serde_json::json!({"status": "done"})).await?;
-            consumer.archive(msg.id).await?;
-        }
-    }
+    // Start processing
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_first_run"
     ```
 
 === "Python"
 
     ```python
-    import asyncio
-    import pgqrs
+    # Trigger the workflow run
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_trigger"
 
-    async def main():
-        store = await pgqrs.connect("postgresql://localhost/mydb")
-
-        # Setup workflow definition
-        await pgqrs.workflow().name("data_pipeline").store(store).create()
-
-        # Register worker
-        consumer = await pgqrs.consumer("worker-1", 8080, "data_pipeline").create(store)
-
-        print("Worker started. Waiting for runs...")
-        while True:
-            messages = await consumer.dequeue(batch_size=1)
-            if not messages:
-                continue
-
-            msg = messages[0]
-            run = await pgqrs.run().message(msg).store(store).execute()
-
-            step = await run.acquire_step("fetch_data", current_time=run.current_time)
-            if step.status == "EXECUTE":
-                await step.guard.success({"status": "ok"})
-
-            await run.complete({"status": "done"})
-            await consumer.archive(msg.id)
-
-    asyncio.run(main())
+    # Start processing
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_first_run"
     ```
 
-## Step 3: Trigger the Workflow
+If the consumer process crashes before finishing `step2`, the in-memory execution halts. The `run` status remains active in the database.
 
-Submit a run from any client (e.g., an HTTP handler).
+#### 3. Release and Recover
+
+Usually, the orchestrator detects crashed workers via timeouts and releases the message back to the queue. For demonstration, we manually release that worker's messages.
 
 === "Rust"
 
     ```rust
-    use pgqrs::workflow;
-
-    async fn handle_request(url: String) -> Result<i64, Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        let run_id = workflow("data_pipeline")
-            .trigger(&PipelineParams { url })?
-            .execute(&store)
-            .await?;
-
-        Ok(run_id)
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_simulate"
     ```
 
 === "Python"
 
     ```python
-    import asyncio
-    import pgqrs
-
-    async def handle_request(url):
-        store = await pgqrs.connect("postgresql://localhost/mydb")
-
-        run_id = await pgqrs.workflow("data_pipeline") \
-            .trigger({"url": url}) \
-            .execute(store)
-
-        return run_id
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_simulate"
     ```
 
-## Crash Recovery Demo
-
-One of the most powerful features of durable workflows is **crash recovery**.
-
-### How it works:
-1. A worker dequeues a run and starts executing `data_pipeline_handler`.
-2. `ctx.step("fetch_data", ...)` completes and the result is saved to the `pgqrs_workflow_steps` table.
-3. **The worker process crashes** (e.g., OOM, hardware failure).
-4. The message visibility timeout in the queue expires.
-5. **Another worker** (or the same one after restart) dequeues the same run.
-6. The handler starts from the beginning, but when it calls `ctx.step("fetch_data", ...)`, pgqrs sees the completed result in the database and **returns it immediately without re-executing the closure**.
-7. The workflow continues from the next uncompleted step.
-
-## Advanced Pausing for External Events
-
-Workflows can pause execution and wait for an external event (like human approval).
+A new consumer picks up the workflow run. When the execution hits `step1` again, pgqrs sees it is already cached, skips executing the closure, and returns the cached result immediately. The execution smoothly resumes at `step2`.
 
 === "Rust"
 
     ```rust
-    async fn approval_workflow(ctx: &mut dyn Workflow, params: Params) -> Result<(), anyhow::Error> {
-        // Step 1: Send approval request
-        ctx.step("send_request", || async { send_email(&params.approver).await }).await?;
-
-        // Step 2: Pause until approval received
-        let approval_data = ctx.step("wait_for_approval", || async {
-            // This will pause the run and release the worker
-            Err(Step::pause(Duration::from_secs(3600)).into())
-        }).await?;
-
-        // Step 3: Process approval
-        ctx.step("process_approval", || async { process(approval_data).await }).await?;
-
-        Ok(())
-    }
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_crash_recovery"
     ```
 
-### Resuming a Paused Workflow
-When an external event occurs (e.g., a webhook), you can update the step state to resume the workflow:
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_crash_recovery"
+    ```
+
+### Transient Errors
+
+When a step fails with a transient error (e.g., network timeout), the workflow will be retried automatically with backoff.
+
+#### 1. Define the Transient Error Step
+
+If a closure inside `pgqrs::workflow_step()` returns a `pgqrs::Error::Transient`, it signals to the orchestrator to automatically retry the step later.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_define"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_define"
+    ```
+
+#### 2. Execute the Workflow
+
+When the worker encounters the transient error, it will halt execution but automatically schedule the run to retry in the background.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_run"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_run"
+    ```
+
+#### 3. Inspect the Paused Status
+
+The workflow run remains in the `Running` state, while the specific step is marked with `Error` and is assigned a `retry_at` timestamp in the database.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_transient_inspect"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_transient_inspect"
+    ```
+
+### Pausing for External Events
+
+Workflows can pause execution and wait for external events (like human approval or webhook callbacks).
+
+#### 1. Define a Paused Step
+
+Returning `pgqrs::Error::Paused` tells the workflow to stop its execution until it is externally resumed or until the timeout `resume_after` is reached.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_define"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_define"
+    ```
+
+#### 2. Process Output
+
+Just like transient errors, when the worker runs into the pause signal, it releases the workflow run smoothly.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_run"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_run"
+    ```
+
+#### 3. Inspect Status
+
+The overall workflow run transitions into a `Paused` state. It won't execute further until the `resume_after` duration expires or an admin resumes it manually.
+
+=== "Rust"
+
+    ```rust
+    --8<-- "crates/pgqrs/tests/guide_tests.rs:durable_workflow_pause_inspect"
+    ```
+
+=== "Python"
+
+    ```python
+    --8<-- "py-pgqrs/tests/test_guides.py:durable_workflow_pause_inspect"
+    ```
+
+## Step-by-Step: Basic Workflow
+
+For a complete step-by-step guide, see [Basic Workflow](basic-workflow.md).
+
+## Advanced: Manual Step Control
+
+For advanced scenarios where you need more control over step execution, you can use the manual step API:
 
 ```rust
-// In your webhook handler
-store.update_step(run_id, "wait_for_approval", StepStatus::Success, Some(approval_data)).await?;
-// Make the message visible immediately to resume
-store.resume_run(run_id).await?;
+// Acquire a step
+let step = pgqrs::step()
+    .run(&run)
+    .name("fetch_data")
+    .execute()
+    .await?;
+
+// Check if step needs execution
+if step.status() == pgqrs::WorkflowStatus::Running {
+    // Do the work
+    let result = do_work().await?;
+
+    // Mark step complete
+    run.complete_step("fetch_data", result).await?;
+}
 ```
 
 ## Best Practices
 
 1. **Idempotency**: Ensure your step closures are idempotent, especially if they have side effects outside of pgqrs.
 2. **Step Granularity**: Balance between durability and performance. Too many small steps create database overhead; too few large steps mean more work is repeated on crash.
-3. **Error Classification**: Use `TransientError` for things that might succeed on retry (network issues) and permanent errors for logic or data issues.
+3. **Use workflow_step**: Prefer `pgqrs::workflow_step()` for automatic step caching. Only use manual step API when you need fine-grained control.
 
 ## Next Steps
 

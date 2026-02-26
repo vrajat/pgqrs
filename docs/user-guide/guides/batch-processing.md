@@ -104,6 +104,99 @@ Fetch and process multiple messages in one operation.
         Ok(())
     }
     ```
+    
+=== "Python"
+
+    ```python
+    import asyncio
+    import pgqrs
+
+    async def batch_dequeue_example():
+        store = await pgqrs.connect("postgresql://localhost/mydb")
+
+        # Create managed consumer
+        consumer = await store.consumer("tasks")
+
+        # Process batch with handler
+        async def process_batch(messages):
+            print(f"Processing {len(messages)} messages")
+            for msg in messages:
+                print(f"Processing: {msg.id}")
+            return True
+
+        await consumer.consume_batch(batch_size=100, handler=process_batch)
+
+    asyncio.run(batch_dequeue_example())
+    ```
+
+## Polling for Work
+
+Use `dequeue().poll(...)` when you want a worker to wait for work instead of constantly fetching empty batches. Polling keeps the worker heartbeat alive, limits spinning, and surfaces a dedicated cancellation error (`Cancelled`) when the interrupt workflow triggers.
+
+- **Default cadence**: `poll_interval` defaults to 250 ms, but you can pass `Duration::from_millis(100)` or longer depending on latency vs. CPU trade-offs.
+- **Heartbeat guardrail**: Every 5 s a heartbeat is sent while the worker waits, so tuning `poll_interval` does not affect liveness detection.
+- **Worker state**: Entering the poll loop sets the worker status to `polling`; external callers can set `interrupted` (via admin APIs) to signal the loop to exit and return a cancel error.
+- **`poll_interval` tip**: Use shorter intervals when latency matters, longer intervals when throughput is low and you want to reduce database activity. Always align the interval with downstream backpressure and heartbeat expectations.
+
+### Long-poll example
+
+```rust
+use pgqrs;
+use std::time::Duration;
+
+async fn long_poll(store: &impl pgqrs::store::Store, cancel: CancellationToken) -> Result<(), Box<dyn std::error::Error>> {
+    let messages = pgqrs::dequeue()
+        .from("tasks")
+        .batch(50)
+        .poll_interval(Duration::from_millis(200))
+        .poll(store, cancel.cancelled())
+        .await?
+        .into_iter()
+        .map(|msg| msg.id)
+        .collect::<Vec<_>>();
+
+    println!("Fetched {} messages", messages.len());
+    Ok(())
+}
+```
+
+Polling also works with `handle`/`handle_batch` builders so your handler executes as soon as work arrives without you manually re-running the loop. When a worker needs to stop, mark it `interrupted`, let `poll` surface the cancel error, and then suspend or shut down cleanly (see Worker Management guide).
+
+## Processing Patterns
+
+### Sequential Batch Processing
+
+    ```rust
+    use pgqrs;
+
+    async fn batch_dequeue_example() -> Result<(), Box<dyn std::error::Error>> {
+        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+
+        // Create managed consumer
+        let consumer = pgqrs::consumer()
+            .queue("tasks")
+            .hostname("batch-consumer")
+            .create(&store)
+            .await?;
+
+        // Fetch and process batch with handler
+        consumer.dequeue()
+            .batch(100)
+            .handle_batch(|messages| async move {
+                println!("Processing {} messages", messages.len());
+
+                for message in &messages {
+                    // Process each message
+                    println!("Processing: {}", message.id);
+                }
+
+                Ok(())
+            })
+            .await?;
+
+        Ok(())
+    }
+    ```
 
 === "Python"
 

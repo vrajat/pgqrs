@@ -38,12 +38,11 @@
 //! pgqrs::admin(&store).install().await?;
 //!
 //! pgqrs::workflow()
-//!     .name("archive_files")
-//!     .store(&store)
-//!     .create()
+//!     .name(archive_files)
+//!     .create(&store)
 //!     .await?;
 //!
-//! let consumer = pgqrs::consumer("worker-1", 8080, "archive_files")
+//! let consumer = pgqrs::consumer("worker-1", 8080, archive_files.name())
 //!     .create(&store)
 //!     .await?;
 //!
@@ -53,10 +52,9 @@
 //! let handler = { let handler = handler.clone(); move |msg| (handler)(msg) };
 //!
 //! pgqrs::workflow()
-//!     .name("archive_files")
-//!     .store(&store)
+//!     .name(archive_files)
 //!     .trigger(&json!({"path": "/tmp/report.csv"}))?
-//!     .execute()
+//!     .execute(&store)
 //!     .await?;
 //!
 //! pgqrs::dequeue()
@@ -103,7 +101,9 @@ pub use crate::tables::{
 pub use crate::workers::{Admin, Consumer, Producer, Run, Step, Worker};
 #[cfg(any(test, feature = "test-utils"))]
 pub use crate::workflow::workflow_handler_with_time;
-pub use crate::workflow::{pause_error, workflow_handler, workflow_step};
+pub use crate::workflow::{
+    pause_error, workflow_handler, workflow_step, WorkflowDef, WorkflowFuture,
+};
 
 pub use crate::config::Config;
 pub use crate::error::{Error, Result, TransientStepError};
@@ -222,19 +222,21 @@ pub fn tables<S: Store>(store: &S) -> builders::tables::TablesBuilder<'_, S> {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
 /// pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
-///     .create()
+///     .name(archive_files)
+///     .create(&store)
 ///     .await?;
 /// let message = pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
+///     .name(archive_files)
 ///     .trigger(&json!({"path": "/tmp/report.csv"}))?
-///     .execute()
+///     .execute(&store)
 ///     .await?;
 /// # Ok(()) }
 /// ```
-pub fn workflow() -> builders::workflow::WorkflowBuilder<'static, crate::store::AnyStore> {
+pub fn workflow<TInput, TOutput>() -> builders::workflow::WorkflowBuilder<TInput, TOutput>
+where
+    TInput: serde::de::DeserializeOwned + Send + 'static,
+    TOutput: serde::Serialize + Send + 'static,
+{
     builders::workflow::WorkflowBuilder::new()
 }
 
@@ -244,11 +246,12 @@ pub fn workflow() -> builders::workflow::WorkflowBuilder<'static, crate::store::
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// # #[pgqrs::pgqrs_workflow(name = "archive_files")]
+/// # async fn archive_files(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> { Ok(input) }
 /// let message = pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
+///     .name(archive_files)
 ///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
-///     .execute()
+///     .execute(&store)
 ///     .await?;
 /// let run = pgqrs::run()
 ///     .message(message)
@@ -267,11 +270,12 @@ pub fn run() -> builders::run::RunBuilder<'static, crate::store::AnyStore> {
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+/// # #[pgqrs::pgqrs_workflow(name = "archive_files")]
+/// # async fn archive_files(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> { Ok(input) }
 /// let message = pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
+///     .name(archive_files)
 ///     .trigger(&serde_json::json!({"path": "/tmp/report.csv"}))?
-///     .execute()
+///     .execute(&store)
 ///     .await?;
 /// let run = pgqrs::run()
 ///     .message(message)

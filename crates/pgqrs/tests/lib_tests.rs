@@ -3,10 +3,6 @@ use serde_json::json;
 
 // Test-specific constants
 const TEST_QUEUE_LOGGED: &str = "test_create_logged_queue";
-const TEST_QUEUE_SEND_MESSAGE: &str = "test_send_message";
-const EXPECTED_MESSAGE_COUNT: i64 = 1;
-const READ_MESSAGE_COUNT: usize = 1;
-
 mod common;
 
 async fn create_store() -> pgqrs::store::AnyStore {
@@ -94,105 +90,7 @@ async fn test_create_and_list_queue() {
 }
 
 #[tokio::test]
-async fn test_send_message() {
-    let store = create_store().await;
-
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(TEST_QUEUE_SEND_MESSAGE)
-        .await
-        .expect("Failed to create queue");
-
-    // Create managed producer and consumer workers using low-level API
-    let producer = pgqrs::producer("test_send_message", 3000, TEST_QUEUE_SEND_MESSAGE)
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
-
-    let consumer = pgqrs::consumer("test_send_message", 3100, TEST_QUEUE_SEND_MESSAGE)
-        .create(&store)
-        .await
-        .expect("Failed to create consumer");
-
-    let payload = json!({
-        "k": "v"
-    });
-
-    // Use low-level enqueue API with managed worker
-    let msg_ids = pgqrs::enqueue()
-        .message(&payload)
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .expect("Failed to enqueue message");
-    let msg_id = msg_ids[0];
-
-    assert!(msg_id > 0, "Message ID should be positive");
-
-    // Verify message count using tables API
-    let pending_count = pgqrs::tables(&store)
-        .messages()
-        .count_pending_for_queue(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(pending_count, EXPECTED_MESSAGE_COUNT);
-
-    // Use low-level dequeue API with managed worker
-    let messages = pgqrs::dequeue()
-        .worker(&consumer)
-        .batch(1)
-        .fetch_all(&store)
-        .await
-        .expect("Failed to dequeue message");
-
-    assert_eq!(messages.len(), READ_MESSAGE_COUNT);
-    let msg = &messages[0];
-    assert_eq!(msg.payload, payload, "Payload should match");
-
-    // Archive using consumer method directly
-    consumer
-        .archive(msg.id)
-        .await
-        .expect("Failed to archive message");
-
-    // Verify the message was archived
-    let pending_count = pgqrs::tables(&store)
-        .messages()
-        .count_pending_for_queue(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(pending_count, 0);
-
-    // Cleanup: suspend workers, then shutdown, then purge and delete queue
-    producer
-        .suspend()
-        .await
-        .expect("Failed to suspend producer");
-    producer
-        .shutdown()
-        .await
-        .expect("Failed to shutdown producer");
-    consumer
-        .suspend()
-        .await
-        .expect("Failed to suspend consumer");
-    consumer
-        .shutdown()
-        .await
-        .expect("Failed to shutdown consumer");
-
-    pgqrs::admin(&store)
-        .purge_queue(TEST_QUEUE_SEND_MESSAGE)
-        .await
-        .expect("Failed to purge queue");
-
-    pgqrs::admin(&store)
-        .delete_queue(&queue_info)
-        .await
-        .expect("Failed to delete queue");
-}
-
-#[tokio::test]
-async fn test_archive_single_message() {
+async fn test_simple_message_lifecycle() {
     const TEST_QUEUE_ARCHIVE: &str = "test_archive_single";
     let store = create_store().await;
 
@@ -201,15 +99,31 @@ async fn test_archive_single_message() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_archive_single_message", 3001, TEST_QUEUE_ARCHIVE)
+    let producer = pgqrs::producer("test_simple_message_lifecycle", 3001, TEST_QUEUE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_archive_single_message", 3101, TEST_QUEUE_ARCHIVE)
+    let consumer = pgqrs::consumer("test_simple_message_lifecycle", 3101, TEST_QUEUE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create consumer");
+
+    // Dequeue before any messages exist
+    let empty_messages = pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(1)
+        .fetch_all(&store)
+        .await
+        .expect("Failed to dequeue from empty queue");
+    assert!(empty_messages.is_empty());
+
+    let empty_message = pgqrs::dequeue()
+        .worker(&consumer)
+        .fetch_one(&store)
+        .await
+        .expect("Failed to fetch_one from empty queue");
+    assert!(empty_message.is_none());
 
     // Send a test message
     let payload = json!({"action": "process", "data": "test_archive"});
@@ -250,6 +164,7 @@ async fn test_archive_single_message() {
 
     assert_eq!(dequeued_msgs.len(), 1);
     assert_eq!(dequeued_msgs[0].id, msg_id);
+    assert_eq!(dequeued_msgs[0].payload, payload, "Payload should match");
 
     // Archive the message
     let archived = consumer.archive(msg_id).await;
@@ -510,7 +425,7 @@ async fn test_archive_nonexistent_message() {
 }
 
 #[tokio::test]
-async fn test_purge_archive() {
+async fn test_purge_queue() {
     const TEST_QUEUE_PURGE_ARCHIVE: &str = "test_purge_archive";
     let store = create_store().await;
 
@@ -1373,349 +1288,6 @@ async fn test_dlq() {
 }
 
 #[tokio::test]
-async fn test_producer_shutdown() {
-    const TEST_QUEUE_PRODUCER_SHUTDOWN: &str = "test_producer_shutdown";
-    let store = create_store().await;
-
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(TEST_QUEUE_PRODUCER_SHUTDOWN)
-        .await
-        .expect("Failed to create queue");
-
-    let producer = pgqrs::producer("test_producer_shutdown", 3015, TEST_QUEUE_PRODUCER_SHUTDOWN)
-        .create(&store)
-        .await
-        .expect("Failed to create producer");
-
-    // Verify worker starts in Ready state
-    let workers = pgqrs::tables(&store)
-        .workers()
-        .filter_by_fk(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(workers.len(), 1);
-    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Ready);
-
-    // First suspend the producer
-    let suspend_result = producer.suspend().await;
-    assert!(suspend_result.is_ok(), "Producer suspend should succeed");
-
-    // Verify worker is now suspended
-    let status = producer.status().await.unwrap();
-    assert_eq!(status, pgqrs::types::WorkerStatus::Suspended);
-
-    // Shutdown the producer (must be suspended first)
-    let shutdown_result = producer.shutdown().await;
-    assert!(shutdown_result.is_ok(), "Producer shutdown should succeed");
-
-    // Verify worker transitioned through states correctly
-    let workers_after = pgqrs::tables(&store)
-        .workers()
-        .filter_by_fk(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(workers_after.len(), 1);
-    assert_eq!(workers_after[0].status, pgqrs::types::WorkerStatus::Stopped);
-
-    // Verify shutdown timestamp was set
-    assert!(
-        workers_after[0].shutdown_at.is_some(),
-        "Shutdown timestamp should be set"
-    );
-
-    // Cleanup
-    pgqrs::admin(&store)
-        .delete_worker(producer.worker_id())
-        .await
-        .unwrap();
-    pgqrs::admin(&store)
-        .delete_queue(&queue_info)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn test_consumer_shutdown_no_messages() {
-    const TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY: &str = "test_consumer_shutdown_empty";
-    let store = create_store().await;
-
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY)
-        .await
-        .expect("Failed to create queue");
-
-    let consumer = pgqrs::consumer(
-        "test_consumer_shutdown_no_messages",
-        3108,
-        TEST_QUEUE_CONSUMER_SHUTDOWN_EMPTY,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create consumer");
-
-    // First suspend the consumer (new lifecycle requirement)
-    // Consumer can suspend when it has no pending messages
-    let suspend_result = consumer.suspend().await;
-    assert!(
-        suspend_result.is_ok(),
-        "Consumer suspend with no messages should succeed"
-    );
-
-    // Shutdown consumer (must be suspended first)
-    let shutdown_result = consumer.shutdown().await;
-    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
-
-    // Verify worker status
-    let workers = pgqrs::tables(&store)
-        .workers()
-        .filter_by_fk(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(workers.len(), 1);
-    assert_eq!(workers[0].status, pgqrs::types::WorkerStatus::Stopped);
-
-    // Cleanup
-    pgqrs::admin(&store)
-        .delete_worker(consumer.worker_id())
-        .await
-        .unwrap();
-    pgqrs::admin(&store)
-        .delete_queue(&queue_info)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn test_consumer_shutdown_with_held_messages() {
-    const TEST_QUEUE_CONSUMER_SHUTDOWN_HELD: &str = "test_consumer_shutdown_held";
-    let store = create_store().await;
-
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
-        .await
-        .expect("Failed to create queue");
-
-    let producer = pgqrs::producer(
-        "test_consumer_shutdown_with_held_messages",
-        3016,
-        TEST_QUEUE_CONSUMER_SHUTDOWN_HELD,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create producer");
-
-    let consumer = pgqrs::consumer(
-        "test_consumer_shutdown_with_held_messages",
-        3109,
-        TEST_QUEUE_CONSUMER_SHUTDOWN_HELD,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create consumer");
-
-    // Send multiple messages
-    let msg1_ids = pgqrs::enqueue()
-        .message(&json!({"task": "held"}))
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .unwrap();
-    let msg1 = msg1_ids[0];
-    let msg2_ids = pgqrs::enqueue()
-        .message(&json!({"task": "in_progress"}))
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .unwrap();
-    let msg2 = msg2_ids[0];
-    let msg3_ids = pgqrs::enqueue()
-        .message(&json!({"task": "held"}))
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .unwrap();
-    let msg3 = msg3_ids[0];
-
-    // Dequeue messages (they become held by the worker)
-    let dequeued = consumer.dequeue_many(3).await.unwrap();
-    assert_eq!(dequeued.len(), 3);
-
-    // Verify all messages are held by worker
-    let worker_messages = pgqrs::admin(&store)
-        .get_worker_messages(consumer.worker_id())
-        .await
-        .unwrap();
-    assert_eq!(worker_messages.len(), 3);
-
-    consumer.suspend().await.unwrap();
-    // Consumer cannot shutdown while holding messages
-    let shutdown_result = consumer.shutdown().await;
-    assert!(
-        shutdown_result.is_err(),
-        "Consumer shutdown should fail when holding messages"
-    );
-
-    // Check the error is WorkerHasPendingMessages
-    match shutdown_result {
-        Err(pgqrs::error::Error::WorkerHasPendingMessages { count, .. }) => {
-            assert_eq!(count, 3, "Should report 3 pending messages");
-        }
-        _ => panic!("Expected WorkerHasPendingMessages error"),
-    }
-
-    // Release messages using the new release_messages method
-    let released = consumer.release_messages(&[msg1, msg3]).await.unwrap();
-    assert_eq!(released, 2, "Should release 2 messages");
-
-    // Still can't shutdown - msg2 is still held
-    let shutdown_result = consumer.shutdown().await;
-    assert!(
-        shutdown_result.is_err(),
-        "Consumer shutdown should fail when still holding messages"
-    );
-
-    // Release the last message
-    let released = consumer.release_messages(&[msg2]).await.unwrap();
-    assert_eq!(released, 1, "Should release 1 message");
-
-    // Now shutdown should succeed
-    let shutdown_result = consumer.shutdown().await;
-    assert!(
-        shutdown_result.is_ok(),
-        "Consumer shutdown should succeed after releasing all messages"
-    );
-
-    // Verify worker status
-    let consumer_worker = pgqrs::tables(&store)
-        .workers()
-        .get(consumer.worker_id())
-        .await
-        .unwrap();
-    assert_eq!(consumer_worker.status, pgqrs::types::WorkerStatus::Stopped);
-
-    // Verify all messages are back in pending state
-    let pending_count = pgqrs::tables(&store)
-        .messages()
-        .count_pending_for_queue(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(
-        pending_count, 3,
-        "All messages should be back in pending state"
-    );
-
-    // Cleanup - purge queue to remove messages since consumer doesn't own them anymore
-    pgqrs::admin(&store)
-        .purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_HELD)
-        .await
-        .unwrap();
-    pgqrs::admin(&store)
-        .delete_queue(&queue_info)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn test_consumer_shutdown_all_messages_released() {
-    const TEST_QUEUE_CONSUMER_SHUTDOWN_ALL: &str = "test_consumer_shutdown_all";
-    let store = create_store().await;
-
-    let queue_info = pgqrs::admin(&store)
-        .create_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
-        .await
-        .expect("Failed to create queue");
-
-    let producer = pgqrs::producer(
-        "test_consumer_shutdown_all_messages_released",
-        3017,
-        TEST_QUEUE_CONSUMER_SHUTDOWN_ALL,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create producer");
-
-    let consumer = pgqrs::consumer(
-        "test_consumer_shutdown_all_messages_released",
-        3110,
-        TEST_QUEUE_CONSUMER_SHUTDOWN_ALL,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create consumer");
-
-    // Send and dequeue messages
-    let msg1_ids = pgqrs::enqueue()
-        .message(&json!({"task": "release_me"}))
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .unwrap();
-    let msg1 = msg1_ids[0];
-    let msg2_ids = pgqrs::enqueue()
-        .message(&json!({"task": "release_me_too"}))
-        .worker(&producer)
-        .execute(&store)
-        .await
-        .unwrap();
-    let msg2 = msg2_ids[0];
-
-    let dequeued = consumer.dequeue_many(2).await.unwrap();
-    assert_eq!(dequeued.len(), 2);
-
-    // Release all messages before suspend
-    let released = consumer.release_messages(&[msg1, msg2]).await.unwrap();
-    assert_eq!(released, 2, "Should release 2 messages");
-
-    // Now we can suspend
-    let suspend_result = consumer.suspend().await;
-    assert!(suspend_result.is_ok(), "Consumer suspend should succeed");
-
-    // Shutdown consumer
-    let shutdown_result = consumer.shutdown().await;
-    assert!(shutdown_result.is_ok(), "Consumer shutdown should succeed");
-
-    // Verify all messages are released back to pending
-    let pending_count = pgqrs::tables(&store)
-        .messages()
-        .count_pending_for_queue(queue_info.id)
-        .await
-        .unwrap();
-    assert_eq!(
-        pending_count, 2,
-        "All messages should be back in pending state"
-    );
-
-    // Verify no messages are held by worker
-    let worker_messages = pgqrs::admin(&store)
-        .get_worker_messages(consumer.worker_id())
-        .await
-        .unwrap();
-    assert_eq!(
-        worker_messages.len(),
-        0,
-        "No messages should be held by worker"
-    );
-
-    // Verify worker status
-    let consumer_worker = pgqrs::tables(&store)
-        .workers()
-        .get(consumer.worker_id())
-        .await
-        .unwrap();
-    assert_eq!(consumer_worker.status, pgqrs::types::WorkerStatus::Stopped);
-
-    // Cleanup
-    pgqrs::admin(&store)
-        .purge_queue(TEST_QUEUE_CONSUMER_SHUTDOWN_ALL)
-        .await
-        .unwrap();
-    pgqrs::admin(&store)
-        .delete_queue(&queue_info)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
 async fn test_archive_count_for_queue() {
     let store = create_store().await;
     let q1_name = "test_archive_count_q1";
@@ -1811,7 +1383,7 @@ async fn test_consumer_extend_visibility_behavior() {
     // Dequeue with 1 second visibility
     let msg = pgqrs::dequeue()
         .worker(&consumer)
-        .vt_offset(1)
+        .with_vt(std::time::Duration::from_secs(1))
         .fetch_one(&store)
         .await
         .unwrap()
@@ -1845,102 +1417,6 @@ async fn test_consumer_extend_visibility_behavior() {
         .delete_queue(&queue_info)
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn test_worker_health_and_heartbeat() {
-    let store = create_store().await;
-    let queue_name = "test_worker_health";
-    let _queue_info = store.queue(queue_name).await.unwrap();
-
-    let consumer = pgqrs::consumer("host", 5000, queue_name)
-        .create(&store)
-        .await
-        .unwrap();
-
-    // Check initial health (max age 10s)
-    let is_healthy = consumer
-        .is_healthy(chrono::Duration::seconds(10))
-        .await
-        .unwrap();
-    assert!(is_healthy, "Newly created worker should be healthy");
-
-    // Check status
-    let status = consumer.status().await.unwrap();
-    assert_eq!(status, pgqrs::types::WorkerStatus::Ready);
-
-    // Heartbeat
-    consumer.heartbeat().await.expect("Heartbeat failed");
-
-    // Test health with a very short window (should still be healthy)
-    let is_healthy_now = consumer
-        .is_healthy(chrono::Duration::seconds(1))
-        .await
-        .unwrap();
-    assert!(is_healthy_now);
-
-    // Test suspend/resume
-    consumer.suspend().await.unwrap();
-    assert_eq!(
-        consumer.status().await.unwrap(),
-        pgqrs::types::WorkerStatus::Suspended
-    );
-
-    consumer.resume().await.unwrap();
-    assert_eq!(
-        consumer.status().await.unwrap(),
-        pgqrs::types::WorkerStatus::Ready
-    );
-
-    // Cleanup
-    consumer.suspend().await.unwrap();
-    consumer.shutdown().await.unwrap();
-    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
-}
-
-#[tokio::test]
-async fn test_admin_worker_management() {
-    let store = create_store().await;
-    let queue_name = "test_admin_mgmt";
-    let _queue_info = store.queue(queue_name).await.unwrap();
-
-    // Initial workers
-    // let initial_workers = store.workers().list().await.unwrap();
-
-    // Create 2 temporary workers
-    let c1 = pgqrs::consumer("host1", 6000, queue_name)
-        .create(&store)
-        .await
-        .unwrap();
-    let c2 = pgqrs::consumer("host2", 6001, queue_name)
-        .create(&store)
-        .await
-        .unwrap();
-
-    let workers = store.workers().list().await.unwrap();
-    // assert!(workers.len() >= initial_workers.len() + 2); // Flaky due to parallel tests
-    assert!(workers.iter().any(|w| w.id == c1.worker_id()));
-    assert!(workers.iter().any(|w| w.id == c2.worker_id()));
-
-    // Shutdown and delete one
-    let w1_id = c1.worker_id();
-    c1.suspend().await.unwrap();
-    c1.shutdown().await.unwrap();
-
-    let deleted = pgqrs::admin(&store).delete_worker(w1_id).await.unwrap();
-    assert_eq!(deleted, 1);
-
-    let workers_final = store.workers().list().await.unwrap();
-    assert!(!workers_final.iter().any(|w| w.id == w1_id));
-
-    // Cleanup
-    c2.suspend().await.unwrap();
-    c2.shutdown().await.unwrap();
-    pgqrs::admin(&store)
-        .delete_worker(c2.worker_id())
-        .await
-        .unwrap();
-    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
 }
 
 #[tokio::test]

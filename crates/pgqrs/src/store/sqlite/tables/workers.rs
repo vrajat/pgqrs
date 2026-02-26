@@ -141,13 +141,13 @@ impl SqliteWorkerTable {
 
     pub async fn suspend(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status = 'ready'",
+            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status IN ('ready', 'polling', 'interrupted')", 
         )
         .bind(worker_id)
         .execute(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_READY_TO_SUSPENDED".into(),
+            query: "TRANSITION_TO_SUSPENDED".into(),
             source: Box::new(e),
             context: format!("Failed to suspend worker {}", worker_id),
         })?;
@@ -161,7 +161,7 @@ impl SqliteWorkerTable {
             return Err(crate::error::Error::InvalidStateTransition {
                 from: current_status.to_string(),
                 to: "suspended".to_string(),
-                reason: "Worker must be in Ready state to suspend".to_string(),
+                reason: "Worker must be Ready, Polling, or Interrupted to suspend".to_string(),
             });
         }
         Ok(())
@@ -212,6 +212,54 @@ impl SqliteWorkerTable {
                 from: current_status.to_string(),
                 to: "stopped".to_string(),
                 reason: "Worker must be in Suspended state to shutdown".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn poll(&self, worker_id: i64) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = $1 AND status IN ('ready', 'interrupted', 'polling')",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "TRANSITION_READY_TO_POLLING".into(),
+            source: Box::new(e),
+            context: format!("Failed to set worker {} to polling", worker_id),
+        })?;
+
+        if result.rows_affected() == 0 {
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "polling".to_string(),
+                reason: "Worker must be Ready or Interrupted to start polling".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn interrupt(&self, worker_id: i64) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE pgqrs_workers SET status = 'interrupted' WHERE id = $1 AND status = 'polling'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "TRANSITION_POLLING_TO_INTERRUPTED".into(),
+            source: Box::new(e),
+            context: format!("Failed to interrupt worker {}", worker_id),
+        })?;
+
+        if result.rows_affected() == 0 {
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "interrupted".to_string(),
+                reason: "Worker must be in Polling state to be interrupted".to_string(),
             });
         }
         Ok(())
@@ -369,7 +417,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'suspended') AND heartbeat_at < $2")
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < $2")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_one(&self.pool)
@@ -414,7 +462,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
-        let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'suspended') AND heartbeat_at < $2 ORDER BY heartbeat_at ASC")
+        let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < $2 ORDER BY heartbeat_at ASC")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_all(&self.pool)
@@ -482,6 +530,14 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                         hostname, port
                     ),
                 }),
+                WorkerStatus::Polling | WorkerStatus::Interrupted => {
+                    Err(crate::error::Error::ValidationFailed {
+                        reason: format!(
+                            "Worker {}:{} is already active. Cannot register duplicate.",
+                            hostname, port
+                        ),
+                    })
+                }
             }
         } else {
             // Create new
@@ -525,6 +581,14 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
 
     async fn shutdown(&self, id: i64) -> Result<()> {
         self.shutdown(id).await
+    }
+
+    async fn poll(&self, id: i64) -> Result<()> {
+        self.poll(id).await
+    }
+
+    async fn interrupt(&self, id: i64) -> Result<()> {
+        self.interrupt(id).await
     }
 
     async fn heartbeat(&self, id: i64) -> Result<()> {

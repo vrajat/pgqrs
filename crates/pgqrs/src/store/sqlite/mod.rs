@@ -260,34 +260,6 @@ impl Store for SqliteStore {
         Ok(workflow_record)
     }
 
-    async fn trigger(
-        &self,
-        name: &str,
-        input: Option<serde_json::Value>,
-    ) -> Result<crate::types::QueueMessage> {
-        use crate::types::NewQueueMessage;
-
-        let queue = self.queues.get_by_name(name).await?;
-        let now = chrono::Utc::now();
-
-        let payload = input.unwrap_or(serde_json::Value::Null);
-
-        let msg = self
-            .messages
-            .insert(NewQueueMessage {
-                queue_id: queue.id,
-                payload,
-                read_ct: 0,
-                enqueued_at: now,
-                vt: now,
-                producer_worker_id: None,
-                consumer_worker_id: None,
-            })
-            .await?;
-
-        Ok(msg)
-    }
-
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
         // Try to find existing run by message_id
         match self.workflow_runs.get_by_message_id(message.id).await {

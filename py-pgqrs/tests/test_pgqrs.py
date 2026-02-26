@@ -334,7 +334,7 @@ async def step2(ctx: Run, val: str):
     return f"step2_{val}"
 
 
-@workflow
+@workflow(name="simple_wf")
 async def simple_wf(ctx: Run, arg: str):
     res1 = await step1(ctx, arg)
     res2 = await step2(ctx, res1)

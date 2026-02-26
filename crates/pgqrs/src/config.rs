@@ -67,6 +67,7 @@ const ENV_SCHEMA: &str = "PGQRS_SCHEMA";
 const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
 const ENV_MAX_READ_CT: &str = "PGQRS_MAX_READ_CT";
 const ENV_HEARTBEAT_INTERVAL: &str = "PGQRS_HEARTBEAT_INTERVAL";
+const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -76,55 +77,7 @@ const DEFAULT_BATCH_SIZE: usize = 100;
 const DEFAULT_SCHEMA: &str = "public";
 const DEFAULT_MAX_READ_CT: i32 = 5;
 const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5;
-
-/// Connection and queue defaults for pgqrs.
-///
-/// The DSN is required. The schema must exist before installing pgqrs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    /// PostgreSQL connection string (DSN) - REQUIRED
-    pub dsn: String,
-    /// Schema name for pgqrs tables and objects (must exist before install)
-    #[serde(default = "default_schema")]
-    pub schema: String,
-    /// Maximum number of database connections in the pool
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-    /// Timeout (seconds) for acquiring a database connection
-    #[serde(default = "default_connection_timeout_seconds")]
-    pub connection_timeout_seconds: u64,
-    /// Default lock time (seconds) for jobs fetched from the queue
-    #[serde(default = "default_lock_time_seconds")]
-    pub default_lock_time_seconds: u32,
-    /// Maximum number of jobs to fetch in a single batch
-    #[serde(default = "default_max_batch_size")]
-    pub default_max_batch_size: usize,
-    /// Maximum read count for messages before moving to dead-letter queue
-    #[serde(default = "default_max_read_ct")]
-    pub max_read_ct: i32,
-    /// Heartbeat interval (seconds) for workers
-    #[serde(default = "default_heartbeat_interval")]
-    pub heartbeat_interval: u64,
-    /// Validation configuration for payload checking and rate limiting
-    #[serde(default)]
-    pub validation_config: crate::validation::ValidationConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            dsn: String::new(),
-            schema: DEFAULT_SCHEMA.to_string(),
-            max_connections: DEFAULT_MAX_CONNECTIONS,
-            connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
-            default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
-            default_max_batch_size: DEFAULT_BATCH_SIZE,
-            max_read_ct: DEFAULT_MAX_READ_CT,
-            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
-            validation_config: Default::default(),
-        }
-    }
-}
+const DEFAULT_POLL_INTERVAL_MS: u64 = 250;
 
 // Default functions for serde
 fn default_max_connections() -> u32 {
@@ -155,21 +108,79 @@ fn default_heartbeat_interval() -> u64 {
     DEFAULT_HEARTBEAT_INTERVAL
 }
 
+fn default_poll_interval_ms() -> u64 {
+    DEFAULT_POLL_INTERVAL_MS
+}
+
+/// Connection and queue defaults for pgqrs.
+///
+/// The DSN is required. The schema must exist before installing pgqrs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    /// PostgreSQL connection string (DSN) - REQUIRED
+    pub dsn: String,
+    /// Schema name for pgqrs tables and objects (must exist before install)
+    #[serde(default = "default_schema")]
+    pub schema: String,
+    /// Maximum number of database connections in the pool
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    /// Timeout (seconds) for acquiring a database connection
+    #[serde(default = "default_connection_timeout_seconds")]
+    pub connection_timeout_seconds: u64,
+    /// Default lock time (seconds) for jobs fetched from the queue
+    #[serde(default = "default_lock_time_seconds")]
+    pub default_lock_time_seconds: u32,
+    /// Maximum number of jobs to fetch in a single batch
+    #[serde(default = "default_max_batch_size")]
+    pub default_max_batch_size: usize,
+    /// Maximum read count for messages before moving to dead-letter queue
+    #[serde(default = "default_max_read_ct")]
+    pub max_read_ct: i32,
+    /// Heartbeat interval (seconds) for workers
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval: u64,
+
+    /// Poll interval (milliseconds) used by consumer polling loops.
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Validation configuration for payload checking and rate limiting
+    #[serde(default)]
+    pub validation_config: crate::validation::ValidationConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dsn: String::new(),
+            schema: default_schema(),
+            max_connections: default_max_connections(),
+            connection_timeout_seconds: default_connection_timeout_seconds(),
+            default_lock_time_seconds: default_lock_time_seconds(),
+            default_max_batch_size: default_max_batch_size(),
+            max_read_ct: default_max_read_ct(),
+            heartbeat_interval: default_heartbeat_interval(),
+            poll_interval_ms: default_poll_interval_ms(),
+            validation_config: Default::default(),
+        }
+    }
+}
+
 impl Config {
     /// Build a config from a DSN with default values.
     ///
     /// This ignores environment overrides.
-
     pub fn from_dsn<S: Into<String>>(dsn: S) -> Self {
         Self {
             dsn: dsn.into(),
-            schema: DEFAULT_SCHEMA.to_string(),
-            max_connections: DEFAULT_MAX_CONNECTIONS,
-            connection_timeout_seconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
-            default_lock_time_seconds: DEFAULT_LOCK_TIME_SECONDS,
-            default_max_batch_size: DEFAULT_BATCH_SIZE,
-            max_read_ct: DEFAULT_MAX_READ_CT,
-            heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            schema: default_schema(),
+            max_connections: default_max_connections(),
+            connection_timeout_seconds: default_connection_timeout_seconds(),
+            default_lock_time_seconds: default_lock_time_seconds(),
+            default_max_batch_size: default_max_batch_size(),
+            max_read_ct: default_max_read_ct(),
+            heartbeat_interval: default_heartbeat_interval(),
+            poll_interval_ms: default_poll_interval_ms(),
             validation_config: Default::default(),
         }
     }
@@ -177,8 +188,7 @@ impl Config {
     /// Build a config from a DSN and schema name.
     ///
     /// # Errors
-    /// Returns `InvalidConfig` if the schema name is not a valid identifier.
-
+    /// Returns `InvalidConfig` if the schema name is invalid.
     pub fn from_dsn_with_schema<D, S>(dsn: D, schema: S) -> Result<Self>
     where
         D: Into<String>,
@@ -196,6 +206,7 @@ impl Config {
             default_max_batch_size: DEFAULT_BATCH_SIZE,
             max_read_ct: DEFAULT_MAX_READ_CT,
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
+            poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             validation_config: Default::default(),
         })
     }
@@ -215,8 +226,8 @@ impl Config {
     /// Build a config from environment variables.
     ///
     /// # Errors
-    /// Returns `MissingConfig` when `PGQRS_DSN` is not set.
-
+    /// Returns `MissingConfig` when `PGQRS_DSN` is not found,
+    /// or other DSN-specific loading errors.
     pub fn from_env() -> Result<Self> {
         use std::env;
 
@@ -228,8 +239,7 @@ impl Config {
         Self::with_dsn_and_env_fallback(dsn)
     }
 
-    /// Build a config using a DSN plus environment fallbacks.
-
+    /// Build a config using a DSN plus environment fallback for the schema.
     fn with_dsn_and_env_fallback(dsn: String) -> Result<Self> {
         use std::env;
 
@@ -268,6 +278,11 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_HEARTBEAT_INTERVAL);
 
+        let poll_interval_ms = env::var(ENV_POLL_INTERVAL_MS)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
+
         let validation_config = env::var(ENV_VALIDATION_CONFIG)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
@@ -282,6 +297,7 @@ impl Config {
             default_max_batch_size,
             max_read_ct,
             heartbeat_interval,
+            poll_interval_ms,
             validation_config,
         })
     }
@@ -290,7 +306,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `InvalidConfig` if the file cannot be read or parsed.
-
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content =
@@ -315,7 +330,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `MissingConfig` when no DSN is provided by any source.
-
     pub fn load() -> Result<Self> {
         Self::load_with_options(None::<String>, None::<String>)
     }
@@ -323,8 +337,7 @@ impl Config {
     /// Load config with explicit DSN or config file overrides.
     ///
     /// # Errors
-    /// Returns `MissingConfig` when no DSN is provided by any source.
-
+    /// Returns `MissingConfig` when no DSN is provided and none can be found in environment.
     pub fn load_with_options<D, P>(
         explicit_dsn: Option<D>,
         explicit_config_path: Option<P>,
@@ -340,7 +353,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `InvalidConfig` for invalid schema names.
-
     pub fn load_with_schema_options<D, S, P>(
         explicit_dsn: Option<D>,
         explicit_schema: Option<S>,
@@ -371,7 +383,6 @@ impl Config {
     }
 
     /// Load config from standard sources in priority order.
-
     fn load_from_standard_sources() -> Result<Self> {
         use std::env;
 

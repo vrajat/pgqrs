@@ -10,10 +10,12 @@ use std::future::Future;
 use std::sync::{Arc, LazyLock};
 use tokio::runtime::Runtime;
 
+mod builder;
 mod tables;
 mod workers;
 mod workflow;
 
+use builder::*;
 use tables::*;
 use workers::*;
 use workflow::*;
@@ -35,6 +37,7 @@ pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
 pyo3::create_exception!(pgqrs, TransientStepError, PgqrsError);
 pyo3::create_exception!(pgqrs, RetriesExhaustedError, PgqrsError);
 pyo3::create_exception!(pgqrs, StepNotReadyError, PgqrsError);
+pyo3::create_exception!(pgqrs, PausedError, PgqrsError);
 
 pub(crate) fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
     match err {
@@ -78,6 +81,7 @@ pub(crate) fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
             RetriesExhaustedError::new_err(err.to_string())
         }
         rust_pgqrs::Error::StepNotReady { .. } => StepNotReadyError::new_err(err.to_string()),
+        rust_pgqrs::Error::Paused { .. } => PausedError::new_err(err.to_string()),
         _ => PgqrsError::new_err(err.to_string()),
     }
 }
@@ -518,23 +522,21 @@ impl PyAdmin {
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             // Ensure workflow exists
-            let _wf_rec = rust_pgqrs::workflow()
-                .store(&store)
-                .name(&name)
-                .create()
-                .await
-                .map_err(to_py_err)?;
+            let _wf_rec = store.workflow(&name).await.map_err(to_py_err)?;
 
             if let Some(input) = json_arg {
                 // If arg is provided, trigger and return a run handle
-                let run_msg = rust_pgqrs::workflow()
-                    .store(&store)
-                    .name(&name)
-                    .trigger(&input)
-                    .map_err(to_py_err)?
-                    .execute()
+                let producer = store
+                    .producer_ephemeral(&name, store.config())
                     .await
                     .map_err(to_py_err)?;
+
+                let payload = serde_json::json!({ "input": input });
+                let msgs = producer
+                    .batch_enqueue(&[payload])
+                    .await
+                    .map_err(to_py_err)?;
+                let run_msg = msgs[0].clone();
 
                 let workflow = store.run(run_msg).await.map_err(to_py_err)?;
                 let workflow_id = workflow.id();
@@ -587,6 +589,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWorkflowTriggerBuilder>()?;
     m.add_class::<PyRunBuilder>()?;
     m.add_class::<PyStepBuilder>()?;
+    m.add_class::<PyDequeueBuilder>()?;
 
     // Exceptions
     m.add("PgqrsError", py.get_type::<PgqrsError>())?;
@@ -620,6 +623,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
         py.get_type::<RetriesExhaustedError>(),
     )?;
     m.add("StepNotReadyError", py.get_type::<StepNotReadyError>())?;
+    m.add("PausedError", py.get_type::<PausedError>())?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;
@@ -631,6 +635,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enqueue, m)?)?;
     m.add_function(wrap_pyfunction!(enqueue_batch, m)?)?;
     m.add_function(wrap_pyfunction!(dequeue, m)?)?;
+    m.add_function(wrap_pyfunction!(dequeue_builder, m)?)?;
     m.add_function(wrap_pyfunction!(archive, m)?)?;
     m.add_function(wrap_pyfunction!(archive_batch, m)?)?;
     m.add_function(wrap_pyfunction!(delete, m)?)?;

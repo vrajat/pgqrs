@@ -1,137 +1,153 @@
-use crate::error::Result;
 use crate::store::Store;
 use crate::types::{QueueMessage, WorkflowRecord};
+use crate::workers::{Consumer, Producer};
+use crate::WorkflowDef;
 use serde::Serialize;
+use std::marker::PhantomData;
 
 /// Start a workflow builder.
 ///
-/// ```rust,no_run
-/// # use pgqrs;
-/// # use serde_json::json;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-/// pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
-///     .create()
-///     .await?;
-/// let message = pgqrs::workflow()
-///     .name("archive_files")
-///     .store(&store)
-///     .trigger(&json!({"path": "/tmp/report.csv"}))?
-///     .execute()
-///     .await?;
-/// # Ok(()) }
-/// ```
-pub fn workflow() -> WorkflowBuilder<'static, crate::store::AnyStore> {
+/// This API is definition-driven: `.name(...)` accepts a macro-defined workflow definition,
+/// not a string. The generic types `TInput` and `TOutput` are inferred from the workflow definition.
+pub fn workflow<TInput, TOutput>() -> WorkflowBuilder<TInput, TOutput>
+where
+    TInput: serde::de::DeserializeOwned + Send + 'static,
+    TOutput: serde::Serialize + Send + 'static,
+{
     WorkflowBuilder::new()
 }
 
-/// Workflow definition handle builder.
-///
-/// Use `.name()` plus `.store()` before `.create()` or `.trigger()`.
-pub struct WorkflowBuilder<'a, S: Store> {
-    pub(crate) store: Option<&'a S>,
-    pub(crate) name: Option<String>,
-    pub(crate) id: Option<i64>,
+pub struct WorkflowBuilder<TInput = serde_json::Value, TOutput = serde_json::Value> {
+    workflow: Option<WorkflowDef<TInput, TOutput>>,
+    consumer: Option<Consumer>,
+    producer: Option<Producer>,
+    poll_interval: std::time::Duration,
+    batch_size: usize,
+    input: Option<serde_json::Value>,
+    _marker: PhantomData<(TInput, TOutput)>,
 }
 
-impl<'a, S: Store> WorkflowBuilder<'a, S> {
-    /// Create a new workflow builder.
+impl<TInput, TOutput> WorkflowBuilder<TInput, TOutput>
+where
+    TInput: serde::de::DeserializeOwned + Send + 'static,
+    TOutput: serde::Serialize + Send + 'static,
+{
     pub fn new() -> Self {
         Self {
-            store: None,
-            name: None,
-            id: None,
+            workflow: None,
+            consumer: None,
+            producer: None,
+            poll_interval: std::time::Duration::from_millis(50),
+            batch_size: 1,
+            input: None,
+            _marker: PhantomData,
         }
     }
 
-    /// Set the store.
-    pub fn store<'b, T: Store>(self, store: &'b T) -> WorkflowBuilder<'b, T> {
-        WorkflowBuilder {
-            store: Some(store),
-            name: self.name,
-            id: self.id,
-        }
-    }
-
-    /// Set the workflow name.
-    pub fn name(mut self, name: &str) -> Self {
-        self.name = Some(name.to_string());
+    /// Select the workflow definition (macro-generated `WorkflowDef`).
+    pub fn name(mut self, workflow: WorkflowDef<TInput, TOutput>) -> Self {
+        self.workflow = Some(workflow);
         self
     }
 
-    /// Set the workflow ID.
-    pub fn id(mut self, id: i64) -> Self {
-        self.id = Some(id);
+    pub fn consumer(mut self, consumer: &Consumer) -> Self {
+        self.consumer = Some(consumer.clone());
         self
     }
 
-    /// Create/ensure the workflow definition using the provided store.
-    pub async fn create(self) -> Result<WorkflowRecord> {
-        let store = self
-            .store
-            .ok_or_else(|| crate::error::Error::ValidationFailed {
-                reason: "Store is required for WorkflowBuilder::create".to_string(),
-            })?;
-        let name = self
-            .name
-            .ok_or_else(|| crate::error::Error::ValidationFailed {
-                reason: "Workflow name is required for WorkflowBuilder::create".to_string(),
-            })?;
-        store.workflow(&name).await
+    pub fn producer(mut self, producer: &Producer) -> Self {
+        self.producer = Some(producer.clone());
+        self
     }
 
-    /// Begin building a workflow trigger.
-    pub fn trigger<T: Serialize>(self, input: &T) -> Result<WorkflowTriggerBuilder<'a, S>> {
+    pub fn poll_interval(mut self, interval: std::time::Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    pub fn batch(mut self, batch_size: usize) -> Self {
+        self.batch_size = std::cmp::max(1, batch_size);
+        self
+    }
+
+    pub async fn create<S: Store>(self, store: &S) -> crate::error::Result<WorkflowRecord> {
+        let workflow = self
+            .workflow
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "workflow definition is required".to_string(),
+            })?;
+
+        store.workflow(workflow.name()).await
+    }
+
+    pub fn trigger<T: Serialize>(mut self, input: &T) -> crate::error::Result<Self> {
         let input = serde_json::to_value(input).map_err(crate::error::Error::Serialization)?;
+        self.input = Some(input);
+        Ok(self)
+    }
 
-        Ok(WorkflowTriggerBuilder {
-            store: self.store,
-            name: self.name,
-            id: self.id,
-            input: Some(input),
-        })
+    pub async fn execute<S: Store>(self, store: &S) -> crate::error::Result<QueueMessage> {
+        let workflow = self
+            .workflow
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "workflow definition is required".to_string(),
+            })?;
+
+        let input = self
+            .input
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "workflow input is required".to_string(),
+            })?;
+
+        let payload = serde_json::json!({ "input": input });
+
+        let ids = if let Some(producer) = self.producer {
+            let msgs = producer.batch_enqueue(&[payload]).await?;
+            msgs.into_iter().map(|m| m.id).collect::<Vec<_>>()
+        } else {
+            crate::enqueue()
+                .to(workflow.name())
+                .message(&payload)
+                .execute(store)
+                .await?
+        };
+
+        store.messages().get(ids[0]).await
+    }
+
+    pub async fn poll<S: Store + Clone + 'static>(self, store: &S) -> crate::error::Result<()> {
+        let workflow = self
+            .workflow
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "workflow definition is required".to_string(),
+            })?;
+        let consumer = self
+            .consumer
+            .ok_or_else(|| crate::error::Error::ValidationFailed {
+                reason: "consumer is required".to_string(),
+            })?;
+
+        let handler = crate::workflow_handler(store.clone(), workflow.runner());
+
+        crate::dequeue()
+            .worker(&consumer)
+            .batch(self.batch_size)
+            .poll_interval(self.poll_interval)
+            .handle(move |msg| {
+                let handler = handler.clone();
+                Box::pin(async move { handler(msg).await })
+            })
+            .poll(store)
+            .await
     }
 }
 
-impl<'a, S: Store> Default for WorkflowBuilder<'a, S> {
+impl<TInput, TOutput> Default for WorkflowBuilder<TInput, TOutput>
+where
+    TInput: serde::de::DeserializeOwned + Send + 'static,
+    TOutput: serde::Serialize + Send + 'static,
+{
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Builder for triggering workflow runs.
-///
-/// Use `.execute()` to enqueue the workflow message.
-///
-/// Use `.execute()` to enqueue the workflow message.
-pub struct WorkflowTriggerBuilder<'a, S: Store> {
-    store: Option<&'a S>,
-    name: Option<String>,
-    id: Option<i64>,
-    input: Option<serde_json::Value>,
-}
-
-impl<'a, S: Store> WorkflowTriggerBuilder<'a, S> {
-    pub async fn execute(self) -> Result<QueueMessage> {
-        let store = self
-            .store
-            .ok_or_else(|| crate::error::Error::ValidationFailed {
-                reason: "Store is required for WorkflowTriggerBuilder::execute".to_string(),
-            })?;
-        let name = match (self.name, self.id) {
-            (Some(n), _) => n,
-            (None, Some(id)) => {
-                let rec = store.workflows().get(id).await?;
-                rec.name
-            }
-            (None, None) => {
-                return Err(crate::error::Error::ValidationFailed {
-                    reason: "Workflow name or ID is required for trigger".to_string(),
-                })
-            }
-        };
-        store.trigger(&name, self.input).await
     }
 }

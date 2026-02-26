@@ -10,7 +10,6 @@ results
 *.log
 __pycache__/
 .pytest_cache/
-.vscode
 *_worktree/
 site/
 .tmp/

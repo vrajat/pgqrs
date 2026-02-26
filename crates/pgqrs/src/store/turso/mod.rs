@@ -6,9 +6,9 @@ use crate::store::{
 };
 use crate::{Admin, Worker};
 
-use crate::types::{NewQueueMessage, NewQueueRecord};
+use crate::types::NewQueueRecord;
 use async_trait::async_trait;
-use chrono::Utc;
+
 use std::sync::Arc;
 use turso::{Database, Row};
 
@@ -795,32 +795,6 @@ impl Store for TursoStore {
             })?;
 
         Ok(workflow_record)
-    }
-
-    async fn trigger(
-        &self,
-        name: &str,
-        input: Option<serde_json::Value>,
-    ) -> Result<crate::types::QueueMessage> {
-        let queue = self.queues.get_by_name(name).await?;
-        let now = Utc::now();
-
-        let payload = input.unwrap_or(serde_json::Value::Null);
-
-        let msg = self
-            .messages
-            .insert(NewQueueMessage {
-                queue_id: queue.id,
-                payload,
-                read_ct: 0,
-                enqueued_at: now,
-                vt: now,
-                producer_worker_id: None,
-                consumer_worker_id: None,
-            })
-            .await?;
-
-        Ok(msg)
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {

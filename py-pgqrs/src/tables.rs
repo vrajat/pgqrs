@@ -366,7 +366,14 @@ impl PyQueueMessage {
 
     #[getter]
     fn payload(&self, py: Python) -> PyObject {
-        json_to_py(py, &self.inner.payload).unwrap_or(py.None())
+        // Workflow triggers enqueue payloads as `{ "input": <value> }`.
+        // For Python users/tests, expose the logical input value.
+        let val = self
+            .inner
+            .payload
+            .get("input")
+            .unwrap_or(&self.inner.payload);
+        json_to_py(py, val).unwrap_or(py.None())
     }
 
     #[getter]

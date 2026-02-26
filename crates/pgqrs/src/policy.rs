@@ -49,7 +49,6 @@ impl Default for StepRetryPolicy {
 
 impl StepRetryPolicy {
     /// Calculate delay in seconds for a retry attempt.
-
     pub fn calculate_delay(&self, attempt: u32) -> u32 {
         match &self.backoff {
             BackoffStrategy::Fixed { delay_seconds } => *delay_seconds,
@@ -97,25 +96,22 @@ impl StepRetryPolicy {
     }
 
     /// Return true if the given attempt should retry.
-
     pub fn should_retry(&self, attempt: u32) -> bool {
         attempt < self.max_attempts
     }
-
     /// Extract retry delay from an error or policy.
-
-    pub fn extract_retry_delay(&self, error: &serde_json::Value, retry_count: i32) -> u64 {
+    pub fn extract_retry_delay(&self, error: &serde_json::Value, attempt: u32) -> u32 {
         if let Some(retry_after_val) = error.get("retry_after") {
             if let Some(secs) = retry_after_val.as_u64() {
                 // Use custom delay from error as plain seconds (e.g., Retry-After header)
-                return secs;
+                return secs as u32;
             } else if let Some(secs) = retry_after_val.get("secs").and_then(|v| v.as_u64()) {
                 // Use custom delay from error when serialized as a Duration { secs, nanos }
-                return secs;
+                return secs as u32;
             }
         }
         // Use policy backoff
-        self.calculate_delay(retry_count as u32) as u64
+        self.calculate_delay(attempt)
     }
 }
 

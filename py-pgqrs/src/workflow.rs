@@ -2,7 +2,7 @@ use crate::tables::PyQueueMessage;
 use crate::{json_to_py, py_to_json, to_py_err, PgqrsError, PyStore};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
-use rust_pgqrs::store::AnyStore;
+use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::types::QueueMessage as RustQueueMessage;
 use rust_pgqrs::{Run, Step};
 use std::sync::Arc;
@@ -59,6 +59,17 @@ impl PyRun {
     #[getter]
     fn current_time(&self) -> Option<String> {
         self.inner.current_time().map(|dt| dt.to_rfc3339())
+    }
+
+    #[getter]
+    fn input<'a>(&self, py: Python<'a>) -> PyResult<PyObject> {
+        let input = self
+            .inner
+            .record()
+            .input
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
+        crate::json_to_py(py, &input)
     }
 
     fn with_time(&self, time: String) -> PyResult<Self> {
@@ -368,15 +379,15 @@ impl PyWorkflowBuilder {
         let store = self.store.clone();
         let name = self.name.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut builder = rust_pgqrs::workflow();
-            if let Some(ref s) = store {
-                builder = builder.store(s);
-            }
-            if let Some(ref n) = name {
-                builder = builder.name(n);
-            }
-            let res = builder.create().await.map_err(to_py_err)?;
-            Ok(WorkflowRecord::from(res))
+            let store = store.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("store is required")
+            })?;
+            let name = name.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("name is required")
+            })?;
+
+            let rec = store.workflow(&name).await.map_err(to_py_err)?;
+            Ok(WorkflowRecord::from(rec))
         })
     }
 
@@ -395,6 +406,7 @@ impl PyWorkflowBuilder {
 pub struct PyWorkflowTriggerBuilder {
     pub(crate) store: Option<AnyStore>,
     pub(crate) name: Option<String>,
+    #[allow(dead_code)]
     pub(crate) id: Option<i64>,
     pub(crate) input: serde_json::Value,
 }
@@ -404,22 +416,36 @@ impl PyWorkflowTriggerBuilder {
     fn execute<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
         let store = self.store.clone();
         let name = self.name.clone();
-        let id = self.id;
         let input = self.input.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let mut builder = rust_pgqrs::workflow();
-            if let Some(ref s) = store {
-                builder = builder.store(s);
-            }
-            if let Some(ref n) = name {
-                builder = builder.name(n);
-            }
-            if let Some(i) = id {
-                builder = builder.id(i);
-            }
-            let trigger = builder.trigger(&input).map_err(to_py_err)?;
-            let msg = trigger.execute().await.map_err(to_py_err)?;
-            Ok(PyQueueMessage::from(msg))
+            let store = store.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("store is required")
+            })?;
+            let name = name.ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("name is required")
+            })?;
+
+            // Workflow should already exist; do not auto-create here.
+            // This prevents trigger() from failing with WorkflowAlreadyExists when
+            // create() was already called by the test/user.
+            let _ = store
+                .workflows()
+                .get_by_name(&name)
+                .await
+                .map_err(to_py_err)?;
+
+            let producer = store
+                .producer_ephemeral(&name, store.config())
+                .await
+                .map_err(to_py_err)?;
+
+            let payload = serde_json::json!({ "input": input });
+            let msgs = producer
+                .batch_enqueue(&[payload])
+                .await
+                .map_err(to_py_err)?;
+
+            Ok(PyQueueMessage::from(msgs[0].clone()))
         })
     }
 }

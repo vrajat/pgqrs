@@ -62,7 +62,6 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
 
     - [Basic Workflow](guides/basic-workflow.md)
     - [Durable Workflows](guides/durable-workflows.md)
-    - [Retry & Pause](guides/durable-workflows.md#advanced-pausing-for-external-events)
     - [Batch Processing](guides/batch-processing.md)
     - [Delayed Messages](guides/delayed-messages.md)
     - [Worker Management](guides/worker-management.md)

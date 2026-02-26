@@ -1,10 +1,10 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
-use crate::store::turso::parse_turso_timestamp;
 use crate::store::turso::tables::messages::TursoMessageTable;
 use crate::store::turso::tables::queues::TursoQueueTable;
 use crate::store::turso::tables::workers::TursoWorkerTable;
+use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::store::{Admin, MessageTable, QueueTable, Worker, WorkerTable};
 use crate::types::{QueueMessage, QueueRecord, WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
@@ -70,7 +70,7 @@ const FIND_OLD_WORKERS_TO_PURGE: &str = r#"
     SELECT w.id FROM pgqrs_workers w
     LEFT JOIN pgqrs_messages m ON m.producer_worker_id = w.id OR m.consumer_worker_id = w.id
     WHERE w.status = 'stopped'
-      AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds')
+      AND w.heartbeat_at < ?
       AND m.id IS NULL
     GROUP BY w.id
 "#;
@@ -122,9 +122,11 @@ const GET_WORKER_HEALTH_GLOBAL: &str = r#"
         'Global',
         COUNT(*),
         SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'polling' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END),
         SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END),
         SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END),
-        SUM(CASE WHEN status = 'ready' AND heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+        SUM(CASE WHEN status IN ('ready', 'polling') AND heartbeat_at < ? THEN 1 ELSE 0 END)
     FROM pgqrs_workers
 "#;
 
@@ -133,9 +135,11 @@ const GET_WORKER_HEALTH_BY_QUEUE: &str = r#"
         COALESCE(q.queue_name, 'Admin'),
         COUNT(w.id),
         SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'polling' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN w.status = 'interrupted' THEN 1 ELSE 0 END),
         SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END),
         SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END),
-        SUM(CASE WHEN w.status = 'ready' AND w.heartbeat_at < datetime('now', '-' || ? || ' seconds') THEN 1 ELSE 0 END)
+        SUM(CASE WHEN w.status IN ('ready', 'polling') AND w.heartbeat_at < ? THEN 1 ELSE 0 END)
     FROM pgqrs_workers w
     LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
     GROUP BY q.queue_name
@@ -236,9 +240,11 @@ impl TursoAdmin {
             queue_name: row.get(0)?,
             total_workers: row.get(1)?,
             ready_workers: row.get(2)?,
-            suspended_workers: row.get(3)?,
-            stopped_workers: row.get(4)?,
-            stale_workers: row.get(5)?,
+            polling_workers: row.get(3)?,
+            interrupted_workers: row.get(4)?,
+            suspended_workers: row.get(5)?,
+            stopped_workers: row.get(6)?,
+            stale_workers: row.get(7)?,
         })
     }
 }
@@ -453,7 +459,11 @@ impl Admin for TursoAdmin {
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
     ) -> Result<Vec<WorkerHealthStats>> {
-        let seconds = heartbeat_timeout.num_seconds();
+        let threshold = Utc::now() - heartbeat_timeout;
+        let threshold_str = parse_turso_timestamp(&format_turso_timestamp(&threshold))
+            .map(|t| format_turso_timestamp(&t))
+            .unwrap_or_else(|_| format_turso_timestamp(&threshold));
+
         let query_str = if group_by_queue {
             GET_WORKER_HEALTH_BY_QUEUE
         } else {
@@ -461,7 +471,7 @@ impl Admin for TursoAdmin {
         };
 
         let rows = crate::store::turso::query(query_str)
-            .bind(seconds)
+            .bind(threshold_str)
             .fetch_all(&self.db)
             .await?;
 
@@ -481,6 +491,14 @@ impl Admin for TursoAdmin {
         let ready_workers = workers
             .iter()
             .filter(|w| w.status == WorkerStatus::Ready)
+            .count() as u32;
+        let polling_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Polling)
+            .count() as u32;
+        let interrupted_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Interrupted)
             .count() as u32;
         let stopped_workers = workers
             .iter()
@@ -518,6 +536,8 @@ impl Admin for TursoAdmin {
         Ok(WorkerStats {
             total_workers,
             ready_workers,
+            polling_workers,
+            interrupted_workers,
             suspended_workers,
             stopped_workers,
             average_messages_per_worker,
@@ -677,11 +697,14 @@ impl Admin for TursoAdmin {
     }
 
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
-        let seconds = older_than.num_seconds();
+        let threshold = Utc::now() - older_than;
+        let threshold_str = parse_turso_timestamp(&format_turso_timestamp(&threshold))
+            .map(|t| format_turso_timestamp(&t))
+            .unwrap_or_else(|_| format_turso_timestamp(&threshold));
 
         // 1. Find candidates
         let rows = crate::store::turso::query(FIND_OLD_WORKERS_TO_PURGE)
-            .bind(seconds)
+            .bind(threshold_str)
             .fetch_all(&self.db)
             .await?;
 

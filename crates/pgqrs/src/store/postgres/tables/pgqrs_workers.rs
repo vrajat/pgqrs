@@ -59,7 +59,7 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
     SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = $1
-    AND status IN ('ready', 'suspended')
+    AND status IN ('ready', 'polling', 'suspended', 'interrupted')
     AND heartbeat_at < NOW() - $2
     ORDER BY heartbeat_at ASC
 "#;
@@ -211,20 +211,20 @@ impl Workers {
         Ok(is_healthy)
     }
 
-    /// Transition worker from Ready to Suspended.
+    /// Transition worker to Suspended.
     pub async fn suspend(&self, worker_id: i64) -> Result<()> {
-        const TRANSITION_READY_TO_SUSPENDED: &str = r#"
+        const TRANSITION_TO_SUSPENDED: &str = r#"
             UPDATE pgqrs_workers
             SET status = 'suspended'
-            WHERE id = $1 AND status = 'ready'
+            WHERE id = $1 AND status IN ('ready', 'polling', 'interrupted')
             RETURNING id
         "#;
-        let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_TO_SUSPENDED)
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_TO_SUSPENDED)
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: "TRANSITION_READY_TO_SUSPENDED".into(),
+                query: "TRANSITION_TO_SUSPENDED".into(),
                 source: Box::new(e),
                 context: format!("Failed to suspend worker {}", worker_id),
             })?;
@@ -236,7 +236,7 @@ impl Workers {
                 Err(crate::error::Error::InvalidStateTransition {
                     from: current_status.to_string(),
                     to: "suspended".to_string(),
-                    reason: "Worker must be in Ready state to suspend".to_string(),
+                    reason: "Worker must be Ready, Polling, or Interrupted to suspend".to_string(),
                 })
             }
         }
@@ -271,6 +271,66 @@ impl Workers {
                 })
             }
         }
+    }
+
+    /// Transition worker from Ready to Polling.
+    pub async fn poll(&self, worker_id: i64) -> Result<()> {
+        const TRANSITION_READY_OR_INTERRUPTED_TO_POLLING: &str = r#"
+            UPDATE pgqrs_workers
+            SET status = 'polling'
+            WHERE id = $1 AND status IN ('ready', 'interrupted', 'polling')
+            RETURNING id
+        "#;
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_OR_INTERRUPTED_TO_POLLING)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "TRANSITION_READY_TO_POLLING".into(),
+                source: Box::new(e),
+                context: format!("Failed to set worker {} to polling", worker_id),
+            })?;
+
+        if result.is_some() {
+            return Ok(());
+        }
+
+        let current_status = self.get_status(worker_id).await?;
+        Err(crate::error::Error::InvalidStateTransition {
+            from: current_status.to_string(),
+            to: "polling".to_string(),
+            reason: "Worker must be Ready or Interrupted to start polling".to_string(),
+        })
+    }
+
+    /// Transition worker from Polling to Interrupted.
+    pub async fn interrupt(&self, worker_id: i64) -> Result<()> {
+        const TRANSITION_POLLING_TO_INTERRUPTED: &str = r#"
+            UPDATE pgqrs_workers
+            SET status = 'interrupted'
+            WHERE id = $1 AND status = 'polling'
+            RETURNING id
+        "#;
+        let result: Option<i64> = sqlx::query_scalar(TRANSITION_POLLING_TO_INTERRUPTED)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "TRANSITION_POLLING_TO_INTERRUPTED".into(),
+                source: Box::new(e),
+                context: format!("Failed to interrupt worker {}", worker_id),
+            })?;
+
+        if result.is_some() {
+            return Ok(());
+        }
+
+        let current_status = self.get_status(worker_id).await?;
+        Err(crate::error::Error::InvalidStateTransition {
+            from: current_status.to_string(),
+            to: "interrupted".to_string(),
+            reason: "Worker must be in Polling state to be interrupted".to_string(),
+        })
     }
 
     /// Shutdown worker: transition from Suspended to Stopped.
@@ -460,7 +520,7 @@ impl crate::store::WorkerTable for Workers {
             SELECT COUNT(*)
             FROM pgqrs_workers
             WHERE queue_id = $1
-            AND status IN ('ready', 'suspended')
+            AND status IN ('ready', 'polling', 'suspended', 'interrupted')
             AND heartbeat_at < NOW() - $2
         "#;
 
@@ -571,6 +631,14 @@ impl crate::store::WorkerTable for Workers {
                             ),
                         });
                     }
+                    WorkerStatus::Polling | WorkerStatus::Interrupted => {
+                        return Err(crate::error::Error::ValidationFailed {
+                            reason: format!(
+                                "Worker {}:{} is already active. Cannot register duplicate.",
+                                hostname, port
+                            ),
+                        });
+                    }
                 }
             }
             None => {
@@ -640,6 +708,14 @@ impl crate::store::WorkerTable for Workers {
 
     async fn shutdown(&self, id: i64) -> Result<()> {
         self.shutdown(id).await
+    }
+
+    async fn poll(&self, id: i64) -> Result<()> {
+        self.poll(id).await
+    }
+
+    async fn interrupt(&self, id: i64) -> Result<()> {
+        self.interrupt(id).await
     }
 
     async fn heartbeat(&self, id: i64) -> Result<()> {

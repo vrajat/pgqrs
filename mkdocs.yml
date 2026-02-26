@@ -74,6 +74,7 @@ nav:
       - Workflows: user-guide/api/workflows.md
     - Guides:
       - user-guide/guides/index.md
+      - Basic Queue: user-guide/guides/basic-queue.md
       - Basic Workflow: user-guide/guides/basic-workflow.md
       - Durable Workflows: user-guide/guides/durable-workflows.md
       - Batch Processing: user-guide/guides/batch-processing.md
@@ -119,6 +120,8 @@ markdown_extensions:
   - pymdownx.keys
   - pymdownx.mark
   - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid

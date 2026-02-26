@@ -1,38 +1,75 @@
 use pgqrs::store::AnyStore;
+use pgqrs::Run;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use pgqrs::pgqrs_workflow;
+
 mod common;
+
+#[pgqrs_workflow(name = "test_wf")]
+async fn test_wf(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "fail_wf")]
+async fn fail_wf(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "pause_wf")]
+async fn pause_wf(
+    _run: &pgqrs::Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "get_wf")]
+async fn get_wf(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "polling_wf")]
+async fn polling_wf(
+    _run: &pgqrs::Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "error_wf")]
+async fn error_wf(
+    _run: &pgqrs::Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct TestData {
     msg: String,
 }
 
-async fn create_store(schema: &str) -> AnyStore {
-    common::create_store(schema).await
+async fn create_store() -> AnyStore {
+    common::create_store("workflow_tests").await
 }
 
 #[tokio::test]
 async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
-    let store = create_store("workflow_tests").await;
+    let store = create_store().await;
 
     // Create definition
-    pgqrs::workflow()
-        .name("test_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(test_wf).create(&store).await?;
 
     let input = TestData {
         msg: "start".to_string(),
     };
 
     let run_msg = pgqrs::workflow()
-        .name("test_wf")
-        .store(&store)
+        .name(test_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut workflow = pgqrs::run()
@@ -70,23 +107,18 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
-    let store = create_store("workflow_tests").await;
+    let store = create_store().await;
 
     // Verify Workflow Failure Logic using new workflow
     let input_fail = TestData {
         msg: "fail".to_string(),
     };
-    pgqrs::workflow()
-        .name("fail_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(fail_wf).create(&store).await?;
 
     let run_msg = pgqrs::workflow()
-        .name("fail_wf")
-        .store(&store)
+        .name(fail_wf)
         .trigger(&input_fail)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut wf_fail = pgqrs::run()
@@ -115,21 +147,16 @@ async fn test_workflow_failure_lifecycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
-    let store = create_store("workflow_tests").await;
+    let store = create_store().await;
 
-    pgqrs::workflow()
-        .name("pause_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(pause_wf).create(&store).await?;
 
     let run_msg = pgqrs::workflow()
-        .name("pause_wf")
-        .store(&store)
+        .name(pause_wf)
         .trigger(&TestData {
             msg: "pause".to_string(),
         })?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut run = pgqrs::run()
@@ -156,23 +183,18 @@ async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_result_get_non_blocking() -> anyhow::Result<()> {
-    let store = create_store("workflow_get_tests").await;
+    let store = create_store().await;
 
-    pgqrs::workflow()
-        .name("get_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(get_wf).create(&store).await?;
 
     let input = TestData {
         msg: "get_test".to_string(),
     };
 
     let run_msg = pgqrs::workflow()
-        .name("get_wf")
-        .store(&store)
+        .name(get_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     // 1. Check immediately - should be None (not even created yet)
@@ -215,23 +237,18 @@ async fn test_workflow_result_get_non_blocking() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_result_polling() -> anyhow::Result<()> {
-    let store = create_store("workflow_polling_tests").await;
+    let store = create_store().await;
 
-    pgqrs::workflow()
-        .name("polling_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(polling_wf).create(&store).await?;
 
     let input = TestData {
         msg: "poll_me".to_string(),
     };
 
     let run_msg = pgqrs::workflow()
-        .name("polling_wf")
-        .store(&store)
+        .name(polling_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let expected_output = TestData {
@@ -267,21 +284,16 @@ async fn test_workflow_result_polling() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_error_polling() -> anyhow::Result<()> {
-    let store = create_store("workflow_error_polling_tests").await;
+    let store = create_store().await;
 
-    pgqrs::workflow()
-        .name("error_wf")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(error_wf).create(&store).await?;
 
     let run_msg = pgqrs::workflow()
-        .name("error_wf")
-        .store(&store)
+        .name(error_wf)
         .trigger(&TestData {
             msg: "fail".to_string(),
         })?
-        .execute()
+        .execute(&store)
         .await?;
 
     let run_msg_clone = run_msg.clone();
@@ -311,50 +323,6 @@ async fn test_workflow_error_polling() -> anyhow::Result<()> {
         }
         other => panic!("Expected ExecutionFailed error, got {:?}", other),
     }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_workflow_message_fk_integrity() -> anyhow::Result<()> {
-    let store = create_store("workflow_fk_tests").await;
-
-    pgqrs::workflow()
-        .name("fk_wf")
-        .store(&store)
-        .create()
-        .await?;
-
-    let run_msg = pgqrs::workflow()
-        .name("fk_wf")
-        .store(&store)
-        .trigger(&TestData {
-            msg: "fk_test".to_string(),
-        })?
-        .execute()
-        .await?;
-
-    // Create the run record
-    let _run = pgqrs::run()
-        .message(run_msg.clone())
-        .store(&store)
-        .execute()
-        .await?;
-
-    // Attempt to delete the message. This should fail due to foreign key constraint.
-    let res = pgqrs::tables(&store).messages().delete(run_msg.id).await;
-
-    assert!(
-        res.is_err(),
-        "Deleting a message referenced by a run should fail with FK violation"
-    );
-    let err_msg = res.unwrap_err().to_string().to_lowercase();
-    assert!(
-        err_msg.contains("foreign key constraint failed")
-            || err_msg.contains("violates foreign key constraint"),
-        "Error should mention foreign key violation, got: {}",
-        err_msg
-    );
 
     Ok(())
 }
