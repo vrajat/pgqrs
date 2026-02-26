@@ -187,21 +187,15 @@ where
             }
             run = run.start().await?;
 
+            // Workflow triggers enqueue payloads in the shape `{ "input": <T> }`.
+            // For replay/resume messages we may also see `{ "input": <T>, "run_id": <id> }`.
+            // Prefer deserializing from the `input` field when present, and fall back to the full
+            // payload only for backward-compat / alternate producer shapes.
             let input: T = if let Some(input) = msg.payload.get("input") {
-                if msg.payload.get("run_id").is_some()
-                    && msg
-                        .payload
-                        .as_object()
-                        .map(|o| o.len() == 2)
-                        .unwrap_or(false)
-                {
-                    serde_json::from_value(input.clone())
-                        .or_else(|_| serde_json::from_value(msg.payload.clone()))?
-                } else {
-                    serde_json::from_value(msg.payload)?
-                }
+                serde_json::from_value(input.clone())
+                    .or_else(|_| serde_json::from_value(msg.payload.clone()))?
             } else {
-                serde_json::from_value(msg.payload)?
+                serde_json::from_value(msg.payload.clone())?
             };
 
             match handler(run.clone(), input).await {

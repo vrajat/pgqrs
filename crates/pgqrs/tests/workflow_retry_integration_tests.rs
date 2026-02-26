@@ -1,55 +1,83 @@
 use chrono::Utc;
 use pgqrs::error::Error;
+use pgqrs::pgqrs_workflow;
 use pgqrs::store::AnyStore;
+use pgqrs::Run;
 use serde::{Deserialize, Serialize};
 
 mod common;
+
+#[pgqrs_workflow(name = "not_ready_test_wf")]
+async fn not_ready_test_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "exhaust_retry_wf")]
+async fn exhaust_retry_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "non_transient_wf")]
+async fn non_transient_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "concurrent_step_retries_wf")]
+async fn concurrent_step_retries_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct TestData {
     msg: String,
 }
 
-async fn create_store(schema: &str) -> AnyStore {
-    common::create_store(schema).await
+async fn create_store() -> AnyStore {
+    common::create_store("workflow_retry_integration_tests").await
 }
 
 /// Test that a step with transient error returns StepNotReady
 #[tokio::test]
 async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
+    let store = create_store().await;
 
     // Create definition
     pgqrs::workflow()
-        .name("not_ready_test_wf")
-        .store(&store)
-        .create()
+        .name(not_ready_test_wf)
+        .create(&store)
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
     let run_msg = pgqrs::workflow()
-        .name("not_ready_test_wf")
-        .store(&store)
+        .name(not_ready_test_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
-    let mut workflow = pgqrs::run()
+    let mut run = pgqrs::run()
         .message(run_msg)
         .store(&store)
         .execute()
         .await?;
-    workflow = workflow.start().await?;
+    run = run.start().await?;
 
     // Step 1: Fail with transient error
     let step_name = "transient_step";
-    let step_rec = pgqrs::step()
-        .run(&workflow)
-        .name(step_name)
-        .execute()
-        .await?;
+    let step_rec = pgqrs::step().run(&run).name(step_name).execute().await?;
 
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
@@ -59,10 +87,10 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         "code": "NETWORK_TIMEOUT",
         "message": "Connection timeout",
     });
-    workflow.fail_step(step_name, error, Utc::now()).await?;
+    run.fail_step(step_name, error, Utc::now()).await?;
 
     // Try to acquire again - should return StepNotReady immediately
-    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
+    let step_res = pgqrs::step().run(&run).name(step_name).execute().await;
 
     // Should get StepNotReady error
     match step_res {
@@ -77,57 +105,18 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         Err(e) => panic!("Expected StepNotReady, got: {:?}", e),
     }
 
-    Ok(())
-}
-
-/// Test that step becomes ready after retry_at timestamp passes
-#[tokio::test]
-async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
-
-    // Create definition
-    pgqrs::workflow()
-        .name("becomes_ready_wf")
-        .store(&store)
-        .create()
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let run_msg = pgqrs::workflow()
-        .name("becomes_ready_wf")
-        .store(&store)
-        .trigger(&input)?
-        .execute()
-        .await?;
-
-    let mut workflow = pgqrs::run()
-        .message(run_msg)
-        .store(&store)
-        .execute()
-        .await?;
-    workflow = workflow.start().await?;
-
-    let step_name = "delayed_step";
-
-    // Fail with transient error
+    // Workflow should still be in RUNNING state
+    let other_step_name = "other_step";
     let step_rec = pgqrs::step()
-        .run(&workflow)
-        .name(step_name)
+        .run(&run)
+        .name(other_step_name)
         .execute()
         .await?;
+
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
-    let error = serde_json::json!({
-        "is_transient": true,
-        "code": "TIMEOUT",
-        "message": "Initial failure",
-    });
-    workflow.fail_step(step_name, error, Utc::now()).await?;
-
     // Get the retry_at timestamp
-    let step_res = pgqrs::step().run(&workflow).name(step_name).execute().await;
+    let step_res = pgqrs::step().run(&run).name(step_name).execute().await;
 
     let retry_at = match step_res {
         Err(Error::StepNotReady { retry_at, .. }) => retry_at,
@@ -139,7 +128,7 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 
     // Now should be able to acquire for execution
     let step_rec = pgqrs::step()
-        .run(&workflow)
+        .run(&run)
         .name(step_name)
         .with_time(simulated_time)
         .execute()
@@ -151,16 +140,11 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
     let output = TestData {
         msg: "success_after_retry".to_string(),
     };
-    workflow
-        .complete_step(step_name, serde_json::to_value(&output)?)
+    run.complete_step(step_name, serde_json::to_value(&output)?)
         .await?;
 
     // Verify step now succeeds on next acquire
-    let step_rec = pgqrs::step()
-        .run(&workflow)
-        .name(step_name)
-        .execute()
-        .await?;
+    let step_rec = pgqrs::step().run(&run).name(step_name).execute().await?;
 
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Success);
     let data: TestData = serde_json::from_value(step_rec.output().unwrap().clone())?;
@@ -172,23 +156,21 @@ async fn test_step_ready_after_retry_at() -> anyhow::Result<()> {
 /// Test that a step exhausts retries and fails permanently
 #[tokio::test]
 async fn test_step_exhausts_retries() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
+    let store = create_store().await;
 
     // Create definition
     pgqrs::workflow()
-        .name("exhaust_retry_wf")
-        .store(&store)
-        .create()
+        .name(exhaust_retry_wf)
+        .create(&store)
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
     let run_msg = pgqrs::workflow()
-        .name("exhaust_retry_wf")
-        .store(&store)
+        .name(exhaust_retry_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut workflow = pgqrs::run()
@@ -302,22 +284,20 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
 /// Test that non-transient errors fail immediately without retry
 #[tokio::test]
 async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
+    let store = create_store().await;
 
     pgqrs::workflow()
-        .name("non_transient_wf")
-        .store(&store)
-        .create()
+        .name(non_transient_wf)
+        .create(&store)
         .await?;
 
     let input = TestData {
         msg: "test".to_string(),
     };
     let run_msg = pgqrs::workflow()
-        .name("non_transient_wf")
-        .store(&store)
+        .name(non_transient_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut workflow = pgqrs::run()
@@ -356,63 +336,16 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_workflow_stays_running_during_retry() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
-
-    pgqrs::workflow()
-        .name("running_state_wf")
-        .store(&store)
-        .create()
-        .await?;
-
-    let input = TestData {
-        msg: "test".to_string(),
-    };
-    let run_msg = pgqrs::workflow()
-        .name("running_state_wf")
-        .store(&store)
-        .trigger(&input)?
-        .execute()
-        .await?;
-
-    let mut workflow = pgqrs::run()
-        .message(run_msg)
-        .store(&store)
-        .execute()
-        .await?;
-    workflow = workflow.start().await?;
-
-    let step_name = "running_step";
-
-    let _ = pgqrs::step()
-        .run(&workflow)
-        .name(step_name)
-        .execute()
-        .await?;
-
-    let error = serde_json::json!({
-        "is_transient": true,
-        "code": "TIMEOUT",
-        "message": "Timeout",
-    });
-    workflow.fail_step(step_name, error, Utc::now()).await?;
-
-    // Workflow should still be in RUNNING state
-    let other_step_name = "other_step";
-    let step_rec = pgqrs::step()
-        .run(&workflow)
-        .name(other_step_name)
-        .execute()
-        .await?;
-
-    assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_concurrent_step_retries() -> anyhow::Result<()> {
-    let store = create_store("workflow_retry_integration_tests").await;
+    let store = create_store().await;
+
+    // This test used to generate unique workflow names dynamically.
+    // With the new API, workflows are definition-driven (macro-generated WorkflowDef),
+    // so we create a single workflow definition and run multiple runs concurrently.
+    pgqrs::workflow()
+        .name(concurrent_step_retries_wf)
+        .create(&store)
+        .await?;
 
     let mut handles = vec![];
 
@@ -423,20 +356,12 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
             let input = TestData {
                 msg: format!("test_{}", i),
             };
-            let name = format!("concurrent_wf_{}", i);
-            pgqrs::workflow()
-                .name(&name)
-                .store(&store)
-                .create()
-                .await
-                .unwrap();
 
             let run_msg = pgqrs::workflow()
-                .name(&name)
-                .store(&store)
+                .name(concurrent_step_retries_wf)
                 .trigger(&input)
                 .unwrap()
-                .execute()
+                .execute(&store)
                 .await
                 .unwrap();
 

@@ -1,12 +1,10 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store, WorkflowFuture};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store};
 use serde::{Deserialize, Serialize};
 
 mod common;
 
-#[pgqrs_workflow(name = "core_sample_workflow")]
-async fn core_sample_workflow(ctx: &Run, input: TestData) -> anyhow::Result<TestData> {
-    let result = my_workflow.run(ctx.clone(), input).await?;
-    Ok(result)
+async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
+    common::create_store(schema).await
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -44,7 +42,8 @@ async fn step_fail(ctx: &Run, _input: &str) -> anyhow::Result<TestData> {
 }
 
 #[pgqrs_workflow]
-async fn my_workflow(ctx: &Run, input: TestData) -> anyhow::Result<TestData> {
+async fn my_workflow(ctx: &Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let input: TestData = serde_json::from_value(input)?;
     // Step 1
     let s1 = step_one(ctx, "input").await?;
 
@@ -52,40 +51,45 @@ async fn my_workflow(ctx: &Run, input: TestData) -> anyhow::Result<TestData> {
     let s2 = step_multi_args(ctx, "arg", 42).await?;
 
     // Return combined result
-    Ok(TestData {
+    Ok(serde_json::to_value(TestData {
         msg: format!("{}, {}, {}", input.msg, s1.msg, s2.msg),
-    })
+    })?)
 }
 
 #[pgqrs_workflow]
-async fn workflow_with_failing_step(ctx: &Run, _input: TestData) -> anyhow::Result<TestData> {
+async fn workflow_with_failing_step(
+    ctx: &Run,
+    _input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
     let _ = step_fail(ctx, "fail").await?;
-    Ok(TestData {
-        msg: "should not happen".to_string(),
-    })
+    Ok(serde_json::json!({"msg": "should not happen"}))
 }
 
 #[pgqrs_workflow]
-async fn workflow_fail_at_end(_ctx: &Run, _input: TestData) -> anyhow::Result<TestData> {
+async fn workflow_fail_at_end(
+    _ctx: &Run,
+    _input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
     anyhow::bail!("workflow failed intentionally")
 }
 
 #[tokio::test]
 async fn test_workflow_creation_state() -> anyhow::Result<()> {
-    let store = common::create_store("macro_test_creation").await;
+    let store = create_store("macro_test_creation").await;
     let input = TestData {
         msg: "pending_check".to_string(),
     };
-    pgqrs::workflow()
-        .name("pending_wf")
-        .store(&store)
-        .create()
-        .await?;
+    // Use a JSON workflow def for the builder API.
+    #[pgqrs_workflow(name = "pending_wf")]
+    async fn pending_wf(_ctx: &Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        Ok(input)
+    }
+
+    pgqrs::workflow().name(pending_wf).create(&store).await?;
     let run_msg = pgqrs::workflow()
-        .name("pending_wf")
-        .store(&store)
+        .name(pending_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let run = pgqrs::run()
@@ -106,23 +110,16 @@ async fn test_workflow_creation_state() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_successful_workflow() -> anyhow::Result<()> {
-    let store = common::create_store("macro_test_success").await;
+    let store = create_store("macro_test_success").await;
     let input = TestData {
         msg: "start".to_string(),
     };
-    pgqrs::workflow()
-        .name("my_workflow")
-        .store(&store)
-        .create()
-        .await?;
+    pgqrs::workflow().name(my_workflow).create(&store).await?;
     let run_msg = pgqrs::workflow()
-        .name("my_workflow")
-        .store(&store)
+        .name(my_workflow)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
-
-    let run_msg = run_msg;
 
     // Execute via the workflow engine (run lifecycle + persistence).
     let handler = pgqrs::workflow_handler(store.clone(), my_workflow.runner());
@@ -147,21 +144,28 @@ async fn test_successful_workflow() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_step_idempotency() -> anyhow::Result<()> {
-    let store = common::create_store("macro_test_idempotency").await;
+    let store = create_store("macro_test_idempotency").await;
+
+    #[pgqrs_workflow(name = "idempotency_wf")]
+    async fn idempotency_wf(
+        _ctx: &Run,
+        input: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        Ok(input)
+    }
+
     // 1. Create context
     let input = TestData {
         msg: "idempotency".to_string(),
     };
     pgqrs::workflow()
-        .name("idempotency_wf")
-        .store(&store)
-        .create()
+        .name(idempotency_wf)
+        .create(&store)
         .await?;
     let run_msg = pgqrs::workflow()
-        .name("idempotency_wf")
-        .store(&store)
+        .name(idempotency_wf)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
 
     let mut idem_wf_run = pgqrs::run()
@@ -198,23 +202,19 @@ async fn test_step_idempotency() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_step_failure() -> anyhow::Result<()> {
-    let store = common::create_store("macro_test_step_failure").await;
+    let store = create_store("macro_test_step_failure").await;
     let input = TestData {
         msg: "fail_step".to_string(),
     };
     pgqrs::workflow()
-        .name("workflow_with_failing_step")
-        .store(&store)
-        .create()
+        .name(workflow_with_failing_step)
+        .create(&store)
         .await?;
     let run_msg = pgqrs::workflow()
-        .name("workflow_with_failing_step")
-        .store(&store)
+        .name(workflow_with_failing_step)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
-
-    let run_msg = run_msg;
 
     let handler = pgqrs::workflow_handler(store.clone(), workflow_with_failing_step.runner());
     let res = handler(run_msg.clone()).await;
@@ -243,23 +243,19 @@ async fn test_step_failure() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_workflow_failure() -> anyhow::Result<()> {
-    let store = common::create_store("macro_test_workflow_failure").await;
+    let store = create_store("macro_test_workflow_failure").await;
     let input = TestData {
         msg: "fail_wf".to_string(),
     };
     pgqrs::workflow()
-        .name("workflow_fail_at_end")
-        .store(&store)
-        .create()
+        .name(workflow_fail_at_end)
+        .create(&store)
         .await?;
     let run_msg = pgqrs::workflow()
-        .name("workflow_fail_at_end")
-        .store(&store)
+        .name(workflow_fail_at_end)
         .trigger(&input)?
-        .execute()
+        .execute(&store)
         .await?;
-
-    let run_msg = run_msg;
 
     let handler = pgqrs::workflow_handler(store.clone(), workflow_fail_at_end.runner());
     let res = handler(run_msg.clone()).await;
@@ -283,5 +279,45 @@ async fn test_workflow_failure() -> anyhow::Result<()> {
         .or_else(|| error_val.get("message").and_then(|v| v.as_str()))
         .unwrap_or("");
     assert!(error_str.contains("workflow failed intentionally"));
+    Ok(())
+}
+
+#[pgqrs_workflow]
+async fn workflow_no_args(_ctx: &Run) -> anyhow::Result<serde_json::Value> {
+    Ok(serde_json::json!({"status": "no_args_success"}))
+}
+
+#[tokio::test]
+async fn test_workflow_no_args() -> anyhow::Result<()> {
+    let store = create_store("macro_test_run_metadata").await;
+    pgqrs::workflow()
+        .name(workflow_no_args)
+        .create(&store)
+        .await?;
+    let run_msg = pgqrs::workflow()
+        .name(workflow_no_args)
+        .trigger(&())? // Trigger with unit payload
+        .execute(&store)
+        .await?;
+
+    let handler = pgqrs::workflow_handler(store.clone(), workflow_no_args.runner());
+    let res = handler(run_msg.clone()).await;
+    assert!(res.is_ok());
+
+    let wf_run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
+
+    // Verify persistence
+    let record = pgqrs::tables(&store)
+        .workflow_runs()
+        .get(wf_run.id())
+        .await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Success);
+
+    let db_output = record.output.unwrap();
+    assert_eq!(db_output.get("status").unwrap(), "no_args_success");
     Ok(())
 }

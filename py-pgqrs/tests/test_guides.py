@@ -100,7 +100,6 @@ async def basic_queue_py_poll_and_interrupt(store, consumer, handler):
 
 # --8<-- [start:basic_queue_single_consumer_poll]
 @pytest.mark.asyncio
-@requires_backend(TestBackend.SQLITE)
 async def test_basic_queue_single_consumer_handler_poll(test_dsn, schema):
     queue_name = "guide_basic_queue_single"
     store, queue_id, producer, consumer, messages_table = await basic_queue_setup(
@@ -134,7 +133,6 @@ async def test_basic_queue_single_consumer_handler_poll(test_dsn, schema):
 
 
 @pytest.mark.asyncio
-@requires_backend(TestBackend.SQLITE)
 async def test_basic_queue_two_consumers_poll_batch_handoff(test_dsn, schema):
     config = pgqrs.Config(test_dsn, schema=schema)
     store = await pgqrs.connect_with(config)
@@ -203,7 +201,6 @@ async def test_basic_queue_two_consumers_poll_batch_handoff(test_dsn, schema):
 
 
 @pytest.mark.asyncio
-@requires_backend(TestBackend.SQLITE)
 async def test_basic_queue_two_consumers_continuous_handler_poll_interrupt(
     test_dsn, schema
 ):

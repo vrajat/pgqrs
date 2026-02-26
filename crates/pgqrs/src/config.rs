@@ -188,8 +188,7 @@ impl Config {
     /// Build a config from a DSN and schema name.
     ///
     /// # Errors
-    /// Returns `InvalidConfig` if the schema name is not a valid identifier.
-
+    /// Returns `InvalidConfig` if the schema name is invalid.
     pub fn from_dsn_with_schema<D, S>(dsn: D, schema: S) -> Result<Self>
     where
         D: Into<String>,
@@ -227,8 +226,8 @@ impl Config {
     /// Build a config from environment variables.
     ///
     /// # Errors
-    /// Returns `MissingConfig` when `PGQRS_DSN` is not set.
-
+    /// Returns `MissingConfig` when `PGQRS_DSN` is not found,
+    /// or other DSN-specific loading errors.
     pub fn from_env() -> Result<Self> {
         use std::env;
 
@@ -240,8 +239,7 @@ impl Config {
         Self::with_dsn_and_env_fallback(dsn)
     }
 
-    /// Build a config using a DSN plus environment fallbacks.
-
+    /// Build a config using a DSN plus environment fallback for the schema.
     fn with_dsn_and_env_fallback(dsn: String) -> Result<Self> {
         use std::env;
 
@@ -308,7 +306,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `InvalidConfig` if the file cannot be read or parsed.
-
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let content =
@@ -333,7 +330,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `MissingConfig` when no DSN is provided by any source.
-
     pub fn load() -> Result<Self> {
         Self::load_with_options(None::<String>, None::<String>)
     }
@@ -341,8 +337,7 @@ impl Config {
     /// Load config with explicit DSN or config file overrides.
     ///
     /// # Errors
-    /// Returns `MissingConfig` when no DSN is provided by any source.
-
+    /// Returns `MissingConfig` when no DSN is provided and none can be found in environment.
     pub fn load_with_options<D, P>(
         explicit_dsn: Option<D>,
         explicit_config_path: Option<P>,
@@ -358,7 +353,6 @@ impl Config {
     ///
     /// # Errors
     /// Returns `InvalidConfig` for invalid schema names.
-
     pub fn load_with_schema_options<D, S, P>(
         explicit_dsn: Option<D>,
         explicit_schema: Option<S>,
@@ -389,7 +383,6 @@ impl Config {
     }
 
     /// Load config from standard sources in priority order.
-
     fn load_from_standard_sources() -> Result<Self> {
         use std::env;
 

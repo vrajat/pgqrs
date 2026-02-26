@@ -419,7 +419,7 @@ where
             poll_interval: base.poll_interval,
         };
 
-        poller.run_forever_one(|msg| handler(msg)).await
+        poller.run_forever_one(handler).await
     }
 }
 
@@ -483,6 +483,6 @@ where
             poll_interval: base.poll_interval,
         };
 
-        poller.run_forever_batch(|msgs| handler(msgs)).await
+        poller.run_forever_batch(handler).await
     }
 }

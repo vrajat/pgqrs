@@ -26,6 +26,7 @@ const TEST_SCHEMAS: &[&str] = &[
     "macro_test_idempotency",
     "macro_test_step_failure",
     "macro_test_workflow_failure",
+    "macro_test_run_metadata",
     "workflow_tests",
     "workflow_get_tests",
     "workflow_retrieval_tests",
@@ -33,6 +34,14 @@ const TEST_SCHEMAS: &[&str] = &[
     "workflow_error_polling_tests",
     "workflow_fk_tests",
     "workflow_retry_integration_tests",
+    "guide_basic_queue_single",
+    "guide_basic_queue_handoff",
+    "guide_basic_queue_continuous",
+    "guide_basic_workflow",
+    "guide_durable_workflow",
+    "guide_crash_recovery",
+    "guide_transient_error",
+    "guide_pause",
 ];
 
 #[tokio::main]

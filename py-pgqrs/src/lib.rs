@@ -520,23 +520,21 @@ impl PyAdmin {
 
         pyo3_asyncio::tokio::future_into_py(py, async move {
             // Ensure workflow exists
-            let _wf_rec = rust_pgqrs::workflow()
-                .store(&store)
-                .name(&name)
-                .create()
-                .await
-                .map_err(to_py_err)?;
+            let _wf_rec = store.workflow(&name).await.map_err(to_py_err)?;
 
             if let Some(input) = json_arg {
                 // If arg is provided, trigger and return a run handle
-                let run_msg = rust_pgqrs::workflow()
-                    .store(&store)
-                    .name(&name)
-                    .trigger(&input)
-                    .map_err(to_py_err)?
-                    .execute()
+                let producer = store
+                    .producer_ephemeral(&name, store.config())
                     .await
                     .map_err(to_py_err)?;
+
+                let payload = serde_json::json!({ "input": input });
+                let msgs = producer
+                    .batch_enqueue(&[payload])
+                    .await
+                    .map_err(to_py_err)?;
+                let run_msg = msgs[0].clone();
 
                 let workflow = store.run(run_msg).await.map_err(to_py_err)?;
                 let workflow_id = workflow.id();

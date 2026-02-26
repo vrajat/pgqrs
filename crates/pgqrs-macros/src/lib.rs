@@ -1,7 +1,5 @@
 use proc_macro::TokenStream;
-use proc_macro2::Span;
 use quote::{format_ident, quote};
-use syn::spanned::Spanned;
 use syn::{
     parse::Parse, parse_macro_input, punctuated::Punctuated, token::Comma, Error, Expr, ExprLit,
     FnArg, GenericArgument, Ident, ItemFn, Lit, LitStr, Meta, PathArguments, ReturnType, Type,
@@ -286,23 +284,37 @@ pub fn pgqrs_workflow(attr_args: TokenStream, item: TokenStream) -> TokenStream 
         Err(err) => return err.to_compile_error().into(),
     };
 
-    if workflow_fn.sig.inputs.len() != 2 {
+    if workflow_fn.sig.inputs.is_empty() {
         return Error::new_spanned(
             &workflow_fn.sig.inputs,
-            "Workflow functions must take exactly one workflow handle and one payload argument",
+            "Workflow functions must take at least one workflow handle argument",
         )
         .to_compile_error()
         .into();
     }
 
-    let data_arg = workflow_fn.sig.inputs.iter().nth(1).unwrap();
-    let data_ty = match data_arg {
-        FnArg::Typed(pat_type) => (*pat_type.ty).clone(),
-        FnArg::Receiver(_) => {
-            return Error::new_spanned(data_arg, "Workflow payload argument must be typed")
-                .to_compile_error()
-                .into();
+    if workflow_fn.sig.inputs.len() > 2 {
+        return Error::new_spanned(
+            &workflow_fn.sig.inputs,
+            "Workflow functions must take at most one workflow handle and one optional payload argument",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let data_ty = if workflow_fn.sig.inputs.len() == 2 {
+        let data_arg = workflow_fn.sig.inputs.iter().nth(1).unwrap();
+        match data_arg {
+            FnArg::Typed(pat_type) => (*pat_type.ty).clone(),
+            FnArg::Receiver(_) => {
+                return Error::new_spanned(data_arg, "Workflow payload argument must be typed")
+                    .to_compile_error()
+                    .into();
+            }
         }
+    } else {
+        // Default to unit type () when no payload is provided
+        syn::parse_quote!(())
     };
 
     let output_type = match extract_workflow_output(&workflow_fn.sig.output) {
@@ -315,16 +327,31 @@ pub fn pgqrs_workflow(attr_args: TokenStream, item: TokenStream) -> TokenStream 
     let visibility = workflow_fn.vis.clone();
     workflow_fn.sig.ident = inner_ident.clone();
 
+    // Determine how to call the inner function based on the number of arguments
+    let call_inner = if workflow_fn.sig.inputs.len() == 2 {
+        quote! { #inner_ident(&run, input).await }
+    } else {
+        quote! { #inner_ident(&run).await }
+    };
+
     let expanded = quote! {
         #workflow_fn
 
         fn #runner_ident(run: Run, input: #data_ty) -> pgqrs::WorkflowFuture<#output_type> {
             Box::pin(async move {
-                match #inner_ident(&run, input).await {
+                match #call_inner {
                     Ok(value) => Ok(value),
-                    Err(err) => Err(pgqrs::Error::Internal {
-                        message: err.to_string(),
-                    }),
+                    Err(err) => {
+                        // Preserve special error types, wrap others in Internal
+                        // Convert any error to anyhow::Error, then attempt downcast
+                        let anyhow_err: anyhow::Error = err.into();
+                        match anyhow_err.downcast::<pgqrs::Error>() {
+                            Ok(pgqrs_err) => Err(pgqrs_err),
+                            Err(e) => Err(pgqrs::Error::Internal {
+                                message: e.to_string(),
+                            }),
+                        }
+                    }
                 }
             })
         }

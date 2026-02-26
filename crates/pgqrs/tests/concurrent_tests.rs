@@ -1,4 +1,5 @@
 use pgqrs::error::Result;
+use pgqrs::pgqrs_workflow;
 use pgqrs::store::AnyStore;
 use pgqrs::Run;
 use pgqrs::Store;
@@ -7,6 +8,54 @@ use serial_test::serial;
 use std::sync::{Arc, Mutex};
 
 mod common;
+
+#[pgqrs_workflow(name = "scenario_success")]
+async fn scenario_success_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_permanent_error")]
+async fn scenario_permanent_error_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_crash_recovery")]
+async fn scenario_crash_recovery_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_step_crash_recovery")]
+async fn scenario_step_crash_recovery_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_transient_error")]
+async fn scenario_transient_error_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_pause")]
+async fn scenario_pause_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
 
 async fn create_store() -> AnyStore {
     common::create_store("pgqrs_concurrent_test").await
@@ -380,9 +429,8 @@ async fn test_workflow_scenario_success() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_success";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_success_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_success_cons", 3200, workflow_name)
@@ -390,10 +438,9 @@ async fn test_workflow_scenario_success() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_success_wf)
         .trigger(&json!({"msg": "success"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     let step_state: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -449,9 +496,8 @@ async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_permanent_error";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_permanent_error_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_perm_err_cons", 3210, workflow_name)
@@ -459,10 +505,9 @@ async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_permanent_error_wf)
         .trigger(&json!({"msg": "perm_error"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     let handler = pgqrs::workflow_handler(
@@ -534,9 +579,8 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_crash_recovery";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_crash_recovery_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_crash_cons", 3220, workflow_name)
@@ -544,10 +588,9 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_crash_recovery_wf)
         .trigger(&json!({"msg": "crash_recovery"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     let step1_calls = Arc::new(Mutex::new(0u32));
@@ -661,9 +704,8 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_step_crash_recovery";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_step_crash_recovery_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_step_crash_cons", 3250, workflow_name)
@@ -671,10 +713,9 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_step_crash_recovery_wf)
         .trigger(&json!({"msg": "step_crash"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     let step1_calls = Arc::new(Mutex::new(0u32));
@@ -772,9 +813,8 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_transient_error";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_transient_error_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_transient_cons", 3230, workflow_name)
@@ -782,10 +822,9 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_transient_error_wf)
         .trigger(&json!({"msg": "transient_error"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     let handler = pgqrs::workflow_handler(
@@ -848,9 +887,8 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
 
     let workflow_name = "scenario_pause";
     pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
-        .create()
+        .name(scenario_pause_wf)
+        .create(&store)
         .await?;
 
     let consumer = pgqrs::consumer("scenario_pause_cons", 3240, workflow_name)
@@ -858,10 +896,9 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
         .await?;
 
     let message = pgqrs::workflow()
-        .name(workflow_name)
-        .store(&store)
+        .name(scenario_pause_wf)
         .trigger(&json!({"msg": "pause"}))?
-        .execute()
+        .execute(&store)
         .await?;
 
     // 1. First attempt: Pause in step 1

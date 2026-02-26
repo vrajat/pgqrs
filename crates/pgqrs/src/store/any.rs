@@ -264,21 +264,6 @@ impl Store for AnyStore {
         }
     }
 
-    async fn trigger(
-        &self,
-        name: &str,
-        input: Option<serde_json::Value>,
-    ) -> crate::error::Result<crate::types::QueueMessage> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.trigger(name, input).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.trigger(name, input).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.trigger(name, input).await,
-        }
-    }
-
     async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Run> {
         match self {
             #[cfg(feature = "postgres")]

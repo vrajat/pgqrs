@@ -804,16 +804,9 @@ impl Step {
                 return self.store.workflow_steps().execute(query).await.map(|_| ());
             }
 
-            let delay_seconds = policy.extract_retry_delay(&error_record, self.record.retry_count);
-            let delay_i64 =
-                delay_seconds
-                    .try_into()
-                    .map_err(|_| crate::error::Error::Internal {
-                        message: format!(
-                            "Retry delay {} seconds exceeds maximum allowed value (i64::MAX)",
-                            delay_seconds
-                        ),
-                    })?;
+            let delay_seconds =
+                policy.extract_retry_delay(&error_record, self.record.retry_count.max(0) as u32);
+            let delay_i64: i64 = delay_seconds.into();
 
             let retry_at = current_time + chrono::Duration::seconds(delay_i64);
             let new_retry_count = self.record.retry_count + 1;
