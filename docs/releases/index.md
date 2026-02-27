@@ -12,7 +12,7 @@ Version history and release notes for pgqrs.
 
     Workflow trigger/worker redesign, retries and pausing, and docs overhaul.
 
-    [:octicons-arrow-right-24: Release Notes](changelog.md#0140---2026-02-21)
+    [:octicons-arrow-right-24: Release Notes](changelog.md#0140-2026-02-21)
 
 </div>
 
@@ -50,10 +50,14 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| [0.14.0](changelog.md#0140---2026-02-21) | 2026-02-21 | Workflow trigger/worker redesign, retries, pausing |
-| [0.3.0](changelog.md#030---2024-11-13) | 2024-11-13 | Producer/Consumer architecture |
-| [0.2.0](changelog.md#020---previous-release) | - | Initial queue implementation |
-| [0.1.0](changelog.md#010---initial-release) | - | Project inception |
+| [0.14.0](changelog.md#0140-2026-02-21) | 2026-02-21 | Workflow trigger/worker redesign, retries, pausing |
+| [0.13.0](changelog.md#0130-2025-10-03) | 2025-10-03 | Turso backend support |
+| [0.12.0](changelog.md#0120-2025-12-xx) | 2025-12-XX | Single-table model migration |
+| [0.11.0](changelog.md#0110-2025-12-19) | 2025-12-19 | Archive access, config options, worker API |
+| [0.4.0](changelog.md#040-2025-12-12) | 2025-12-12 | Workspace support, Python bindings, metrics |
+| [0.3.0](changelog.md#030-2024-11-13) | 2024-11-13 | Producer/Consumer architecture |
+| [0.2.0](changelog.md#020-previous-release) | - | Initial queue implementation |
+| [0.1.0](changelog.md#010-initial-release) | - | Project inception |
 
 ## Upgrade Guides
 

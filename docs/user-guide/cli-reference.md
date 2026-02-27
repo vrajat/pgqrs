@@ -16,13 +16,13 @@ All commands accept these global options:
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--dsn <DSN>` | `-d` | Database URL (overrides all config) |
-| `--schema <SCHEMA>` | `-s` | Schema name (default: public) |
-| `--config <FILE>` | `-c` | Config file path |
-| `--log-dest <DEST>` | | stderr \| file |
-| `--log-level <LEVEL>` | | error \| warn \| info \| debug \| trace |
-| `--format <FORMAT>` | | json \| table (default: table) |
-| `--out <OUT>` | | stdout \| file |
+| `--dsn <DSN>` | `-d` | Database URL (highest priority, overrides all config sources) |
+| `--schema <SCHEMA>` | `-s` | Schema name (default: public, must exist before install) |
+| `--config <CONFIG>` | `-c` | Config file path (overrides environment variables and defaults) |
+| `--log-dest <LOG_DEST>` | | Log destination: stderr or file path [default: stderr] |
+| `--log-level <LOG_LEVEL>` | | Log level: error, warn, info, debug, trace [default: info] |
+| `--format <FORMAT>` | | Output format: json, table [default: table] |
+| `--out <OUT>` | | Output destination: stdout or file path [default: stdout] |
 
 ## Configuration
 
@@ -63,40 +63,52 @@ default_max_batch_size: 100
 
 ---
 
-## Schema Commands
+## Admin Commands
+
+Administrative operations for managing the pgqrs installation and system-wide state.
 
 ### install
 
-Install the pgqrs schema (schema must already exist).
-
-```bash
-pgqrs install
-```
-
-### uninstall
-
-Remove the pgqrs schema and all data.
-
-```bash
-pgqrs uninstall
-```
+Install the pgqrs schema in your database.
 
 !!! warning
-    This permanently deletes all queues, messages, and workers.
+    The target schema (e.g., `public` or your custom schema) must already exist.
+
+```bash
+pgqrs admin install
+```
 
 ### verify
 
-Verify the pgqrs installation.
+Verify the pgqrs installation by checking that all required tables and indexes exist.
 
 ```bash
-pgqrs verify
+pgqrs admin verify
+```
+
+### stats
+
+Get system-wide statistics across all queues and workers.
+
+```bash
+pgqrs admin stats
+```
+
+### reclaim
+
+Reclaim messages from zombie workers (workers that have stopped sending heartbeats).
+
+```bash
+pgqrs admin reclaim
 ```
 
 ---
 
 ## Queue Commands
 
-### queue create
+Commands for managing queues and viewing queue-level metrics.
+
+### create
 
 Create a new queue.
 
@@ -111,45 +123,61 @@ pgqrs queue create emails
 pgqrs queue create --format json emails
 ```
 
-### queue list
+### list
 
-List all queues.
+List all queues in the database.
 
 ```bash
 pgqrs queue list
 pgqrs queue list --format json
 ```
 
-### queue get
+### get
 
-Show details for a queue.
+Show details for a specific queue.
 
 ```bash
 pgqrs queue get <name>
 ```
 
-### queue delete
+### messages
+
+List messages currently in the queue.
+
+```bash
+pgqrs queue messages <name>
+```
+
+### archive-dlq
+
+Move dead letter queue messages to the archive.
+
+```bash
+pgqrs queue archive-dlq <name>
+```
+
+### delete
 
 Delete a queue.
+
+!!! warning
+    This deletes the queue and **all** its messages.
 
 ```bash
 pgqrs queue delete <name>
 ```
 
-!!! warning
-    This deletes the queue and all its messages.
+### purge
 
-### queue purge
-
-Remove all messages from a queue without deleting the queue.
+Remove all messages from a queue without deleting the queue itself.
 
 ```bash
 pgqrs queue purge <name>
 ```
 
-### queue metrics
+### metrics
 
-Show metrics for one or all queues.
+Show detailed metrics for one or all queues.
 
 ```bash
 # All queues
@@ -159,231 +187,112 @@ pgqrs queue metrics
 pgqrs queue metrics <name>
 ```
 
-**Output:**
-
-| Field | Description |
-|-------|-------------|
-| `pending` | Messages waiting to be processed |
-| `locked` | Messages currently being processed |
-| `archived` | Successfully processed messages |
-| `total` | Total messages |
-
----
-
-## Message Commands
-
-### message enqueue
-
-Add a message to a queue.
-
-```bash
-pgqrs message enqueue --queue <queue> --payload <json> [--delay <seconds>]
-```
-
-**Options:**
-
-| Option | Required | Description |
-|--------|----------|-------------|
-| `--queue` | Yes | Queue name |
-| `--payload` | Yes | JSON payload |
-| `--delay` | No | Delay in seconds |
-
-**Examples:**
-
-```bash
-# Immediate message
-pgqrs message enqueue --queue emails --payload '{"to": "user@example.com"}'
-
-# Delayed message (1 hour)
-pgqrs message enqueue --queue reminders --payload '{"type": "follow_up"}' --delay 3600
-```
-
-### message dequeue
-
-Fetch a message for processing.
-
-```bash
-pgqrs message dequeue --queue <queue> --worker <id> [--lock-time <seconds>]
-```
-
-**Options:**
-
-| Option | Required | Description |
-|--------|----------|-------------|
-| `--queue` | Yes | Queue name |
-| `--worker` | Yes | Worker ID |
-| `--lock-time` | No | Lock duration in seconds |
-
-### message archive
-
-Archive a processed message.
-
-```bash
-pgqrs message archive --queue <queue> --id <id>
-```
-
-### message delete
-
-Delete a message without archiving.
-
-```bash
-pgqrs message delete --queue <queue> --id <id>
-```
-
-### message get
-
-Show message details.
-
-```bash
-pgqrs message get --queue <queue> --id <id>
-```
-
-### message count
-
-Count pending messages in a queue.
-
-```bash
-pgqrs message count --queue <queue>
-```
+**Output attributes include:**
+- Pending and Locked message counts
+- Archived metrics
+- Error rates
 
 ---
 
 ## Worker Commands
 
-### worker create
+Commands for managing, monitoring, and cleaning up workers.
 
-Register a new worker.
+### list
 
-```bash
-pgqrs worker create --queue <queue> --host <host> --port <port>
-```
-
-**Example:**
+List all active workers.
 
 ```bash
-pgqrs worker create --queue emails --host worker1.example.com --port 3000
+pgqrs worker list
 ```
 
-### worker list
+### get
 
-List all workers.
+Get details for a specific worker by its ID.
 
 ```bash
-pgqrs worker list [--queue <queue>]
+pgqrs worker get <id>
 ```
 
-### worker get
+### messages
 
-Show worker details.
+Get messages currently assigned to a specific worker.
 
 ```bash
-pgqrs worker get --id <id>
+pgqrs worker messages <id>
 ```
 
-### worker stats
+### release-messages
 
-Show worker statistics for a queue.
+Force-release all messages currently held by a worker back to the queue.
 
 ```bash
-pgqrs worker stats --queue <queue>
+pgqrs worker release-messages <id>
 ```
 
-### worker stop
+### suspend
 
-Mark a worker as stopped.
+Suspend a worker (`Ready` -> `Suspended`). It will stop processing new messages but finish current ones.
 
 ```bash
-pgqrs worker stop --id <id>
+pgqrs worker suspend <id>
 ```
 
-### worker messages
+### resume
 
-Show messages assigned to a worker.
+Resume a suspended worker (`Suspended` -> `Ready`).
 
 ```bash
-pgqrs worker messages --id <id>
+pgqrs worker resume <id>
 ```
 
-### worker release
+### shutdown
 
-Release all messages from a worker.
+Shutdown a worker. The worker must be suspended first.
 
 ```bash
-pgqrs worker release --id <id>
+pgqrs worker shutdown <id>
 ```
 
-### worker delete
+### purge
 
-Delete a worker (must have no messages).
+Purge old stopped workers from the database to save space.
 
 ```bash
-pgqrs worker delete --id <id>
+pgqrs worker purge
 ```
 
-### worker purge
+### delete
 
-Remove old stopped workers.
+Delete a specific worker record.
 
 ```bash
-pgqrs worker purge [--older-than <duration>]
+pgqrs worker delete <id>
 ```
 
-**Duration format:** `7d`, `30d`, `24h`, etc.
+### heartbeat
 
-**Example:**
+Manually update a worker's heartbeat.
 
 ```bash
-# Remove workers stopped more than 30 days ago
-pgqrs worker purge --older-than 30d
+pgqrs worker heartbeat <id>
 ```
 
-### worker health
+### stats
 
-Check worker health.
+Get statistics for a specific worker.
 
 ```bash
-pgqrs worker health --queue <queue> [--max-age <seconds>]
+pgqrs worker stats <id>
 ```
 
-**Example:**
+### health
+
+Check the health status of a specific worker or workers.
 
 ```bash
-# Alert if no heartbeat in 10 minutes
-pgqrs worker health --queue emails --max-age 600
+pgqrs worker health
 ```
-
----
-
-## Archive Commands
-
-### archive list
-
-List archived messages.
-
-```bash
-pgqrs archive list <queue> [--worker <id>]
-```
-
-### archive count
-
-Count archived messages.
-
-```bash
-pgqrs archive count <queue> [--worker <id>]
-```
-
-### archive delete
-
-Delete archived messages.
-
-```bash
-pgqrs archive delete <queue> [--worker <id>]
-```
-
-!!! tip "Archive Best Practices"
-    - Regularly purge old archived messages
-    - Monitor archive growth
-    - Set retention policies
 
 ---
 
@@ -415,63 +324,6 @@ pgqrs queue list --format json
   {"id": 1, "name": "emails", "created_at": "2024-01-15T10:30:00Z"},
   {"id": 2, "name": "reminders", "created_at": "2024-01-15T10:31:00Z"}
 ]
-```
-
----
-
-## Common Workflows
-
-### Setup
-
-```bash
-# Set connection
-export PGQRS_DSN="postgresql://localhost/mydb"
-
-# Install schema
-pgqrs install
-pgqrs verify
-
-# Create queue
-pgqrs queue create tasks
-```
-
-### Send and Process Messages
-
-```bash
-# Send message
-pgqrs message enqueue --queue tasks --payload '{"job": "process_order", "order_id": 123}'
-
-# Process (in worker)
-pgqrs message dequeue --queue tasks --worker 1 --lock-time 60
-
-# Archive after processing
-pgqrs message archive --queue tasks --id 1
-```
-
-### Monitor
-
-```bash
-# Queue status
-pgqrs queue metrics tasks
-
-# Worker health
-pgqrs worker health --queue tasks
-
-# Check backlog
-pgqrs message count --queue tasks
-```
-
-### Cleanup
-
-```bash
-# Purge old workers
-pgqrs worker purge --older-than 30d
-
-# Clean archive
-pgqrs archive delete tasks --older-than 90d
-
-# Empty queue
-pgqrs queue purge tasks
 ```
 
 ---

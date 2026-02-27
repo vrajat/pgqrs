@@ -72,7 +72,7 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
 
     Command-line tool documentation.
 
-    - [CLI Reference](cli-reference.md)
+    - [Admin, Queue, and Worker CLI](cli-reference.md)
 
 </div>
 
@@ -92,4 +92,4 @@ Before using pgqrs, ensure you have:
 | [Producer](api/producer.md) | Creating and sending messages |
 | [Consumer](api/consumer.md) | Processing messages |
 | [Durable Workflows](guides/durable-workflows.md) | Multi-step, crash-resistant workflows |
-| [CLI Reference](cli-reference.md) | Command-line operations |
+| [Admin, Queue, and Worker CLI](cli-reference.md) | Command-line operations |
