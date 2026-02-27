@@ -582,8 +582,8 @@ Regularly check worker health in production:
     # Check status of all workers
     pgqrs worker list
 
-    # Check for stale workers (heartbeat > 5 mins ago)
-    pgqrs worker health --timeout 300
+    # Check for stale workers
+    pgqrs worker health
     ```
 
 ### 4. Clean Up Stopped Workers
@@ -626,11 +626,11 @@ Periodically purge old stopped workers:
 === "CLI"
 
     ```bash
-    # Run via cron to purge workers older than 30 days
-    pgqrs worker purge --older-than 30d
+    # Run via cron to purge stopped workers
+    pgqrs worker purge
 
-    # Crontab example (daily at 2 AM, purge older than 7 days)
-    0 2 * * * pgqrs worker purge --older-than 7d
+    # Crontab example (daily at 2 AM)
+    0 2 * * * pgqrs worker purge
     ```
 
 ## What's Next?

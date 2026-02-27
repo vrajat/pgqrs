@@ -6,7 +6,7 @@ This guide will walk you through creating your first queue, sending messages, an
 
 - pgqrs installed ([Configuration](../api/configuration.md))
 - A running PostgreSQL database
-- pgqrs schema installed (`pgqrs install`)
+- pgqrs schema installed (`pgqrs admin install`)
 
 ## Step 1: Create a Queue
 

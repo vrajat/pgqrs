@@ -10,9 +10,10 @@ The Admin API provides queue management, schema administration, and monitoring c
     use pgqrs;
 
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+    let admin = pgqrs::admin(&store);
 
     // Use admin builder for operations
-    pgqrs::admin(&store).install().await?;
+    admin.install().await?;
     store.queue("tasks").await?;
     ```
 

@@ -140,10 +140,10 @@ Before using pgqrs, you need to install its schema in your database. You can do 
     export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
 
     # Install the schema
-    pgqrs install
+    pgqrs admin install
 
     # Verify the installation
-    pgqrs verify
+    pgqrs admin verify
     ```
 
 === "Rust"
@@ -200,7 +200,7 @@ By default, pgqrs creates tables in the `public` schema. To use a custom schema:
     # CREATE SCHEMA IF NOT EXISTS pgqrs;
 
     # Install with custom schema
-    pgqrs --schema pgqrs install
+    pgqrs --schema pgqrs admin install
     ```
 
 === "Rust"
