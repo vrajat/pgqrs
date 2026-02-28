@@ -33,8 +33,6 @@ required-features = ["postgres"]
 tokio-test = "0.4"
 ctor = "0.2.4"
 once_cell = "1.19"
-aws-config = "1"
-aws-sdk-s3 = "1"
 
 serial_test = "3.2"
 
@@ -48,7 +46,7 @@ sqlx = ["dep:sqlx"]
 full = ["postgres", "sqlite", "turso", "s3"]
 postgres = ["sqlx", "sqlx/postgres"]
 sqlite = ["sqlx", "sqlx/sqlite"]
-s3 = ["sqlite"]
+s3 = ["sqlite", "dep:aws-config", "dep:aws-sdk-s3"]
 # Turso backend (Rust-native logic)
 turso = ["dep:turso"]
 test-utils = []
@@ -73,6 +71,8 @@ humantime = "2.1"
 async-trait = "0.1"
 turso = { version = "0.4.2", optional = true }
 rand = "0.8"
+aws-config = { version = "1", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)

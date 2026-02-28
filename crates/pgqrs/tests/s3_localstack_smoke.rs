@@ -4,6 +4,7 @@ use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
+use pgqrs::store::s3::client::{AwsS3ObjectStore, ObjectStoreClient};
 use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -175,4 +176,37 @@ async fn localstack_s3_basic_ops_and_cas_etag() {
         .await
         .expect_err("conditional get with stale etag should fail");
     let _ = err;
+}
+
+#[tokio::test]
+async fn localstack_aws_adapter_round_trip() {
+    let client = localstack_client().await;
+    let bucket = s3_bucket();
+    let key = format!("smoke/adapter-{}.bin", uuid::Uuid::new_v4());
+    let adapter = AwsS3ObjectStore::new(client.clone(), bucket.clone());
+
+    let create_res = client.create_bucket().bucket(&bucket).send().await;
+    if let Err(e) = create_res {
+        let msg = e.to_string();
+        assert!(
+            msg.contains("BucketAlreadyOwnedByYou") || msg.contains("BucketAlreadyExists"),
+            "create_bucket failed unexpectedly: {}",
+            msg
+        );
+    }
+
+    let etag_v1 = adapter
+        .put_object_if_match(&key, b"adapter-v1", None)
+        .await
+        .expect("adapter put v1");
+    let obj_v1 = adapter.get_object(&key).await.expect("adapter get v1");
+    assert_eq!(obj_v1.bytes, b"adapter-v1");
+    assert_eq!(obj_v1.etag.as_deref(), Some(etag_v1.as_str()));
+
+    let _etag_v2 = adapter
+        .put_object_if_match(&key, b"adapter-v2", Some(&etag_v1))
+        .await
+        .expect("adapter cas put v2");
+    let obj_v2 = adapter.get_object(&key).await.expect("adapter get v2");
+    assert_eq!(obj_v2.bytes, b"adapter-v2");
 }

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::error::{Error, Result};
+use aws_sdk_s3::primitives::ByteStream;
 
 /// Object payload and associated ETag/revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,26 @@ pub trait ObjectStoreClient: Send + Sync + 'static {
         bytes: &[u8],
         expected_etag: Option<&str>,
     ) -> Result<String>;
+}
+
+/// AWS S3-backed object store client.
+#[derive(Clone, Debug)]
+pub struct AwsS3ObjectStore {
+    client: aws_sdk_s3::Client,
+    bucket: String,
+}
+
+impl AwsS3ObjectStore {
+    pub fn new(client: aws_sdk_s3::Client, bucket: impl Into<String>) -> Self {
+        Self {
+            client,
+            bucket: bucket.into(),
+        }
+    }
+
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -124,9 +145,97 @@ impl ObjectStoreClient for InMemoryObjectStore {
     }
 }
 
+#[async_trait]
+impl ObjectStoreClient for AwsS3ObjectStore {
+    async fn get_object(&self, key: &str) -> Result<ObjectData> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| map_s3_error("get_object", key, &e.to_string()))?;
+
+        let etag = output.e_tag().map(|s| s.to_string());
+
+        let bytes = output
+            .body
+            .collect()
+            .await
+            .map_err(|e| map_s3_error("get_object_body", key, &e.to_string()))?
+            .into_bytes()
+            .to_vec();
+
+        Ok(ObjectData { bytes, etag })
+    }
+
+    async fn put_object_if_match(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        expected_etag: Option<&str>,
+    ) -> Result<String> {
+        let mut req = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(bytes.to_vec()));
+
+        if let Some(etag) = expected_etag {
+            req = req.if_match(etag.to_string());
+        }
+
+        let output = req
+            .send()
+            .await
+            .map_err(|e| map_s3_error("put_object_if_match", key, &e.to_string()))?;
+
+        output
+            .e_tag()
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Internal {
+                message: format!(
+                    "S3 put_object_if_match succeeded but no ETag returned for key '{}'",
+                    key
+                ),
+            })
+    }
+}
+
+fn map_s3_error(operation: &str, key: &str, msg: &str) -> Error {
+    let lower = msg.to_ascii_lowercase();
+    if lower.contains("preconditionfailed")
+        || lower.contains("if-match")
+        || lower.contains("condition")
+        || lower.contains("412")
+    {
+        return Error::Conflict {
+            message: format!(
+                "S3 CAS conflict during {} for key '{}': {}",
+                operation, key, msg
+            ),
+        };
+    }
+    if lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("dispatch failure")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+    {
+        return Error::Timeout {
+            operation: format!("s3:{} key={}", operation, key),
+        };
+    }
+    Error::Internal {
+        message: format!("S3 {} failed for key '{}': {}", operation, key, msg),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{InMemoryObjectStore, ObjectStoreClient};
+    use super::{map_s3_error, InMemoryObjectStore, ObjectStoreClient};
     use crate::error::Error;
 
     #[tokio::test]
@@ -172,5 +281,31 @@ mod tests {
             .await
             .expect_err("forced timeout should fail");
         assert!(matches!(err, Error::Timeout { .. }));
+    }
+
+    #[test]
+    fn map_s3_error_conflict() {
+        let err = map_s3_error(
+            "put_object_if_match",
+            "queue.sqlite",
+            "PreconditionFailed: At least one of the pre-conditions you specified did not hold",
+        );
+        assert!(matches!(err, Error::Conflict { .. }));
+    }
+
+    #[test]
+    fn map_s3_error_timeout() {
+        let err = map_s3_error(
+            "get_object",
+            "queue.sqlite",
+            "dispatch failure: operation timed out",
+        );
+        assert!(matches!(err, Error::Timeout { .. }));
+    }
+
+    #[test]
+    fn map_s3_error_fallback_internal() {
+        let err = map_s3_error("get_object", "queue.sqlite", "some random provider error");
+        assert!(matches!(err, Error::Internal { .. }));
     }
 }
