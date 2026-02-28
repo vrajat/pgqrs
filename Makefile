@@ -197,6 +197,13 @@ ifdef CI_LOCALSTACK_RUNNING
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
 	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"
+	@echo "Listing sqlite objects in LocalStack after test run"
+	PGQRS_S3_ENDPOINT="$${PGQRS_S3_ENDPOINT:-http://localhost:4566}" \
+	PGQRS_S3_REGION="$${PGQRS_S3_REGION:-$(LOCALSTACK_REGION)}" \
+	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
+	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
+	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
+	cargo run -p pgqrs --bin setup_test_schemas --no-default-features --features s3 -- --list-s3-sqlite
 else
 	@echo "Running full test suite with local LocalStack (S3 backend)"
 	@PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
@@ -205,9 +212,17 @@ else
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \
 	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"; \
-	status=$$?; \
+	test_status=$$?; \
+	PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
+	PGQRS_S3_REGION="$(LOCALSTACK_REGION)" \
+	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
+	AWS_ACCESS_KEY_ID="test" \
+	AWS_SECRET_ACCESS_KEY="test" \
+	cargo run -p pgqrs --bin setup_test_schemas --no-default-features --features s3 -- --list-s3-sqlite; \
+	list_status=$$?; \
 	$(MAKE) stop-localstack; \
-	exit $$status
+	if [ $$test_status -ne 0 ]; then exit $$test_status; fi; \
+	exit $$list_status
 endif
 
 # Backward compatibility alias.

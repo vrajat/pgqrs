@@ -1,10 +1,28 @@
-use sqlx::postgres::PgPoolOptions;
 use std::env;
 
+#[cfg(feature = "postgres")]
+use sqlx::postgres::PgPoolOptions;
+
+#[cfg(feature = "s3")]
+use aws_config::{BehaviorVersion, Region};
+#[cfg(feature = "s3")]
+use aws_sdk_s3::config::Credentials;
+#[cfg(feature = "s3")]
+use aws_sdk_s3::Client;
+
+#[cfg(feature = "postgres")]
 const TEST_DB_DSN_ENV: &str = "PGQRS_TEST_DSN";
+#[cfg(feature = "postgres")]
 const DEFAULT_TEST_DSN: &str = "postgres://postgres:postgres@localhost:5432/postgres";
+#[cfg(feature = "s3")]
+const DEFAULT_S3_ENDPOINT: &str = "http://localhost:4566";
+#[cfg(feature = "s3")]
+const DEFAULT_S3_REGION: &str = "us-east-1";
+#[cfg(feature = "s3")]
+const DEFAULT_S3_BUCKET: &str = "pgqrs-test-bucket";
 
 // List of all schemas used in tests (derived from grep analysis)
+#[cfg(feature = "postgres")]
 const TEST_SCHEMAS: &[&str] = &[
     "pgqrs_builder_test",
     "pgqrs_builder_ergonomics_test",
@@ -37,11 +55,8 @@ const TEST_SCHEMAS: &[&str] = &[
     "guide_tests",
 ];
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
-    let cleanup_mode = args.get(1).map(|s| s.as_str()) == Some("--cleanup");
-
+#[cfg(feature = "postgres")]
+async fn run_postgres_schema_setup(cleanup_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
     let dsn = env::var(TEST_DB_DSN_ENV).unwrap_or_else(|_| DEFAULT_TEST_DSN.to_string());
 
     let pool = PgPoolOptions::new()
@@ -86,4 +101,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(feature = "s3")]
+async fn run_list_s3_sqlite_objects() -> Result<(), Box<dyn std::error::Error>> {
+    let endpoint =
+        env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| DEFAULT_S3_ENDPOINT.to_string());
+    let region = env::var("PGQRS_S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
+    let bucket = env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
+    let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| "test".to_string());
+    let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| "test".to_string());
+
+    let creds = Credentials::new(access_key, secret_key, None, None, "pgqrs-test-listing");
+    let conf = aws_config::defaults(BehaviorVersion::latest())
+        .region(Region::new(region))
+        .credentials_provider(creds)
+        .endpoint_url(endpoint)
+        .load()
+        .await;
+    let s3_conf = aws_sdk_s3::config::Builder::from(&conf)
+        .force_path_style(true)
+        .build();
+    let client = Client::from_conf(s3_conf);
+
+    println!("Listing sqlite objects in bucket '{}'...", bucket);
+
+    let mut continuation: Option<String> = None;
+    let mut sqlite_keys: Vec<String> = Vec::new();
+
+    loop {
+        let mut req = client.list_objects_v2().bucket(&bucket);
+        if let Some(token) = continuation.as_deref() {
+            req = req.continuation_token(token.to_string());
+        }
+        let out = req.send().await?;
+
+        for obj in out.contents() {
+            if let Some(key) = obj.key() {
+                if key.ends_with(".sqlite") {
+                    sqlite_keys.push(key.to_string());
+                }
+            }
+        }
+
+        if out.is_truncated().unwrap_or(false) {
+            continuation = out
+                .next_continuation_token()
+                .map(std::string::ToString::to_string);
+        } else {
+            break;
+        }
+    }
+
+    sqlite_keys.sort();
+
+    if sqlite_keys.is_empty() {
+        println!("No .sqlite objects found.");
+        return Ok(());
+    }
+
+    println!("Found {} sqlite object(s):", sqlite_keys.len());
+    for key in sqlite_keys {
+        println!(" - {}", key);
+    }
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    let list_s3_sqlite = args.iter().any(|a| a == "--list-s3-sqlite");
+    let cleanup_mode = args.get(1).map(|s| s.as_str()) == Some("--cleanup");
+
+    if list_s3_sqlite {
+        #[cfg(feature = "s3")]
+        {
+            return run_list_s3_sqlite_objects().await;
+        }
+        #[cfg(not(feature = "s3"))]
+        {
+            return Err("setup_test_schemas --list-s3-sqlite requires feature 's3'".into());
+        }
+    }
+
+    #[cfg(feature = "postgres")]
+    {
+        return run_postgres_schema_setup(cleanup_mode).await;
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    {
+        let _ = cleanup_mode;
+        return Err("setup_test_schemas schema mode requires feature 'postgres'".into());
+    }
 }

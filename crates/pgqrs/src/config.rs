@@ -122,7 +122,7 @@ fn default_poll_interval_ms() -> u64 {
 
 #[cfg(feature = "s3")]
 fn default_s3_mode() -> crate::store::s3::DurabilityMode {
-    crate::store::s3::DurabilityMode::Local
+    crate::store::s3::DurabilityMode::Durable
 }
 
 #[cfg(feature = "s3")]

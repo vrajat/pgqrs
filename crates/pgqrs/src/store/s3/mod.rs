@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
-use client::ObjectStoreClient;
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_s3::config::Credentials;
+use client::{AwsS3ObjectStore, InMemoryObjectStore, ObjectStoreClient};
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,9 +29,9 @@ use tokio::sync::{mpsc, Mutex};
 #[serde(rename_all = "snake_case")]
 pub enum DurabilityMode {
     /// Reads and writes use local SQLite state. Flushes happen asynchronously.
-    #[default]
     Local,
     /// Writes wait for successful object-store flush before acknowledging.
+    #[default]
     Durable,
 }
 
@@ -57,16 +59,30 @@ impl Default for S3SyncConfig {
 /// Initial S3-backed store scaffold.
 ///
 /// Current implementation delegates to a local SQLite cache DB derived from the S3 DSN.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct S3Store {
     sqlite: SqliteStore,
     state: LocalDbState,
     sync: Arc<SyncCoordinator>,
     last_etag: Arc<Mutex<Option<String>>>,
+    object_key: String,
+    wake_tx: SyncWakeSender,
+    durable_wait_timeout: Duration,
     mode: DurabilityMode,
     sync_config: S3SyncConfig,
     source_dsn: String,
     sqlite_cache_dsn: String,
+}
+
+impl std::fmt::Debug for S3Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Store")
+            .field("mode", &self.mode)
+            .field("source_dsn", &self.source_dsn)
+            .field("sqlite_cache_dsn", &self.sqlite_cache_dsn)
+            .field("object_key", &self.object_key)
+            .finish()
+    }
 }
 
 impl S3Store {
@@ -77,20 +93,40 @@ impl S3Store {
         mode: DurabilityMode,
         sync_config: S3SyncConfig,
     ) -> Result<Self> {
+        let (bucket, object_key) = parse_s3_bucket_and_key(s3_dsn)?;
         let sqlite_cache_dsn = sqlite_cache_dsn_from_s3_dsn(s3_dsn)?;
         let state = LocalDbState::from_cache_dsn(&sqlite_cache_dsn, mode)?;
         state.ensure_files()?;
+        let object_store = build_object_store_from_env(&bucket).await?;
+        let last_etag = Arc::new(Mutex::new(None));
+
         let sqlite = SqliteStore::new(&state.write_dsn(), config).await?;
-        Ok(Self {
+        let sync = Arc::new(SyncCoordinator::new());
+        let (wake_tx, wake_rx) = wake_channel(sync_config.max_pending_ops.max(1));
+        let durable_wait_timeout = Duration::from_secs(config.connection_timeout_seconds.max(1));
+
+        let store = Self {
             sqlite,
             state,
-            sync: Arc::new(SyncCoordinator::new()),
-            last_etag: Arc::new(Mutex::new(None)),
+            sync,
+            last_etag,
+            object_key: object_key.clone(),
+            wake_tx,
+            durable_wait_timeout,
             mode,
             sync_config,
             source_dsn: s3_dsn.to_string(),
             sqlite_cache_dsn,
-        })
+        };
+
+        let task_store = store.clone();
+        tokio::spawn(async move {
+            task_store
+                .run_sync_task(object_store, object_key, wake_rx)
+                .await;
+        });
+
+        Ok(store)
     }
 
     /// Underlying SQLite cache store used for reads/writes.
@@ -130,7 +166,11 @@ impl S3Store {
     }
 
     /// Flush local write DB to object storage using optimistic CAS.
-    pub async fn flush_once<C: ObjectStoreClient>(&self, client: &C, key: &str) -> Result<()> {
+    pub async fn flush_once<C: ObjectStoreClient + ?Sized>(
+        &self,
+        client: &C,
+        key: &str,
+    ) -> Result<()> {
         let payload = std::fs::read(self.state.write_path()).map_err(|e| Error::Internal {
             message: format!(
                 "Failed to read write_db '{}': {}",
@@ -169,7 +209,11 @@ impl S3Store {
         Ok(())
     }
 
-    async fn recover_from_remote<C: ObjectStoreClient>(&self, client: &C, key: &str) -> Result<()> {
+    async fn recover_from_remote<C: ObjectStoreClient + ?Sized>(
+        &self,
+        client: &C,
+        key: &str,
+    ) -> Result<()> {
         let remote = client.get_object(key).await?;
         self.state.restore_from_remote_bytes(&remote.bytes)?;
         let mut guard = self.last_etag.lock().await;
@@ -183,7 +227,7 @@ impl S3Store {
     }
 
     /// Run the background sync loop for this store.
-    pub async fn run_sync_task<C: ObjectStoreClient>(
+    pub async fn run_sync_task<C: ObjectStoreClient + ?Sized>(
         &self,
         client: Arc<C>,
         key: String,
@@ -218,10 +262,23 @@ impl S3Store {
         &self.sqlite_cache_dsn
     }
 
+    /// Notify S3Store that a local mutation committed.
+    ///
+    /// In durable mode this waits until the flush sequence is committed to object storage.
+    pub async fn record_mutation_and_maybe_wait(&self) -> Result<()> {
+        let seq = self.reserve_write_sequence();
+        self.wake_tx.wake();
+        if self.mode == DurabilityMode::Durable {
+            self.wait_until_flushed(seq, self.durable_wait_timeout)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Initialize local state from remote object if it exists.
     ///
     /// Returns `Ok(true)` when remote state was loaded and `Ok(false)` when object was missing.
-    pub async fn bootstrap_from_remote<C: ObjectStoreClient>(
+    pub async fn bootstrap_from_remote<C: ObjectStoreClient + ?Sized>(
         &self,
         client: &C,
         key: &str,
@@ -237,6 +294,72 @@ impl S3Store {
             Err(err) => Err(err),
         }
     }
+}
+
+fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
+    let full = dsn
+        .strip_prefix("s3://")
+        .or_else(|| dsn.strip_prefix("s3:"))
+        .ok_or_else(|| Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("Invalid S3 DSN format: {}", dsn),
+        })?;
+
+    let mut parts = full.splitn(2, '/');
+    let bucket = parts.next().unwrap_or_default().trim();
+    let key = parts.next().unwrap_or_default().trim();
+
+    if bucket.is_empty() {
+        return Err(Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("S3 DSN missing bucket: {}", dsn),
+        });
+    }
+    if key.is_empty() {
+        return Err(Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("S3 DSN missing object key: {}", dsn),
+        });
+    }
+
+    Ok((bucket.to_string(), key.to_string()))
+}
+
+async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStoreClient>> {
+    let region = std::env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+    let endpoint = std::env::var("PGQRS_S3_ENDPOINT").ok();
+    if endpoint.as_ref().is_none_or(|v| v.trim().is_empty()) {
+        #[cfg(test)]
+        {
+            return Ok(Arc::new(InMemoryObjectStore::new()) as Arc<dyn ObjectStoreClient>);
+        }
+    }
+    let test_backend = std::env::var("PGQRS_TEST_BACKEND")
+        .ok()
+        .map(|v| v.eq_ignore_ascii_case("s3"))
+        .unwrap_or(false);
+    if endpoint.as_ref().is_none_or(|v| v.trim().is_empty()) && test_backend {
+        return Ok(Arc::new(InMemoryObjectStore::new()) as Arc<dyn ObjectStoreClient>);
+    }
+
+    let access_key = std::env::var("AWS_ACCESS_KEY_ID").ok();
+    let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
+
+    let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
+    if let (Some(ak), Some(sk)) = (access_key, secret_key) {
+        loader = loader.credentials_provider(Credentials::new(ak, sk, None, None, "pgqrs-s3"));
+    }
+    if let Some(ep) = endpoint.clone().filter(|v| !v.trim().is_empty()) {
+        loader = loader.endpoint_url(ep);
+    }
+
+    let conf = loader.load().await;
+    let mut s3_builder = aws_sdk_s3::config::Builder::from(&conf);
+    if endpoint.as_ref().is_some_and(|v| !v.trim().is_empty()) {
+        s3_builder = s3_builder.force_path_style(true);
+    }
+    let client = aws_sdk_s3::Client::from_conf(s3_builder.build());
+    Ok(Arc::new(AwsS3ObjectStore::new(client, bucket.to_string())) as Arc<dyn ObjectStoreClient>)
 }
 
 /// Map an `s3://...` DSN to a deterministic local SQLite cache DSN.
