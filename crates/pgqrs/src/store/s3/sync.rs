@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 pub struct SyncCoordinator {
     current_seq: AtomicU64,
     last_flushed_seq: AtomicU64,
+    failed_seq: AtomicU64,
     notify: Notify,
 }
 
@@ -31,6 +32,10 @@ impl SyncCoordinator {
         self.last_flushed_seq.load(Ordering::SeqCst)
     }
 
+    pub fn failed_sequence(&self) -> u64 {
+        self.failed_seq.load(Ordering::SeqCst)
+    }
+
     /// Mark all sequences up to `flushed_seq` as durable.
     pub fn mark_flushed(&self, flushed_seq: u64) {
         // Monotonic max update to avoid stale writes rolling progress back.
@@ -42,15 +47,33 @@ impl SyncCoordinator {
         self.notify.notify_waiters();
     }
 
+    /// Mark all sequences up to `failed_seq` as failed due to conflict.
+    pub fn mark_conflict(&self, failed_seq: u64) {
+        let _ = self
+            .failed_seq
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| {
+                Some(prev.max(failed_seq))
+            });
+        self.notify.notify_waiters();
+    }
+
     /// Wait until target sequence is durable or timeout is hit.
     pub async fn wait_until_flushed(&self, target_seq: u64, timeout: Duration) -> Result<()> {
         if self.last_flushed_sequence() >= target_seq {
             return Ok(());
         }
+        if self.failed_sequence() >= target_seq {
+            return Err(Error::Conflict {
+                message: format!("flush sequence {} failed due to CAS conflict", target_seq),
+            });
+        }
 
         tokio::time::timeout(timeout, async {
             loop {
                 if self.last_flushed_sequence() >= target_seq {
+                    return;
+                }
+                if self.failed_sequence() >= target_seq {
                     return;
                 }
                 self.notify.notified().await;
@@ -60,6 +83,12 @@ impl SyncCoordinator {
         .map_err(|_| Error::Timeout {
             operation: format!("wait_until_flushed(seq={target_seq})"),
         })?;
+
+        if self.failed_sequence() >= target_seq {
+            return Err(Error::Conflict {
+                message: format!("flush sequence {} failed due to CAS conflict", target_seq),
+            });
+        }
 
         Ok(())
     }
@@ -147,6 +176,24 @@ mod tests {
             .await
             .expect_err("expected timeout");
         assert!(matches!(err, Error::Timeout { .. }));
+    }
+
+    #[tokio::test]
+    async fn wait_until_flushed_returns_conflict_after_mark_conflict() {
+        let c = Arc::new(SyncCoordinator::new());
+        let target = c.next_sequence();
+        let c2 = c.clone();
+
+        let waiter = tokio::spawn(async move {
+            c2.wait_until_flushed(target, Duration::from_secs(1))
+                .await
+                .expect_err("wait should fail with conflict")
+        });
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        c.mark_conflict(target);
+        let err = waiter.await.expect("wait task should complete");
+        assert!(matches!(err, Error::Conflict { .. }));
     }
 
     #[tokio::test]

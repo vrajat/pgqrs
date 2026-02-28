@@ -150,6 +150,7 @@ impl S3Store {
         {
             Ok(etag) => etag,
             Err(Error::Conflict { message }) => {
+                self.sync.mark_conflict(self.current_sequence());
                 // Fast-fail callers, but first reset local state to latest remote baseline.
                 let _ = self.recover_from_remote(client, key).await;
                 return Err(Error::Conflict { message });
@@ -392,13 +393,18 @@ mod tests {
         .await
         .expect("open b");
         std::fs::write(store_b.state().write_path(), b"v2").expect("write v2");
-        store_b.reserve_write_sequence();
+        let seq = store_b.reserve_write_sequence();
 
         let err = store_b
             .flush_once(&client, &shared_key)
             .await
             .expect_err("second store should conflict (stale/no etag)");
         assert!(matches!(err, Error::Conflict { .. }));
+        let wait_err = store_b
+            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
+            .await
+            .expect_err("pending waiters should fail-fast after conflict");
+        assert!(matches!(wait_err, Error::Conflict { .. }));
 
         // store_b should have been reset to remote state from store_a
         let write_bytes =
