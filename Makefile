@@ -8,11 +8,20 @@ ifeq ($(PGQRS_TEST_BACKEND),postgres)
 	CARGO_FEATURES ?= --no-default-features --features postgres
 else ifeq ($(PGQRS_TEST_BACKEND),sqlite)
 	CARGO_FEATURES ?= --no-default-features --features sqlite
+else ifeq ($(PGQRS_TEST_BACKEND),s3)
+	CARGO_FEATURES ?= --no-default-features --features s3
 else ifeq ($(PGQRS_TEST_BACKEND),turso)
 	CARGO_FEATURES ?= --no-default-features --features turso
 else
 	CARGO_FEATURES ?=
 endif
+
+# LocalStack test config (S3)
+LOCALSTACK_IMAGE ?= localstack/localstack:3
+LOCALSTACK_CONTAINER ?= pgqrs-test-localstack
+LOCALSTACK_PORT ?= 4566
+LOCALSTACK_REGION ?= us-east-1
+PGQRS_S3_TEST_BUCKET ?= pgqrs-test-bucket
 
 # Test-only features to always enable for test runs
 TEST_FEATURES ?= --features test-utils
@@ -155,6 +164,50 @@ test-sqlite:  ## Run tests on SQLite backend
 test-turso:  ## Run tests on Turso backend
 	$(MAKE) test PGQRS_TEST_BACKEND=turso CARGO_FEATURES="--no-default-features --features turso"
 
+start-localstack: ## Start LocalStack S3 container (skipped if CI_LOCALSTACK_RUNNING=true)
+ifdef CI_LOCALSTACK_RUNNING
+	@echo "Skipping LocalStack container start (CI_LOCALSTACK_RUNNING=true)"
+else
+	docker rm -f $(LOCALSTACK_CONTAINER) || true
+	docker run -d --name $(LOCALSTACK_CONTAINER) \
+		-p $(LOCALSTACK_PORT):4566 \
+		-e SERVICES=s3 \
+		-e AWS_DEFAULT_REGION=$(LOCALSTACK_REGION) \
+		-e AWS_ACCESS_KEY_ID=test \
+		-e AWS_SECRET_ACCESS_KEY=test \
+		$(LOCALSTACK_IMAGE)
+	@echo "Waiting for LocalStack S3 to be ready..."
+	@until curl -fsS "http://localhost:$(LOCALSTACK_PORT)/_localstack/health" | grep -Eq '"s3"[[:space:]]*:[[:space:]]*"(running|available)"'; do sleep 1; done
+	@docker exec $(LOCALSTACK_CONTAINER) awslocal s3api create-bucket --bucket $(PGQRS_S3_TEST_BUCKET) >/dev/null 2>&1 || true
+endif
+
+stop-localstack: ## Stop LocalStack S3 container (skipped if CI_LOCALSTACK_RUNNING=true)
+ifdef CI_LOCALSTACK_RUNNING
+	@echo "Skipping LocalStack container stop (CI_LOCALSTACK_RUNNING=true)"
+else
+	docker rm -f $(LOCALSTACK_CONTAINER) || true
+endif
+
+test-s3: start-localstack ## Run LocalStack-backed S3 smoke tests
+ifdef CI_LOCALSTACK_RUNNING
+	@echo "Running S3 tests with CI LocalStack"
+	PGQRS_S3_ENDPOINT="$${PGQRS_S3_ENDPOINT:-http://localhost:4566}" \
+	PGQRS_S3_REGION="$${PGQRS_S3_REGION:-$(LOCALSTACK_REGION)}" \
+	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
+	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
+	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
+	$(MAKE) test-rust PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" TEST=s3_localstack_smoke
+else
+	@echo "Running S3 tests with local LocalStack"
+	PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
+	PGQRS_S3_REGION="$(LOCALSTACK_REGION)" \
+	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
+	AWS_ACCESS_KEY_ID="test" \
+	AWS_SECRET_ACCESS_KEY="test" \
+	$(MAKE) test-rust PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" TEST=s3_localstack_smoke
+	$(MAKE) stop-localstack
+endif
+
 # Run on all available backends
 test-all-backends:  ## Run tests on all available backends
 	@echo "=== Testing on Postgres ==="
@@ -164,6 +217,8 @@ test-all-backends:  ## Run tests on all available backends
 	$(MAKE) test-sqlite
 	echo "=== Testing on Turso ==="; \
 	$(MAKE) test-turso; \
+	echo "=== Testing S3 (LocalStack smoke) ==="; \
+	$(MAKE) test-s3; \
 
 # Run on a subset (comma-separated)
 # Usage: make test-backends BACKENDS=postgres,sqlite

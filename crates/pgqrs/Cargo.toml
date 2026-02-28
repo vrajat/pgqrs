@@ -43,9 +43,10 @@ predicates = "3.0"
 [features]
 default = ["postgres"]
 sqlx = ["dep:sqlx"]
-full = ["postgres", "sqlite", "turso"]
+full = ["postgres", "sqlite", "turso", "s3"]
 postgres = ["sqlx", "sqlx/postgres"]
 sqlite = ["sqlx", "sqlx/sqlite"]
+s3 = ["sqlite"]
 # Turso backend (Rust-native logic)
 turso = ["dep:turso"]
 test-utils = []

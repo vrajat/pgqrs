@@ -21,6 +21,8 @@ pub mod postgres;
 pub(crate) mod query;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "s3")]
+pub mod s3;
 #[cfg(feature = "turso")]
 pub mod turso;
 
