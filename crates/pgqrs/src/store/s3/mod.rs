@@ -15,10 +15,12 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
+use client::ObjectStoreClient;
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
 use sync::SyncCoordinator;
+use tokio::sync::Mutex;
 
 /// Durability behavior for S3-backed stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -60,6 +62,7 @@ pub struct S3Store {
     sqlite: SqliteStore,
     state: LocalDbState,
     sync: Arc<SyncCoordinator>,
+    last_etag: Arc<Mutex<Option<String>>>,
     mode: DurabilityMode,
     sync_config: S3SyncConfig,
     source_dsn: String,
@@ -82,6 +85,7 @@ impl S3Store {
             sqlite,
             state,
             sync: Arc::new(SyncCoordinator::new()),
+            last_etag: Arc::new(Mutex::new(None)),
             mode,
             sync_config,
             source_dsn: s3_dsn.to_string(),
@@ -123,6 +127,36 @@ impl S3Store {
 
     pub fn last_flushed_sequence(&self) -> u64 {
         self.sync.last_flushed_sequence()
+    }
+
+    /// Flush local write DB to object storage using optimistic CAS.
+    pub async fn flush_once<C: ObjectStoreClient>(&self, client: &C, key: &str) -> Result<()> {
+        let payload = std::fs::read(self.state.write_path()).map_err(|e| Error::Internal {
+            message: format!(
+                "Failed to read write_db '{}': {}",
+                self.state.write_path().display(),
+                e
+            ),
+        })?;
+
+        let expected = {
+            let guard = self.last_etag.lock().await;
+            guard.clone()
+        };
+
+        let new_etag = client
+            .put_object_if_match(key, &payload, expected.as_deref())
+            .await?;
+
+        self.state.promote_write_to_read()?;
+
+        {
+            let mut guard = self.last_etag.lock().await;
+            *guard = Some(new_etag);
+        }
+
+        self.mark_flushed(self.current_sequence());
+        Ok(())
     }
 
     pub fn sync_config(&self) -> &S3SyncConfig {
@@ -176,6 +210,8 @@ pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
 mod tests {
     use super::{sqlite_cache_dsn_from_s3_dsn, DurabilityMode, S3Store, S3SyncConfig};
     use crate::config::Config;
+    use crate::error::Error;
+    use crate::store::s3::client::{InMemoryObjectStore, ObjectStoreClient};
 
     #[test]
     fn sqlite_cache_mapping_is_deterministic() {
@@ -233,5 +269,78 @@ mod tests {
             .await
             .expect("wait should complete");
         assert_eq!(store.last_flushed_sequence(), 1);
+    }
+
+    #[tokio::test]
+    async fn flush_once_promotes_and_marks_flushed() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let store = S3Store::open(
+            "s3://bucket/flush_ok.sqlite",
+            &config,
+            DurabilityMode::Durable,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open should succeed");
+
+        std::fs::write(store.state().write_path(), b"hello-world").expect("write test db bytes");
+        let seq = store.reserve_write_sequence();
+        let client = InMemoryObjectStore::new();
+
+        store
+            .flush_once(&client, "bucket/flush_ok.sqlite")
+            .await
+            .expect("flush should succeed");
+
+        store
+            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
+            .await
+            .expect("seq should be durable");
+
+        let read_bytes = std::fs::read(store.state().read_path()).expect("read read_db");
+        assert_eq!(read_bytes, b"hello-world");
+        let obj = client
+            .get_object("bucket/flush_ok.sqlite")
+            .await
+            .expect("object should exist");
+        assert_eq!(obj.bytes, b"hello-world");
+    }
+
+    #[tokio::test]
+    async fn flush_once_reports_conflict() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let client = InMemoryObjectStore::new();
+
+        let store_a = S3Store::open(
+            "s3://bucket/conflict_a.sqlite",
+            &config,
+            DurabilityMode::Local,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open a");
+        std::fs::write(store_a.state().write_path(), b"v1").expect("write v1");
+        store_a.reserve_write_sequence();
+        store_a
+            .flush_once(&client, "bucket/shared.sqlite")
+            .await
+            .expect("first flush");
+
+        let store_b = S3Store::open(
+            "s3://bucket/conflict_b.sqlite",
+            &config,
+            DurabilityMode::Local,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open b");
+        std::fs::write(store_b.state().write_path(), b"v2").expect("write v2");
+        store_b.reserve_write_sequence();
+
+        let err = store_b
+            .flush_once(&client, "bucket/shared.sqlite")
+            .await
+            .expect_err("second store should conflict (stale/no etag)");
+        assert!(matches!(err, Error::Conflict { .. }));
     }
 }
