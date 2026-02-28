@@ -8,7 +8,7 @@ use crate::config::Config;
 #[cfg(feature = "postgres")]
 use crate::store::postgres::PostgresStore;
 #[cfg(feature = "s3")]
-use crate::store::s3::{DurabilityMode, S3Store, S3SyncConfig};
+use crate::store::s3::S3Store;
 #[cfg(feature = "sqlite")]
 use crate::store::sqlite::SqliteStore;
 #[cfg(feature = "turso")]
@@ -86,8 +86,8 @@ impl AnyStore {
                     let store = S3Store::open(
                         &config.dsn,
                         config,
-                        DurabilityMode::Local,
-                        S3SyncConfig::default(),
+                        config.s3_mode,
+                        config.s3_sync_config.clone(),
                     )
                     .await?;
                     return Ok(AnyStore::S3(store));

@@ -68,6 +68,14 @@ const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
 const ENV_MAX_READ_CT: &str = "PGQRS_MAX_READ_CT";
 const ENV_HEARTBEAT_INTERVAL: &str = "PGQRS_HEARTBEAT_INTERVAL";
 const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
+#[cfg(feature = "s3")]
+const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
+#[cfg(feature = "s3")]
+const ENV_S3_FLUSH_INTERVAL_MS: &str = "PGQRS_S3_FLUSH_INTERVAL_MS";
+#[cfg(feature = "s3")]
+const ENV_S3_MAX_PENDING_OPS: &str = "PGQRS_S3_MAX_PENDING_OPS";
+#[cfg(feature = "s3")]
+const ENV_S3_MAX_BACKOFF_MS: &str = "PGQRS_S3_MAX_BACKOFF_MS";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -112,6 +120,16 @@ fn default_poll_interval_ms() -> u64 {
     DEFAULT_POLL_INTERVAL_MS
 }
 
+#[cfg(feature = "s3")]
+fn default_s3_mode() -> crate::store::s3::DurabilityMode {
+    crate::store::s3::DurabilityMode::Local
+}
+
+#[cfg(feature = "s3")]
+fn default_s3_sync_config() -> crate::store::s3::S3SyncConfig {
+    crate::store::s3::S3SyncConfig::default()
+}
+
 /// Connection and queue defaults for pgqrs.
 ///
 /// The DSN is required. The schema must exist before installing pgqrs.
@@ -147,6 +165,14 @@ pub struct Config {
     /// Validation configuration for payload checking and rate limiting
     #[serde(default)]
     pub validation_config: crate::validation::ValidationConfig,
+    /// S3-backed durability mode (only used for s3:// DSNs)
+    #[cfg(feature = "s3")]
+    #[serde(default = "default_s3_mode")]
+    pub s3_mode: crate::store::s3::DurabilityMode,
+    /// S3-backed sync tuning (only used for s3:// DSNs)
+    #[cfg(feature = "s3")]
+    #[serde(default = "default_s3_sync_config")]
+    pub s3_sync_config: crate::store::s3::S3SyncConfig,
 }
 
 impl Default for Config {
@@ -162,6 +188,10 @@ impl Default for Config {
             heartbeat_interval: default_heartbeat_interval(),
             poll_interval_ms: default_poll_interval_ms(),
             validation_config: Default::default(),
+            #[cfg(feature = "s3")]
+            s3_mode: default_s3_mode(),
+            #[cfg(feature = "s3")]
+            s3_sync_config: default_s3_sync_config(),
         }
     }
 }
@@ -182,6 +212,10 @@ impl Config {
             heartbeat_interval: default_heartbeat_interval(),
             poll_interval_ms: default_poll_interval_ms(),
             validation_config: Default::default(),
+            #[cfg(feature = "s3")]
+            s3_mode: default_s3_mode(),
+            #[cfg(feature = "s3")]
+            s3_sync_config: default_s3_sync_config(),
         }
     }
 
@@ -208,6 +242,10 @@ impl Config {
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             validation_config: Default::default(),
+            #[cfg(feature = "s3")]
+            s3_mode: default_s3_mode(),
+            #[cfg(feature = "s3")]
+            s3_sync_config: default_s3_sync_config(),
         })
     }
 
@@ -288,6 +326,32 @@ impl Config {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
+        #[cfg(feature = "s3")]
+        let s3_mode = env::var(ENV_S3_MODE)
+            .ok()
+            .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                "local" => Some(crate::store::s3::DurabilityMode::Local),
+                "durable" => Some(crate::store::s3::DurabilityMode::Durable),
+                _ => None,
+            })
+            .unwrap_or_else(default_s3_mode);
+
+        #[cfg(feature = "s3")]
+        let s3_sync_config = crate::store::s3::S3SyncConfig {
+            flush_interval_ms: env::var(ENV_S3_FLUSH_INTERVAL_MS)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default_s3_sync_config().flush_interval_ms),
+            max_pending_ops: env::var(ENV_S3_MAX_PENDING_OPS)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default_s3_sync_config().max_pending_ops),
+            max_backoff_ms: env::var(ENV_S3_MAX_BACKOFF_MS)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default_s3_sync_config().max_backoff_ms),
+        };
+
         Ok(Self {
             dsn,
             schema,
@@ -299,6 +363,10 @@ impl Config {
             heartbeat_interval,
             poll_interval_ms,
             validation_config,
+            #[cfg(feature = "s3")]
+            s3_mode,
+            #[cfg(feature = "s3")]
+            s3_sync_config,
         })
     }
 
@@ -441,6 +509,13 @@ mod tests {
         env::remove_var(ENV_CONFIG_FILE);
         env::remove_var(ENV_SCHEMA);
         env::remove_var(ENV_VALIDATION_CONFIG);
+        #[cfg(feature = "s3")]
+        {
+            env::remove_var(ENV_S3_MODE);
+            env::remove_var(ENV_S3_FLUSH_INTERVAL_MS);
+            env::remove_var(ENV_S3_MAX_PENDING_OPS);
+            env::remove_var(ENV_S3_MAX_BACKOFF_MS);
+        }
     }
 
     #[test]
@@ -872,5 +947,26 @@ schema: "invalid-schema-name"
         }
 
         cleanup_test_file(&config_path);
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    #[serial]
+    fn test_from_env_s3_settings() {
+        clear_test_env_vars();
+
+        env::set_var(ENV_DSN, "s3://bucket/queue.sqlite");
+        env::set_var(ENV_S3_MODE, "durable");
+        env::set_var(ENV_S3_FLUSH_INTERVAL_MS, "2500");
+        env::set_var(ENV_S3_MAX_PENDING_OPS, "42");
+        env::set_var(ENV_S3_MAX_BACKOFF_MS, "120000");
+
+        let config = Config::from_env().expect("Should load s3 settings from env");
+        assert_eq!(config.s3_mode, crate::store::s3::DurabilityMode::Durable);
+        assert_eq!(config.s3_sync_config.flush_interval_ms, 2500);
+        assert_eq!(config.s3_sync_config.max_pending_ops, 42);
+        assert_eq!(config.s3_sync_config.max_backoff_ms, 120000);
+
+        clear_test_env_vars();
     }
 }
