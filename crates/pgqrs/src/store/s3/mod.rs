@@ -4,6 +4,7 @@
 //! S3-backed SQLite implementation.
 
 pub mod client;
+pub mod state;
 pub mod sync;
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
+use state::LocalDbState;
 
 /// Durability behavior for S3-backed stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -53,6 +55,7 @@ impl Default for S3SyncConfig {
 #[derive(Debug, Clone)]
 pub struct S3Store {
     sqlite: SqliteStore,
+    state: LocalDbState,
     mode: DurabilityMode,
     sync_config: S3SyncConfig,
     source_dsn: String,
@@ -68,9 +71,12 @@ impl S3Store {
         sync_config: S3SyncConfig,
     ) -> Result<Self> {
         let sqlite_cache_dsn = sqlite_cache_dsn_from_s3_dsn(s3_dsn)?;
-        let sqlite = SqliteStore::new(&sqlite_cache_dsn, config).await?;
+        let state = LocalDbState::from_cache_dsn(&sqlite_cache_dsn, mode)?;
+        state.ensure_files()?;
+        let sqlite = SqliteStore::new(&state.write_dsn(), config).await?;
         Ok(Self {
             sqlite,
+            state,
             mode,
             sync_config,
             source_dsn: s3_dsn.to_string(),
@@ -85,6 +91,10 @@ impl S3Store {
 
     pub fn mode(&self) -> DurabilityMode {
         self.mode
+    }
+
+    pub fn state(&self) -> &LocalDbState {
+        &self.state
     }
 
     pub fn sync_config(&self) -> &S3SyncConfig {
