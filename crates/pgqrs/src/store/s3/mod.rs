@@ -10,7 +10,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::store::sqlite::SqliteStore;
 
 /// Durability behavior for S3-backed stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -41,6 +43,59 @@ impl Default for S3SyncConfig {
             max_pending_ops: 100,
             max_backoff_ms: 30_000,
         }
+    }
+}
+
+/// Initial S3-backed store scaffold.
+///
+/// Current implementation delegates to a local SQLite cache DB derived from the S3 DSN.
+#[derive(Debug, Clone)]
+pub struct S3Store {
+    sqlite: SqliteStore,
+    mode: DurabilityMode,
+    sync_config: S3SyncConfig,
+    source_dsn: String,
+    sqlite_cache_dsn: String,
+}
+
+impl S3Store {
+    /// Open an S3-backed store against a local SQLite cache.
+    pub async fn open(
+        s3_dsn: &str,
+        config: &Config,
+        mode: DurabilityMode,
+        sync_config: S3SyncConfig,
+    ) -> Result<Self> {
+        let sqlite_cache_dsn = sqlite_cache_dsn_from_s3_dsn(s3_dsn)?;
+        let sqlite = SqliteStore::new(&sqlite_cache_dsn, config).await?;
+        Ok(Self {
+            sqlite,
+            mode,
+            sync_config,
+            source_dsn: s3_dsn.to_string(),
+            sqlite_cache_dsn,
+        })
+    }
+
+    /// Underlying SQLite cache store used for reads/writes.
+    pub fn sqlite(&self) -> &SqliteStore {
+        &self.sqlite
+    }
+
+    pub fn mode(&self) -> DurabilityMode {
+        self.mode
+    }
+
+    pub fn sync_config(&self) -> &S3SyncConfig {
+        &self.sync_config
+    }
+
+    pub fn source_dsn(&self) -> &str {
+        &self.source_dsn
+    }
+
+    pub fn sqlite_cache_dsn(&self) -> &str {
+        &self.sqlite_cache_dsn
     }
 }
 
@@ -80,7 +135,8 @@ pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::sqlite_cache_dsn_from_s3_dsn;
+    use super::{sqlite_cache_dsn_from_s3_dsn, DurabilityMode, S3Store, S3SyncConfig};
+    use crate::config::Config;
 
     #[test]
     fn sqlite_cache_mapping_is_deterministic() {
@@ -94,5 +150,22 @@ mod tests {
     fn sqlite_cache_mapping_rejects_invalid_input() {
         let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
         assert!(err.to_string().contains("Invalid S3 DSN format"));
+    }
+
+    #[tokio::test]
+    async fn s3_store_open_uses_sqlite_cache() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let store = S3Store::open(
+            "s3://bucket/queue.sqlite",
+            &config,
+            DurabilityMode::Local,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open should succeed");
+
+        assert_eq!(store.mode(), DurabilityMode::Local);
+        assert_eq!(store.source_dsn(), "s3://bucket/queue.sqlite");
+        assert!(store.sqlite_cache_dsn().starts_with("sqlite://"));
     }
 }
