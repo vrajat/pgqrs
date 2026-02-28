@@ -196,7 +196,7 @@ ifdef CI_LOCALSTACK_RUNNING
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
-	$(MAKE) test-rust PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" TEST=s3_localstack_smoke
+	$(MAKE) test-rust PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3" TEST=s3_localstack_smoke
 else
 	@echo "Running S3 tests with local LocalStack"
 	PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
@@ -204,7 +204,7 @@ else
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \
-	$(MAKE) test-rust PGQRS_TEST_BACKEND=sqlite CARGO_FEATURES="--no-default-features --features sqlite" TEST=s3_localstack_smoke
+	$(MAKE) test-rust PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3" TEST=s3_localstack_smoke
 	$(MAKE) stop-localstack
 endif
 

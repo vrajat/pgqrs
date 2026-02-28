@@ -76,7 +76,18 @@ impl AnyStore {
             }
             #[cfg(feature = "sqlite")]
             BackendType::Sqlite => {
-                let store = SqliteStore::new(&config.dsn, config).await?;
+                #[cfg(feature = "s3")]
+                let sqlite_dsn = if config.dsn.starts_with("s3://") || config.dsn.starts_with("s3:")
+                {
+                    crate::store::s3::sqlite_cache_dsn_from_s3_dsn(&config.dsn)?
+                } else {
+                    config.dsn.clone()
+                };
+
+                #[cfg(not(feature = "s3"))]
+                let sqlite_dsn = config.dsn.clone();
+
+                let store = SqliteStore::new(&sqlite_dsn, config).await?;
                 Ok(AnyStore::Sqlite(store))
             }
             #[cfg(feature = "turso")]
@@ -95,6 +106,7 @@ impl AnyStore {
     /// The DSN format determines which backend is used:
     /// - `postgres://` or `postgresql://` → PostgreSQL
     /// - `sqlite://` → SQLite (requires "sqlite" feature)
+    /// - `s3://` → SQLite local cache path (requires "s3" feature)
     /// - `turso://` → Turso (requires "turso" feature)
     ///
     /// # Arguments

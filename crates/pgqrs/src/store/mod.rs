@@ -19,10 +19,10 @@ pub mod any;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub(crate) mod query;
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
 #[cfg(feature = "s3")]
 pub mod s3;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 #[cfg(feature = "turso")]
 pub mod turso;
 
@@ -173,6 +173,8 @@ impl BackendType {
     const POSTGRES_PREFIXES: &'static [&'static str] =
         &["postgres://", "postgresql://", "postgres", "pg"];
     const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
+    #[cfg(feature = "s3")]
+    const S3_PREFIXES: &'static [&'static str] = &["s3://", "s3:"];
     const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
 
     pub fn detect(dsn: &str) -> crate::error::Result<Self> {
@@ -183,6 +185,16 @@ impl BackendType {
             return Err(crate::error::Error::InvalidConfig {
                 field: "dsn".to_string(),
                 message: "Postgres backend is not enabled".to_string(),
+            });
+        }
+        #[cfg(feature = "s3")]
+        if Self::S3_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            #[cfg(feature = "sqlite")]
+            return Ok(Self::Sqlite);
+            #[cfg(not(feature = "sqlite"))]
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: "S3 backend requires sqlite feature".to_string(),
             });
         }
         if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
