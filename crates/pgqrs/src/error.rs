@@ -191,6 +191,10 @@ pub enum Error {
     #[error("Invalid worker type: {message}")]
     InvalidWorkerType { message: String },
 
+    /// Optimistic concurrency conflict (e.g. stale CAS/ETag)
+    #[error("Conflict: {message}")]
+    Conflict { message: String },
+
     /// Worker not found
     #[error("Worker with id '{id}' not found")]
     WorkerNotFound { id: i64 },

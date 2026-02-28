@@ -3,6 +3,8 @@
 //! This module defines configuration and mode types used by the upcoming
 //! S3-backed SQLite implementation.
 
+pub mod client;
+
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
