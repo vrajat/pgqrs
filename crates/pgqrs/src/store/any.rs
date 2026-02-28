@@ -7,6 +7,8 @@ use super::*;
 use crate::config::Config;
 #[cfg(feature = "postgres")]
 use crate::store::postgres::PostgresStore;
+#[cfg(feature = "s3")]
+use crate::store::s3::{DurabilityMode, S3Store, S3SyncConfig};
 #[cfg(feature = "sqlite")]
 use crate::store::sqlite::SqliteStore;
 #[cfg(feature = "turso")]
@@ -27,6 +29,9 @@ pub enum AnyStore {
     /// SQLite backend
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteStore),
+    /// S3-backed SQLite backend
+    #[cfg(feature = "s3")]
+    S3(S3Store),
     /// Turso backend (Rust-native SQLite rewrite)
     #[cfg(feature = "turso")]
     Turso(TursoStore),
@@ -77,18 +82,25 @@ impl AnyStore {
             #[cfg(feature = "sqlite")]
             BackendType::Sqlite => {
                 #[cfg(feature = "s3")]
-                let sqlite_dsn = if config.dsn.starts_with("s3://") || config.dsn.starts_with("s3:")
-                {
-                    crate::store::s3::sqlite_cache_dsn_from_s3_dsn(&config.dsn)?
+                if config.dsn.starts_with("s3://") || config.dsn.starts_with("s3:") {
+                    let store = S3Store::open(
+                        &config.dsn,
+                        config,
+                        DurabilityMode::Local,
+                        S3SyncConfig::default(),
+                    )
+                    .await?;
+                    return Ok(AnyStore::S3(store));
                 } else {
-                    config.dsn.clone()
-                };
+                    let store = SqliteStore::new(&config.dsn, config).await?;
+                    return Ok(AnyStore::Sqlite(store));
+                }
 
                 #[cfg(not(feature = "s3"))]
-                let sqlite_dsn = config.dsn.clone();
-
-                let store = SqliteStore::new(&sqlite_dsn, config).await?;
-                Ok(AnyStore::Sqlite(store))
+                {
+                    let store = SqliteStore::new(&config.dsn, config).await?;
+                    Ok(AnyStore::Sqlite(store))
+                }
             }
             #[cfg(feature = "turso")]
             BackendType::Turso => {
@@ -134,6 +146,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.execute_raw(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw(sql).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().execute_raw(sql).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw(sql).await,
         }
@@ -145,6 +159,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_i64(sql, param).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw_with_i64(sql, param).await,
         }
@@ -161,6 +177,12 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => {
+                s.sqlite()
+                    .execute_raw_with_two_i64(sql, param1, param2)
+                    .await
+            }
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
         }
@@ -172,6 +194,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_int(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_int(sql).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().query_int(sql).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.query_int(sql).await,
         }
@@ -183,6 +207,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_string(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_string(sql).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().query_string(sql).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.query_string(sql).await,
         }
@@ -194,6 +220,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.query_bool(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.query_bool(sql).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().query_bool(sql).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.query_bool(sql).await,
         }
@@ -205,6 +233,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.config(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.config(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().config(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.config(),
         }
@@ -216,6 +246,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.queues(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.queues(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().queues(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.queues(),
         }
@@ -227,6 +259,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.messages(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.messages(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().messages(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.messages(),
         }
@@ -238,6 +272,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workers(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workers(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().workers(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workers(),
         }
@@ -249,6 +285,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflows(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflows(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().workflows(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflows(),
         }
@@ -260,6 +298,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflow_runs(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow_runs(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().workflow_runs(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow_runs(),
         }
@@ -271,6 +311,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflow_steps(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow_steps(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().workflow_steps(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow_steps(),
         }
@@ -282,6 +324,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.run(message).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.run(message).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().run(message).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.run(message).await,
         }
@@ -293,6 +337,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.worker(id).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.worker(id).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().worker(id).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.worker(id).await,
         }
@@ -304,6 +350,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.bootstrap().await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.bootstrap().await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().bootstrap().await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.bootstrap().await,
         }
@@ -320,6 +368,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.admin(hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.admin(hostname, port, config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().admin(hostname, port, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.admin(hostname, port, config).await,
         }
@@ -331,6 +381,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.admin_ephemeral(config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.admin_ephemeral(config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().admin_ephemeral(config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.admin_ephemeral(config).await,
         }
@@ -342,6 +394,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.workflow(name).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow(name).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().workflow(name).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow(name).await,
         }
@@ -353,6 +407,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.concurrency_model(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.concurrency_model(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().concurrency_model(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.concurrency_model(),
         }
@@ -364,6 +420,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.backend_name(),
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.backend_name(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().backend_name(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.backend_name(),
         }
@@ -379,6 +437,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer_ephemeral(queue, config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().producer_ephemeral(queue, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.producer_ephemeral(queue, config).await,
         }
@@ -394,6 +454,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().consumer_ephemeral(queue, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.consumer_ephemeral(queue, config).await,
         }
@@ -411,6 +473,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().producer(queue, hostname, port, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
         }
@@ -428,6 +492,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().consumer(queue, hostname, port, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
         }
@@ -439,6 +505,8 @@ impl Store for AnyStore {
             AnyStore::Postgres(s) => s.queue(name).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.queue(name).await,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.sqlite().queue(name).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.queue(name).await,
         }

@@ -305,3 +305,13 @@ async fn test_anystore_invalid_dsn() {
         .to_string()
         .contains("Unsupported DSN format"));
 }
+
+#[cfg(feature = "s3")]
+#[tokio::test]
+async fn test_anystore_s3_dsn_creates_s3_variant() {
+    let config = pgqrs::config::Config::from_dsn("s3://bucket/queue.sqlite");
+    let store = pgqrs::connect_with_config(&config)
+        .await
+        .expect("Failed to connect using s3 dsn");
+    assert!(matches!(store, pgqrs::store::AnyStore::S3(_)));
+}
