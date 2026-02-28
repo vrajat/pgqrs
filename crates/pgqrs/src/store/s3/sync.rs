@@ -121,6 +121,7 @@ pub fn wake_channel(buffer: usize) -> (SyncWakeSender, mpsc::Receiver<()>) {
 pub async fn run_sync_loop<F, Fut>(
     mut wake_rx: mpsc::Receiver<()>,
     interval: Duration,
+    max_backoff: Duration,
     mut flush_once: F,
 ) where
     F: FnMut() -> Fut,
@@ -131,16 +132,45 @@ pub async fn run_sync_loop<F, Fut>(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let _ = flush_once().await;
+                flush_with_backoff(&mut flush_once, max_backoff).await;
             }
             msg = wake_rx.recv() => {
                 if msg.is_none() {
                     break;
                 }
-                let _ = flush_once().await;
+                flush_with_backoff(&mut flush_once, max_backoff).await;
             }
         }
     }
+}
+
+async fn flush_with_backoff<F, Fut>(flush_once: &mut F, max_backoff: Duration)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let mut backoff = Duration::from_millis(50);
+
+    loop {
+        match flush_once().await {
+            Ok(()) => return,
+            Err(err) if is_retryable_sync_error(&err) => {
+                tokio::time::sleep(backoff).await;
+                backoff = std::cmp::min(backoff.saturating_mul(2), max_backoff.max(backoff));
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+fn is_retryable_sync_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Timeout { .. }
+            | Error::ConnectionFailed { .. }
+            | Error::PoolExhausted { .. }
+            | Error::Internal { .. }
+    )
 }
 
 #[cfg(test)]
@@ -203,13 +233,18 @@ mod tests {
         let calls_ref = calls.clone();
 
         let loop_task = tokio::spawn(async move {
-            run_sync_loop(rx, Duration::from_millis(50), || {
-                let calls_ref = calls_ref.clone();
-                async move {
-                    calls_ref.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(())
-                }
-            })
+            run_sync_loop(
+                rx,
+                Duration::from_millis(50),
+                Duration::from_millis(200),
+                || {
+                    let calls_ref = calls_ref.clone();
+                    async move {
+                        calls_ref.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    }
+                },
+            )
             .await;
         });
 
@@ -224,5 +259,42 @@ mod tests {
 
         let n = calls.load(std::sync::atomic::Ordering::SeqCst);
         assert!(n >= 2, "expected >=2 flushes, got {}", n);
+    }
+
+    #[tokio::test]
+    async fn run_sync_loop_retries_with_backoff_for_timeouts() {
+        let (wake, rx) = wake_channel(4);
+        let calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let calls_ref = calls.clone();
+
+        let loop_task = tokio::spawn(async move {
+            run_sync_loop(
+                rx,
+                Duration::from_secs(60),
+                Duration::from_millis(60),
+                || {
+                    let calls_ref = calls_ref.clone();
+                    async move {
+                        let n = calls_ref.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        if n < 3 {
+                            return Err(Error::Timeout {
+                                operation: "test transient".to_string(),
+                            });
+                        }
+                        Ok(())
+                    }
+                },
+            )
+            .await;
+        });
+
+        wake.wake();
+        tokio::time::sleep(Duration::from_millis(220)).await;
+
+        drop(wake);
+        loop_task.await.expect("loop should exit cleanly");
+
+        let n = calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(n >= 3, "expected retries before success, got {}", n);
     }
 }

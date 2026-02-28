@@ -191,12 +191,18 @@ impl S3Store {
     ) {
         let store = self.clone();
         let interval_ms = self.sync_config.flush_interval_ms.max(1);
-        run_sync_loop(wake_rx, Duration::from_millis(interval_ms), move || {
-            let store = store.clone();
-            let client = client.clone();
-            let key = key.clone();
-            async move { store.flush_once(client.as_ref(), &key).await }
-        })
+        let max_backoff = Duration::from_millis(self.sync_config.max_backoff_ms.max(1));
+        run_sync_loop(
+            wake_rx,
+            Duration::from_millis(interval_ms),
+            max_backoff,
+            move || {
+                let store = store.clone();
+                let client = client.clone();
+                let key = key.clone();
+                async move { store.flush_once(client.as_ref(), &key).await }
+            },
+        )
         .await;
     }
 
