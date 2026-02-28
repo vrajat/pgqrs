@@ -174,7 +174,7 @@ impl BackendType {
         &["postgres://", "postgresql://", "postgres", "pg"];
     const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
     #[cfg(feature = "s3")]
-    const S3_PREFIXES: &'static [&'static str] = &["s3://", "s3:"];
+    const S3_PREFIXES: &'static [&'static str] = &["s3://", "s3:", "s3"];
     const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
 
     pub fn detect(dsn: &str) -> crate::error::Result<Self> {

@@ -188,25 +188,30 @@ else
 	docker rm -f $(LOCALSTACK_CONTAINER) || true
 endif
 
-test-s3: start-localstack ## Run LocalStack-backed S3 smoke tests
+test-localstack: start-localstack ## Run full test suite against LocalStack-backed S3 backend
 ifdef CI_LOCALSTACK_RUNNING
-	@echo "Running S3 tests with CI LocalStack"
+	@echo "Running full test suite with CI LocalStack (S3 backend)"
 	PGQRS_S3_ENDPOINT="$${PGQRS_S3_ENDPOINT:-http://localhost:4566}" \
 	PGQRS_S3_REGION="$${PGQRS_S3_REGION:-$(LOCALSTACK_REGION)}" \
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
-	$(MAKE) test-rust PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3" TEST=s3_localstack_smoke
+	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"
 else
-	@echo "Running S3 tests with local LocalStack"
-	PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
+	@echo "Running full test suite with local LocalStack (S3 backend)"
+	@PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
 	PGQRS_S3_REGION="$(LOCALSTACK_REGION)" \
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \
-	$(MAKE) test-rust PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3" TEST=s3_localstack_smoke
-	$(MAKE) stop-localstack
+	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"; \
+	status=$$?; \
+	$(MAKE) stop-localstack; \
+	exit $$status
 endif
+
+# Backward compatibility alias.
+test-s3: test-localstack ## Alias for test-localstack
 
 # Run on all available backends
 test-all-backends:  ## Run tests on all available backends
@@ -217,8 +222,8 @@ test-all-backends:  ## Run tests on all available backends
 	$(MAKE) test-sqlite
 	echo "=== Testing on Turso ==="; \
 	$(MAKE) test-turso; \
-	echo "=== Testing S3 (LocalStack smoke) ==="; \
-	$(MAKE) test-s3; \
+	echo "=== Testing S3 (LocalStack full suite) ==="; \
+	$(MAKE) test-localstack; \
 
 # Run on a subset (comma-separated)
 # Usage: make test-backends BACKENDS=postgres,sqlite

@@ -13,6 +13,7 @@ class TestBackend(Enum):
 
     POSTGRES = "postgres"
     SQLITE = "sqlite"
+    S3 = "s3"
     TURSO = "turso"
 
     @classmethod
@@ -53,6 +54,10 @@ def base_dsn(test_backend: TestBackend) -> Generator[str | None, None, None]:
 
     elif test_backend == TestBackend.SQLITE:
         dsn = os.environ.get("PGQRS_TEST_SQLITE_DSN")
+        yield dsn
+
+    elif test_backend == TestBackend.S3:
+        dsn = os.environ.get("PGQRS_TEST_S3_DSN")
         yield dsn
 
     elif test_backend == TestBackend.TURSO:
@@ -110,6 +115,13 @@ def test_dsn(
                     os.remove(f"{tmp_path}-wal")
             except OSError:
                 pass
+    elif test_backend == TestBackend.S3:
+        if base_dsn:
+            yield base_dsn
+        else:
+            bucket = os.environ.get("PGQRS_S3_BUCKET", "pgqrs-test-bucket")
+            key = f"pytest_{uuid.uuid4().hex}.sqlite"
+            yield f"s3://{bucket}/{key}"
     elif test_backend == TestBackend.TURSO:
         if base_dsn:
             yield base_dsn
