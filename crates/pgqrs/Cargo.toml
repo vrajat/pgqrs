@@ -33,6 +33,8 @@ required-features = ["postgres"]
 tokio-test = "0.4"
 ctor = "0.2.4"
 once_cell = "1.19"
+aws-config = "1"
+aws-sdk-s3 = "1"
 
 serial_test = "3.2"
 

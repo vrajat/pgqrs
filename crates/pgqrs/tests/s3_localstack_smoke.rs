@@ -1,5 +1,10 @@
-#![cfg(feature = "sqlite")]
+#![cfg(feature = "s3")]
 
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::Client;
+use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -55,4 +60,119 @@ fn localstack_s3_health_endpoint_is_reachable() {
         "LocalStack health payload does not report S3 service: {}",
         response
     );
+}
+
+fn s3_endpoint() -> String {
+    env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| "http://localhost:4566".to_string())
+}
+
+fn s3_region() -> String {
+    env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string())
+}
+
+fn s3_bucket() -> String {
+    env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string())
+}
+
+async fn localstack_client() -> Client {
+    let creds = Credentials::new("test", "test", None, None, "localstack");
+    let conf = aws_config::defaults(BehaviorVersion::latest())
+        .region(Region::new(s3_region()))
+        .credentials_provider(creds)
+        .endpoint_url(s3_endpoint())
+        .load()
+        .await;
+
+    let s3_conf = aws_sdk_s3::config::Builder::from(&conf)
+        .force_path_style(true)
+        .build();
+    Client::from_conf(s3_conf)
+}
+
+#[tokio::test]
+async fn localstack_s3_basic_ops_and_cas_etag() {
+    let client = localstack_client().await;
+    let bucket = s3_bucket();
+    let key = format!("smoke/etag-cas-{}.bin", uuid::Uuid::new_v4());
+
+    let create_res = client.create_bucket().bucket(&bucket).send().await;
+    if let Err(e) = create_res {
+        let msg = e.to_string();
+        assert!(
+            msg.contains("BucketAlreadyOwnedByYou") || msg.contains("BucketAlreadyExists"),
+            "create_bucket failed unexpectedly: {}",
+            msg
+        );
+    }
+
+    let put_v1 = client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(ByteStream::from_static(b"payload-v1"))
+        .send()
+        .await
+        .expect("put v1 should succeed");
+
+    let etag_v1 = put_v1
+        .e_tag()
+        .expect("put v1 should return etag")
+        .to_string();
+
+    let head_v1 = client
+        .head_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .expect("head should succeed");
+    let head_etag_v1 = head_v1
+        .e_tag()
+        .expect("head should include etag")
+        .to_string();
+    assert_eq!(etag_v1, head_etag_v1, "head etag should match put etag");
+
+    let get_v1 = client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .expect("get should succeed");
+    let bytes_v1 = get_v1.body.collect().await.expect("read body").into_bytes();
+    assert_eq!(bytes_v1.as_ref(), b"payload-v1");
+
+    let put_v2 = client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .if_match(etag_v1.clone())
+        .body(ByteStream::from_static(b"payload-v2"))
+        .send()
+        .await
+        .expect("CAS put with current etag should succeed");
+    let etag_v2 = put_v2
+        .e_tag()
+        .expect("put v2 should return etag")
+        .to_string();
+    assert_ne!(etag_v1, etag_v2, "etag should change after update");
+
+    let _get_ok = client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .if_match(etag_v2)
+        .send()
+        .await
+        .expect("conditional get with latest etag should succeed");
+
+    let err = client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .if_match(etag_v1)
+        .send()
+        .await
+        .expect_err("conditional get with stale etag should fail");
+    let _ = err;
 }
