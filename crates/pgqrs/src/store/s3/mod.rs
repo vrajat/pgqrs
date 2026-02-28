@@ -19,8 +19,8 @@ use client::ObjectStoreClient;
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
-use sync::SyncCoordinator;
-use tokio::sync::Mutex;
+use sync::{run_sync_loop, wake_channel, SyncCoordinator, SyncWakeSender};
+use tokio::sync::{mpsc, Mutex};
 
 /// Durability behavior for S3-backed stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -159,6 +159,29 @@ impl S3Store {
         Ok(())
     }
 
+    /// Create a wake channel for the background sync loop.
+    pub fn create_wake_channel(&self) -> (SyncWakeSender, mpsc::Receiver<()>) {
+        wake_channel(self.sync_config.max_pending_ops.max(1))
+    }
+
+    /// Run the background sync loop for this store.
+    pub async fn run_sync_task<C: ObjectStoreClient>(
+        &self,
+        client: Arc<C>,
+        key: String,
+        wake_rx: mpsc::Receiver<()>,
+    ) {
+        let store = self.clone();
+        let interval_ms = self.sync_config.flush_interval_ms.max(1);
+        run_sync_loop(wake_rx, Duration::from_millis(interval_ms), move || {
+            let store = store.clone();
+            let client = client.clone();
+            let key = key.clone();
+            async move { store.flush_once(client.as_ref(), &key).await }
+        })
+        .await;
+    }
+
     pub fn sync_config(&self) -> &S3SyncConfig {
         &self.sync_config
     }
@@ -212,6 +235,7 @@ mod tests {
     use crate::config::Config;
     use crate::error::Error;
     use crate::store::s3::client::{InMemoryObjectStore, ObjectStoreClient};
+    use std::sync::Arc;
 
     #[test]
     fn sqlite_cache_mapping_is_deterministic() {
@@ -342,5 +366,49 @@ mod tests {
             .await
             .expect_err("second store should conflict (stale/no etag)");
         assert!(matches!(err, Error::Conflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn run_sync_task_flushes_on_wake() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let store = S3Store::open(
+            "s3://bucket/sync_task.sqlite",
+            &config,
+            DurabilityMode::Local,
+            S3SyncConfig {
+                flush_interval_ms: 60_000,
+                ..S3SyncConfig::default()
+            },
+        )
+        .await
+        .expect("open should succeed");
+
+        std::fs::write(store.state().write_path(), b"sync-wake").expect("write test bytes");
+        let seq = store.reserve_write_sequence();
+        let client = Arc::new(InMemoryObjectStore::new());
+        let (wake, wake_rx) = store.create_wake_channel();
+
+        let task_store = store.clone();
+        let task_client = client.clone();
+        let handle = tokio::spawn(async move {
+            task_store
+                .run_sync_task(task_client, "bucket/sync_task.sqlite".to_string(), wake_rx)
+                .await;
+        });
+
+        wake.wake();
+        store
+            .wait_until_flushed(seq, std::time::Duration::from_millis(500))
+            .await
+            .expect("wake-triggered flush should complete");
+
+        let obj = client
+            .get_object("bucket/sync_task.sqlite")
+            .await
+            .expect("object should exist after wake flush");
+        assert_eq!(obj.bytes, b"sync-wake");
+
+        drop(wake);
+        handle.await.expect("sync loop task should exit");
     }
 }
