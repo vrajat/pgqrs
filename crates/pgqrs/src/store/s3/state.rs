@@ -94,6 +94,28 @@ impl LocalDbState {
         })?;
         Ok(())
     }
+
+    /// Overwrite local DB state from remote bytes.
+    pub fn restore_from_remote_bytes(&self, bytes: &[u8]) -> Result<()> {
+        self.ensure_files()?;
+        fs::write(&self.write_path, bytes).map_err(|e| Error::Internal {
+            message: format!(
+                "Failed writing recovered write_db '{}': {}",
+                self.write_path.display(),
+                e
+            ),
+        })?;
+        if self.mode == DurabilityMode::Durable {
+            fs::write(&self.read_path, bytes).map_err(|e| Error::Internal {
+                message: format!(
+                    "Failed writing recovered read_db '{}': {}",
+                    self.read_path.display(),
+                    e
+                ),
+            })?;
+        }
+        Ok(())
+    }
 }
 
 fn sqlite_path_to_dsn(path: &Path) -> String {
@@ -164,5 +186,19 @@ mod tests {
         assert!(state.write_path().exists());
         assert!(state.read_path().exists());
         state.promote_write_to_read().unwrap();
+    }
+
+    #[test]
+    fn restore_from_remote_bytes_restores_both_files_in_durable_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "pgqrs_s3_state_restore_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let dsn = format!("sqlite://{}/cache.db?mode=rwc", root.display());
+        let state = LocalDbState::from_cache_dsn(&dsn, DurabilityMode::Durable).unwrap();
+        state.ensure_files().unwrap();
+        state.restore_from_remote_bytes(b"remote-state").unwrap();
+        assert_eq!(std::fs::read(state.write_path()).unwrap(), b"remote-state");
+        assert_eq!(std::fs::read(state.read_path()).unwrap(), b"remote-state");
     }
 }
