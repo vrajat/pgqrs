@@ -31,7 +31,8 @@ pub use crate::workers::*;
 
 pub use any::AnyStore;
 
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+// S3 store uses SQLite locally, so sqlite_utils are needed for `s3` too.
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 pub(crate) mod sqlite_utils {
     use crate::error::{Error, Result};
     use chrono::{DateTime, Utc};

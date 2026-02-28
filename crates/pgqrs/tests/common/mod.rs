@@ -64,7 +64,9 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
             }
             env_non_empty("PGQRS_TEST_S3_DSN")
                 .or_else(|| env_non_empty("PGQRS_TEST_DSN"))
-                .map(|dsn| Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>)
+                .map(|dsn| {
+                    Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
+                })
         }
         #[cfg(feature = "turso")]
         BackendType::Turso => {
@@ -89,6 +91,14 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
     let store = pgqrs::connect_with_config(&config)
         .await
         .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
+
+    #[cfg(feature = "s3")]
+    if current_backend() == BackendType::S3 {
+        assert!(
+            matches!(store, pgqrs::store::AnyStore::S3(_)),
+            "Expected AnyStore::S3 when PGQRS_TEST_BACKEND=s3"
+        );
+    }
 
     // Install schema based on backend:
     // - Postgres: Uses global setup (setup_test_schemas binary), skip install
@@ -147,13 +157,9 @@ pub async fn get_test_dsn(schema: &str) -> String {
             }
             #[cfg(feature = "s3")]
             BackendType::S3 => {
-                let bucket =
-                    std::env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
-                let key = format!(
-                    "{}_{}.sqlite",
-                    schema,
-                    uuid::Uuid::new_v4()
-                );
+                let bucket = std::env::var("PGQRS_S3_BUCKET")
+                    .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
+                let key = format!("{}_{}.sqlite", schema, uuid::Uuid::new_v4());
                 Box::new(resource::ExternalFileResource::new(format!(
                     "s3://{}/{}",
                     bucket, key

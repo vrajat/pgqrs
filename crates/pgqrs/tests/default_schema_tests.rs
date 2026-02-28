@@ -13,7 +13,10 @@ async fn create_store() -> pgqrs::store::AnyStore {
         ),
         #[cfg(feature = "s3")]
         pgqrs::store::BackendType::S3 => {
-            format!("s3://pgqrs-test-bucket/default_schema_{}.sqlite", uuid::Uuid::new_v4())
+            format!(
+                "s3://pgqrs-test-bucket/default_schema_{}.sqlite",
+                uuid::Uuid::new_v4()
+            )
         }
         #[cfg(feature = "turso")]
         pgqrs::store::BackendType::Turso => {

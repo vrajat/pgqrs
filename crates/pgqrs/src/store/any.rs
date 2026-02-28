@@ -81,9 +81,13 @@ impl AnyStore {
             }
             #[cfg(feature = "s3")]
             BackendType::S3 => {
-                let store =
-                    S3Store::open(&config.dsn, config, config.s3_mode, config.s3_sync_config.clone())
-                        .await?;
+                let store = S3Store::open(
+                    &config.dsn,
+                    config,
+                    config.s3_mode,
+                    config.s3_sync_config.clone(),
+                )
+                .await?;
                 Ok(AnyStore::S3(store))
             }
             #[cfg(feature = "sqlite")]
