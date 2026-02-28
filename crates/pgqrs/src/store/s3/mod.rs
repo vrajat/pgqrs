@@ -4,6 +4,7 @@
 //! S3-backed SQLite implementation.
 
 pub mod client;
+pub mod sync;
 
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
