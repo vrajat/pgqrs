@@ -32,6 +32,8 @@ pub fn current_backend() -> BackendType {
 
 #[allow(dead_code)]
 pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
+    let env_non_empty = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
+
     match backend {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => {
@@ -40,9 +42,8 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
             {
                 panic!("Ambiguous configuration: DSN mismatch for Postgres");
             }
-            std::env::var("PGQRS_TEST_POSTGRES_DSN")
-                .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
-                .ok()
+            env_non_empty("PGQRS_TEST_POSTGRES_DSN")
+                .or_else(|| env_non_empty("PGQRS_TEST_DSN"))
                 .map(|dsn| Box::new(resource::ExternalResource::new(dsn)) as Box<dyn TestResource>)
         }
         #[cfg(feature = "sqlite")]
@@ -53,6 +54,17 @@ pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
             std::env::var("PGQRS_TEST_SQLITE_DSN").ok().map(|dsn| {
                 Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
             })
+        }
+        #[cfg(feature = "s3")]
+        BackendType::S3 => {
+            if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok()
+                || std::env::var("PGQRS_TEST_SQLITE_DSN").is_ok()
+            {
+                panic!("Ambiguous configuration: DSN mismatch for S3");
+            }
+            env_non_empty("PGQRS_TEST_S3_DSN")
+                .or_else(|| env_non_empty("PGQRS_TEST_DSN"))
+                .map(|dsn| Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>)
         }
         #[cfg(feature = "turso")]
         BackendType::Turso => {
@@ -132,6 +144,20 @@ pub async fn get_test_dsn(schema: &str) -> String {
                     .await
                     .expect("Failed to init sqlite resource");
                 Box::new(r)
+            }
+            #[cfg(feature = "s3")]
+            BackendType::S3 => {
+                let bucket =
+                    std::env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
+                let key = format!(
+                    "{}_{}.sqlite",
+                    schema,
+                    uuid::Uuid::new_v4()
+                );
+                Box::new(resource::ExternalFileResource::new(format!(
+                    "s3://{}/{}",
+                    bucket, key
+                )))
             }
             #[cfg(feature = "turso")]
             BackendType::Turso => {

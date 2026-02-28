@@ -163,6 +163,8 @@ pub trait Store: Send + Sync + 'static {
 pub enum BackendType {
     #[cfg(feature = "postgres")]
     Postgres,
+    #[cfg(feature = "s3")]
+    S3,
     #[cfg(feature = "sqlite")]
     Sqlite,
     #[cfg(feature = "turso")]
@@ -189,13 +191,7 @@ impl BackendType {
         }
         #[cfg(feature = "s3")]
         if Self::S3_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
-            #[cfg(feature = "sqlite")]
-            return Ok(Self::Sqlite);
-            #[cfg(not(feature = "sqlite"))]
-            return Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "S3 backend requires sqlite feature".to_string(),
-            });
+            return Ok(Self::S3);
         }
         if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
             #[cfg(feature = "sqlite")]
@@ -219,5 +215,27 @@ impl BackendType {
             field: "dsn".to_string(),
             message: format!("Unsupported DSN format: {}", dsn),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BackendType;
+
+    #[test]
+    fn detect_rejects_unsupported_dsn() {
+        let err = BackendType::detect("invalid://dsn").unwrap_err();
+        assert!(err.to_string().contains("Unsupported DSN format"));
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn detect_s3_dsn_returns_s3_backend() {
+        assert_eq!(
+            BackendType::detect("s3://bucket/queue.sqlite").unwrap(),
+            BackendType::S3
+        );
+        assert_eq!(BackendType::detect("s3:").unwrap(), BackendType::S3);
+        assert_eq!(BackendType::detect("s3").unwrap(), BackendType::S3);
     }
 }

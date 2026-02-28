@@ -11,6 +11,10 @@ async fn create_store() -> pgqrs::store::AnyStore {
             "sqlite:file:{}?mode=memory&cache=shared",
             uuid::Uuid::new_v4()
         ),
+        #[cfg(feature = "s3")]
+        pgqrs::store::BackendType::S3 => {
+            format!("s3://pgqrs-test-bucket/default_schema_{}.sqlite", uuid::Uuid::new_v4())
+        }
         #[cfg(feature = "turso")]
         pgqrs::store::BackendType::Turso => {
             let path = std::env::temp_dir().join(format!(
@@ -51,6 +55,11 @@ async fn test_default_schema_backward_compatibility() {
         #[cfg(feature = "sqlite")]
         pgqrs::store::BackendType::Sqlite => format!(
             "sqlite:file:{}?mode=memory&cache=shared",
+            uuid::Uuid::new_v4()
+        ),
+        #[cfg(feature = "s3")]
+        pgqrs::store::BackendType::S3 => format!(
+            "s3://pgqrs-test-bucket/default_schema_{}.sqlite",
             uuid::Uuid::new_v4()
         ),
         #[cfg(feature = "turso")]

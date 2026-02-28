@@ -55,6 +55,8 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         let update_sql = match common::current_backend() {
             #[cfg(feature = "postgres")]
             pgqrs::store::BackendType::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            #[cfg(feature = "s3")]
+            pgqrs::store::BackendType::S3 => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
             #[cfg(feature = "sqlite")]
             pgqrs::store::BackendType::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
             #[cfg(feature = "turso")]
@@ -135,6 +137,11 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
             #[cfg(feature = "sqlite")]
             if backend == pgqrs::store::BackendType::Sqlite {
+                needs_checkpoint = true;
+            }
+
+            #[cfg(feature = "s3")]
+            if backend == pgqrs::store::BackendType::S3 {
                 needs_checkpoint = true;
             }
 

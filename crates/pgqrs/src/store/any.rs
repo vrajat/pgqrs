@@ -79,28 +79,17 @@ impl AnyStore {
 
                 Ok(AnyStore::Postgres(PostgresStore::new(pool, config)))
             }
+            #[cfg(feature = "s3")]
+            BackendType::S3 => {
+                let store =
+                    S3Store::open(&config.dsn, config, config.s3_mode, config.s3_sync_config.clone())
+                        .await?;
+                Ok(AnyStore::S3(store))
+            }
             #[cfg(feature = "sqlite")]
             BackendType::Sqlite => {
-                #[cfg(feature = "s3")]
-                if config.dsn.starts_with("s3://") || config.dsn.starts_with("s3:") {
-                    let store = S3Store::open(
-                        &config.dsn,
-                        config,
-                        config.s3_mode,
-                        config.s3_sync_config.clone(),
-                    )
-                    .await?;
-                    return Ok(AnyStore::S3(store));
-                } else {
-                    let store = SqliteStore::new(&config.dsn, config).await?;
-                    return Ok(AnyStore::Sqlite(store));
-                }
-
-                #[cfg(not(feature = "s3"))]
-                {
-                    let store = SqliteStore::new(&config.dsn, config).await?;
-                    Ok(AnyStore::Sqlite(store))
-                }
+                let store = SqliteStore::new(&config.dsn, config).await?;
+                Ok(AnyStore::Sqlite(store))
             }
             #[cfg(feature = "turso")]
             BackendType::Turso => {
@@ -421,7 +410,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.backend_name(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().backend_name(),
+            AnyStore::S3(_) => "s3",
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.backend_name(),
         }

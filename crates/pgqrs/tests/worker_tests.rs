@@ -693,6 +693,8 @@ async fn test_custom_schema_search_path() {
     // use common::TestBackend;
     #[cfg(feature = "sqlite")]
     skip_on_backend!(pgqrs::store::BackendType::Sqlite);
+    #[cfg(feature = "s3")]
+    skip_on_backend!(pgqrs::store::BackendType::S3);
     #[cfg(feature = "turso")]
     skip_on_backend!(pgqrs::store::BackendType::Turso);
 
@@ -948,7 +950,10 @@ async fn test_purge_old_workers() {
     // Set old heartbeat ONLY for producer1 and producer2
     let old_seconds = Duration::days(30).num_seconds();
 
-    let sql = if store.backend_name() == "sqlite" || store.backend_name() == "turso" {
+    let sql = if store.backend_name() == "sqlite"
+        || store.backend_name() == "turso"
+        || store.backend_name() == "s3"
+    {
         "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?"
     } else {
         "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2"
