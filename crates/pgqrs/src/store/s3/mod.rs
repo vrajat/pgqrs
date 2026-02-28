@@ -16,6 +16,9 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
 use state::LocalDbState;
+use std::sync::Arc;
+use std::time::Duration;
+use sync::SyncCoordinator;
 
 /// Durability behavior for S3-backed stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -56,6 +59,7 @@ impl Default for S3SyncConfig {
 pub struct S3Store {
     sqlite: SqliteStore,
     state: LocalDbState,
+    sync: Arc<SyncCoordinator>,
     mode: DurabilityMode,
     sync_config: S3SyncConfig,
     source_dsn: String,
@@ -77,6 +81,7 @@ impl S3Store {
         Ok(Self {
             sqlite,
             state,
+            sync: Arc::new(SyncCoordinator::new()),
             mode,
             sync_config,
             source_dsn: s3_dsn.to_string(),
@@ -95,6 +100,29 @@ impl S3Store {
 
     pub fn state(&self) -> &LocalDbState {
         &self.state
+    }
+
+    /// Reserve a local write sequence for a mutating operation.
+    pub fn reserve_write_sequence(&self) -> u64 {
+        self.sync.next_sequence()
+    }
+
+    /// Mark a sequence as durable after a successful flush.
+    pub fn mark_flushed(&self, seq: u64) {
+        self.sync.mark_flushed(seq);
+    }
+
+    /// Wait until a sequence is durable.
+    pub async fn wait_until_flushed(&self, seq: u64, timeout: Duration) -> Result<()> {
+        self.sync.wait_until_flushed(seq, timeout).await
+    }
+
+    pub fn current_sequence(&self) -> u64 {
+        self.sync.current_sequence()
+    }
+
+    pub fn last_flushed_sequence(&self) -> u64 {
+        self.sync.last_flushed_sequence()
     }
 
     pub fn sync_config(&self) -> &S3SyncConfig {
@@ -178,5 +206,32 @@ mod tests {
         assert_eq!(store.mode(), DurabilityMode::Local);
         assert_eq!(store.source_dsn(), "s3://bucket/queue.sqlite");
         assert!(store.sqlite_cache_dsn().starts_with("sqlite://"));
+        assert_eq!(store.current_sequence(), 0);
+        assert_eq!(store.last_flushed_sequence(), 0);
+    }
+
+    #[tokio::test]
+    async fn s3_store_flush_sequence_tracking() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let store = S3Store::open(
+            "s3://bucket/queue.sqlite",
+            &config,
+            DurabilityMode::Local,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open should succeed");
+
+        let seq = store.reserve_write_sequence();
+        assert_eq!(seq, 1);
+        assert_eq!(store.current_sequence(), 1);
+        assert_eq!(store.last_flushed_sequence(), 0);
+
+        store.mark_flushed(seq);
+        store
+            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
+            .await
+            .expect("wait should complete");
+        assert_eq!(store.last_flushed_sequence(), 1);
     }
 }
