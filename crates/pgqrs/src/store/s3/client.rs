@@ -206,6 +206,16 @@ impl ObjectStoreClient for AwsS3ObjectStore {
 
 fn map_s3_error(operation: &str, key: &str, msg: &str) -> Error {
     let lower = msg.to_ascii_lowercase();
+    if lower.contains("nosuchkey")
+        || lower.contains("notfound")
+        || lower.contains("status code: 404")
+        || lower.contains("statuscode: 404")
+    {
+        return Error::NotFound {
+            entity: "object".to_string(),
+            id: key.to_string(),
+        };
+    }
     if lower.contains("preconditionfailed")
         || lower.contains("if-match")
         || lower.contains("condition")
@@ -301,6 +311,16 @@ mod tests {
             "dispatch failure: operation timed out",
         );
         assert!(matches!(err, Error::Timeout { .. }));
+    }
+
+    #[test]
+    fn map_s3_error_not_found() {
+        let err = map_s3_error(
+            "get_object",
+            "queue.sqlite",
+            "NoSuchKey: The specified key does not exist",
+        );
+        assert!(matches!(err, Error::NotFound { .. }));
     }
 
     #[test]

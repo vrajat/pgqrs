@@ -217,6 +217,26 @@ impl S3Store {
     pub fn sqlite_cache_dsn(&self) -> &str {
         &self.sqlite_cache_dsn
     }
+
+    /// Initialize local state from remote object if it exists.
+    ///
+    /// Returns `Ok(true)` when remote state was loaded and `Ok(false)` when object was missing.
+    pub async fn bootstrap_from_remote<C: ObjectStoreClient>(
+        &self,
+        client: &C,
+        key: &str,
+    ) -> Result<bool> {
+        match client.get_object(key).await {
+            Ok(remote) => {
+                self.state.restore_from_remote_bytes(&remote.bytes)?;
+                let mut guard = self.last_etag.lock().await;
+                *guard = remote.etag;
+                Ok(true)
+            }
+            Err(Error::NotFound { .. }) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 /// Map an `s3://...` DSN to a deterministic local SQLite cache DSN.
@@ -471,5 +491,74 @@ mod tests {
 
         drop(wake);
         handle.await.expect("sync loop task should exit");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_from_remote_loads_existing_state_and_etag() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let s3_dsn = unique_s3_dsn("bootstrap_existing");
+        let object_key = unique_object_key("bootstrap_existing");
+        let store = S3Store::open(
+            &s3_dsn,
+            &config,
+            DurabilityMode::Durable,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open should succeed");
+        let client = InMemoryObjectStore::new();
+        client
+            .put_object_if_match(&object_key, b"remote-v1", None)
+            .await
+            .expect("seed remote object");
+
+        let loaded = store
+            .bootstrap_from_remote(&client, &object_key)
+            .await
+            .expect("bootstrap should succeed");
+        assert!(loaded);
+        assert_eq!(
+            std::fs::read(store.state().write_path()).unwrap(),
+            b"remote-v1"
+        );
+        assert_eq!(
+            std::fs::read(store.state().read_path()).unwrap(),
+            b"remote-v1"
+        );
+
+        // Verify ETag baseline was set by bootstrap: subsequent flush should succeed.
+        std::fs::write(store.state().write_path(), b"remote-v2").expect("write v2");
+        store.reserve_write_sequence();
+        store
+            .flush_once(&client, &object_key)
+            .await
+            .expect("flush after bootstrap should succeed");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_from_remote_missing_object_returns_false() {
+        let config = Config::from_dsn("sqlite::memory:");
+        let s3_dsn = unique_s3_dsn("bootstrap_missing");
+        let object_key = unique_object_key("bootstrap_missing");
+        let store = S3Store::open(
+            &s3_dsn,
+            &config,
+            DurabilityMode::Durable,
+            S3SyncConfig::default(),
+        )
+        .await
+        .expect("open should succeed");
+        let client = InMemoryObjectStore::new();
+
+        std::fs::write(store.state().write_path(), b"local-only").expect("seed local");
+        let loaded = store
+            .bootstrap_from_remote(&client, &object_key)
+            .await
+            .expect("bootstrap should not fail when object missing");
+        assert!(!loaded);
+        assert_eq!(
+            std::fs::read(store.state().write_path()).unwrap(),
+            b"local-only"
+        );
     }
 }
