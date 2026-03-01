@@ -4,6 +4,8 @@ pub mod resource;
 use ctor::dtor;
 use pgqrs::store::{BackendType, Store};
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// Get the current test backend.
 #[allow(dead_code)]
@@ -32,6 +34,7 @@ pub fn current_backend() -> BackendType {
 
 #[allow(dead_code)]
 pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
+    #[cfg(any(feature = "postgres", feature = "s3"))]
     let env_non_empty = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
 
     match backend {
@@ -202,6 +205,10 @@ macro_rules! skip_on_backend {
 
 #[dtor]
 fn drop_database() {
+    if keep_test_data() {
+        return;
+    }
+
     // Cleanup global resource
     let mut guard = match RESOURCE_MANAGER.write() {
         Ok(g) => g,
@@ -215,5 +222,127 @@ fn drop_database() {
                 eprintln!("Error during resource cleanup: {}", e);
             }
         });
+    }
+
+    cleanup_local_test_artifacts();
+}
+
+fn keep_test_data() -> bool {
+    std::env::var("PGQRS_KEEP_TEST_DATA")
+        .map(|v| {
+            let lowered = v.trim().to_ascii_lowercase();
+            !(lowered.is_empty() || lowered == "0" || lowered == "false" || lowered == "no")
+        })
+        .unwrap_or(false)
+}
+
+fn candidate_temp_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(v) = std::env::var("CARGO_TARGET_TMPDIR") {
+        dirs.push(PathBuf::from(v));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        dirs.push(cwd.join("target").join("tmp"));
+    }
+    dirs.push(std::env::temp_dir());
+
+    let mut seen = HashSet::new();
+    dirs.into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect()
+}
+
+fn remove_file_if_exists(path: &Path) {
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(feature = "s3")]
+fn remove_dir_if_exists(path: &Path) {
+    if path.exists() {
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
+fn cleanup_local_test_artifacts() {
+    let Some(backend) = detect_backend_for_cleanup() else {
+        return;
+    };
+    for dir in candidate_temp_dirs() {
+        if !dir.exists() {
+            continue;
+        }
+
+        #[cfg(feature = "s3")]
+        if backend == BackendType::S3 {
+            remove_dir_if_exists(&dir.join("pgqrs_s3_cache"));
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with("pgqrs_s3_state_") {
+                        remove_dir_if_exists(&path);
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "sqlite")]
+        if backend == BackendType::Sqlite {
+            cleanup_sqlite_or_turso_files(&dir);
+        }
+
+        #[cfg(feature = "turso")]
+        if backend == BackendType::Turso {
+            cleanup_sqlite_or_turso_files(&dir);
+        }
+    }
+}
+
+fn detect_backend_for_cleanup() -> Option<BackendType> {
+    if let Ok(backend_str) = std::env::var("PGQRS_TEST_BACKEND") {
+        if let Ok(backend) = BackendType::detect(&backend_str.to_lowercase()) {
+            return Some(backend);
+        }
+    }
+    if let Ok(dsn) = std::env::var("PGQRS_TEST_DSN") {
+        if let Ok(backend) = BackendType::detect(&dsn) {
+            return Some(backend);
+        }
+    }
+    None
+}
+
+fn cleanup_sqlite_or_turso_files(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let is_test_db = name.starts_with("sqlite_")
+                || name.starts_with("turso_")
+                || name.starts_with("test_turso_")
+                || name.starts_with("test_default_schema_turso_");
+            if !is_test_db {
+                continue;
+            }
+
+            if name.ends_with(".db") {
+                remove_file_if_exists(&path);
+                remove_file_if_exists(
+                    PathBuf::from(format!("{}-wal", path.to_string_lossy())).as_path(),
+                );
+                remove_file_if_exists(
+                    PathBuf::from(format!("{}-shm", path.to_string_lossy())).as_path(),
+                );
+                continue;
+            }
+
+            if name.contains(".db-wal") || name.contains(".db-shm") {
+                remove_file_if_exists(&path);
+            }
+        }
     }
 }
