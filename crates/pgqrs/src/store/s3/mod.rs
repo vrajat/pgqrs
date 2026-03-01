@@ -119,11 +119,29 @@ impl S3Store {
             sqlite_cache_dsn,
         };
 
-        let task_store = store.clone();
+        let task_state = store.state.clone();
+        let task_sync = store.sync.clone();
+        let task_last_etag = store.last_etag.clone();
+        let interval_ms = store.sync_config.flush_interval_ms.max(1);
+        let max_backoff = Duration::from_millis(store.sync_config.max_backoff_ms.max(1));
         tokio::spawn(async move {
-            task_store
-                .run_sync_task(object_store, object_key, wake_rx)
-                .await;
+            run_sync_loop(
+                wake_rx,
+                Duration::from_millis(interval_ms),
+                max_backoff,
+                move || {
+                    let client = object_store.clone();
+                    let key = object_key.clone();
+                    let state = task_state.clone();
+                    let sync = task_sync.clone();
+                    let last_etag = task_last_etag.clone();
+                    async move {
+                        flush_once_inner(&state, sync.as_ref(), &last_etag, client.as_ref(), &key)
+                            .await
+                    }
+                },
+            )
+            .await;
         });
 
         Ok(store)
@@ -171,54 +189,14 @@ impl S3Store {
         client: &C,
         key: &str,
     ) -> Result<()> {
-        let payload = std::fs::read(self.state.write_path()).map_err(|e| Error::Internal {
-            message: format!(
-                "Failed to read write_db '{}': {}",
-                self.state.write_path().display(),
-                e
-            ),
-        })?;
-
-        let expected = {
-            let guard = self.last_etag.lock().await;
-            guard.clone()
-        };
-
-        let new_etag = match client
-            .put_object_if_match(key, &payload, expected.as_deref())
-            .await
-        {
-            Ok(etag) => etag,
-            Err(Error::Conflict { message }) => {
-                self.sync.mark_conflict(self.current_sequence());
-                // Fast-fail callers, but first reset local state to latest remote baseline.
-                let _ = self.recover_from_remote(client, key).await;
-                return Err(Error::Conflict { message });
-            }
-            Err(e) => return Err(e),
-        };
-
-        self.state.promote_write_to_read()?;
-
-        {
-            let mut guard = self.last_etag.lock().await;
-            *guard = Some(new_etag);
-        }
-
-        self.mark_flushed(self.current_sequence());
-        Ok(())
-    }
-
-    async fn recover_from_remote<C: ObjectStoreClient + ?Sized>(
-        &self,
-        client: &C,
-        key: &str,
-    ) -> Result<()> {
-        let remote = client.get_object(key).await?;
-        self.state.restore_from_remote_bytes(&remote.bytes)?;
-        let mut guard = self.last_etag.lock().await;
-        *guard = remote.etag;
-        Ok(())
+        flush_once_inner(
+            &self.state,
+            self.sync.as_ref(),
+            &self.last_etag,
+            client,
+            key,
+        )
+        .await
     }
 
     /// Create a wake channel for the background sync loop.
@@ -233,7 +211,9 @@ impl S3Store {
         key: String,
         wake_rx: mpsc::Receiver<()>,
     ) {
-        let store = self.clone();
+        let state = self.state.clone();
+        let sync = self.sync.clone();
+        let last_etag = self.last_etag.clone();
         let interval_ms = self.sync_config.flush_interval_ms.max(1);
         let max_backoff = Duration::from_millis(self.sync_config.max_backoff_ms.max(1));
         run_sync_loop(
@@ -241,10 +221,14 @@ impl S3Store {
             Duration::from_millis(interval_ms),
             max_backoff,
             move || {
-                let store = store.clone();
                 let client = client.clone();
                 let key = key.clone();
-                async move { store.flush_once(client.as_ref(), &key).await }
+                let state = state.clone();
+                let sync = sync.clone();
+                let last_etag = last_etag.clone();
+                async move {
+                    flush_once_inner(&state, sync.as_ref(), &last_etag, client.as_ref(), &key).await
+                }
             },
         )
         .await;
@@ -294,6 +278,64 @@ impl S3Store {
             Err(err) => Err(err),
         }
     }
+}
+
+async fn flush_once_inner<C: ObjectStoreClient + ?Sized>(
+    state: &LocalDbState,
+    sync: &SyncCoordinator,
+    last_etag: &Mutex<Option<String>>,
+    client: &C,
+    key: &str,
+) -> Result<()> {
+    let payload = std::fs::read(state.write_path()).map_err(|e| Error::Internal {
+        message: format!(
+            "Failed to read write_db '{}': {}",
+            state.write_path().display(),
+            e
+        ),
+    })?;
+
+    let expected = {
+        let guard = last_etag.lock().await;
+        guard.clone()
+    };
+
+    let new_etag = match client
+        .put_object_if_match(key, &payload, expected.as_deref())
+        .await
+    {
+        Ok(etag) => etag,
+        Err(Error::Conflict { message }) => {
+            sync.mark_conflict(sync.current_sequence());
+            // Fast-fail callers, but first reset local state to latest remote baseline.
+            let _ = recover_from_remote_inner(state, last_etag, client, key).await;
+            return Err(Error::Conflict { message });
+        }
+        Err(e) => return Err(e),
+    };
+
+    state.promote_write_to_read()?;
+
+    {
+        let mut guard = last_etag.lock().await;
+        *guard = Some(new_etag);
+    }
+
+    sync.mark_flushed(sync.current_sequence());
+    Ok(())
+}
+
+async fn recover_from_remote_inner<C: ObjectStoreClient + ?Sized>(
+    state: &LocalDbState,
+    last_etag: &Mutex<Option<String>>,
+    client: &C,
+    key: &str,
+) -> Result<()> {
+    let remote = client.get_object(key).await?;
+    state.restore_from_remote_bytes(&remote.bytes)?;
+    let mut guard = last_etag.lock().await;
+    *guard = remote.etag;
+    Ok(())
 }
 
 fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
