@@ -3,8 +3,15 @@ use once_cell::sync::Lazy;
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "sqlite", feature = "turso"))]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 use std::sync::Mutex;
 use std::sync::RwLock;
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+static FILE_RESOURCE_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Trait for managing test backend resources (Tests Containers or Files)
 #[async_trait]
@@ -82,12 +89,23 @@ impl TestResource for FileResource {
         let dir = dir.canonicalize().unwrap_or(dir);
 
         let schema_part = schema.unwrap_or("default");
-        let filename = format!(
-            "{}_{}_{}.db",
-            self.backend_prefix.replace("://", ""),
-            schema_part,
-            uuid::Uuid::new_v4()
+        let backend = sanitize_component(self.backend_prefix.trim_end_matches("://"));
+        let suite = sanitize_component(schema_part);
+        let test = sanitize_component(
+            std::thread::current()
+                .name()
+                .unwrap_or("unknown_test")
+                .rsplit("::")
+                .next()
+                .unwrap_or("unknown_test"),
         );
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let seq = FILE_RESOURCE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let filename = format!("{backend}-{suite}-{test}-{ts}-{pid}-{seq}.db");
         let path = dir.join(filename);
 
         // Track for cleanup
@@ -132,6 +150,27 @@ impl TestResource for FileResource {
         }
         files.clear();
         Ok(())
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+fn sanitize_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed
     }
 }
 

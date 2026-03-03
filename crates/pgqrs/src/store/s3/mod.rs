@@ -17,7 +17,9 @@ use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
 use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::config::Credentials;
-use client::{AwsS3ObjectStore, InMemoryObjectStore, ObjectStoreClient};
+#[cfg(test)]
+use client::InMemoryObjectStore;
+use client::{AwsS3ObjectStore, ObjectStoreClient};
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -368,7 +370,6 @@ fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
 }
 
 async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStoreClient>> {
-    let region = std::env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
     let endpoint = std::env::var("PGQRS_S3_ENDPOINT").ok();
     if endpoint.as_ref().is_none_or(|v| v.trim().is_empty()) {
         #[cfg(test)]
@@ -376,32 +377,70 @@ async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore
             return Ok(Arc::new(InMemoryObjectStore::new()) as Arc<dyn ObjectStoreClient>);
         }
     }
-    let test_backend = std::env::var("PGQRS_TEST_BACKEND")
-        .ok()
-        .map(|v| v.eq_ignore_ascii_case("s3"))
-        .unwrap_or(false);
-    if endpoint.as_ref().is_none_or(|v| v.trim().is_empty()) && test_backend {
-        return Ok(Arc::new(InMemoryObjectStore::new()) as Arc<dyn ObjectStoreClient>);
-    }
+    let region = required_non_empty_env("PGQRS_S3_REGION")?;
+    let endpoint = required_non_empty_env("PGQRS_S3_ENDPOINT")?;
+    validate_s3_auth_env(&endpoint)?;
 
-    let access_key = std::env::var("AWS_ACCESS_KEY_ID").ok();
-    let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
+    let access_key = std::env::var("AWS_ACCESS_KEY_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
 
     let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
     if let (Some(ak), Some(sk)) = (access_key, secret_key) {
         loader = loader.credentials_provider(Credentials::new(ak, sk, None, None, "pgqrs-s3"));
     }
-    if let Some(ep) = endpoint.clone().filter(|v| !v.trim().is_empty()) {
-        loader = loader.endpoint_url(ep);
-    }
+    loader = loader.endpoint_url(endpoint.clone());
 
     let conf = loader.load().await;
     let mut s3_builder = aws_sdk_s3::config::Builder::from(&conf);
-    if endpoint.as_ref().is_some_and(|v| !v.trim().is_empty()) {
-        s3_builder = s3_builder.force_path_style(true);
-    }
+    s3_builder = s3_builder.force_path_style(true);
     let client = aws_sdk_s3::Client::from_conf(s3_builder.build());
     Ok(Arc::new(AwsS3ObjectStore::new(client, bucket.to_string())) as Arc<dyn ObjectStoreClient>)
+}
+
+fn required_non_empty_env(name: &str) -> Result<String> {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::InvalidConfig {
+            field: name.to_string(),
+            message: format!("S3 backend requires {} to be set", name),
+        })
+}
+
+fn validate_s3_auth_env(endpoint: &str) -> Result<()> {
+    let access_key = std::env::var("AWS_ACCESS_KEY_ID").ok();
+    let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").ok();
+    let access_present = access_key.as_ref().is_some_and(|v| !v.trim().is_empty());
+    let secret_present = secret_key.as_ref().is_some_and(|v| !v.trim().is_empty());
+    if access_present ^ secret_present {
+        return Err(Error::InvalidConfig {
+            field: "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY".to_string(),
+            message: "Set both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or neither".to_string(),
+        });
+    }
+
+    // For LocalStack/custom local endpoints, force explicit static creds so tests do not silently
+    // fall back to non-deterministic provider-chain behavior.
+    let endpoint_lc = endpoint.to_ascii_lowercase();
+    let is_local_endpoint = endpoint_lc.contains("localhost")
+        || endpoint_lc.contains("127.0.0.1")
+        || endpoint_lc.contains("localstack");
+    if is_local_endpoint && !(access_present && secret_present) {
+        return Err(Error::InvalidConfig {
+            field: "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY".to_string(),
+            message: format!(
+                "Local S3 endpoint '{}' requires explicit AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+                endpoint
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 /// Map an `s3://...` DSN to a deterministic local SQLite cache DSN.

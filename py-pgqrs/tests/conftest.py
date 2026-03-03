@@ -2,10 +2,16 @@ import pytest
 import os
 import psycopg
 import uuid
-import tempfile
+import itertools
+import re
 from enum import Enum
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Generator
 from testcontainers.postgres import PostgresContainer
+
+_S3_SEQ = itertools.count(1)
+_LOCAL_DB_SEQ = itertools.count(1)
 
 
 class TestBackend(Enum):
@@ -83,7 +89,7 @@ def skip_on_backend(backend: TestBackend):
 
 @pytest.fixture(scope="function")
 def test_dsn(
-    test_backend: TestBackend, base_dsn: str | None
+    test_backend: TestBackend, base_dsn: str | None, request
 ) -> Generator[str, None, None]:
     """
     Provides a per-test DSN.
@@ -99,10 +105,7 @@ def test_dsn(
         if base_dsn:
             yield base_dsn
         else:
-            # Create a unique temporary file
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp_path = tmp.name
-
+            tmp_path = _build_local_db_path("sqlite", request)
             dsn = f"sqlite://{tmp_path}"
             yield dsn
 
@@ -120,16 +123,22 @@ def test_dsn(
             yield base_dsn
         else:
             bucket = os.environ.get("PGQRS_S3_BUCKET", "pgqrs-test-bucket")
-            key = f"pytest_{uuid.uuid4().hex}.sqlite"
+            module_name = request.module.__name__.split(".")[-1]
+            test_name = request.node.name
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            pid = os.getpid()
+            seq = next(_S3_SEQ)
+            key = (
+                f"{_sanitize_key_part(module_name)}-"
+                f"{_sanitize_key_part(test_name)}-"
+                f"{ts}-{pid}-{seq}.sqlite"
+            )
             yield f"s3://{bucket}/{key}"
     elif test_backend == TestBackend.TURSO:
         if base_dsn:
             yield base_dsn
         else:
-            # Create a unique temporary file
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp_path = tmp.name
-
+            tmp_path = _build_local_db_path("turso", request)
             dsn = f"turso://{tmp_path}"
             yield dsn
 
@@ -169,3 +178,24 @@ def schema(
     else:
         # SQLite doesn't use schemas for isolation (we use separate DB files)
         yield None
+
+
+def _sanitize_key_part(value: str) -> str:
+    value = value.lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return value or "unknown"
+
+
+def _build_local_db_path(backend: str, request) -> str:
+    module_name = request.module.__name__.split(".")[-1]
+    test_name = request.node.name
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    pid = os.getpid()
+    seq = next(_LOCAL_DB_SEQ)
+    filename = (
+        f"{_sanitize_key_part(backend)}-"
+        f"{_sanitize_key_part(module_name)}-"
+        f"{_sanitize_key_part(test_name)}-"
+        f"{ts}-{pid}-{seq}.db"
+    )
+    return str(Path(os.getenv("TMPDIR", "/tmp")) / filename)

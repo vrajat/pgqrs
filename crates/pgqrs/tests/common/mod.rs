@@ -6,6 +6,13 @@ use pgqrs::store::{BackendType, Store};
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "s3")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "s3")]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "s3")]
+static TEST_KEY_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Get the current test backend.
 #[allow(dead_code)]
@@ -162,7 +169,7 @@ pub async fn get_test_dsn(schema: &str) -> String {
             BackendType::S3 => {
                 let bucket = std::env::var("PGQRS_S3_BUCKET")
                     .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
-                let key = format!("{}_{}.sqlite", schema, uuid::Uuid::new_v4());
+                let key = build_human_s3_key(schema);
                 Box::new(resource::ExternalFileResource::new(format!(
                     "s3://{}/{}",
                     bucket, key
@@ -258,13 +265,6 @@ fn remove_file_if_exists(path: &Path) {
     }
 }
 
-#[cfg(feature = "s3")]
-fn remove_dir_if_exists(path: &Path) {
-    if path.exists() {
-        let _ = std::fs::remove_dir_all(path);
-    }
-}
-
 fn cleanup_local_test_artifacts() {
     let Some(backend) = detect_backend_for_cleanup() else {
         return;
@@ -276,14 +276,15 @@ fn cleanup_local_test_artifacts() {
 
         #[cfg(feature = "s3")]
         if backend == BackendType::S3 {
-            remove_dir_if_exists(&dir.join("pgqrs_s3_cache"));
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
                     if name.starts_with("pgqrs_s3_state_") {
-                        remove_dir_if_exists(&path);
+                        if path.exists() {
+                            let _ = std::fs::remove_dir_all(path);
+                        }
                     }
                 }
             }
@@ -344,5 +345,47 @@ fn cleanup_sqlite_or_turso_files(dir: &Path) {
                 remove_file_if_exists(&path);
             }
         }
+    }
+}
+
+#[cfg(feature = "s3")]
+fn build_human_s3_key(schema: &str) -> String {
+    let suite = sanitize_component(schema);
+    let test = sanitize_component(
+        std::thread::current()
+            .name()
+            .unwrap_or("unknown_test")
+            .rsplit("::")
+            .next()
+            .unwrap_or("unknown_test"),
+    );
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let seq = TEST_KEY_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{suite}-{test}-{ts}-{pid}-{seq}.sqlite")
+}
+
+#[cfg(feature = "s3")]
+fn sanitize_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        let is_valid = c.is_ascii_alphanumeric();
+        if is_valid {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed
     }
 }
