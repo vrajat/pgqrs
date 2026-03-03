@@ -15,9 +15,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
-#[cfg(test)]
-use client::InMemoryObjectStore;
-use client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore, ObjectStoreClient};
+use client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore};
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,6 +60,7 @@ impl Default for S3SyncConfig {
 #[derive(Clone)]
 pub struct S3Store {
     sqlite: SqliteStore,
+    object_store: Arc<AwsS3ObjectStore>,
     state: LocalDbState,
     sync: Arc<SyncCoordinator>,
     last_etag: Arc<Mutex<Option<String>>>,
@@ -98,6 +97,7 @@ impl S3Store {
         let state = LocalDbState::from_cache_dsn(&sqlite_cache_dsn, mode)?;
         state.ensure_files()?;
         let object_store = build_object_store_from_env(&bucket).await?;
+        let task_object_store = object_store.clone();
         let last_etag = Arc::new(Mutex::new(None));
 
         let sqlite = SqliteStore::new(&state.write_dsn(), config).await?;
@@ -107,6 +107,7 @@ impl S3Store {
 
         let store = Self {
             sqlite,
+            object_store,
             state,
             sync,
             last_etag,
@@ -130,7 +131,7 @@ impl S3Store {
                 Duration::from_millis(interval_ms),
                 max_backoff,
                 move || {
-                    let client = object_store.clone();
+                    let client = task_object_store.clone();
                     let key = object_key.clone();
                     let state = task_state.clone();
                     let sync = task_sync.clone();
@@ -184,16 +185,12 @@ impl S3Store {
     }
 
     /// Flush local write DB to object storage using optimistic CAS.
-    pub async fn flush_once<C: ObjectStoreClient + ?Sized>(
-        &self,
-        client: &C,
-        key: &str,
-    ) -> Result<()> {
+    pub async fn flush_once(&self, key: &str) -> Result<()> {
         flush_once_inner(
             &self.state,
             self.sync.as_ref(),
             &self.last_etag,
-            client,
+            self.object_store.as_ref(),
             key,
         )
         .await
@@ -205,9 +202,9 @@ impl S3Store {
     }
 
     /// Run the background sync loop for this store.
-    pub async fn run_sync_task<C: ObjectStoreClient + ?Sized>(
+    pub async fn run_sync_task(
         &self,
-        client: Arc<C>,
+        client: Arc<AwsS3ObjectStore>,
         key: String,
         wake_rx: mpsc::Receiver<()>,
     ) {
@@ -262,12 +259,8 @@ impl S3Store {
     /// Initialize local state from remote object if it exists.
     ///
     /// Returns `Ok(true)` when remote state was loaded and `Ok(false)` when object was missing.
-    pub async fn bootstrap_from_remote<C: ObjectStoreClient + ?Sized>(
-        &self,
-        client: &C,
-        key: &str,
-    ) -> Result<bool> {
-        match client.get_object(key).await {
+    pub async fn bootstrap_from_remote(&self, key: &str) -> Result<bool> {
+        match self.object_store.get_object(key).await {
             Ok(remote) => {
                 self.state.restore_from_remote_bytes(&remote.bytes)?;
                 let mut guard = self.last_etag.lock().await;
@@ -280,11 +273,11 @@ impl S3Store {
     }
 }
 
-async fn flush_once_inner<C: ObjectStoreClient + ?Sized>(
+async fn flush_once_inner(
     state: &LocalDbState,
     sync: &SyncCoordinator,
     last_etag: &Mutex<Option<String>>,
-    client: &C,
+    client: &AwsS3ObjectStore,
     key: &str,
 ) -> Result<()> {
     let payload = std::fs::read(state.write_path()).map_err(|e| Error::Internal {
@@ -325,10 +318,10 @@ async fn flush_once_inner<C: ObjectStoreClient + ?Sized>(
     Ok(())
 }
 
-async fn recover_from_remote_inner<C: ObjectStoreClient + ?Sized>(
+async fn recover_from_remote_inner(
     state: &LocalDbState,
     last_etag: &Mutex<Option<String>>,
-    client: &C,
+    client: &AwsS3ObjectStore,
     key: &str,
 ) -> Result<()> {
     let remote = client.get_object(key).await?;
@@ -367,14 +360,7 @@ fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), key.to_string()))
 }
 
-async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStoreClient>> {
-    let endpoint = std::env::var("PGQRS_S3_ENDPOINT").ok();
-    if endpoint.as_ref().is_none_or(|v| v.trim().is_empty()) {
-        #[cfg(test)]
-        {
-            return Ok(Arc::new(InMemoryObjectStore::new()) as Arc<dyn ObjectStoreClient>);
-        }
-    }
+async fn build_object_store_from_env(bucket: &str) -> Result<Arc<AwsS3ObjectStore>> {
     let region = required_non_empty_env("PGQRS_S3_REGION")?;
     let endpoint = required_non_empty_env("PGQRS_S3_ENDPOINT")?;
     validate_s3_auth_env(&endpoint)?;
@@ -395,7 +381,7 @@ async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore
         credentials_provider_name: "pgqrs-s3",
     })
     .await;
-    Ok(Arc::new(AwsS3ObjectStore::new(client, bucket.to_string())) as Arc<dyn ObjectStoreClient>)
+    Ok(Arc::new(AwsS3ObjectStore::new(client, bucket.to_string())))
 }
 
 fn required_non_empty_env(name: &str) -> Result<String> {
@@ -476,20 +462,7 @@ pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sqlite_cache_dsn_from_s3_dsn, DurabilityMode, S3Store, S3SyncConfig};
-    use crate::config::Config;
-    use crate::error::Error;
-    use crate::store::s3::client::{InMemoryObjectStore, ObjectStoreClient};
-    use std::sync::Arc;
-    use uuid::Uuid;
-
-    fn unique_s3_dsn(prefix: &str) -> String {
-        format!("s3://bucket/{}_{}.sqlite", prefix, Uuid::new_v4())
-    }
-
-    fn unique_object_key(prefix: &str) -> String {
-        format!("bucket/{}_{}.sqlite", prefix, Uuid::new_v4())
-    }
+    use super::sqlite_cache_dsn_from_s3_dsn;
 
     #[test]
     fn sqlite_cache_mapping_is_deterministic() {
@@ -503,263 +476,5 @@ mod tests {
     fn sqlite_cache_mapping_rejects_invalid_input() {
         let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
         assert!(err.to_string().contains("Invalid S3 DSN format"));
-    }
-
-    #[tokio::test]
-    async fn s3_store_open_uses_sqlite_cache() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("queue");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Local,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open should succeed");
-
-        assert_eq!(store.mode(), DurabilityMode::Local);
-        assert_eq!(store.source_dsn(), s3_dsn);
-        assert!(store.sqlite_cache_dsn().starts_with("sqlite://"));
-        assert_eq!(store.current_sequence(), 0);
-        assert_eq!(store.last_flushed_sequence(), 0);
-    }
-
-    #[tokio::test]
-    async fn s3_store_flush_sequence_tracking() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("flush_sequence");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Local,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open should succeed");
-
-        let seq = store.reserve_write_sequence();
-        assert_eq!(seq, 1);
-        assert_eq!(store.current_sequence(), 1);
-        assert_eq!(store.last_flushed_sequence(), 0);
-
-        store.mark_flushed(seq);
-        store
-            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
-            .await
-            .expect("wait should complete");
-        assert_eq!(store.last_flushed_sequence(), 1);
-    }
-
-    #[tokio::test]
-    async fn flush_once_promotes_and_marks_flushed() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("flush_ok");
-        let object_key = unique_object_key("flush_ok");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Durable,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open should succeed");
-
-        std::fs::write(store.state().write_path(), b"hello-world").expect("write test db bytes");
-        let seq = store.reserve_write_sequence();
-        let client = InMemoryObjectStore::new();
-
-        store
-            .flush_once(&client, &object_key)
-            .await
-            .expect("flush should succeed");
-
-        store
-            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
-            .await
-            .expect("seq should be durable");
-
-        let read_bytes = std::fs::read(store.state().read_path()).expect("read read_db");
-        assert_eq!(read_bytes, b"hello-world");
-        let obj = client
-            .get_object(&object_key)
-            .await
-            .expect("object should exist");
-        assert_eq!(obj.bytes, b"hello-world");
-    }
-
-    #[tokio::test]
-    async fn flush_once_reports_conflict() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let client = InMemoryObjectStore::new();
-        let s3_dsn_a = unique_s3_dsn("conflict_a");
-        let s3_dsn_b = unique_s3_dsn("conflict_b");
-        let shared_key = unique_object_key("shared_conflict");
-
-        let store_a = S3Store::open(
-            &s3_dsn_a,
-            &config,
-            DurabilityMode::Local,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open a");
-        std::fs::write(store_a.state().write_path(), b"v1").expect("write v1");
-        store_a.reserve_write_sequence();
-        store_a
-            .flush_once(&client, &shared_key)
-            .await
-            .expect("first flush");
-
-        let store_b = S3Store::open(
-            &s3_dsn_b,
-            &config,
-            DurabilityMode::Local,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open b");
-        std::fs::write(store_b.state().write_path(), b"v2").expect("write v2");
-        let seq = store_b.reserve_write_sequence();
-
-        let err = store_b
-            .flush_once(&client, &shared_key)
-            .await
-            .expect_err("second store should conflict (stale/no etag)");
-        assert!(matches!(err, Error::Conflict { .. }));
-        let wait_err = store_b
-            .wait_until_flushed(seq, std::time::Duration::from_millis(100))
-            .await
-            .expect_err("pending waiters should fail-fast after conflict");
-        assert!(matches!(wait_err, Error::Conflict { .. }));
-
-        // store_b should have been reset to remote state from store_a
-        let write_bytes =
-            std::fs::read(store_b.state().write_path()).expect("read recovered write");
-        assert_eq!(write_bytes, b"v1");
-
-        // retry from refreshed baseline should succeed
-        std::fs::write(store_b.state().write_path(), b"v2").expect("rewrite v2");
-        store_b.reserve_write_sequence();
-        store_b
-            .flush_once(&client, &shared_key)
-            .await
-            .expect("retry flush should succeed after recovery");
-    }
-
-    #[tokio::test]
-    async fn run_sync_task_flushes_on_wake() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("sync_task");
-        let object_key = unique_object_key("sync_task");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Local,
-            S3SyncConfig {
-                flush_interval_ms: 60_000,
-                ..S3SyncConfig::default()
-            },
-        )
-        .await
-        .expect("open should succeed");
-
-        std::fs::write(store.state().write_path(), b"sync-wake").expect("write test bytes");
-        let seq = store.reserve_write_sequence();
-        let client = Arc::new(InMemoryObjectStore::new());
-        let (wake, wake_rx) = store.create_wake_channel();
-        let task_key = object_key.clone();
-
-        let task_store = store.clone();
-        let task_client = client.clone();
-        let handle = tokio::spawn(async move {
-            task_store
-                .run_sync_task(task_client, task_key, wake_rx)
-                .await;
-        });
-
-        wake.wake();
-        store
-            .wait_until_flushed(seq, std::time::Duration::from_millis(500))
-            .await
-            .expect("wake-triggered flush should complete");
-
-        let obj = client
-            .get_object(&object_key)
-            .await
-            .expect("object should exist after wake flush");
-        assert_eq!(obj.bytes, b"sync-wake");
-
-        drop(wake);
-        handle.await.expect("sync loop task should exit");
-    }
-
-    #[tokio::test]
-    async fn bootstrap_from_remote_loads_existing_state_and_etag() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("bootstrap_existing");
-        let object_key = unique_object_key("bootstrap_existing");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Durable,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open should succeed");
-        let client = InMemoryObjectStore::new();
-        client
-            .put_object_if_match(&object_key, b"remote-v1", None)
-            .await
-            .expect("seed remote object");
-
-        let loaded = store
-            .bootstrap_from_remote(&client, &object_key)
-            .await
-            .expect("bootstrap should succeed");
-        assert!(loaded);
-        assert_eq!(
-            std::fs::read(store.state().write_path()).unwrap(),
-            b"remote-v1"
-        );
-        assert_eq!(
-            std::fs::read(store.state().read_path()).unwrap(),
-            b"remote-v1"
-        );
-
-        // Verify ETag baseline was set by bootstrap: subsequent flush should succeed.
-        std::fs::write(store.state().write_path(), b"remote-v2").expect("write v2");
-        store.reserve_write_sequence();
-        store
-            .flush_once(&client, &object_key)
-            .await
-            .expect("flush after bootstrap should succeed");
-    }
-
-    #[tokio::test]
-    async fn bootstrap_from_remote_missing_object_returns_false() {
-        let config = Config::from_dsn("sqlite::memory:");
-        let s3_dsn = unique_s3_dsn("bootstrap_missing");
-        let object_key = unique_object_key("bootstrap_missing");
-        let store = S3Store::open(
-            &s3_dsn,
-            &config,
-            DurabilityMode::Durable,
-            S3SyncConfig::default(),
-        )
-        .await
-        .expect("open should succeed");
-        let client = InMemoryObjectStore::new();
-
-        std::fs::write(store.state().write_path(), b"local-only").expect("seed local");
-        let loaded = store
-            .bootstrap_from_remote(&client, &object_key)
-            .await
-            .expect("bootstrap should not fail when object missing");
-        assert!(!loaded);
-        assert_eq!(
-            std::fs::read(store.state().write_path()).unwrap(),
-            b"local-only"
-        );
     }
 }

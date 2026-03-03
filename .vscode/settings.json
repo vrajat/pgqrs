@@ -3,6 +3,7 @@
         "test-utils",
         "sqlite",
         "postgres",
-        "turso"
+        "turso",
+        "s3"
     ]
 }
