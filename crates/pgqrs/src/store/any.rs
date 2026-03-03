@@ -21,6 +21,7 @@ use sqlx::postgres::PgPoolOptions;
 /// `AnyStore` wraps different database implementations and provides
 /// a unified interface via the `Store` trait. This allows backend
 /// selection at runtime based on DSN or configuration.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum AnyStore {
     /// PostgreSQL backend
@@ -129,47 +130,34 @@ impl AnyStore {
         let config = Config::from_dsn(dsn);
         Self::connect(&config).await
     }
-
-    /// Commit hook for S3-backed durable semantics after a local mutation succeeds.
-    pub(crate) async fn post_mutation(&self) -> crate::error::Result<()> {
-        match self {
-            #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.record_mutation_and_maybe_wait().await,
-            _ => Ok(()),
-        }
-    }
 }
 
 #[async_trait]
 impl Store for AnyStore {
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
-        let result = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.execute_raw(sql).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw(sql).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().execute_raw(sql).await,
+            AnyStore::S3(s) => s.execute_raw(sql).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw(sql).await,
-        };
-        result?;
-        self.post_mutation().await
+        }
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
-        let result = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().execute_raw_with_i64(sql, param).await,
+            AnyStore::S3(s) => s.execute_raw_with_i64(sql, param).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw_with_i64(sql, param).await,
-        };
-        result?;
-        self.post_mutation().await
+        }
     }
 
     async fn execute_raw_with_two_i64(
@@ -178,22 +166,16 @@ impl Store for AnyStore {
         param1: i64,
         param2: i64,
     ) -> crate::error::Result<()> {
-        let result = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => {
-                s.sqlite()
-                    .execute_raw_with_two_i64(sql, param1, param2)
-                    .await
-            }
+            AnyStore::S3(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.execute_raw_with_two_i64(sql, param1, param2).await,
-        };
-        result?;
-        self.post_mutation().await
+        }
     }
 
     async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
@@ -255,7 +237,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.queues(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().queues(),
+            AnyStore::S3(s) => s.queues(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.queues(),
         }
@@ -268,7 +250,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.messages(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().messages(),
+            AnyStore::S3(s) => s.messages(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.messages(),
         }
@@ -281,7 +263,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workers(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().workers(),
+            AnyStore::S3(s) => s.workers(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workers(),
         }
@@ -294,7 +276,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflows(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().workflows(),
+            AnyStore::S3(s) => s.workflows(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflows(),
         }
@@ -307,7 +289,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow_runs(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().workflow_runs(),
+            AnyStore::S3(s) => s.workflow_runs(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow_runs(),
         }
@@ -320,7 +302,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow_steps(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().workflow_steps(),
+            AnyStore::S3(s) => s.workflow_steps(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow_steps(),
         }
@@ -397,18 +379,16 @@ impl Store for AnyStore {
     }
 
     async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workflow(name).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.workflow(name).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().workflow(name).await,
+            AnyStore::S3(s) => s.workflow(name).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.workflow(name).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
@@ -431,7 +411,7 @@ impl Store for AnyStore {
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.backend_name(),
             #[cfg(feature = "s3")]
-            AnyStore::S3(_) => "s3",
+            AnyStore::S3(s) => s.backend_name(),
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.backend_name(),
         }
@@ -442,18 +422,16 @@ impl Store for AnyStore {
         queue: &str,
         config: &Config,
     ) -> crate::error::Result<Producer> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer_ephemeral(queue, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().producer_ephemeral(queue, config).await,
+            AnyStore::S3(s) => s.producer_ephemeral(queue, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.producer_ephemeral(queue, config).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 
     async fn consumer_ephemeral(
@@ -461,18 +439,16 @@ impl Store for AnyStore {
         queue: &str,
         config: &Config,
     ) -> crate::error::Result<Consumer> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().consumer_ephemeral(queue, config).await,
+            AnyStore::S3(s) => s.consumer_ephemeral(queue, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.consumer_ephemeral(queue, config).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 
     async fn producer(
@@ -482,18 +458,16 @@ impl Store for AnyStore {
         port: i32,
         config: &Config,
     ) -> crate::error::Result<Producer> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().producer(queue, hostname, port, config).await,
+            AnyStore::S3(s) => s.producer(queue, hostname, port, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 
     async fn consumer(
@@ -503,32 +477,28 @@ impl Store for AnyStore {
         port: i32,
         config: &Config,
     ) -> crate::error::Result<Consumer> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().consumer(queue, hostname, port, config).await,
+            AnyStore::S3(s) => s.consumer(queue, hostname, port, config).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
-        let out = match self {
+        match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.queue(name).await,
             #[cfg(feature = "sqlite")]
             AnyStore::Sqlite(s) => s.queue(name).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.sqlite().queue(name).await,
+            AnyStore::S3(s) => s.queue(name).await,
             #[cfg(feature = "turso")]
             AnyStore::Turso(s) => s.queue(name).await,
-        }?;
-        self.post_mutation().await?;
-        Ok(out)
+        }
     }
 }

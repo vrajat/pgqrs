@@ -6,6 +6,7 @@
 pub mod client;
 pub mod state;
 pub mod sync;
+mod tables;
 
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -14,7 +15,15 @@ use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::store::s3::tables::{
+    S3MessageTable, S3QueueTable, S3RunRecordTable, S3StepRecordTable, S3WorkerTable,
+    S3WorkflowTable,
+};
 use crate::store::sqlite::SqliteStore;
+use crate::store::{
+    AnyStore, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
+};
 use client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore};
 use state::LocalDbState;
 use std::sync::Arc;
@@ -60,6 +69,12 @@ impl Default for S3SyncConfig {
 #[derive(Clone)]
 pub struct S3Store {
     sqlite: SqliteStore,
+    queues: Arc<S3QueueTable>,
+    messages: Arc<S3MessageTable>,
+    workers: Arc<S3WorkerTable>,
+    workflows: Arc<S3WorkflowTable>,
+    workflow_runs: Arc<S3RunRecordTable>,
+    workflow_steps: Arc<S3StepRecordTable>,
     object_store: Arc<AwsS3ObjectStore>,
     state: LocalDbState,
     sync: Arc<SyncCoordinator>,
@@ -71,6 +86,27 @@ pub struct S3Store {
     sync_config: S3SyncConfig,
     source_dsn: String,
     sqlite_cache_dsn: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct S3MutationGate {
+    sync: Arc<SyncCoordinator>,
+    wake_tx: SyncWakeSender,
+    durable_wait_timeout: Duration,
+    mode: DurabilityMode,
+}
+
+impl S3MutationGate {
+    pub(crate) async fn commit(&self) -> Result<()> {
+        let seq = self.sync.next_sequence();
+        self.wake_tx.wake();
+        if self.mode == DurabilityMode::Durable {
+            self.sync
+                .wait_until_flushed(seq, self.durable_wait_timeout)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for S3Store {
@@ -104,9 +140,27 @@ impl S3Store {
         let sync = Arc::new(SyncCoordinator::new());
         let (wake_tx, wake_rx) = wake_channel(sync_config.max_pending_ops.max(1));
         let durable_wait_timeout = Duration::from_secs(config.connection_timeout_seconds.max(1));
+        let gate = S3MutationGate {
+            sync: sync.clone(),
+            wake_tx: wake_tx.clone(),
+            durable_wait_timeout,
+            mode,
+        };
+        let messages = Arc::new(S3MessageTable::new(sqlite.clone(), gate.clone()));
+        let workers = Arc::new(S3WorkerTable::new(sqlite.clone(), gate.clone()));
+        let queues = Arc::new(S3QueueTable::new(sqlite.clone(), gate.clone()));
+        let workflows = Arc::new(S3WorkflowTable::new(sqlite.clone(), gate.clone()));
+        let workflow_runs = Arc::new(S3RunRecordTable::new(sqlite.clone(), gate.clone()));
+        let workflow_steps = Arc::new(S3StepRecordTable::new(sqlite.clone(), gate.clone()));
 
         let store = Self {
             sqlite,
+            queues,
+            messages,
+            workers,
+            workflows,
+            workflow_runs,
+            workflow_steps,
             object_store,
             state,
             sync,
@@ -151,6 +205,30 @@ impl S3Store {
     /// Underlying SQLite cache store used for reads/writes.
     pub fn sqlite(&self) -> &SqliteStore {
         &self.sqlite
+    }
+
+    pub fn messages(&self) -> &dyn MessageTable {
+        self.messages.as_ref()
+    }
+
+    pub fn workers(&self) -> &dyn WorkerTable {
+        self.workers.as_ref()
+    }
+
+    pub fn queues(&self) -> &dyn QueueTable {
+        self.queues.as_ref()
+    }
+
+    pub fn workflows(&self) -> &dyn WorkflowTable {
+        self.workflows.as_ref()
+    }
+
+    pub fn workflow_runs(&self) -> &dyn RunRecordTable {
+        self.workflow_runs.as_ref()
+    }
+
+    pub fn workflow_steps(&self) -> &dyn StepRecordTable {
+        self.workflow_steps.as_ref()
     }
 
     pub fn mode(&self) -> DurabilityMode {
@@ -243,17 +321,137 @@ impl S3Store {
         &self.sqlite_cache_dsn
     }
 
+    pub async fn execute_raw(&self, sql: &str) -> Result<()> {
+        self.sqlite().execute_raw(sql).await?;
+        self.record_mutation_and_maybe_wait().await
+    }
+
+    pub async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
+        self.sqlite().execute_raw_with_i64(sql, param).await?;
+        self.record_mutation_and_maybe_wait().await
+    }
+
+    pub async fn execute_raw_with_two_i64(
+        &self,
+        sql: &str,
+        param1: i64,
+        param2: i64,
+    ) -> Result<()> {
+        self.sqlite()
+            .execute_raw_with_two_i64(sql, param1, param2)
+            .await?;
+        self.record_mutation_and_maybe_wait().await
+    }
+
     /// Notify S3Store that a local mutation committed.
     ///
     /// In durable mode this waits until the flush sequence is committed to object storage.
     pub async fn record_mutation_and_maybe_wait(&self) -> Result<()> {
-        let seq = self.reserve_write_sequence();
-        self.wake_tx.wake();
-        if self.mode == DurabilityMode::Durable {
-            self.wait_until_flushed(seq, self.durable_wait_timeout)
-                .await?;
-        }
-        Ok(())
+        let gate = S3MutationGate {
+            sync: self.sync.clone(),
+            wake_tx: self.wake_tx.clone(),
+            durable_wait_timeout: self.durable_wait_timeout,
+            mode: self.mode,
+        };
+        gate.commit().await
+    }
+
+    /// Build a producer bound to the S3-backed store.
+    pub async fn producer(
+        &self,
+        queue_name: &str,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> Result<crate::workers::Producer> {
+        let queue_info = self.sqlite().queues().get_by_name(queue_name).await?;
+        let worker_record = self
+            .workers()
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Producer::new(
+            AnyStore::S3(self.clone()),
+            queue_info,
+            worker_record,
+            config.validation_config.clone(),
+        ))
+    }
+
+    /// Build a consumer bound to the S3-backed store.
+    pub async fn consumer(
+        &self,
+        queue_name: &str,
+        hostname: &str,
+        port: i32,
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
+        let queue_info = self.sqlite().queues().get_by_name(queue_name).await?;
+        let worker_record = self
+            .workers()
+            .register(Some(queue_info.id), hostname, port)
+            .await?;
+
+        Ok(crate::workers::Consumer::new(
+            AnyStore::S3(self.clone()),
+            queue_info,
+            worker_record,
+        ))
+    }
+
+    /// Build an ephemeral producer bound to the S3-backed store.
+    pub async fn producer_ephemeral(
+        &self,
+        queue_name: &str,
+        config: &Config,
+    ) -> Result<crate::workers::Producer> {
+        let queue_info = self.sqlite().queues().get_by_name(queue_name).await?;
+        let worker_record = self
+            .workers()
+            .register_ephemeral(Some(queue_info.id))
+            .await?;
+
+        Ok(crate::workers::Producer::new(
+            AnyStore::S3(self.clone()),
+            queue_info,
+            worker_record,
+            config.validation_config.clone(),
+        ))
+    }
+
+    /// Build an ephemeral consumer bound to the S3-backed store.
+    pub async fn consumer_ephemeral(
+        &self,
+        queue_name: &str,
+        _config: &Config,
+    ) -> Result<crate::workers::Consumer> {
+        let queue_info = self.sqlite().queues().get_by_name(queue_name).await?;
+        let worker_record = self
+            .workers()
+            .register_ephemeral(Some(queue_info.id))
+            .await?;
+
+        Ok(crate::workers::Consumer::new(
+            AnyStore::S3(self.clone()),
+            queue_info,
+            worker_record,
+        ))
+    }
+
+    pub async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
+        let record = self.sqlite().queue(name).await?;
+        self.record_mutation_and_maybe_wait().await?;
+        Ok(record)
+    }
+
+    pub async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
+        let record = self.sqlite().workflow(name).await?;
+        self.record_mutation_and_maybe_wait().await?;
+        Ok(record)
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        "s3"
     }
 
     /// Initialize local state from remote object if it exists.

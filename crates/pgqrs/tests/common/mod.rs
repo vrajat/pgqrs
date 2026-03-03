@@ -180,7 +180,7 @@ pub async fn get_test_dsn(schema: &str) -> String {
         }
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => {
-            if let Some(dsn) = std::env::var("PGQRS_TEST_SQLITE_DSN").ok() {
+            if let Ok(dsn) = std::env::var("PGQRS_TEST_SQLITE_DSN") {
                 Box::new(resource::ExternalFileResource::new(dsn))
             } else {
                 let r = resource::FileResource::new("sqlite://".to_string());
@@ -204,7 +204,7 @@ pub async fn get_test_dsn(schema: &str) -> String {
         }
         #[cfg(feature = "turso")]
         BackendType::Turso => {
-            if let Some(dsn) = std::env::var("PGQRS_TEST_TURSO_DSN").ok() {
+            if let Ok(dsn) = std::env::var("PGQRS_TEST_TURSO_DSN") {
                 Box::new(resource::ExternalFileResource::new(dsn))
             } else {
                 let r = resource::FileResource::new("turso://".to_string());

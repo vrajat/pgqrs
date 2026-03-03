@@ -139,26 +139,22 @@ impl Producer {
         self.store.workers().get_status(self.worker_record.id).await
     }
 
-    async fn commit_s3_mutation(&self) -> crate::error::Result<()> {
-        self.store.post_mutation().await
-    }
-
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
         self.store.workers().suspend(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
         self.store.workers().resume(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Shut down this worker.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
         self.store.workers().shutdown(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Record a heartbeat for this worker.
@@ -167,7 +163,7 @@ impl Producer {
             .workers()
             .heartbeat(self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -210,7 +206,6 @@ impl Producer {
         };
 
         let msg = self.store.messages().insert(new_message).await?;
-        self.commit_s3_mutation().await?;
         Ok(msg)
     }
 
@@ -254,7 +249,6 @@ impl Producer {
         };
 
         let msg = self.store.messages().insert(new_message).await?;
-        self.commit_s3_mutation().await?;
         Ok(msg)
     }
 
@@ -286,7 +280,6 @@ impl Producer {
             .await?;
 
         let msgs = self.store.messages().get_by_ids(&ids).await?;
-        self.commit_s3_mutation().await?;
         Ok(msgs)
     }
 
@@ -296,7 +289,6 @@ impl Producer {
         archived_msg_id: i64,
     ) -> crate::error::Result<Option<QueueMessage>> {
         let out = self.store.messages().replay_dlq(archived_msg_id).await?;
-        self.commit_s3_mutation().await?;
         Ok(out)
     }
 
@@ -351,10 +343,6 @@ impl Consumer {
         &self.store
     }
 
-    async fn commit_s3_mutation(&self) -> crate::error::Result<()> {
-        self.store.post_mutation().await
-    }
-
     /// Return the worker record for this consumer.
     pub fn worker_record(&self) -> &WorkerRecord {
         &self.worker_record
@@ -368,13 +356,13 @@ impl Consumer {
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
         self.store.workers().suspend(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Mark this consumer as polling.
     pub async fn poll(&self) -> crate::error::Result<()> {
         self.store.workers().poll(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Interrupt this consumer's poll loop.
@@ -383,13 +371,13 @@ impl Consumer {
             .workers()
             .interrupt(self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
         self.store.workers().resume(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Shut down this worker if no messages are pending.
@@ -407,7 +395,7 @@ impl Consumer {
             });
         }
         self.store.workers().shutdown(self.worker_record.id).await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Record a heartbeat for this worker.
@@ -416,7 +404,7 @@ impl Consumer {
             .workers()
             .heartbeat(self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await
+        Ok(())
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -470,7 +458,6 @@ impl Consumer {
                 self.store.config().max_read_ct,
             )
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(msgs)
     }
 
@@ -481,7 +468,6 @@ impl Consumer {
             .messages()
             .extend_visibility(message_id, self.worker_record.id, seconds)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(count > 0)
     }
 
@@ -492,7 +478,6 @@ impl Consumer {
             .messages()
             .delete_owned(message_id, self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(count > 0)
     }
 
@@ -503,7 +488,6 @@ impl Consumer {
             .messages()
             .delete_many_owned(&message_ids, self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(out)
     }
 
@@ -514,7 +498,6 @@ impl Consumer {
             .messages()
             .archive(msg_id, self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(out)
     }
 
@@ -525,7 +508,6 @@ impl Consumer {
             .messages()
             .archive_many(&msg_ids, self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(out)
     }
 
@@ -536,7 +518,6 @@ impl Consumer {
             .messages()
             .release_messages_by_ids(message_ids, self.worker_record.id)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(res.iter().filter(|&&x| x).count() as u64)
     }
 
@@ -551,7 +532,6 @@ impl Consumer {
             .messages()
             .release_with_visibility(message_id, self.worker_record.id, visible_at)
             .await?;
-        self.commit_s3_mutation().await?;
         Ok(count > 0)
     }
 }
