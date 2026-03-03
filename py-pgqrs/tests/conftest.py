@@ -4,11 +4,13 @@ import psycopg
 import uuid
 import itertools
 import re
+import shutil
 from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 from testcontainers.postgres import PostgresContainer
+import boto3
 
 _S3_SEQ = itertools.count(1)
 _LOCAL_DB_SEQ = itertools.count(1)
@@ -109,15 +111,8 @@ def test_dsn(
             dsn = f"sqlite://{tmp_path}"
             yield dsn
 
-            # Cleanup
-            try:
-                os.remove(tmp_path)
-                if os.path.exists(f"{tmp_path}-shm"):
-                    os.remove(f"{tmp_path}-shm")
-                if os.path.exists(f"{tmp_path}-wal"):
-                    os.remove(f"{tmp_path}-wal")
-            except OSError:
-                pass
+            if not _keep_test_data():
+                _cleanup_local_db_file(tmp_path)
     elif test_backend == TestBackend.S3:
         if base_dsn:
             yield base_dsn
@@ -133,7 +128,12 @@ def test_dsn(
                 f"{_sanitize_key_part(test_name)}-"
                 f"{ts}-{pid}-{seq}.sqlite"
             )
-            yield f"s3://{bucket}/{key}"
+            dsn = f"s3://{bucket}/{key}"
+            yield dsn
+
+            if not _keep_test_data():
+                _cleanup_s3_object(dsn)
+                _cleanup_local_s3_cache()
     elif test_backend == TestBackend.TURSO:
         if base_dsn:
             yield base_dsn
@@ -142,15 +142,8 @@ def test_dsn(
             dsn = f"turso://{tmp_path}"
             yield dsn
 
-            # Cleanup
-            try:
-                os.remove(tmp_path)
-                if os.path.exists(f"{tmp_path}-shm"):
-                    os.remove(f"{tmp_path}-shm")
-                if os.path.exists(f"{tmp_path}-wal"):
-                    os.remove(f"{tmp_path}-wal")
-            except OSError:
-                pass
+            if not _keep_test_data():
+                _cleanup_local_db_file(tmp_path)
 
 
 @pytest.fixture(scope="function")
@@ -198,4 +191,82 @@ def _build_local_db_path(backend: str, request) -> str:
         f"{_sanitize_key_part(test_name)}-"
         f"{ts}-{pid}-{seq}.db"
     )
-    return str(Path(os.getenv("TMPDIR", "/tmp")) / filename)
+    base = Path(os.getenv("TMPDIR", "/tmp"))
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / filename
+    path.touch(exist_ok=True)
+    return str(path)
+
+
+def _keep_test_data() -> bool:
+    raw = os.environ.get("PGQRS_KEEP_TEST_DATA", "").strip().lower()
+    return raw not in ("", "0", "false", "no")
+
+
+def _parse_s3_dsn(dsn: str) -> tuple[str, str] | None:
+    if dsn.startswith("s3://"):
+        full = dsn[len("s3://") :]
+    elif dsn.startswith("s3:"):
+        full = dsn[len("s3:") :]
+    else:
+        return None
+    parts = full.split("/", 1)
+    if len(parts) != 2:
+        return None
+    bucket, key = parts[0].strip(), parts[1].strip()
+    if not bucket or not key:
+        return None
+    return bucket, key
+
+
+def _cleanup_s3_object(dsn: str) -> None:
+    parsed = _parse_s3_dsn(dsn)
+    if not parsed:
+        return
+    bucket, key = parsed
+    endpoint = os.environ.get("PGQRS_S3_ENDPOINT")
+    region = os.environ.get("PGQRS_S3_REGION", "us-east-1")
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+
+    kwargs = {"region_name": region}
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+    if access_key and secret_key:
+        kwargs["aws_access_key_id"] = access_key
+        kwargs["aws_secret_access_key"] = secret_key
+
+    try:
+        client = boto3.client("s3", **kwargs)
+        client.delete_object(Bucket=bucket, Key=key)
+    except Exception:
+        # Best-effort cleanup; tests should fail on functional assertions, not teardown IO.
+        pass
+
+
+def _cleanup_local_s3_cache() -> None:
+    base = Path(os.getenv("PGQRS_S3_LOCAL_CACHE_DIR", Path(os.getenv("TMPDIR", "/tmp")) / "pgqrs_s3_cache"))
+    if not base.exists():
+        return
+    for db in base.glob("s3_cache_*.db"):
+        try:
+            db.unlink(missing_ok=True)
+            wal = Path(f"{db}-wal")
+            shm = Path(f"{db}-shm")
+            wal.unlink(missing_ok=True)
+            shm.unlink(missing_ok=True)
+            state_dir = db.with_suffix(".s3state")
+            if state_dir.exists():
+                shutil.rmtree(state_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _cleanup_local_db_file(path: str) -> None:
+    db = Path(path)
+    try:
+        db.unlink(missing_ok=True)
+        Path(f"{db}-wal").unlink(missing_ok=True)
+        Path(f"{db}-shm").unlink(missing_ok=True)
+    except Exception:
+        pass

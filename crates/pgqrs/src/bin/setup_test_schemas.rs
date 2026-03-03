@@ -4,11 +4,7 @@ use std::env;
 use sqlx::postgres::PgPoolOptions;
 
 #[cfg(feature = "s3")]
-use aws_config::{BehaviorVersion, Region};
-#[cfg(feature = "s3")]
-use aws_sdk_s3::config::Credentials;
-#[cfg(feature = "s3")]
-use aws_sdk_s3::Client;
+use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig};
 
 #[cfg(feature = "postgres")]
 const TEST_DB_DSN_ENV: &str = "PGQRS_TEST_DSN";
@@ -109,20 +105,24 @@ async fn run_list_s3_sqlite_objects() -> Result<(), Box<dyn std::error::Error>> 
         env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| DEFAULT_S3_ENDPOINT.to_string());
     let region = env::var("PGQRS_S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
     let bucket = env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
-    let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| "test".to_string());
-    let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| "test".to_string());
+    let access_key = env::var("AWS_ACCESS_KEY_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| Some("test".to_string()));
+    let secret_key = env::var("AWS_SECRET_ACCESS_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| Some("test".to_string()));
 
-    let creds = Credentials::new(access_key, secret_key, None, None, "pgqrs-test-listing");
-    let conf = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(region))
-        .credentials_provider(creds)
-        .endpoint_url(endpoint)
-        .load()
-        .await;
-    let s3_conf = aws_sdk_s3::config::Builder::from(&conf)
-        .force_path_style(true)
-        .build();
-    let client = Client::from_conf(s3_conf);
+    let client = build_aws_s3_client(AwsS3ClientConfig {
+        region,
+        endpoint: Some(endpoint),
+        access_key,
+        secret_key,
+        force_path_style: true,
+        credentials_provider_name: "pgqrs-test-listing",
+    })
+    .await;
 
     println!("Listing sqlite objects in bucket '{}'...", bucket);
 

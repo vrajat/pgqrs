@@ -3,10 +3,48 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use aws_config::{BehaviorVersion, Region};
+use aws_sdk_s3::config::Credentials;
 use tokio::sync::RwLock;
 
 use crate::error::{Error, Result};
 use aws_sdk_s3::primitives::ByteStream;
+
+/// Shared AWS S3 client builder options.
+#[derive(Debug, Clone)]
+pub struct AwsS3ClientConfig {
+    pub region: String,
+    pub endpoint: Option<String>,
+    pub access_key: Option<String>,
+    pub secret_key: Option<String>,
+    pub force_path_style: bool,
+    pub credentials_provider_name: &'static str,
+}
+
+/// Build an AWS S3 SDK client from normalized configuration.
+pub async fn build_aws_s3_client(config: AwsS3ClientConfig) -> aws_sdk_s3::Client {
+    let mut loader =
+        aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region));
+    if let (Some(ak), Some(sk)) = (config.access_key, config.secret_key) {
+        loader = loader.credentials_provider(Credentials::new(
+            ak,
+            sk,
+            None,
+            None,
+            config.credentials_provider_name,
+        ));
+    }
+    if let Some(ep) = config.endpoint.clone().filter(|v| !v.trim().is_empty()) {
+        loader = loader.endpoint_url(ep);
+    }
+    let conf = loader.load().await;
+
+    let mut s3_builder = aws_sdk_s3::config::Builder::from(&conf);
+    if config.force_path_style {
+        s3_builder = s3_builder.force_path_style(true);
+    }
+    aws_sdk_s3::Client::from_conf(s3_builder.build())
+}
 
 /// Object payload and associated ETag/revision.
 #[derive(Debug, Clone, PartialEq, Eq)]

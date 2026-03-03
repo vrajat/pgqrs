@@ -1,10 +1,10 @@
 #![cfg(feature = "s3")]
 
-use aws_config::{BehaviorVersion, Region};
-use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client;
-use pgqrs::store::s3::client::{AwsS3ObjectStore, ObjectStoreClient};
+use pgqrs::store::s3::client::{
+    build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore, ObjectStoreClient,
+};
 use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -76,18 +76,15 @@ fn s3_bucket() -> String {
 }
 
 async fn localstack_client() -> Client {
-    let creds = Credentials::new("test", "test", None, None, "localstack");
-    let conf = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(s3_region()))
-        .credentials_provider(creds)
-        .endpoint_url(s3_endpoint())
-        .load()
-        .await;
-
-    let s3_conf = aws_sdk_s3::config::Builder::from(&conf)
-        .force_path_style(true)
-        .build();
-    Client::from_conf(s3_conf)
+    build_aws_s3_client(AwsS3ClientConfig {
+        region: s3_region(),
+        endpoint: Some(s3_endpoint()),
+        access_key: Some("test".to_string()),
+        secret_key: Some("test".to_string()),
+        force_path_style: true,
+        credentials_provider_name: "localstack",
+    })
+    .await
 }
 
 #[tokio::test]

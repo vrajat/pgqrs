@@ -15,11 +15,9 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::sqlite::SqliteStore;
-use aws_config::{BehaviorVersion, Region};
-use aws_sdk_s3::config::Credentials;
 #[cfg(test)]
 use client::InMemoryObjectStore;
-use client::{AwsS3ObjectStore, ObjectStoreClient};
+use client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore, ObjectStoreClient};
 use state::LocalDbState;
 use std::sync::Arc;
 use std::time::Duration;
@@ -388,16 +386,15 @@ async fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore
         .ok()
         .filter(|v| !v.trim().is_empty());
 
-    let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
-    if let (Some(ak), Some(sk)) = (access_key, secret_key) {
-        loader = loader.credentials_provider(Credentials::new(ak, sk, None, None, "pgqrs-s3"));
-    }
-    loader = loader.endpoint_url(endpoint.clone());
-
-    let conf = loader.load().await;
-    let mut s3_builder = aws_sdk_s3::config::Builder::from(&conf);
-    s3_builder = s3_builder.force_path_style(true);
-    let client = aws_sdk_s3::Client::from_conf(s3_builder.build());
+    let client = build_aws_s3_client(AwsS3ClientConfig {
+        region,
+        endpoint: Some(endpoint),
+        access_key,
+        secret_key,
+        force_path_style: true,
+        credentials_provider_name: "pgqrs-s3",
+    })
+    .await;
     Ok(Arc::new(AwsS3ObjectStore::new(client, bucket.to_string())) as Arc<dyn ObjectStoreClient>)
 }
 

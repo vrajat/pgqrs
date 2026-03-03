@@ -1,17 +1,21 @@
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+#[cfg(feature = "s3")]
+use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig};
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::path::PathBuf;
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::sync::Mutex;
 use std::sync::RwLock;
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 static FILE_RESOURCE_SEQ: AtomicU64 = AtomicU64::new(1);
+#[cfg(feature = "s3")]
+static S3_RESOURCE_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Trait for managing test backend resources (Tests Containers or Files)
 #[async_trait]
@@ -153,7 +157,7 @@ impl TestResource for FileResource {
     }
 }
 
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 fn sanitize_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_dash = false;
@@ -171,6 +175,203 @@ fn sanitize_component(s: &str) -> String {
         "unknown".to_string()
     } else {
         trimmed
+    }
+}
+
+// --- S3 File Resource (S3 DSN + local cache cleanup) ---
+#[cfg(feature = "s3")]
+pub struct S3FileResource {
+    bucket: String,
+    issued_dsns: Mutex<Vec<String>>,
+    delete_remote: bool,
+}
+
+#[cfg(feature = "s3")]
+impl S3FileResource {
+    pub fn new_generated(bucket: String) -> Self {
+        Self {
+            bucket,
+            issued_dsns: Mutex::new(Vec::new()),
+            delete_remote: true,
+        }
+    }
+
+    fn track_dsn(&self, dsn: String) {
+        let mut dsns = self.issued_dsns.lock().unwrap();
+        dsns.push(dsn);
+    }
+
+    fn cleanup_local_cache_for_dsn(dsn: &str) {
+        let Ok(cache_dsn) = pgqrs::store::s3::sqlite_cache_dsn_from_s3_dsn(dsn) else {
+            return;
+        };
+        let Some(raw) = cache_dsn.strip_prefix("sqlite://") else {
+            return;
+        };
+        let db_path = PathBuf::from(raw.split('?').next().unwrap_or_default());
+        if db_path.as_os_str().is_empty() {
+            return;
+        }
+
+        if db_path.exists() {
+            let _ = std::fs::remove_file(&db_path);
+        }
+        let _ = std::fs::remove_file(PathBuf::from(format!("{}-wal", db_path.to_string_lossy())));
+        let _ = std::fs::remove_file(PathBuf::from(format!("{}-shm", db_path.to_string_lossy())));
+
+        let state_dir = db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(db_path.file_stem().unwrap_or_default())
+            .with_extension("s3state");
+        if state_dir.exists() {
+            let _ = std::fs::remove_dir_all(state_dir);
+        }
+    }
+
+    fn parse_s3_dsn(dsn: &str) -> Option<(String, String)> {
+        let full = dsn
+            .strip_prefix("s3://")
+            .or_else(|| dsn.strip_prefix("s3:"))?;
+        let mut parts = full.splitn(2, '/');
+        let bucket = parts.next()?.trim();
+        let key = parts.next()?.trim();
+        if bucket.is_empty() || key.is_empty() {
+            return None;
+        }
+        Some((bucket.to_string(), key.to_string()))
+    }
+
+    async fn delete_remote_objects(dsns: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+        let mut by_bucket: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for dsn in dsns {
+            if let Some((bucket, key)) = Self::parse_s3_dsn(dsn) {
+                by_bucket.entry(bucket).or_default().push(key);
+            }
+        }
+        if by_bucket.is_empty() {
+            return Ok(());
+        }
+
+        let region = std::env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let endpoint = std::env::var("PGQRS_S3_ENDPOINT").ok();
+        let access_key = std::env::var("AWS_ACCESS_KEY_ID")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let client = build_aws_s3_client(AwsS3ClientConfig {
+            region,
+            endpoint,
+            access_key,
+            secret_key,
+            force_path_style: true,
+            credentials_provider_name: "pgqrs-s3-test-cleanup",
+        })
+        .await;
+
+        for (bucket, keys) in by_bucket {
+            for key in keys {
+                let _ = client
+                    .delete_object()
+                    .bucket(&bucket)
+                    .key(&key)
+                    .send()
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn cleanup_dsns(&self, delete_remote: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let snapshot = {
+            let mut dsns = self.issued_dsns.lock().unwrap();
+            let snapshot = dsns.clone();
+            dsns.clear();
+            snapshot
+        };
+
+        for dsn in &snapshot {
+            Self::cleanup_local_cache_for_dsn(dsn);
+        }
+        if delete_remote {
+            // Best effort remote cleanup; keep local cleanup deterministic even if S3 deletion fails.
+            let _ = Self::delete_remote_objects(&snapshot).await;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "s3")]
+#[async_trait]
+impl TestResource for S3FileResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    async fn get_dsn(&self, schema: Option<&str>) -> String {
+        let bucket = self.bucket.clone();
+        let suite = sanitize_component(schema.unwrap_or("default"));
+        let test = sanitize_component(
+            std::thread::current()
+                .name()
+                .unwrap_or("unknown_test")
+                .rsplit("::")
+                .next()
+                .unwrap_or("unknown_test"),
+        );
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let seq = S3_RESOURCE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dsn = format!("s3://{bucket}/{suite}-{test}-{ts}-{pid}-{seq}.sqlite");
+        self.track_dsn(dsn.clone());
+        dsn
+    }
+
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.cleanup_dsns(self.delete_remote).await
+    }
+}
+
+#[cfg(feature = "s3")]
+pub struct ExternalS3FileResource {
+    dsn: String,
+    inner: S3FileResource,
+}
+
+#[cfg(feature = "s3")]
+impl ExternalS3FileResource {
+    pub fn new(dsn: String) -> Self {
+        Self {
+            dsn,
+            inner: S3FileResource {
+                bucket: String::new(),
+                issued_dsns: Mutex::new(Vec::new()),
+                delete_remote: false,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "s3")]
+#[async_trait]
+impl TestResource for ExternalS3FileResource {
+    async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
+    async fn get_dsn(&self, _schema: Option<&str>) -> String {
+        self.inner.track_dsn(self.dsn.clone());
+        self.dsn.clone()
+    }
+
+    async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.inner.cleanup().await
     }
 }
 

@@ -12,21 +12,9 @@ async fn create_store() -> pgqrs::store::AnyStore {
             uuid::Uuid::new_v4()
         ),
         #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => {
-            format!(
-                "s3://pgqrs-test-bucket/default_schema_{}.sqlite",
-                uuid::Uuid::new_v4()
-            )
-        }
+        pgqrs::store::BackendType::S3 => common::get_test_dsn("default_schema").await,
         #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => {
-            let path = std::env::temp_dir().join(format!(
-                "test_default_schema_turso_{}.db",
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::File::create(&path).expect("Failed to create test DB file");
-            format!("turso://{}", path.display())
-        }
+        pgqrs::store::BackendType::Turso => common::get_test_dsn("default_schema").await,
     };
     let config = pgqrs::config::Config::from_dsn(&dsn);
     let store = pgqrs::connect_with_config(&config)
@@ -61,19 +49,9 @@ async fn test_default_schema_backward_compatibility() {
             uuid::Uuid::new_v4()
         ),
         #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => format!(
-            "s3://pgqrs-test-bucket/default_schema_{}.sqlite",
-            uuid::Uuid::new_v4()
-        ),
+        pgqrs::store::BackendType::S3 => common::get_test_dsn("default_schema").await,
         #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => {
-            let path = std::env::temp_dir().join(format!(
-                "test_default_schema_turso_{}.db",
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::File::create(&path).expect("Failed to create test DB file");
-            format!("turso://{}", path.display())
-        }
+        pgqrs::store::BackendType::Turso => common::get_test_dsn("default_schema").await,
     };
 
     // Test Config::from_dsn creates config with default schema (public for Postgres)
