@@ -138,7 +138,7 @@ async fn delete_key(client: &Client, bucket: &str, key: &str) {
     let _ = client.delete_object().bucket(bucket).key(key).send().await;
 }
 
-mod anytables_tests {
+mod tables_tests {
     use super::*;
 
     async fn sync_store(prefix: &str) -> SyncStore<SnapshotDb> {
@@ -152,8 +152,8 @@ mod anytables_tests {
     }
 
     #[tokio::test]
-    async fn anytables_sqlite_queue_insert_and_get() {
-        let mut store = sync_store("anytables-queue").await;
+    async fn tables_sqlite_queue_insert_and_get() {
+        let mut store = sync_store("tables-queue").await;
 
         let inserted = pgqrs::tables(&store)
             .queues()
@@ -180,8 +180,8 @@ mod anytables_tests {
     }
 
     #[tokio::test]
-    async fn anytables_sqlite_message_insert_and_count() {
-        let mut store = sync_store("anytables-message").await;
+    async fn tables_sqlite_message_insert_and_count() {
+        let mut store = sync_store("tables-message").await;
 
         let queue = pgqrs::tables(&store)
             .queues()

@@ -4,11 +4,11 @@
 //! configuration/model types. The implementation uses the `SyncStore<ConsistentDb>`
 //! stack internally so reads are serialized behind durable write+refresh sequencing.
 
-pub mod anytables;
 pub mod client;
 pub mod consistent;
 pub mod snapshot;
 pub mod syncstore;
+pub mod tables;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
