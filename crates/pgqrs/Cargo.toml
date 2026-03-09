@@ -45,7 +45,7 @@ sqlx = ["dep:sqlx"]
 full = ["postgres", "sqlite", "turso", "s3"]
 postgres = ["sqlx", "sqlx/postgres"]
 sqlite = ["sqlx", "sqlx/sqlite"]
-s3 = ["sqlite", "dep:aws-config", "dep:aws-sdk-s3"]
+s3 = ["sqlite", "dep:aws-config", "dep:aws-sdk-s3", "dep:object_store"]
 # Turso backend (Rust-native logic)
 turso = ["dep:turso"]
 test-utils = []
@@ -72,6 +72,7 @@ turso = { version = "0.4.2", optional = true }
 rand = "0.8"
 aws-config = { version = "1", optional = true }
 aws-sdk-s3 = { version = "1", optional = true }
+object_store = { version = "0.12.4", optional = true, features = ["aws"] }
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)

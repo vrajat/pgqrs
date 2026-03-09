@@ -17,23 +17,44 @@ pub struct AwsS3ClientConfig {
 
 /// Build an AWS S3 SDK client from normalized configuration.
 pub async fn build_aws_s3_client(config: AwsS3ClientConfig) -> aws_sdk_s3::Client {
-    let mut loader =
-        aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region));
-    if let (Some(ak), Some(sk)) = (config.access_key, config.secret_key) {
-        loader = loader.credentials_provider(Credentials::new(
-            ak,
-            sk,
-            None,
-            None,
-            config.credentials_provider_name,
-        ));
+    if let Some(endpoint) = config.endpoint.as_deref() {
+        let ep = endpoint.to_ascii_lowercase();
+        if ep.starts_with("http://")
+            || ep.contains("localhost")
+            || ep.contains("127.0.0.1")
+            || ep.contains("localstack")
+        {
+            std::env::remove_var("SSL_CERT_FILE");
+            std::env::remove_var("SSL_CERT_DIR");
+            std::env::remove_var("AWS_CA_BUNDLE");
+        }
     }
-    if let Some(ep) = config.endpoint.clone().filter(|v| !v.trim().is_empty()) {
-        loader = loader.endpoint_url(ep);
-    }
-    let conf = loader.load().await;
 
-    let mut s3_builder = aws_sdk_s3::config::Builder::from(&conf);
+    let mut s3_builder =
+        if let (Some(ak), Some(sk)) = (config.access_key.clone(), config.secret_key.clone()) {
+            // LocalStack/test path: avoid aws_config default loader so we don't initialize
+            // native root stores in subprocess/test-thread contexts.
+            aws_sdk_s3::config::Builder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new(config.region.clone()))
+                .credentials_provider(Credentials::new(
+                    ak,
+                    sk,
+                    None,
+                    None,
+                    config.credentials_provider_name,
+                ))
+        } else {
+            let conf = aws_config::defaults(BehaviorVersion::latest())
+                .region(Region::new(config.region.clone()))
+                .load()
+                .await;
+            aws_sdk_s3::config::Builder::from(&conf)
+        };
+
+    if let Some(ep) = config.endpoint.clone().filter(|v| !v.trim().is_empty()) {
+        s3_builder = s3_builder.endpoint_url(ep);
+    }
     if config.force_path_style {
         s3_builder = s3_builder.force_path_style(true);
     }
@@ -96,6 +117,38 @@ impl AwsS3ObjectStore {
             .to_vec();
 
         Ok(ObjectData { bytes, etag })
+    }
+
+    pub async fn object_exists(&self, key: &str) -> Result<bool> {
+        const MAX_ATTEMPTS: usize = 4;
+        for attempt in 0..MAX_ATTEMPTS {
+            match self
+                .client
+                .head_object()
+                .bucket(&self.bucket)
+                .key(key)
+                .send()
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.trim().eq_ignore_ascii_case("service error") {
+                        if attempt + 1 == MAX_ATTEMPTS {
+                            return Ok(false);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    let mapped = map_s3_error("head_object", key, &msg);
+                    if matches!(mapped, Error::NotFound { .. }) {
+                        return Ok(false);
+                    }
+                    return Err(mapped);
+                }
+            }
+        }
+        Ok(false)
     }
 
     pub async fn put_object_if_match(

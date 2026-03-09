@@ -36,11 +36,18 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Create a new SQLite store with default optimizations.
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
+        let journal_mode = if config.sqlite.use_wal {
+            "WAL"
+        } else {
+            "DELETE"
+        };
+        let journal_mode_pragma = format!("PRAGMA journal_mode={}", journal_mode);
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
-            .after_connect(|conn, _meta| {
+            .after_connect(move |conn, _meta| {
+                let journal_mode_pragma = journal_mode_pragma.clone();
                 Box::pin(async move {
-                    sqlx::query("PRAGMA journal_mode=WAL")
+                    sqlx::query(&journal_mode_pragma)
                         .execute(&mut *conn)
                         .await?;
                     sqlx::query("PRAGMA busy_timeout=5000")

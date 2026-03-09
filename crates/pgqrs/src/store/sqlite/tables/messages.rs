@@ -429,7 +429,6 @@ impl crate::store::MessageTable for SqliteMessageTable {
             source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;
-
         Ok(count)
     }
 

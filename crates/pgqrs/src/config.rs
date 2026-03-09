@@ -68,6 +68,7 @@ const ENV_VALIDATION_CONFIG: &str = "PGQRS_VALIDATION_CONFIG";
 const ENV_MAX_READ_CT: &str = "PGQRS_MAX_READ_CT";
 const ENV_HEARTBEAT_INTERVAL: &str = "PGQRS_HEARTBEAT_INTERVAL";
 const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
+const ENV_SQLITE_USE_WAL: &str = "PGQRS_SQLITE_USE_WAL";
 #[cfg(feature = "s3")]
 const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
 #[cfg(feature = "s3")]
@@ -76,6 +77,8 @@ const ENV_S3_FLUSH_INTERVAL_MS: &str = "PGQRS_S3_FLUSH_INTERVAL_MS";
 const ENV_S3_MAX_PENDING_OPS: &str = "PGQRS_S3_MAX_PENDING_OPS";
 #[cfg(feature = "s3")]
 const ENV_S3_MAX_BACKOFF_MS: &str = "PGQRS_S3_MAX_BACKOFF_MS";
+#[cfg(feature = "s3")]
+const ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS: &str = "PGQRS_S3_INITIAL_LOAD_MAX_ATTEMPTS";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -120,14 +123,92 @@ fn default_poll_interval_ms() -> u64 {
     DEFAULT_POLL_INTERVAL_MS
 }
 
+fn default_sqlite_use_wal() -> bool {
+    true
+}
+
+fn default_sqlite_config() -> SqliteConfig {
+    SqliteConfig::default()
+}
+
 #[cfg(feature = "s3")]
 fn default_s3_mode() -> crate::store::s3::DurabilityMode {
     crate::store::s3::DurabilityMode::Durable
 }
 
 #[cfg(feature = "s3")]
-fn default_s3_sync_config() -> crate::store::s3::S3SyncConfig {
-    crate::store::s3::S3SyncConfig::default()
+fn default_s3_flush_interval_ms() -> u64 {
+    1000
+}
+
+#[cfg(feature = "s3")]
+fn default_s3_max_pending_ops() -> usize {
+    100
+}
+
+#[cfg(feature = "s3")]
+fn default_s3_max_backoff_ms() -> u64 {
+    30_000
+}
+
+#[cfg(feature = "s3")]
+fn default_s3_initial_load_max_attempts() -> usize {
+    8
+}
+
+#[cfg(feature = "s3")]
+fn default_s3_config() -> S3Config {
+    S3Config::default()
+}
+
+/// SQLite-specific runtime settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqliteConfig {
+    /// Enable WAL journal mode for SQLite connections.
+    #[serde(default = "default_sqlite_use_wal")]
+    pub use_wal: bool,
+}
+
+impl Default for SqliteConfig {
+    fn default() -> Self {
+        Self {
+            use_wal: default_sqlite_use_wal(),
+        }
+    }
+}
+
+/// S3-specific runtime settings.
+#[cfg(feature = "s3")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3Config {
+    /// S3-backed durability mode (only used for s3:// DSNs)
+    #[serde(default = "default_s3_mode")]
+    pub mode: crate::store::s3::DurabilityMode,
+    /// Periodic flush interval in milliseconds.
+    #[serde(default = "default_s3_flush_interval_ms")]
+    pub flush_interval_ms: u64,
+    /// Threshold for pending local operations before forcing a flush.
+    #[serde(default = "default_s3_max_pending_ops")]
+    pub max_pending_ops: usize,
+    /// Maximum retry backoff in milliseconds for transient sync errors.
+    #[serde(default = "default_s3_max_backoff_ms")]
+    pub max_backoff_ms: u64,
+    /// Number of retries for initial remote load while opening the store.
+    #[serde(default = "default_s3_initial_load_max_attempts")]
+    pub initial_load_max_attempts: usize,
+}
+
+#[cfg(feature = "s3")]
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            mode: default_s3_mode(),
+            flush_interval_ms: default_s3_flush_interval_ms(),
+            max_pending_ops: default_s3_max_pending_ops(),
+            max_backoff_ms: default_s3_max_backoff_ms(),
+            initial_load_max_attempts: default_s3_initial_load_max_attempts(),
+        }
+    }
 }
 
 /// Connection and queue defaults for pgqrs.
@@ -165,14 +246,11 @@ pub struct Config {
     /// Validation configuration for payload checking and rate limiting
     #[serde(default)]
     pub validation_config: crate::validation::ValidationConfig,
-    /// S3-backed durability mode (only used for s3:// DSNs)
+    #[serde(default = "default_sqlite_config")]
+    pub sqlite: SqliteConfig,
     #[cfg(feature = "s3")]
-    #[serde(default = "default_s3_mode")]
-    pub s3_mode: crate::store::s3::DurabilityMode,
-    /// S3-backed sync tuning (only used for s3:// DSNs)
-    #[cfg(feature = "s3")]
-    #[serde(default = "default_s3_sync_config")]
-    pub s3_sync_config: crate::store::s3::S3SyncConfig,
+    #[serde(default = "default_s3_config")]
+    pub s3: S3Config,
 }
 
 impl Default for Config {
@@ -188,10 +266,9 @@ impl Default for Config {
             heartbeat_interval: default_heartbeat_interval(),
             poll_interval_ms: default_poll_interval_ms(),
             validation_config: Default::default(),
+            sqlite: default_sqlite_config(),
             #[cfg(feature = "s3")]
-            s3_mode: default_s3_mode(),
-            #[cfg(feature = "s3")]
-            s3_sync_config: default_s3_sync_config(),
+            s3: default_s3_config(),
         }
     }
 }
@@ -212,10 +289,9 @@ impl Config {
             heartbeat_interval: default_heartbeat_interval(),
             poll_interval_ms: default_poll_interval_ms(),
             validation_config: Default::default(),
+            sqlite: default_sqlite_config(),
             #[cfg(feature = "s3")]
-            s3_mode: default_s3_mode(),
-            #[cfg(feature = "s3")]
-            s3_sync_config: default_s3_sync_config(),
+            s3: default_s3_config(),
         }
     }
 
@@ -242,10 +318,9 @@ impl Config {
             heartbeat_interval: DEFAULT_HEARTBEAT_INTERVAL,
             poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
             validation_config: Default::default(),
+            sqlite: default_sqlite_config(),
             #[cfg(feature = "s3")]
-            s3_mode: default_s3_mode(),
-            #[cfg(feature = "s3")]
-            s3_sync_config: default_s3_sync_config(),
+            s3: default_s3_config(),
         })
     }
 
@@ -326,6 +401,15 @@ impl Config {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
+        let sqlite_use_wal = env::var(ENV_SQLITE_USE_WAL)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(default_sqlite_use_wal);
+
+        let sqlite = SqliteConfig {
+            use_wal: sqlite_use_wal,
+        };
+
         #[cfg(feature = "s3")]
         let s3_mode = env::var(ENV_S3_MODE)
             .ok()
@@ -337,19 +421,24 @@ impl Config {
             .unwrap_or_else(default_s3_mode);
 
         #[cfg(feature = "s3")]
-        let s3_sync_config = crate::store::s3::S3SyncConfig {
+        let s3 = S3Config {
+            mode: s3_mode,
             flush_interval_ms: env::var(ENV_S3_FLUSH_INTERVAL_MS)
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(default_s3_sync_config().flush_interval_ms),
+                .unwrap_or_else(default_s3_flush_interval_ms),
             max_pending_ops: env::var(ENV_S3_MAX_PENDING_OPS)
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(default_s3_sync_config().max_pending_ops),
+                .unwrap_or_else(default_s3_max_pending_ops),
             max_backoff_ms: env::var(ENV_S3_MAX_BACKOFF_MS)
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(default_s3_sync_config().max_backoff_ms),
+                .unwrap_or_else(default_s3_max_backoff_ms),
+            initial_load_max_attempts: env::var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(default_s3_initial_load_max_attempts),
         };
 
         Ok(Self {
@@ -363,10 +452,9 @@ impl Config {
             heartbeat_interval,
             poll_interval_ms,
             validation_config,
+            sqlite,
             #[cfg(feature = "s3")]
-            s3_mode,
-            #[cfg(feature = "s3")]
-            s3_sync_config,
+            s3,
         })
     }
 
@@ -509,12 +597,14 @@ mod tests {
         env::remove_var(ENV_CONFIG_FILE);
         env::remove_var(ENV_SCHEMA);
         env::remove_var(ENV_VALIDATION_CONFIG);
+        env::remove_var(ENV_SQLITE_USE_WAL);
         #[cfg(feature = "s3")]
         {
             env::remove_var(ENV_S3_MODE);
             env::remove_var(ENV_S3_FLUSH_INTERVAL_MS);
             env::remove_var(ENV_S3_MAX_PENDING_OPS);
             env::remove_var(ENV_S3_MAX_BACKOFF_MS);
+            env::remove_var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS);
         }
     }
 
@@ -531,6 +621,7 @@ mod tests {
         );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
+        assert!(config.sqlite.use_wal);
     }
 
     #[test]
@@ -560,6 +651,7 @@ mod tests {
             assert_eq!(config.connection_timeout_seconds, 60);
             assert_eq!(config.default_lock_time_seconds, 10);
             assert_eq!(config.default_max_batch_size, 200);
+            assert!(config.sqlite.use_wal);
         }
         clear_test_env_vars();
     }
@@ -581,6 +673,7 @@ mod tests {
         );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
+        assert!(config.sqlite.use_wal);
 
         clear_test_env_vars();
     }
@@ -618,6 +711,7 @@ mod tests {
             config.connection_timeout_seconds,
             DEFAULT_CONNECTION_TIMEOUT_SECONDS
         );
+        assert!(config.sqlite.use_wal);
 
         clear_test_env_vars();
     }
@@ -640,6 +734,7 @@ default_max_batch_size: 500
         assert_eq!(config.connection_timeout_seconds, 120);
         assert_eq!(config.default_lock_time_seconds, 15);
         assert_eq!(config.default_max_batch_size, 500);
+        assert!(config.sqlite.use_wal);
 
         cleanup_test_file(&config_path);
     }
@@ -661,6 +756,7 @@ dsn: "postgresql://minimal:test@localhost/minimaldb"
         );
         assert_eq!(config.default_lock_time_seconds, DEFAULT_LOCK_TIME_SECONDS);
         assert_eq!(config.default_max_batch_size, DEFAULT_BATCH_SIZE);
+        assert!(config.sqlite.use_wal);
 
         cleanup_test_file(&config_path);
     }
@@ -960,12 +1056,28 @@ schema: "invalid-schema-name"
         env::set_var(ENV_S3_FLUSH_INTERVAL_MS, "2500");
         env::set_var(ENV_S3_MAX_PENDING_OPS, "42");
         env::set_var(ENV_S3_MAX_BACKOFF_MS, "120000");
+        env::set_var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS, "12");
 
         let config = Config::from_env().expect("Should load s3 settings from env");
-        assert_eq!(config.s3_mode, crate::store::s3::DurabilityMode::Durable);
-        assert_eq!(config.s3_sync_config.flush_interval_ms, 2500);
-        assert_eq!(config.s3_sync_config.max_pending_ops, 42);
-        assert_eq!(config.s3_sync_config.max_backoff_ms, 120000);
+        assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
+        assert_eq!(config.s3.flush_interval_ms, 2500);
+        assert_eq!(config.s3.max_pending_ops, 42);
+        assert_eq!(config.s3.max_backoff_ms, 120000);
+        assert_eq!(config.s3.initial_load_max_attempts, 12);
+
+        clear_test_env_vars();
+    }
+
+    #[test]
+    #[serial]
+    fn test_from_env_sqlite_use_wal_override() {
+        clear_test_env_vars();
+
+        env::set_var(ENV_DSN, "sqlite://test.db?mode=rwc");
+        env::set_var(ENV_SQLITE_USE_WAL, "false");
+
+        let config = Config::from_env().expect("Should load sqlite settings from env");
+        assert!(!config.sqlite.use_wal);
 
         clear_test_env_vars();
     }

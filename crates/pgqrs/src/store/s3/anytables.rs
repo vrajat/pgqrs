@@ -1,0 +1,753 @@
+use crate::error::Result;
+use crate::store::s3::SyncDb;
+use crate::store::{
+    MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable, WorkflowTable,
+};
+use crate::types::{
+    BatchInsertParams, NewQueueMessage, NewQueueRecord, NewRunRecord, NewStepRecord,
+    NewWorkerRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord, StepRecord,
+    WorkerRecord, WorkerStatus, WorkflowRecord,
+};
+use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
+use serde_json::Value;
+
+const SQL_ACQUIRE_STEP: &str = r#"
+INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
+VALUES ($1, $2, 'RUNNING', datetime('now'), 0)
+ON CONFLICT (run_id, step_name) DO UPDATE
+SET status = CASE
+    WHEN status = 'SUCCESS' THEN 'SUCCESS'
+    WHEN status = 'ERROR' THEN 'ERROR'
+    ELSE 'RUNNING'
+END,
+started_at = CASE
+    WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
+    ELSE datetime('now')
+END
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
+"#;
+
+const SQL_CLEAR_RETRY: &str = r#"
+UPDATE pgqrs_workflow_steps
+SET status = 'RUNNING', retry_at = NULL, error = NULL
+WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
+"#;
+
+const SQL_COMPLETE_STEP: &str = r#"
+UPDATE pgqrs_workflow_steps
+SET status = 'SUCCESS', output = $2, completed_at = datetime('now')
+WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
+"#;
+
+const SQL_FAIL_STEP: &str = r#"
+UPDATE pgqrs_workflow_steps
+SET status = 'ERROR', error = $2, completed_at = datetime('now'),
+    retry_at = $3, retry_count = $4
+WHERE id = $1
+RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
+"#;
+
+/// Basic table facade: direct delegation to read/write stores.
+#[derive(Clone)]
+pub struct AnyTables<S>
+where
+    S: SyncDb,
+{
+    store: S,
+}
+
+impl<S> AnyTables<S>
+where
+    S: SyncDb,
+{
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    pub fn store_mut(&mut self) -> &mut S {
+        &mut self.store
+    }
+}
+
+#[async_trait]
+impl<S> MessageTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewQueueMessage) -> Result<QueueMessage> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.messages().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueMessage> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.messages().get(id).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<QueueMessage>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.messages().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.messages().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.messages().delete(id).await }))
+            .await
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.messages().filter_by_fk(queue_id).await })
+            })
+            .await
+    }
+
+    async fn batch_insert(
+        &self,
+        queue_id: i64,
+        payloads: &[Value],
+        params: BatchInsertParams,
+    ) -> Result<Vec<i64>> {
+        let payloads = payloads.to_vec();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .batch_insert(queue_id, &payloads, params)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
+        let ids = ids.to_vec();
+        self.store
+            .with_read(|store| Box::pin(async move { store.messages().get_by_ids(&ids).await }))
+            .await
+    }
+
+    async fn update_payload(&self, id: i64, payload: Value) -> Result<u64> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.messages().update_payload(id, payload).await })
+            })
+            .await
+    }
+
+    async fn extend_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<u64> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .extend_visibility(id, worker_id, additional_seconds)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn extend_visibility_batch(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+        additional_seconds: u32,
+    ) -> Result<Vec<bool>> {
+        let message_ids = message_ids.to_vec();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .extend_visibility_batch(&message_ids, worker_id, additional_seconds)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn release_messages_by_ids(
+        &self,
+        message_ids: &[i64],
+        worker_id: i64,
+    ) -> Result<Vec<bool>> {
+        let message_ids = message_ids.to_vec();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .release_messages_by_ids(&message_ids, worker_id)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn release_with_visibility(
+        &self,
+        id: i64,
+        worker_id: i64,
+        vt: DateTime<Utc>,
+    ) -> Result<u64> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .release_with_visibility(id, worker_id, vt)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.messages().count_pending_for_queue(queue_id).await })
+            })
+            .await
+    }
+
+    async fn count_pending_for_queue_and_worker(
+        &self,
+        queue_id: i64,
+        worker_id: i64,
+    ) -> Result<i64> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .count_pending_for_queue_and_worker(queue_id, worker_id)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn dequeue_at(
+        &self,
+        queue_id: i64,
+        limit: usize,
+        vt: u32,
+        worker_id: i64,
+        now: DateTime<Utc>,
+        max_read_ct: i32,
+    ) -> Result<Vec<QueueMessage>> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .messages()
+                        .dequeue_at(queue_id, limit, vt, worker_id, now, max_read_ct)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.messages().archive(id, worker_id).await })
+            })
+            .await
+    }
+
+    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        let ids = ids.to_vec();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.messages().archive_many(&ids, worker_id).await })
+            })
+            .await
+    }
+
+    async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.messages().replay_dlq(id).await }))
+            .await
+    }
+
+    async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.messages().delete_owned(id, worker_id).await })
+            })
+            .await
+    }
+
+    async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+        let ids = ids.to_vec();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.messages().delete_many_owned(&ids, worker_id).await })
+            })
+            .await
+    }
+
+    async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.messages().list_archived_by_queue(queue_id).await })
+            })
+            .await
+    }
+
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.messages().count_by_fk(queue_id).await })
+            })
+            .await
+    }
+
+    async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
+        let ids = ids.to_vec();
+        self.store
+            .with_write(|store| Box::pin(async move { store.messages().delete_by_ids(&ids).await }))
+            .await
+    }
+}
+
+#[async_trait]
+impl<S> WorkerTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewWorkerRecord) -> Result<WorkerRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<WorkerRecord> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workers().get(id).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<WorkerRecord>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workers().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workers().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().delete(id).await }))
+            .await
+    }
+
+    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.workers().filter_by_fk(queue_id).await })
+            })
+            .await
+    }
+
+    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workers().count_by_fk(queue_id).await }))
+            .await
+    }
+
+    async fn count_for_queue(&self, queue_id: i64, state: WorkerStatus) -> Result<i64> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.workers().count_for_queue(queue_id, state).await })
+            })
+            .await
+    }
+
+    async fn count_zombies_for_queue(&self, queue_id: i64, older_than: Duration) -> Result<i64> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move {
+                    store
+                        .workers()
+                        .count_zombies_for_queue(queue_id, older_than)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn list_for_queue(
+        &self,
+        queue_id: i64,
+        state: WorkerStatus,
+    ) -> Result<Vec<WorkerRecord>> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.workers().list_for_queue(queue_id, state).await })
+            })
+            .await
+    }
+
+    async fn list_zombies_for_queue(
+        &self,
+        queue_id: i64,
+        older_than: Duration,
+    ) -> Result<Vec<WorkerRecord>> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move {
+                    store
+                        .workers()
+                        .list_zombies_for_queue(queue_id, older_than)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn register(
+        &self,
+        queue_id: Option<i64>,
+        hostname: &str,
+        port: i32,
+    ) -> Result<WorkerRecord> {
+        let hostname = hostname.to_string();
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.workers().register(queue_id, &hostname, port).await })
+            })
+            .await
+    }
+
+    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.workers().register_ephemeral(queue_id).await })
+            })
+            .await
+    }
+
+    async fn get_status(&self, id: i64) -> Result<WorkerStatus> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workers().get_status(id).await }))
+            .await
+    }
+
+    async fn suspend(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().suspend(id).await }))
+            .await
+    }
+
+    async fn resume(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().resume(id).await }))
+            .await
+    }
+
+    async fn shutdown(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().shutdown(id).await }))
+            .await
+    }
+
+    async fn poll(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().poll(id).await }))
+            .await
+    }
+
+    async fn interrupt(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().interrupt(id).await }))
+            .await
+    }
+
+    async fn heartbeat(&self, id: i64) -> Result<()> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workers().heartbeat(id).await }))
+            .await
+    }
+
+    async fn is_healthy(&self, id: i64, max_age: Duration) -> Result<bool> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.workers().is_healthy(id, max_age).await })
+            })
+            .await
+    }
+}
+
+#[async_trait]
+impl<S> QueueTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewQueueRecord) -> Result<QueueRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.queues().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<QueueRecord> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.queues().get(id).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<QueueRecord>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.queues().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.queues().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.queues().delete(id).await }))
+            .await
+    }
+
+    async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
+        let name = name.to_string();
+        self.store
+            .with_read(|store| Box::pin(async move { store.queues().get_by_name(&name).await }))
+            .await
+    }
+
+    async fn exists(&self, name: &str) -> Result<bool> {
+        let name = name.to_string();
+        self.store
+            .with_read(|store| Box::pin(async move { store.queues().exists(&name).await }))
+            .await
+    }
+
+    async fn delete_by_name(&self, name: &str) -> Result<u64> {
+        let name = name.to_string();
+        self.store
+            .with_write(|store| Box::pin(async move { store.queues().delete_by_name(&name).await }))
+            .await
+    }
+}
+
+#[async_trait]
+impl<S> WorkflowTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflows().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<WorkflowRecord> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflows().get(id).await }))
+            .await
+    }
+
+    async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+        let name = name.to_string();
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflows().get_by_name(&name).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<WorkflowRecord>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflows().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflows().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflows().delete(id).await }))
+            .await
+    }
+}
+
+#[async_trait]
+impl<S> RunRecordTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflow_runs().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<RunRecord> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_runs().get(id).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<RunRecord>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_runs().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_runs().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflow_runs().delete(id).await }))
+            .await
+    }
+
+    async fn start_run(&self, id: i64) -> Result<RunRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflow_runs().start_run(id).await }))
+            .await
+    }
+
+    async fn complete_run(&self, id: i64, output: Value) -> Result<RunRecord> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_runs().complete_run(id, output).await })
+            })
+            .await
+    }
+
+    async fn pause_run(
+        &self,
+        id: i64,
+        message: String,
+        resume_after: std::time::Duration,
+    ) -> Result<RunRecord> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .workflow_runs()
+                        .pause_run(id, message, resume_after)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn fail_run(&self, id: i64, error: Value) -> Result<RunRecord> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_runs().fail_run(id, error).await })
+            })
+            .await
+    }
+
+    async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
+        self.store
+            .with_read(|store| {
+                Box::pin(async move { store.workflow_runs().get_by_message_id(message_id).await })
+            })
+            .await
+    }
+}
+
+#[async_trait]
+impl<S> StepRecordTable for AnyTables<S>
+where
+    S: SyncDb,
+{
+    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflow_steps().insert(data).await }))
+            .await
+    }
+
+    async fn get(&self, id: i64) -> Result<StepRecord> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_steps().get(id).await }))
+            .await
+    }
+
+    async fn list(&self) -> Result<Vec<StepRecord>> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_steps().list().await }))
+            .await
+    }
+
+    async fn count(&self) -> Result<i64> {
+        self.store
+            .with_read(|store| Box::pin(async move { store.workflow_steps().count().await }))
+            .await
+    }
+
+    async fn delete(&self, id: i64) -> Result<u64> {
+        self.store
+            .with_write(|store| Box::pin(async move { store.workflow_steps().delete(id).await }))
+            .await
+    }
+
+    async fn execute(&self, query: crate::store::query::QueryBuilder) -> Result<StepRecord> {
+        self.store
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_steps().execute(query).await })
+            })
+            .await
+    }
+
+    fn sql_acquire_step(&self) -> &'static str {
+        SQL_ACQUIRE_STEP
+    }
+
+    fn sql_clear_retry(&self) -> &'static str {
+        SQL_CLEAR_RETRY
+    }
+
+    fn sql_complete_step(&self) -> &'static str {
+        SQL_COMPLETE_STEP
+    }
+
+    fn sql_fail_step(&self) -> &'static str {
+        SQL_FAIL_STEP
+    }
+}

@@ -38,7 +38,8 @@ To provide maximum testability and avoid API bloat, durability is configured at 
 
 **`DurabilityMode::Durable` (Strict Consistency)**
 - **Writes:** Operations are executed locally, but the client **blocks** (loops in a wait) until the background Sync Task successfully uploads the local DB to S3.
-- **Reads:** Reads strictly reflect what has been globally committed to S3. Local, un-flushed writes happen in isolation and are hidden from reads until the S3 upload succeeds.
+- **Reads:** Reads strictly reflect what has been globally committed to S3. Before serving a durable read, the store checks the remote ETag/revision and, if it differs from local committed state, performs a **synchronous refresh** (`GET` + `read_db` rewrite) before returning data.
+- **Read freshness guarantee:** Durable reads must not return stale committed data. They may block briefly to refresh if a newer committed S3 revision is detected.
 - *Equivalency:* `READ COMMITTED` / Synchronous replication. Maximum safety, higher latency.
 
 **`DurabilityMode::Local` (Optimistic)**
@@ -57,6 +58,12 @@ To enforce `Durable` mode where reads must *not* see un-synced local writes, the
 1. **`read_db.sqlite`**: Represents the globally confirmed state. It is a direct copy of the most recent successful S3 download. All read operations (`dequeue`, `list_workflows`) execute strictly against this file.
 2. **`write_db.sqlite`**: The staging database. Mutating operations (`enqueue`, `update_status`) write here.
 
+**Durable Read Refresh Rule**
+- Durable reads do not mutate local write state.
+- Durable reads compare local committed revision (ETag) to remote committed revision.
+- If revisions differ, the store synchronously refreshes local committed state (`read_db.sqlite`) from S3 before executing the read query.
+- If revisions match, reads execute directly from `read_db.sqlite` without remote download.
+
 **How it works during a Durable Write:**
 1. Client calls `enqueue()`.
 2. `S3Store` writes the payload to `write_db.sqlite`.
@@ -66,6 +73,8 @@ To enforce `Durable` mode where reads must *not* see un-synced local writes, the
 6. The Upload Succeeds: The Sync Task issues an OS-level file copy from `write_db.sqlite` overwriting `read_db.sqlite`.
 7. The Sync Task resolves the client's completion channel. The `enqueue()` call unblocks.
 8. The next `dequeue` hits the newly updated `read_db.sqlite` and sees the committed payload.
+
+**Cross-node note:** If another node commits first, a durable reader on this node will detect the ETag mismatch and refresh `read_db.sqlite` synchronously before returning results.
 
 *Note for `Local` Mode:* If configured in Local mode, both the read and write connection stores simply point to the identical `write_db.sqlite` file, meaning reads instantly see all local writes.
 
