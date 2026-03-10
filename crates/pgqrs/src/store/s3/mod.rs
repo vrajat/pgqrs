@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -193,8 +194,8 @@ impl Store for S3Store {
     ) -> crate::error::Result<Box<dyn crate::Admin>> {
         let inner_admin = self.store.admin(hostname, port, config).await?;
         Ok(Box::new(S3Admin {
-            inner: inner_admin,
-            store: self.clone(),
+            db: self.store.db().clone(),
+            inner: Arc::from(inner_admin),
         }))
     }
 
@@ -204,8 +205,8 @@ impl Store for S3Store {
     ) -> crate::error::Result<Box<dyn crate::Admin>> {
         let inner_admin = self.store.admin_ephemeral(config).await?;
         Ok(Box::new(S3Admin {
-            inner: inner_admin,
-            store: self.clone(),
+            db: self.store.db().clone(),
+            inner: Arc::from(inner_admin),
         }))
     }
 
@@ -301,14 +302,14 @@ impl Store for S3Store {
     }
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn crate::Worker>> {
-        let inner = self
+        let worker_record = self
             .store
             .db()
-            .with_write(|store| Box::pin(async move { store.worker(id).await }))
+            .with_read(|store| Box::pin(async move { store.workers().get(id).await }))
             .await?;
         Ok(Box::new(S3Worker {
-            inner,
-            store: self.clone(),
+            db: self.store.db().clone(),
+            worker_record,
         }))
     }
 
@@ -381,138 +382,186 @@ impl Store for S3Store {
     }
 }
 
-struct S3Admin {
-    inner: Box<dyn Admin>,
-    store: S3Store,
-}
-
-impl S3Admin {
-    async fn sync_then_refresh(&self) -> crate::error::Result<()> {
-        let mut store = self.store.clone();
-        store.sync().await?;
-        store.refresh().await
-    }
+struct S3Admin<DB>
+where
+    DB: SyncDb,
+{
+    db: DB,
+    inner: Arc<dyn Admin>,
 }
 
 #[async_trait]
-impl Worker for S3Admin {
+impl<DB> Worker for S3Admin<DB>
+where
+    DB: SyncDb,
+{
     fn worker_record(&self) -> &crate::types::WorkerRecord {
         self.inner.worker_record()
     }
 
     async fn status(&self) -> crate::error::Result<crate::types::WorkerStatus> {
-        self.inner.status().await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.status().await }))
+            .await
     }
 
     async fn suspend(&self) -> crate::error::Result<()> {
-        self.inner.suspend().await?;
-        self.sync_then_refresh().await
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.suspend().await }))
+            .await
     }
 
     async fn resume(&self) -> crate::error::Result<()> {
-        self.inner.resume().await?;
-        self.sync_then_refresh().await
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.resume().await }))
+            .await
     }
 
     async fn shutdown(&self) -> crate::error::Result<()> {
-        self.inner.shutdown().await?;
-        self.sync_then_refresh().await
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.shutdown().await }))
+            .await
     }
 
     async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.inner.heartbeat().await
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.heartbeat().await }))
+            .await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> crate::error::Result<bool> {
-        self.inner.is_healthy(max_age).await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.is_healthy(max_age).await }))
+            .await
     }
 }
 
-struct S3Worker {
-    inner: Box<dyn Worker>,
-    store: S3Store,
+struct S3Worker<DB>
+where
+    DB: SyncDb,
+{
+    db: DB,
+    worker_record: crate::types::WorkerRecord,
 }
 
 #[async_trait]
-impl Worker for S3Worker {
+impl<DB> Worker for S3Worker<DB>
+where
+    DB: SyncDb,
+{
     fn worker_record(&self) -> &crate::types::WorkerRecord {
-        self.inner.worker_record()
+        &self.worker_record
     }
 
     async fn status(&self) -> crate::error::Result<crate::types::WorkerStatus> {
-        self.inner.status().await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_read(|store| Box::pin(async move { store.workers().get_status(worker_id).await }))
+            .await
     }
 
     async fn suspend(&self) -> crate::error::Result<()> {
-        self.inner.suspend().await?;
-        let mut store = self.store.clone();
-        store.sync().await?;
-        store.refresh().await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().suspend(worker_id).await }))
+            .await
     }
 
     async fn resume(&self) -> crate::error::Result<()> {
-        self.inner.resume().await?;
-        let mut store = self.store.clone();
-        store.sync().await?;
-        store.refresh().await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().resume(worker_id).await }))
+            .await
     }
 
     async fn shutdown(&self) -> crate::error::Result<()> {
-        self.inner.shutdown().await?;
-        let mut store = self.store.clone();
-        store.sync().await?;
-        store.refresh().await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().shutdown(worker_id).await }))
+            .await
     }
 
     async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.inner.heartbeat().await?;
-        let mut store = self.store.clone();
-        store.sync().await?;
-        store.refresh().await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().heartbeat(worker_id).await }))
+            .await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> crate::error::Result<bool> {
-        self.inner.is_healthy(max_age).await
+        let worker_id = self.worker_record.id;
+        self.db
+            .with_read(|store| {
+                Box::pin(async move { store.workers().is_healthy(worker_id, max_age).await })
+            })
+            .await
     }
 }
 
 #[async_trait]
-impl Admin for S3Admin {
+impl<DB> Admin for S3Admin<DB>
+where
+    DB: SyncDb,
+{
     async fn verify(&self) -> crate::error::Result<()> {
-        self.inner.verify().await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.verify().await }))
+            .await
     }
 
     async fn delete_queue(
         &self,
         queue_info: &crate::types::QueueRecord,
     ) -> crate::error::Result<()> {
-        self.inner.delete_queue(queue_info).await?;
-        self.sync_then_refresh().await
+        let inner = self.inner.clone();
+        let queue_info = queue_info.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.delete_queue(&queue_info).await }))
+            .await
     }
 
     async fn purge_queue(&self, name: &str) -> crate::error::Result<()> {
-        self.inner.purge_queue(name).await?;
-        self.sync_then_refresh().await
+        let inner = self.inner.clone();
+        let name = name.to_string();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.purge_queue(&name).await }))
+            .await
     }
 
     async fn dlq(&self) -> crate::error::Result<Vec<i64>> {
-        let moved = self.inner.dlq().await?;
-        if !moved.is_empty() {
-            self.sync_then_refresh().await?;
-        }
-        Ok(moved)
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.dlq().await }))
+            .await
     }
 
     async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::stats::QueueMetrics> {
-        self.inner.queue_metrics(name).await
+        let inner = self.inner.clone();
+        let name = name.to_string();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.queue_metrics(&name).await }))
+            .await
     }
 
     async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::stats::QueueMetrics>> {
-        self.inner.all_queues_metrics().await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.all_queues_metrics().await }))
+            .await
     }
 
     async fn system_stats(&self) -> crate::error::Result<crate::stats::SystemStats> {
-        self.inner.system_stats().await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.system_stats().await }))
+            .await
     }
 
     async fn worker_health_stats(
@@ -520,8 +569,15 @@ impl Admin for S3Admin {
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
     ) -> crate::error::Result<Vec<crate::stats::WorkerHealthStats>> {
-        self.inner
-            .worker_health_stats(heartbeat_timeout, group_by_queue)
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| {
+                Box::pin(async move {
+                    inner
+                        .worker_health_stats(heartbeat_timeout, group_by_queue)
+                        .await
+                })
+            })
             .await
     }
 
@@ -529,20 +585,28 @@ impl Admin for S3Admin {
         &self,
         queue_name: &str,
     ) -> crate::error::Result<crate::stats::WorkerStats> {
-        self.inner.worker_stats(queue_name).await
+        let inner = self.inner.clone();
+        let queue_name = queue_name.to_string();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.worker_stats(&queue_name).await }))
+            .await
     }
 
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let count = self.inner.delete_worker(worker_id).await?;
-        self.sync_then_refresh().await?;
-        Ok(count)
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.delete_worker(worker_id).await }))
+            .await
     }
 
     async fn get_worker_messages(
         &self,
         worker_id: i64,
     ) -> crate::error::Result<Vec<crate::types::QueueMessage>> {
-        self.inner.get_worker_messages(worker_id).await
+        let inner = self.inner.clone();
+        self.db
+            .with_read(|_| Box::pin(async move { inner.get_worker_messages(worker_id).await }))
+            .await
     }
 
     async fn reclaim_messages(
@@ -550,21 +614,26 @@ impl Admin for S3Admin {
         queue_id: i64,
         older_than: Option<chrono::Duration>,
     ) -> crate::error::Result<u64> {
-        let count = self.inner.reclaim_messages(queue_id, older_than).await?;
-        self.sync_then_refresh().await?;
-        Ok(count)
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| {
+                Box::pin(async move { inner.reclaim_messages(queue_id, older_than).await })
+            })
+            .await
     }
 
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64> {
-        let count = self.inner.purge_old_workers(older_than).await?;
-        self.sync_then_refresh().await?;
-        Ok(count)
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.purge_old_workers(older_than).await }))
+            .await
     }
 
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let count = self.inner.release_worker_messages(worker_id).await?;
-        self.sync_then_refresh().await?;
-        Ok(count)
+        let inner = self.inner.clone();
+        self.db
+            .with_write(|_| Box::pin(async move { inner.release_worker_messages(worker_id).await }))
+            .await
     }
 }
 
