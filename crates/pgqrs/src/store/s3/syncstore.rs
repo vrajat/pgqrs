@@ -8,6 +8,8 @@ use crate::store::{
     WorkerTable, WorkflowTable,
 };
 use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Store adapter over a SnapshotDb-like core.
 ///
@@ -62,11 +64,12 @@ impl SyncStore<ConsistentDb> {
 impl SyncStore<super::DurabilityStore> {
     pub async fn new(config: &crate::Config) -> Result<Self> {
         let db = match config.s3.mode {
-            super::DurabilityMode::Local => {
-                super::DurabilityStore::Local(Box::new(SnapshotDb::new(config).await?))
-            }
+            super::DurabilityMode::Local => super::DurabilityStore::Local {
+                db: Arc::new(RwLock::new(SnapshotDb::new(config).await?)),
+                config: config.clone(),
+            },
             super::DurabilityMode::Durable => {
-                super::DurabilityStore::Durable(Box::new(ConsistentDb::new(config).await?))
+                super::DurabilityStore::Durable(ConsistentDb::new(config).await?)
             }
         };
         Ok(Self {

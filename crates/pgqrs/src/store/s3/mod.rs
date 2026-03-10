@@ -15,10 +15,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::store::s3::syncstore::SyncStore;
+use crate::store::s3::tables::Tables;
 use crate::store::{
     AnyStore, ConcurrencyModel, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
     WorkerTable, WorkflowTable,
@@ -63,22 +64,25 @@ pub enum DurabilityMode {
 
 #[derive(Clone)]
 enum DurabilityStore {
-    Local(Box<snapshot::SnapshotDb>),
-    Durable(Box<consistent::ConsistentDb>),
+    Local {
+        db: Arc<RwLock<snapshot::SnapshotDb>>,
+        config: Config,
+    },
+    Durable(consistent::ConsistentDb),
 }
 
 #[async_trait]
 impl SyncDb for DurabilityStore {
     fn config(&self) -> &Config {
         match self {
-            Self::Local(db) => db.config(),
+            Self::Local { config, .. } => config,
             Self::Durable(db) => db.config(),
         }
     }
 
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
         match self {
-            Self::Local(db) => db.concurrency_model(),
+            Self::Local { .. } => crate::store::ConcurrencyModel::SingleProcess,
             Self::Durable(db) => db.concurrency_model(),
         }
     }
@@ -88,7 +92,7 @@ impl SyncDb for DurabilityStore {
         F: FnOnce(&dyn Store) -> R + Send,
     {
         match self {
-            Self::Local(db) => db.with_read_ref(f),
+            Self::Local { db, .. } => db.blocking_read().with_read_ref(f),
             Self::Durable(db) => db.with_read_ref(f),
         }
     }
@@ -98,7 +102,7 @@ impl SyncDb for DurabilityStore {
         F: FnOnce(&dyn Store) -> R + Send,
     {
         match self {
-            Self::Local(db) => db.with_write_ref(f),
+            Self::Local { db, .. } => db.blocking_write().with_write_ref(f),
             Self::Durable(db) => db.with_write_ref(f),
         }
     }
@@ -109,7 +113,7 @@ impl SyncDb for DurabilityStore {
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
         match self {
-            Self::Local(db) => db.with_read(f).await,
+            Self::Local { db, .. } => db.read().await.with_read(f).await,
             Self::Durable(db) => db.with_read(f).await,
         }
     }
@@ -120,28 +124,28 @@ impl SyncDb for DurabilityStore {
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
         match self {
-            Self::Local(db) => db.with_write(f).await,
+            Self::Local { db, .. } => db.write().await.with_write(f).await,
             Self::Durable(db) => db.with_write(f).await,
         }
     }
 
     async fn snapshot(&mut self) -> Result<()> {
         match self {
-            Self::Local(db) => db.snapshot().await,
+            Self::Local { db, .. } => db.write().await.snapshot().await,
             Self::Durable(db) => db.snapshot().await,
         }
     }
 
     async fn refresh(&mut self) -> Result<()> {
         match self {
-            Self::Local(db) => db.refresh().await,
+            Self::Local { db, .. } => db.write().await.refresh().await,
             Self::Durable(db) => db.refresh().await,
         }
     }
 
     async fn sync(&mut self) -> Result<()> {
         match self {
-            Self::Local(db) => db.sync().await,
+            Self::Local { db, .. } => db.write().await.sync().await,
             Self::Durable(db) => db.sync().await,
         }
     }
@@ -150,7 +154,9 @@ impl SyncDb for DurabilityStore {
 /// S3-backed store entrypoint.
 #[derive(Clone)]
 pub struct S3Store {
-    store: SyncStore<DurabilityStore>,
+    db: DurabilityStore,
+    tables: Tables<DurabilityStore>,
+    config: Config,
     mode: DurabilityMode,
 }
 
@@ -168,8 +174,22 @@ impl S3Store {
     /// - `DurabilityMode::Durable` -> `ConsistentDb`
     pub async fn new(config: &Config) -> Result<Self> {
         let mode = config.s3.mode;
-        let store = SyncStore::<DurabilityStore>::new(config).await?;
-        Ok(Self { store, mode })
+        let db = match mode {
+            DurabilityMode::Local => DurabilityStore::Local {
+                db: Arc::new(RwLock::new(snapshot::SnapshotDb::new(config).await?)),
+                config: config.clone(),
+            },
+            DurabilityMode::Durable => {
+                DurabilityStore::Durable(consistent::ConsistentDb::new(config).await?)
+            }
+        };
+        let tables = Tables::new(db.clone());
+        Ok(Self {
+            db,
+            tables,
+            config: config.clone(),
+            mode,
+        })
     }
 
     /// Access the mode captured from configuration.
@@ -181,21 +201,21 @@ impl S3Store {
     ///
     /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
     pub async fn snapshot(&mut self) -> Result<()> {
-        self.store.snapshot().await
+        self.db.snapshot().await
     }
 
     /// Reload local read handle from the current backing files.
     ///
     /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
     pub async fn refresh(&mut self) -> Result<()> {
-        self.store.refresh().await
+        self.db.refresh().await
     }
 
     /// Sync local write state to object storage.
     ///
     /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
     pub async fn sync(&mut self) -> Result<()> {
-        self.store.sync().await
+        self.db.sync().await
     }
 
     /// Parse `sqlite://` cache dsn from an `s3://` DSN.
@@ -207,11 +227,19 @@ impl S3Store {
 #[async_trait]
 impl Store for S3Store {
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
-        self.store.execute_raw(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_write(|store| Box::pin(async move { store.execute_raw(&sql).await }))
+            .await
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
-        self.store.execute_raw_with_i64(sql, param).await
+        let sql = sql.to_string();
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.execute_raw_with_i64(&sql, param).await })
+            })
+            .await
     }
 
     async fn execute_raw_with_two_i64(
@@ -220,53 +248,67 @@ impl Store for S3Store {
         param1: i64,
         param2: i64,
     ) -> crate::error::Result<()> {
-        self.store
-            .execute_raw_with_two_i64(sql, param1, param2)
+        let sql = sql.to_string();
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.execute_raw_with_two_i64(&sql, param1, param2).await })
+            })
             .await
     }
 
     async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
-        self.store.query_int(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|store| Box::pin(async move { store.query_int(&sql).await }))
+            .await
     }
 
     async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
-        self.store.query_string(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|store| Box::pin(async move { store.query_string(&sql).await }))
+            .await
     }
 
     async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
-        self.store.query_bool(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|store| Box::pin(async move { store.query_bool(&sql).await }))
+            .await
     }
 
     fn config(&self) -> &Config {
-        self.store.config()
+        &self.config
     }
 
     fn queues(&self) -> &dyn QueueTable {
-        self.store.queues()
+        &self.tables
     }
 
     fn messages(&self) -> &dyn MessageTable {
-        self.store.messages()
+        &self.tables
     }
 
     fn workers(&self) -> &dyn WorkerTable {
-        self.store.workers()
+        &self.tables
     }
 
     fn workflows(&self) -> &dyn WorkflowTable {
-        self.store.workflows()
+        &self.tables
     }
 
     fn workflow_runs(&self) -> &dyn RunRecordTable {
-        self.store.workflow_runs()
+        &self.tables
     }
 
     fn workflow_steps(&self) -> &dyn StepRecordTable {
-        self.store.workflow_steps()
+        &self.tables
     }
 
     async fn bootstrap(&self) -> crate::error::Result<()> {
-        self.store.bootstrap().await
+        self.db
+            .with_write(|store| Box::pin(async move { store.bootstrap().await }))
+            .await
     }
 
     async fn admin(
@@ -275,9 +317,16 @@ impl Store for S3Store {
         port: i32,
         config: &Config,
     ) -> crate::error::Result<Box<dyn crate::Admin>> {
-        let inner_admin = self.store.admin(hostname, port, config).await?;
+        let hostname = hostname.to_string();
+        let config = config.clone();
+        let inner_admin = self
+            .db
+            .with_write(|store| {
+                Box::pin(async move { store.admin(&hostname, port, &config).await })
+            })
+            .await?;
         Ok(Box::new(S3Admin {
-            db: self.store.db().clone(),
+            db: self.db.clone(),
             inner: Arc::from(inner_admin),
         }))
     }
@@ -286,9 +335,13 @@ impl Store for S3Store {
         &self,
         config: &Config,
     ) -> crate::error::Result<Box<dyn crate::Admin>> {
-        let inner_admin = self.store.admin_ephemeral(config).await?;
+        let config = config.clone();
+        let inner_admin = self
+            .db
+            .with_write(|store| Box::pin(async move { store.admin_ephemeral(&config).await }))
+            .await?;
         Ok(Box::new(S3Admin {
-            db: self.store.db().clone(),
+            db: self.db.clone(),
             inner: Arc::from(inner_admin),
         }))
     }
@@ -305,8 +358,7 @@ impl Store for S3Store {
         let validation_config = config.validation_config.clone();
 
         let (queue_info, worker_record) = self
-            .store
-            .db()
+            .db
             .with_write(|store| {
                 Box::pin(async move {
                     let queue_info = store.queues().get_by_name(&queue).await?;
@@ -338,8 +390,7 @@ impl Store for S3Store {
         let hostname = hostname.to_string();
 
         let (queue_info, worker_record) = self
-            .store
-            .db()
+            .db
             .with_write(|store| {
                 Box::pin(async move {
                     let queue_info = store.queues().get_by_name(&queue).await?;
@@ -361,18 +412,21 @@ impl Store for S3Store {
 
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
         let name = name.to_string();
-        self.store.queue(&name).await
+        self.db
+            .with_write(|store| Box::pin(async move { store.queue(&name).await }))
+            .await
     }
 
     async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         let name = name.to_string();
-        self.store.workflow(&name).await
+        self.db
+            .with_write(|store| Box::pin(async move { store.workflow(&name).await }))
+            .await
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<crate::Run> {
         let record = self
-            .store
-            .db()
+            .db
             .with_write(|store| {
                 Box::pin(async move {
                     let run = store.run(message).await?;
@@ -386,18 +440,17 @@ impl Store for S3Store {
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn crate::Worker>> {
         let worker_record = self
-            .store
-            .db()
+            .db
             .with_read(|store| Box::pin(async move { store.workers().get(id).await }))
             .await?;
         Ok(Box::new(S3Worker {
-            db: self.store.db().clone(),
+            db: self.db.clone(),
             worker_record,
         }))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
-        ConcurrencyModel::SingleProcess
+        self.db.concurrency_model()
     }
 
     fn backend_name(&self) -> &'static str {
@@ -413,8 +466,7 @@ impl Store for S3Store {
         let validation_config = config.validation_config.clone();
 
         let (queue_info, worker_record) = self
-            .store
-            .db()
+            .db
             .with_write(|store| {
                 Box::pin(async move {
                     let queue_info = store.queues().get_by_name(&queue).await?;
@@ -443,8 +495,7 @@ impl Store for S3Store {
         let queue = queue.to_string();
 
         let (queue_info, worker_record) = self
-            .store
-            .db()
+            .db
             .with_write(|store| {
                 Box::pin(async move {
                     let queue_info = store.queues().get_by_name(&queue).await?;
