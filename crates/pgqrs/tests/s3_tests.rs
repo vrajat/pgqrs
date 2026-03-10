@@ -672,7 +672,7 @@ async fn localstack_s3_store_bootstrap_restores_seeded_queue() {
     let config = s3_config_for(&dsn, DurabilityMode::Local);
 
     {
-        let seed_store = S3Store::new(&config).await.expect("seed store should open");
+        let mut seed_store = S3Store::new(&config).await.expect("seed store should open");
         pgqrs::admin(&seed_store)
             .create_queue("seeded")
             .await
@@ -689,6 +689,9 @@ async fn localstack_s3_store_bootstrap_restores_seeded_queue() {
             .execute(&seed_store)
             .await
             .expect("seed enqueue should succeed");
+
+        // Local mode requires explicit publish to remote object storage.
+        seed_store.sync().await.expect("seed sync should succeed");
     }
 
     let store = S3Store::new(&config).await.expect("store should open");

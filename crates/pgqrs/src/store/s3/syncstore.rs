@@ -59,6 +59,22 @@ impl SyncStore<ConsistentDb> {
     }
 }
 
+impl SyncStore<super::DurabilityStore> {
+    pub async fn new(config: &crate::Config) -> Result<Self> {
+        let db = match config.s3.mode {
+            super::DurabilityMode::Local => {
+                super::DurabilityStore::Local(Box::new(SnapshotDb::new(config).await?))
+            }
+            super::DurabilityMode::Durable => {
+                super::DurabilityStore::Durable(Box::new(ConsistentDb::new(config).await?))
+            }
+        };
+        Ok(Self {
+            tables: Tables::new(db),
+        })
+    }
+}
+
 #[async_trait]
 impl<DB> Store for SyncStore<DB>
 where

@@ -1,8 +1,8 @@
 //! S3-backed queue store facade.
 //!
 //! This module provides the public `S3Store` entrypoint and common S3-oriented
-//! configuration/model types. The implementation uses the `SyncStore<ConsistentDb>`
-//! stack internally so reads are serialized behind durable write+refresh sequencing.
+//! configuration/model types. The implementation uses an internal durability-backed
+//! DB holder and `SyncStore<...>` for store/table wiring.
 
 pub mod client;
 pub mod consistent;
@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::store::s3::consistent::ConsistentDb;
 use crate::store::s3::syncstore::SyncStore;
 use crate::store::{
     AnyStore, ConcurrencyModel, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
@@ -55,19 +54,103 @@ pub trait SyncDb: Clone + Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DurabilityMode {
-    /// Legacy mode preserved for configuration compatibility.
-    /// Reads and writes use local SQLite state and operations are written eagerly.
+    /// Strict mode: write operations are synchronized before returning.
     #[default]
     Durable,
-    /// Legacy mode preserved for configuration compatibility.
-    /// Treated as Durable for the Consistent layer.
+    /// Local snapshot mode: write/read handles are split and app drives sync/refresh boundaries.
     Local,
+}
+
+#[derive(Clone)]
+enum DurabilityStore {
+    Local(Box<snapshot::SnapshotDb>),
+    Durable(Box<consistent::ConsistentDb>),
+}
+
+#[async_trait]
+impl SyncDb for DurabilityStore {
+    fn config(&self) -> &Config {
+        match self {
+            Self::Local(db) => db.config(),
+            Self::Durable(db) => db.config(),
+        }
+    }
+
+    fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
+        match self {
+            Self::Local(db) => db.concurrency_model(),
+            Self::Durable(db) => db.concurrency_model(),
+        }
+    }
+
+    fn with_read_ref<R, F>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn Store) -> R + Send,
+    {
+        match self {
+            Self::Local(db) => db.with_read_ref(f),
+            Self::Durable(db) => db.with_read_ref(f),
+        }
+    }
+
+    fn with_write_ref<R, F>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn Store) -> R + Send,
+    {
+        match self {
+            Self::Local(db) => db.with_write_ref(f),
+            Self::Durable(db) => db.with_write_ref(f),
+        }
+    }
+
+    async fn with_read<R, F>(&self, f: F) -> Result<R>
+    where
+        R: Send,
+        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+    {
+        match self {
+            Self::Local(db) => db.with_read(f).await,
+            Self::Durable(db) => db.with_read(f).await,
+        }
+    }
+
+    async fn with_write<R, F>(&self, f: F) -> Result<R>
+    where
+        R: Send,
+        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+    {
+        match self {
+            Self::Local(db) => db.with_write(f).await,
+            Self::Durable(db) => db.with_write(f).await,
+        }
+    }
+
+    async fn snapshot(&mut self) -> Result<()> {
+        match self {
+            Self::Local(db) => db.snapshot().await,
+            Self::Durable(db) => db.snapshot().await,
+        }
+    }
+
+    async fn refresh(&mut self) -> Result<()> {
+        match self {
+            Self::Local(db) => db.refresh().await,
+            Self::Durable(db) => db.refresh().await,
+        }
+    }
+
+    async fn sync(&mut self) -> Result<()> {
+        match self {
+            Self::Local(db) => db.sync().await,
+            Self::Durable(db) => db.sync().await,
+        }
+    }
 }
 
 /// S3-backed store entrypoint.
 #[derive(Clone)]
 pub struct S3Store {
-    store: SyncStore<ConsistentDb>,
+    store: SyncStore<DurabilityStore>,
     mode: DurabilityMode,
 }
 
@@ -80,12 +163,12 @@ impl std::fmt::Debug for S3Store {
 impl S3Store {
     /// Create an S3-backed store.
     ///
-    /// Internally this initializes a `SyncStore<ConsistentDb>`, so writes are
-    /// immediately published to object storage and the read path is refreshed
-    /// before returning.
+    /// Internally this initializes mode-specific DB wiring:
+    /// - `DurabilityMode::Local` -> `SnapshotDb`
+    /// - `DurabilityMode::Durable` -> `ConsistentDb`
     pub async fn new(config: &Config) -> Result<Self> {
         let mode = config.s3.mode;
-        let store = SyncStore::<ConsistentDb>::new(config).await?;
+        let store = SyncStore::<DurabilityStore>::new(config).await?;
         Ok(Self { store, mode })
     }
 
