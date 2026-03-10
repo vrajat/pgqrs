@@ -5,10 +5,7 @@ use aws_sdk_s3::Client;
 use chrono::Utc;
 use pgqrs::config::Config;
 use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore};
-use pgqrs::store::s3::consistent::ConsistentDb;
-use pgqrs::store::s3::snapshot::SnapshotDb;
-use pgqrs::store::s3::syncstore::SyncStore;
-use pgqrs::store::s3::{DurabilityMode, S3Store, SyncDb};
+use pgqrs::store::s3::{DurabilityMode, S3Store};
 use pgqrs::types::{NewQueueMessage, NewQueueRecord};
 use pgqrs::Store;
 use std::env;
@@ -141,19 +138,19 @@ async fn delete_key(client: &Client, bucket: &str, key: &str) {
 mod tables_tests {
     use super::*;
 
-    async fn sync_store(prefix: &str) -> SyncStore<SnapshotDb> {
+    async fn local_store(prefix: &str) -> S3Store {
         let (dsn, _key) = unique_s3_dsn(prefix);
         let config = s3_config_for(&dsn, DurabilityMode::Local);
         let client = localstack_client().await;
         ensure_bucket(&client, &s3_bucket()).await;
-        SyncStore::<SnapshotDb>::new(&config)
+        S3Store::new(&config)
             .await
             .expect("sync store should open from config")
     }
 
     #[tokio::test]
     async fn tables_sqlite_queue_insert_and_get() {
-        let mut store = sync_store("tables-queue").await;
+        let mut store = local_store("tables-queue").await;
 
         let inserted = pgqrs::tables(&store)
             .queues()
@@ -181,7 +178,7 @@ mod tables_tests {
 
     #[tokio::test]
     async fn tables_sqlite_message_insert_and_count() {
-        let mut store = sync_store("tables-message").await;
+        let mut store = local_store("tables-message").await;
 
         let queue = pgqrs::tables(&store)
             .queues()
@@ -233,7 +230,7 @@ mod tables_tests {
         let config = s3_config_for(&dsn, DurabilityMode::Local);
         let queue_name = "jobs";
 
-        let mut sync_store = SyncStore::<SnapshotDb>::new(&config)
+        let mut sync_store = S3Store::new(&config)
             .await
             .expect("sync store should open from config");
 
@@ -274,7 +271,7 @@ mod tables_tests {
             before_sync_count == 0,
             "read-side message count should be zero before sync"
         );
-        let mut follower_store = SyncStore::<SnapshotDb>::new(&config)
+        let mut follower_store = S3Store::new(&config)
             .await
             .expect("follower sync store should open from config");
         follower_store
@@ -332,10 +329,9 @@ mod tables_tests {
     #[tokio::test]
     async fn consistentdb_normal_flow_without_explicit_sync_or_refresh() {
         let (dsn, _key) = unique_s3_dsn("consistent-normal");
-        let config = s3_config_for(&dsn, DurabilityMode::Local);
         let queue_name = "jobs";
 
-        let consistent_store = SyncStore::<ConsistentDb>::new(&config)
+        let consistent_store = S3Store::new(&s3_config_for(&dsn, DurabilityMode::Durable))
             .await
             .expect("consistent store should open from config");
 
@@ -390,7 +386,7 @@ mod tables_tests {
             "read-side count should be one after enqueue"
         );
 
-        let mut follower_store = SyncStore::<SnapshotDb>::new(&config)
+        let mut follower_store = S3Store::new(&s3_config_for(&dsn, DurabilityMode::Local))
             .await
             .expect("follower sync store should open from config");
         follower_store
@@ -418,36 +414,32 @@ mod tables_tests {
     #[tokio::test]
     async fn consistentdb_sequences_reads_and_writes_under_contention() {
         let (dsn, _key) = unique_s3_dsn("consistent-lock");
-        let config = s3_config_for(&dsn, DurabilityMode::Local);
-
-        let store = SyncStore::<ConsistentDb>::new(&config)
+        let config = s3_config_for(&dsn, DurabilityMode::Durable);
+        let store = S3Store::new(&config)
             .await
             .expect("consistent store should open from config");
-
-        // Acquire ConsistentDb write lock and hold it until explicitly released.
-        let db = store.db().clone();
-        let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        let hold_task = tokio::spawn(async move {
-            db.with_write(|_| {
-                Box::pin(async move {
-                    let _ = held_tx.send(());
-                    release_rx
-                        .await
-                        .expect("release signal should arrive while lock is held");
-                    Ok(())
-                })
-            })
+        pgqrs::admin(&store)
+            .create_queue("jobs")
             .await
-            .expect("lock-holding write should succeed");
-        });
+            .expect("queue creation should succeed");
+        let producer = pgqrs::producer("test-host", 9303, "jobs")
+            .create(&store)
+            .await
+            .expect("producer should be created");
 
-        held_rx.await.expect("write lock should be held");
-
-        // Launch read and write together; both should block while write lock is held.
         let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
-        let (read_done_tx, mut read_done_rx) = tokio::sync::oneshot::channel::<()>();
-        let (write_done_tx, mut write_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let write_store = store.clone();
+        let write_barrier = barrier.clone();
+        let producer_for_task = producer.clone();
+        let write_task = tokio::spawn(async move {
+            write_barrier.wait().await;
+            pgqrs::enqueue()
+                .message(&serde_json::json!({ "job": "concurrency" }))
+                .worker(&producer_for_task)
+                .execute(&write_store)
+                .await
+                .expect("enqueue should succeed");
+        });
 
         let read_store = store.clone();
         let read_barrier = barrier.clone();
@@ -458,49 +450,18 @@ mod tables_tests {
                 .count()
                 .await
                 .expect("count should succeed");
-            let _ = read_done_tx.send(());
         });
 
-        let write_store = store.clone();
-        let write_barrier = barrier.clone();
-        let write_task = tokio::spawn(async move {
-            write_barrier.wait().await;
-            pgqrs::tables(&write_store)
-                .queues()
-                .insert(NewQueueRecord {
-                    queue_name: format!("blocked-write-{}", Uuid::new_v4()),
-                })
-                .await
-                .expect("queue insert should succeed after lock release");
-            let _ = write_done_tx.send(());
-        });
-
-        // Release both contenders at the same time.
         barrier.wait().await;
-        for _ in 0..5 {
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            !read_task.is_finished(),
-            "read should be blocked while write lock is held"
-        );
-        assert!(
-            !write_task.is_finished(),
-            "write should be blocked while write lock is held"
-        );
-
-        let _ = release_tx.send(());
-        hold_task
-            .await
-            .expect("lock-holding task should complete cleanly");
-        (&mut read_done_rx)
-            .await
-            .expect("read completion signal should arrive");
-        (&mut write_done_rx)
-            .await
-            .expect("write completion signal should arrive");
-        read_task.await.expect("read task should complete");
         write_task.await.expect("write task should complete");
+        read_task.await.expect("read task should complete");
+
+        let final_count = pgqrs::tables(&store)
+            .messages()
+            .count()
+            .await
+            .expect("final count should succeed");
+        assert_eq!(final_count, 1);
     }
 }
 

@@ -2,12 +2,11 @@
 //!
 //! This module provides the public `S3Store` entrypoint and common S3-oriented
 //! configuration/model types. The implementation uses an internal durability-backed
-//! DB holder and `SyncStore<...>` for store/table wiring.
+//! DB holder and direct `S3Store` wiring for table and worker operations.
 
 pub mod client;
 pub mod consistent;
 pub mod snapshot;
-pub mod syncstore;
 pub mod tables;
 
 use async_trait::async_trait;
@@ -199,21 +198,21 @@ impl S3Store {
 
     /// Synchronize state from object storage on demand.
     ///
-    /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
+    /// Synchronize state from object storage on demand.
     pub async fn snapshot(&mut self) -> Result<()> {
         self.db.snapshot().await
     }
 
     /// Reload local read handle from the current backing files.
     ///
-    /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
+    /// Reload local read handle from the current backing files.
     pub async fn refresh(&mut self) -> Result<()> {
         self.db.refresh().await
     }
 
     /// Sync local write state to object storage.
     ///
-    /// For `S3Store` this is a compatibility shim over `SyncStore<SnapshotDb>`.
+    /// Sync local write state to object storage.
     pub async fn sync(&mut self) -> Result<()> {
         self.db.sync().await
     }

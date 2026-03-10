@@ -42,15 +42,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// # #[cfg(feature = "s3")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use pgqrs::config::Config;
-/// use pgqrs::store::s3::snapshot::SnapshotDb;
-/// use pgqrs::store::s3::syncstore::SyncStore;
+/// use pgqrs::store::s3::S3Store;
 /// use serde_json::json;
 ///
 /// let rt = tokio::runtime::Runtime::new()?;
 /// rt.block_on(async {
 ///     // Requires S3 env vars (endpoint/region/credentials) to be configured.
 ///     let config = Config::from_dsn("s3://pgqrs-test-bucket/snapshot-doc.sqlite");
-///     let mut store = SyncStore::<SnapshotDb>::new(&config).await?;
+///     let mut store = S3Store::new(&config).await?;
 ///
 ///     let queue_name = "jobs";
 ///     pgqrs::admin(&store).create_queue(queue_name).await?;
