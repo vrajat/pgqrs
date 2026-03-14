@@ -198,15 +198,26 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         );
 
         // Use existing DSN to ensure we connect to the same DB file
-        #[cfg(any(feature = "sqlite", feature = "turso"))]
+        #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
         let store = {
             let config = pgqrs::config::Config::from_dsn(&dsn_str);
             pgqrs::connect_with_config(&config)
                 .await
                 .expect("Failed to connect")
         };
-        #[cfg(not(any(feature = "sqlite", feature = "turso")))]
-        let store = common::create_store(schema).await;
+        #[cfg(feature = "s3")]
+        let store = {
+            let mut store = store;
+            if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
+                s3_store
+                    .snapshot()
+                    .await
+                    .expect("Failed to snapshot S3 state");
+            }
+            store
+        };
+        #[cfg(all(not(feature = "sqlite"), not(feature = "turso"), not(feature = "s3")))]
+        let store = { common::create_store(schema).await };
 
         let c2_worker = pgqrs::tables(&store).workers().get(c2_id).await?;
         assert!(

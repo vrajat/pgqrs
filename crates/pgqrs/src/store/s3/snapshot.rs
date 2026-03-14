@@ -6,7 +6,7 @@ use crate::store::Store;
 use async_trait::async_trait;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, PutMode, UpdateVersion};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -100,7 +100,7 @@ impl SnapshotDb {
     ///
     /// - DSN is parsed as `s3://bucket/key` from `config.dsn`.
     /// - Object store is created from environment (`PGQRS_S3_*`, `AWS_*`).
-    /// - Local read/write SQLite handles are bootstrapped in snapshot mode.
+    /// - Local read/write SQLite handles are created in snapshot mode.
     pub async fn new(config: &Config) -> Result<Self> {
         let (bucket, object_key) = parse_s3_bucket_and_key(&config.dsn)?;
         let object_store = build_object_store_from_env(&bucket)?;
@@ -114,10 +114,8 @@ impl SnapshotDb {
 
         let read_store = SqliteStore::new(&read_dsn, &config).await?;
         let write_store = SqliteStore::new(&write_dsn, &config).await?;
-        read_store.bootstrap().await?;
-        write_store.bootstrap().await?;
 
-        let mut this = Self {
+        let this = Self {
             object_store,
             object_key,
             last_etag: None,
@@ -130,8 +128,6 @@ impl SnapshotDb {
             config,
         };
 
-        // Pull if present; otherwise keep local empty/bootstrap state.
-        let _ = this.snapshot().await;
         Ok(this)
     }
 
@@ -292,12 +288,7 @@ impl SyncDb for SnapshotDb {
             .object_store
             .get(&object_path)
             .await
-            .map_err(|e| map_object_store_error("get", &self.object_key, &e));
-        let remote = match remote {
-            Ok(remote) => remote,
-            Err(Error::NotFound { .. }) => return Ok(()),
-            Err(e) => return Err(e),
-        };
+            .map_err(|e| map_object_store_error("get", &self.object_key, &e))?;
         self.last_etag = remote.meta.e_tag.clone();
         let remote_bytes = remote.bytes().await.map_err(|e| Error::Internal {
             message: format!(
@@ -369,11 +360,36 @@ impl SyncDb for SnapshotDb {
         })?;
 
         let object_path = ObjectPath::from(self.object_key.as_str());
-        let put_result = self
-            .object_store
-            .put(&object_path, payload.into())
-            .await
-            .map_err(|e| map_object_store_error("put", &self.object_key, &e))?;
+        let put_result = match &self.last_etag {
+            Some(last_etag) => {
+                let version = UpdateVersion {
+                    e_tag: Some(last_etag.clone()),
+                    version: None,
+                };
+                match self
+                    .object_store
+                    .put_opts(
+                        &object_path,
+                        payload.clone().into(),
+                        PutMode::Update(version).into(),
+                    )
+                    .await
+                {
+                    Ok(put_result) => put_result,
+                    Err(object_store::Error::NotFound { .. }) => self
+                        .object_store
+                        .put_opts(&object_path, payload.into(), PutMode::Create.into())
+                        .await
+                        .map_err(|e| map_object_store_error("put", &self.object_key, &e))?,
+                    Err(e) => return Err(map_object_store_error("put", &self.object_key, &e)),
+                }
+            }
+            None => self
+                .object_store
+                .put_opts(&object_path, payload.into(), PutMode::Create.into())
+                .await
+                .map_err(|e| map_object_store_error("put", &self.object_key, &e))?,
+        };
         self.last_etag = put_result.e_tag;
 
         copy_sqlite_db(
