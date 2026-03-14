@@ -47,6 +47,14 @@ impl<'a> Poller<'a> {
             });
         }
 
+        let status = self.consumer.status().await?;
+        if status == crate::types::WorkerStatus::Interrupted {
+            self.consumer.suspend().await?;
+            return Err(Error::Suspended {
+                reason: "worker interrupted".to_string(),
+            });
+        }
+
         // Consumer-only states: Ready -> Polling
         self.consumer.poll().await?;
 

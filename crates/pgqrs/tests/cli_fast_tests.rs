@@ -230,7 +230,10 @@ fn test_queue_purge() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, schema).unwrap();
+        #[cfg(feature = "s3")]
         let mut store = pgqrs::connect_with_config(&config).await.unwrap();
+        #[cfg(not(feature = "s3"))]
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         #[cfg(feature = "s3")]
         if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
             s3_store.snapshot().await.unwrap();
@@ -272,7 +275,10 @@ fn test_queue_purge() {
     // Verify purged
     rt.block_on(async {
         let config = pgqrs::config::Config::from_dsn_with_schema(&db_url, schema).unwrap();
+        #[cfg(feature = "s3")]
         let mut store = pgqrs::connect_with_config(&config).await.unwrap();
+        #[cfg(not(feature = "s3"))]
+        let store = pgqrs::connect_with_config(&config).await.unwrap();
         #[cfg(feature = "s3")]
         if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
             s3_store.snapshot().await.unwrap();

@@ -18,12 +18,12 @@ const SQL_ACQUIRE_STEP: &str = r#"
     VALUES (?, ?, 'RUNNING', datetime('now'), 0)
     ON CONFLICT (run_id, step_name) DO UPDATE
     SET status = CASE
-        WHEN status = 'SUCCESS' THEN 'SUCCESS'
-        WHEN status = 'ERROR' THEN 'ERROR'
+        WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'
+        WHEN pgqrs_workflow_steps.status = 'ERROR' THEN 'ERROR'
         ELSE 'RUNNING'
     END,
     started_at = CASE
-        WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
+        WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
         ELSE datetime('now')
     END
     RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
