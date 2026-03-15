@@ -278,7 +278,7 @@ impl Workers {
         const TRANSITION_READY_OR_INTERRUPTED_TO_POLLING: &str = r#"
             UPDATE pgqrs_workers
             SET status = 'polling'
-            WHERE id = $1 AND status IN ('ready', 'interrupted', 'polling')
+            WHERE id = $1 AND status IN ('ready', 'polling')
             RETURNING id
         "#;
         let result: Option<i64> = sqlx::query_scalar(TRANSITION_READY_OR_INTERRUPTED_TO_POLLING)
@@ -299,7 +299,7 @@ impl Workers {
         Err(crate::error::Error::InvalidStateTransition {
             from: current_status.to_string(),
             to: "polling".to_string(),
-            reason: "Worker must be Ready or Interrupted to start polling".to_string(),
+            reason: "Worker must be Ready to start polling".to_string(),
         })
     }
 

@@ -101,9 +101,10 @@ async fn run_postgres_schema_setup(cleanup_mode: bool) -> Result<(), Box<dyn std
 
 #[cfg(feature = "s3")]
 async fn run_list_s3_sqlite_objects() -> Result<(), Box<dyn std::error::Error>> {
-    let endpoint =
-        env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| DEFAULT_S3_ENDPOINT.to_string());
-    let region = env::var("PGQRS_S3_REGION").unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
+    let endpoint = env::var("AWS_ENDPOINT_URL").unwrap_or_else(|_| DEFAULT_S3_ENDPOINT.to_string());
+    let region = env::var("AWS_REGION")
+        .or_else(|_| env::var("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
     let bucket = env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
     let access_key = env::var("AWS_ACCESS_KEY_ID")
         .ok()

@@ -8,7 +8,7 @@ use chrono::Utc;
 use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore};
 use pgqrs::store::s3::DurabilityMode;
 use pgqrs::store::AnyStore;
-use pgqrs::types::{NewQueueMessage, NewQueueRecord};
+use pgqrs::types::NewQueueMessage;
 use pgqrs::Store;
 use std::env;
 use std::io::{Read, Write};
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 fn endpoint_host_port() -> (String, u16) {
     let endpoint =
-        std::env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| "http://localhost:4566".to_string());
+        std::env::var("AWS_ENDPOINT_URL").unwrap_or_else(|_| "http://localhost:4566".to_string());
     let without_scheme = endpoint
         .strip_prefix("http://")
         .or_else(|| endpoint.strip_prefix("https://"))
@@ -69,11 +69,13 @@ fn localstack_s3_health_endpoint_is_reachable() {
 }
 
 fn s3_endpoint() -> String {
-    env::var("PGQRS_S3_ENDPOINT").unwrap_or_else(|_| "http://localhost:4566".to_string())
+    env::var("AWS_ENDPOINT_URL").unwrap_or_else(|_| "http://localhost:4566".to_string())
 }
 
 fn s3_region() -> String {
-    env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string())
+    env::var("AWS_REGION")
+        .or_else(|_| env::var("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|_| "us-east-1".to_string())
 }
 
 fn s3_bucket() -> String {
@@ -106,13 +108,6 @@ async fn create_s3_store_for_test(schema: &str, mode: DurabilityMode) -> AnyStor
 fn store_mode(store: &AnyStore) -> DurabilityMode {
     match store {
         AnyStore::S3(store) => store.mode(),
-        _ => panic!("Expected AnyStore::S3 for s3 tests"),
-    }
-}
-
-async fn s3_refresh_store(store: &mut AnyStore) -> pgqrs::error::Result<()> {
-    match store {
-        AnyStore::S3(store) => store.refresh().await,
         _ => panic!("Expected AnyStore::S3 for s3 tests"),
     }
 }
@@ -163,10 +158,7 @@ async fn delete_key(client: &Client, bucket: &str, key: &str) {
 }
 
 fn parse_s3_bucket_key(dsn: &str) -> (String, String) {
-    let full = dsn
-        .strip_prefix("s3://")
-        .or_else(|| dsn.strip_prefix("s3:"))
-        .unwrap_or(dsn);
+    let full = dsn.strip_prefix("s3://").unwrap_or(dsn);
     let mut parts = full.splitn(2, '/');
     let bucket = parts.next().unwrap_or_default().trim().to_string();
     let key = parts.next().unwrap_or_default().trim().to_string();
@@ -192,196 +184,6 @@ async fn wait_for_head_object(client: &Client, bucket: &str, key: &str) -> bool 
 
 mod tables_tests {
     use super::*;
-
-    #[tokio::test]
-    async fn tables_sqlite_queue_insert_and_get() {
-        let mut store =
-            create_s3_store_for_test("tables_sqlite_queue_insert_and_get", DurabilityMode::Local)
-                .await;
-
-        let inserted = pgqrs::tables(&store)
-            .queues()
-            .insert(NewQueueRecord {
-                queue_name: "jobs".to_string(),
-            })
-            .await
-            .expect("queue insert should succeed");
-
-        let pre_sync_get = pgqrs::tables(&store).queues().get(inserted.id).await;
-        assert!(
-            pre_sync_get.is_err(),
-            "read store should not see write-side queue before sync"
-        );
-
-        s3_sync_store(&mut store)
-            .await
-            .expect("sync should succeed");
-
-        let fetched = pgqrs::tables(&store)
-            .queues()
-            .get(inserted.id)
-            .await
-            .expect("queue get should succeed");
-        assert_eq!(fetched.queue_name, "jobs");
-    }
-
-    #[tokio::test]
-    async fn tables_sqlite_message_insert_and_count() {
-        let mut store = create_s3_store_for_test(
-            "tables_sqlite_message_insert_and_count",
-            DurabilityMode::Local,
-        )
-        .await;
-
-        let queue = pgqrs::tables(&store)
-            .queues()
-            .insert(NewQueueRecord {
-                queue_name: "jobs".to_string(),
-            })
-            .await
-            .expect("queue insert should succeed");
-
-        let now = Utc::now();
-        let inserted = pgqrs::tables(&store)
-            .messages()
-            .insert(NewQueueMessage {
-                queue_id: queue.id,
-                payload: serde_json::json!({ "kind": "basic" }),
-                read_ct: 0,
-                enqueued_at: now,
-                vt: now,
-                producer_worker_id: None,
-                consumer_worker_id: None,
-            })
-            .await
-            .expect("message insert should succeed");
-
-        assert_eq!(inserted.queue_id, queue.id);
-        assert!(
-            pgqrs::tables(&store)
-                .messages()
-                .count()
-                .await
-                .is_err(),
-            "read-side count should fail before explicit sync/refresh because read store is not bootstrapped"
-        );
-        s3_sync_store(&mut store)
-            .await
-            .expect("sync should succeed");
-        assert_eq!(
-            pgqrs::tables(&store)
-                .messages()
-                .count()
-                .await
-                .expect("count should succeed"),
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn syncstore_normal_flow_with_explicit_refresh_calls() {
-        let base_store = create_s3_store_for_test(
-            "syncstore_normal_flow_with_explicit_refresh_calls",
-            DurabilityMode::Local,
-        )
-        .await;
-        let mut sync_store = base_store.clone();
-        let queue_name = "jobs";
-
-        pgqrs::admin(&sync_store)
-            .create_queue(queue_name)
-            .await
-            .expect("queue insert should succeed");
-
-        let producer_worker = pgqrs::producer("test-host", 9201, queue_name)
-            .create(&sync_store)
-            .await
-            .expect("producer worker create should succeed");
-
-        let consumer_worker = pgqrs::consumer("test-host", 9202, queue_name)
-            .create(&sync_store)
-            .await
-            .expect("consumer worker create should succeed");
-
-        // App chooses to refresh before doing read-side operations.
-        s3_refresh_store(&mut sync_store)
-            .await
-            .expect("pre-run refresh should succeed");
-        s3_sync_store(&mut sync_store)
-            .await
-            .expect("pre-run sync should seed remote state");
-
-        pgqrs::enqueue()
-            .message(&serde_json::json!({ "job": "snapshot-doc-test" }))
-            .worker(&producer_worker)
-            .execute(&sync_store)
-            .await
-            .expect("enqueue should succeed");
-
-        let before_sync_count = pgqrs::tables(&sync_store)
-            .messages()
-            .count()
-            .await
-            .expect("read-side count should succeed against the stale local read store");
-        assert_eq!(
-            before_sync_count, 0,
-            "read-side should remain stale before explicit sync/refresh"
-        );
-        let mut follower_cfg = base_store.config().clone();
-        follower_cfg.s3.mode = DurabilityMode::Local;
-        let mut follower_store = pgqrs::connect_with_config(&follower_cfg)
-            .await
-            .expect("follower sync store should open from config");
-        s3_snapshot_store(&mut follower_store)
-            .await
-            .expect("follower snapshot should succeed");
-        let follower_before = pgqrs::tables(&follower_store)
-            .messages()
-            .count()
-            .await
-            .expect("follower pre-sync count should not fail");
-        assert_eq!(
-            follower_before, 0,
-            "remote object should still be unchanged before sync"
-        );
-
-        s3_sync_store(&mut sync_store)
-            .await
-            .expect("sync should succeed");
-
-        s3_refresh_store(&mut sync_store)
-            .await
-            .expect("post-sync refresh should succeed");
-
-        let after_sync_count = pgqrs::tables(&sync_store)
-            .messages()
-            .count()
-            .await
-            .expect("post-sync count should not fail");
-        assert_eq!(
-            after_sync_count, 1,
-            "read-side count should be one after sync"
-        );
-        s3_snapshot_store(&mut follower_store)
-            .await
-            .expect("follower snapshot should succeed");
-        let follower_after = pgqrs::tables(&follower_store)
-            .messages()
-            .count()
-            .await
-            .expect("follower post-sync count should not fail");
-        assert_eq!(
-            follower_after, 1,
-            "remote object should reflect synced message"
-        );
-
-        let after = pgqrs::dequeue()
-            .worker(&consumer_worker)
-            .fetch_all(&sync_store)
-            .await
-            .expect("post-refresh dequeue should not fail");
-        assert_eq!(after.len(), 1, "dequeue should return synced message");
-    }
 
     #[tokio::test]
     async fn consistentdb_normal_flow_without_explicit_sync_or_refresh() {
@@ -524,7 +326,7 @@ mod tables_tests {
     }
 }
 
-mod snapshot_bootstrap {
+mod snapshot_db_tests {
     use super::*;
 
     #[tokio::test]
@@ -722,12 +524,16 @@ mod snapshot_bootstrap {
 
         delete_key(&client, &bucket, &key).await;
 
+        pgqrs::admin(&seed_store)
+            .create_queue("recreated")
+            .await
+            .expect("local mutation after remote delete should succeed");
         s3_sync_store(&mut seed_store)
             .await
-            .expect("seed sync should recreate missing remote state");
+            .expect("dirty sync should recreate missing remote state");
         assert!(
             wait_for_head_object(&client, &bucket, &key).await,
-            "sync should recreate missing state object"
+            "dirty sync should recreate missing state object"
         );
     }
 
@@ -743,6 +549,526 @@ mod snapshot_bootstrap {
         assert!(
             result.is_err(),
             "connect or bootstrap should fail for invalid S3 DSN"
+        );
+    }
+
+    fn cache_dir_for_dsn(dsn: &str) -> std::path::PathBuf {
+        let bootstrap_dsn = pgqrs::store::s3::S3Store::sqlite_cache_dsn_from_s3_dsn(dsn)
+            .expect("cache dsn should be derivable");
+        let path_str = bootstrap_dsn
+            .strip_prefix("sqlite://")
+            .and_then(|s| s.strip_suffix("?mode=rwc"))
+            .expect("cache dsn should be sqlite://...?... format");
+        std::path::Path::new(path_str)
+            .parent()
+            .expect("bootstrap sqlite path should have parent")
+            .to_path_buf()
+    }
+
+    fn non_bootstrap_sqlite_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut files = std::fs::read_dir(dir)
+            .expect("cache dir should exist")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "sqlite")
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name != "bootstrap.sqlite")
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        files
+    }
+
+    #[tokio::test]
+    async fn given_matching_local_and_remote_etag_when_snapshot_then_returns_without_rewrite() {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_matching_etag_is_idempotent",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish initial remote state");
+
+        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
+        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        assert_eq!(
+            revision_files.len(),
+            1,
+            "expected exactly one revision sqlite file after initial sync"
+        );
+        let revision_path = &revision_files[0];
+        let before_modified = std::fs::metadata(revision_path)
+            .expect("revision file should exist")
+            .modified()
+            .expect("revision mtime should be readable");
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        s3_snapshot_store(&mut store)
+            .await
+            .expect("snapshot with matching etag should succeed");
+
+        let after_files = non_bootstrap_sqlite_files(&cache_dir);
+        assert_eq!(
+            after_files.len(),
+            1,
+            "snapshot should not materialize a new revision file when etag matches"
+        );
+        let after_modified = std::fs::metadata(&after_files[0])
+            .expect("revision file should still exist")
+            .modified()
+            .expect("revision mtime should be readable");
+        assert_eq!(
+            before_modified, after_modified,
+            "snapshot should not rewrite the local revision file when etag matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_dirty_local_state_when_snapshot_then_returns_conflict() {
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_dirty_snapshot_conflicts",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("dirty")
+            .await
+            .expect("queue creation should succeed");
+
+        let err = s3_snapshot_store(&mut store)
+            .await
+            .expect_err("snapshot should fail when local state is dirty");
+        assert!(
+            matches!(err, pgqrs::error::Error::Conflict { .. }),
+            "expected Conflict for dirty snapshot, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_clean_local_state_when_sync_then_returns_without_remote_change() {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store =
+            create_s3_store_for_test("snapshot_db_clean_sync_is_noop", DurabilityMode::Local).await;
+
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
+        let before = client
+            .head_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .expect("remote state should exist after initial sync")
+            .e_tag()
+            .map(|etag| etag.to_string())
+            .unwrap_or_default();
+
+        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
+        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        assert_eq!(
+            revision_files.len(),
+            1,
+            "expected exactly one revision sqlite file after initial sync"
+        );
+        let revision_path = &revision_files[0];
+        let before_modified = std::fs::metadata(revision_path)
+            .expect("revision file should exist")
+            .modified()
+            .expect("revision mtime should be readable");
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        s3_sync_store(&mut store)
+            .await
+            .expect("clean sync should be a no-op");
+
+        let after = client
+            .head_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .expect("remote state should still exist after no-op sync")
+            .e_tag()
+            .map(|etag| etag.to_string())
+            .unwrap_or_default();
+        assert_eq!(before, after, "clean sync should not change remote etag");
+
+        let after_modified = std::fs::metadata(revision_path)
+            .expect("revision file should still exist")
+            .modified()
+            .expect("revision mtime should be readable");
+        assert_eq!(
+            before_modified, after_modified,
+            "clean sync should not rewrite the local revision file"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_deleted_remote_object_and_clean_local_state_when_sync_then_returns_without_recreating_remote_state(
+    ) {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_deleted_remote_clean_sync_stays_noop",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
+        delete_key(&client, &bucket, &key).await;
+
+        s3_sync_store(&mut store)
+            .await
+            .expect("clean sync should remain a no-op even when remote is missing");
+
+        assert!(
+            !wait_for_head_object(&client, &bucket, &key).await,
+            "clean sync should not recreate deleted remote state"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_dirty_local_state_when_sync_then_publishes_remote_state() {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store =
+            create_s3_store_for_test("snapshot_db_dirty_sync_publishes", DurabilityMode::Local)
+                .await;
+
+        pgqrs::admin(&store)
+            .create_queue("published")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish initial remote state");
+
+        let follower_config = store.config().clone();
+        let mut follower = pgqrs::connect_with_config(&follower_config)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("published")
+                .await
+                .expect("follower queue existence check should succeed"),
+            "dirty sync should publish queue to remote state"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_deleted_remote_object_and_dirty_local_state_when_sync_then_recreates_remote_state(
+    ) {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_deleted_remote_dirty_sync_recreates",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
+        delete_key(&client, &bucket, &key).await;
+
+        pgqrs::admin(&store)
+            .create_queue("recreated")
+            .await
+            .expect("local mutation after remote delete should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("dirty sync should recreate missing remote state");
+
+        assert!(
+            wait_for_head_object(&client, &bucket, &key).await,
+            "dirty sync should recreate deleted remote state"
+        );
+
+        let mut follower = pgqrs::connect_with_config(store.config())
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed after recreation");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("recreated")
+                .await
+                .expect("follower queue existence check should succeed"),
+            "recreated remote state should include latest dirty write"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_successful_sync_when_remote_head_is_checked_then_etag_advances_and_dirty_state_is_cleared(
+    ) {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_sync_advances_etag_and_clears_dirty",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("first")
+            .await
+            .expect("initial queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
+        let before = client
+            .head_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .expect("remote state should exist after initial sync")
+            .e_tag()
+            .map(|etag| etag.to_string())
+            .unwrap_or_default();
+
+        pgqrs::admin(&store)
+            .create_queue("second")
+            .await
+            .expect("second queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("dirty sync should publish updated remote state");
+
+        let after = client
+            .head_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .expect("remote state should exist after second sync")
+            .e_tag()
+            .map(|etag| etag.to_string())
+            .unwrap_or_default();
+        assert_ne!(before, after, "successful sync should advance remote etag");
+
+        s3_snapshot_store(&mut store)
+            .await
+            .expect("snapshot after successful sync should succeed once dirty state is cleared");
+    }
+
+    #[tokio::test]
+    async fn given_successful_sync_when_local_revision_is_reopened_then_latest_state_remains_queryable(
+    ) {
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_successful_sync_reopened_revision_queryable",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("queryable")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should reopen to the latest local revision");
+
+        assert!(
+            pgqrs::tables(&store)
+                .queues()
+                .exists("queryable")
+                .await
+                .expect("queue existence check should succeed after successful sync"),
+            "latest local revision should remain queryable after sync reopen"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_successful_sync_when_snapshot_follows_then_snapshot_returns_without_change() {
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_sync_then_snapshot_is_idempotent",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("stable")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish remote state");
+
+        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
+        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        assert_eq!(
+            revision_files.len(),
+            1,
+            "expected exactly one revision sqlite file after sync"
+        );
+        let revision_path = &revision_files[0];
+        let before_modified = std::fs::metadata(revision_path)
+            .expect("revision file should exist")
+            .modified()
+            .expect("revision mtime should be readable");
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        s3_snapshot_store(&mut store)
+            .await
+            .expect("snapshot after successful sync should be a no-op");
+
+        let after_files = non_bootstrap_sqlite_files(&cache_dir);
+        assert_eq!(
+            after_files.len(),
+            1,
+            "snapshot should not create a new revision file when sync already matches remote"
+        );
+        let after_modified = std::fs::metadata(&after_files[0])
+            .expect("revision file should still exist")
+            .modified()
+            .expect("revision mtime should be readable");
+        assert_eq!(
+            before_modified, after_modified,
+            "snapshot after successful sync should not rewrite local revision state"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_changed_remote_state_when_snapshot_then_latest_remote_data_is_visible_locally() {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut seed_store = create_s3_store_for_test(
+            "snapshot_db_refreshes_changed_remote_state",
+            DurabilityMode::Local,
+        )
+        .await;
+        pgqrs::admin(&seed_store)
+            .create_queue("first")
+            .await
+            .expect("seed queue should be created");
+        s3_sync_store(&mut seed_store)
+            .await
+            .expect("initial sync should succeed");
+
+        let follower_config = seed_store.config().clone();
+        let mut follower = pgqrs::connect_with_config(&follower_config)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("initial follower snapshot should succeed");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("first")
+                .await
+                .expect("follower queue existence check should succeed"),
+            "initial snapshot should load first queue"
+        );
+
+        pgqrs::admin(&seed_store)
+            .create_queue("second")
+            .await
+            .expect("second queue should be created");
+        s3_sync_store(&mut seed_store)
+            .await
+            .expect("second sync should publish changed remote state");
+
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("snapshot after remote change should succeed");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("second")
+                .await
+                .expect("follower queue existence check should succeed"),
+            "snapshot should refresh follower to latest remote state"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_missing_remote_object_when_snapshot_then_returns_not_found() {
+        let client = localstack_client().await;
+        let bucket = s3_bucket();
+        ensure_bucket(&client, &bucket).await;
+
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_missing_remote_returns_not_found",
+            DurabilityMode::Local,
+        )
+        .await;
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish initial remote state");
+
+        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
+        delete_key(&client, &bucket, &key).await;
+
+        let err = s3_snapshot_store(&mut store)
+            .await
+            .expect_err("snapshot should fail when remote object is missing");
+        assert!(
+            matches!(err, pgqrs::error::Error::NotFound { .. }),
+            "expected NotFound when remote object is missing, got: {err}"
         );
     }
 }
@@ -928,7 +1254,7 @@ mod consistent_db_tests {
             .expect("queue create should succeed");
 
         let follower_cfg = follower_base_store.config().clone();
-        let mut follower = pgqrs::connect_with_config(&follower_cfg)
+        let follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
         let bootstrap_err = follower
@@ -939,10 +1265,14 @@ mod consistent_db_tests {
             matches!(bootstrap_err, pgqrs::error::Error::Conflict { .. }),
             "follower bootstrap should surface conflict, got: {bootstrap_err}"
         );
-        s3_snapshot_store(&mut follower)
+
+        let mut restore_follower = pgqrs::connect_with_config(&follower_cfg)
+            .await
+            .expect("fresh follower should reopen cleanly after bootstrap conflict");
+        s3_snapshot_store(&mut restore_follower)
             .await
             .expect("follower snapshot should succeed as compatibility alias");
-        let queues = pgqrs::tables(&follower)
+        let queues = pgqrs::tables(&restore_follower)
             .queues()
             .exists("stable")
             .await

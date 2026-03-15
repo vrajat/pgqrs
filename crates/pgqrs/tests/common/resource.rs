@@ -254,8 +254,10 @@ impl S3FileResource {
             return Ok(());
         }
 
-        let region = std::env::var("PGQRS_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
-        let endpoint = std::env::var("PGQRS_S3_ENDPOINT").ok();
+        let region = std::env::var("AWS_REGION")
+            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|_| "us-east-1".to_string());
+        let endpoint = std::env::var("AWS_ENDPOINT_URL").ok();
         let access_key = std::env::var("AWS_ACCESS_KEY_ID")
             .ok()
             .filter(|v| !v.trim().is_empty());

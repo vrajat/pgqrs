@@ -191,30 +191,30 @@ endif
 test-localstack: start-localstack ## Run full test suite against LocalStack-backed S3 backend
 ifdef CI_LOCALSTACK_RUNNING
 	@echo "Running full test suite with CI LocalStack (S3 backend)"
-	PGQRS_S3_ENDPOINT="$${PGQRS_S3_ENDPOINT:-http://localhost:4566}" \
-	PGQRS_S3_REGION="$${PGQRS_S3_REGION:-$(LOCALSTACK_REGION)}" \
+	AWS_ENDPOINT_URL="$${AWS_ENDPOINT_URL:-http://localhost:4566}" \
+	AWS_REGION="$${AWS_REGION:-$(LOCALSTACK_REGION)}" \
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
 	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"
 	@echo "Listing sqlite objects in LocalStack after test run"
-	PGQRS_S3_ENDPOINT="$${PGQRS_S3_ENDPOINT:-http://localhost:4566}" \
-	PGQRS_S3_REGION="$${PGQRS_S3_REGION:-$(LOCALSTACK_REGION)}" \
+	AWS_ENDPOINT_URL="$${AWS_ENDPOINT_URL:-http://localhost:4566}" \
+	AWS_REGION="$${AWS_REGION:-$(LOCALSTACK_REGION)}" \
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
 	cargo run -p pgqrs --bin setup_test_schemas --no-default-features --features s3 -- --list-s3-sqlite
 else
 	@echo "Running full test suite with local LocalStack (S3 backend)"
-	@PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
-	PGQRS_S3_REGION="$(LOCALSTACK_REGION)" \
+	@AWS_ENDPOINT_URL="http://localhost:$(LOCALSTACK_PORT)" \
+	AWS_REGION="$(LOCALSTACK_REGION)" \
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \
 	$(MAKE) test PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"; \
 	test_status=$$?; \
-	PGQRS_S3_ENDPOINT="http://localhost:$(LOCALSTACK_PORT)" \
-	PGQRS_S3_REGION="$(LOCALSTACK_REGION)" \
+	AWS_ENDPOINT_URL="http://localhost:$(LOCALSTACK_PORT)" \
+	AWS_REGION="$(LOCALSTACK_REGION)" \
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \

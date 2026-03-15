@@ -4,8 +4,6 @@ use crate::store::s3::snapshot::SnapshotDb;
 use crate::store::s3::{StoreOpFuture, SyncDb};
 use crate::store::{ConcurrencyModel, Store};
 use async_trait::async_trait;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// SyncDb variant that enforces durable writes.
 ///
@@ -13,7 +11,7 @@ use tokio::sync::RwLock;
 /// runs `sync()+refresh()` before returning.
 #[derive(Clone)]
 pub struct ConsistentDb {
-    inner: Arc<RwLock<SnapshotDb>>,
+    inner: SnapshotDb,
     concurrency_model: ConcurrencyModel,
 }
 
@@ -23,7 +21,7 @@ impl ConsistentDb {
         let concurrency_model = snapshot.concurrency_model();
 
         Ok(Self {
-            inner: Arc::new(RwLock::new(snapshot)),
+            inner: snapshot,
             concurrency_model,
         })
     }
@@ -32,7 +30,7 @@ impl ConsistentDb {
 #[async_trait]
 impl SyncDb for ConsistentDb {
     fn config(&self) -> &Config {
-        self.inner.blocking_read().config()
+        self.inner.config()
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
@@ -43,16 +41,14 @@ impl SyncDb for ConsistentDb {
     where
         F: FnOnce(&dyn Store) -> R + Send,
     {
-        let guard = self.inner.blocking_read();
-        guard.with_read_ref(f)
+        self.inner.with_read_ref(f)
     }
 
     fn with_write_ref<R, F>(&self, f: F) -> R
     where
         F: FnOnce(&dyn Store) -> R + Send,
     {
-        let guard = self.inner.blocking_write();
-        guard.with_write_ref(f)
+        self.inner.with_write_ref(f)
     }
 
     async fn with_read<R, F>(&self, f: F) -> Result<R>
@@ -60,8 +56,7 @@ impl SyncDb for ConsistentDb {
         R: Send,
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
-        let guard = self.inner.read().await;
-        guard.with_read(f).await
+        self.inner.with_read(f).await
     }
 
     async fn with_write<R, F>(&self, f: F) -> Result<R>
@@ -69,25 +64,23 @@ impl SyncDb for ConsistentDb {
         R: Send,
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
-        let mut guard = self.inner.write().await;
-        let out = guard.with_write(f).await?;
-        guard.sync().await?;
-        guard.refresh().await?;
+        let _write_guard = self.inner.write_gate().lock().await;
+        let out = self.inner.with_write(f).await?;
+        let mut inner = self.inner.clone();
+        SyncDb::sync(&mut inner).await?;
+        SyncDb::refresh(&mut inner).await?;
         Ok(out)
     }
 
     async fn snapshot(&mut self) -> Result<()> {
-        let mut guard = self.inner.write().await;
-        guard.snapshot().await
+        SyncDb::snapshot(&mut self.inner).await
     }
 
     async fn refresh(&mut self) -> Result<()> {
-        let mut guard = self.inner.write().await;
-        guard.refresh().await
+        SyncDb::refresh(&mut self.inner).await
     }
 
     async fn sync(&mut self) -> Result<()> {
-        let mut guard = self.inner.write().await;
-        guard.sync().await
+        SyncDb::sync(&mut self.inner).await
     }
 }

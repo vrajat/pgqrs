@@ -2596,6 +2596,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turso",
+ "url",
  "uuid",
 ]
 

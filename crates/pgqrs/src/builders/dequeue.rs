@@ -56,7 +56,19 @@ impl<'a> Poller<'a> {
         }
 
         // Consumer-only states: Ready -> Polling
-        self.consumer.poll().await?;
+        if let Err(e) = self.consumer.poll().await {
+            if matches!(
+                &e,
+                Error::InvalidStateTransition { from, to, .. }
+                    if from == "interrupted" && to == "polling"
+            ) {
+                self.consumer.suspend().await?;
+                return Err(Error::Suspended {
+                    reason: "worker interrupted".to_string(),
+                });
+            }
+            return Err(e);
+        }
 
         let config = self.consumer.store().config();
 

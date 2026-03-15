@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use url::Url;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -63,7 +62,7 @@ pub enum DurabilityMode {
 
 #[derive(Clone)]
 enum DurabilityStore {
-    Local { db: Arc<RwLock<snapshot::SnapshotDb>> },
+    Local(snapshot::SnapshotDb),
     Durable(consistent::ConsistentDb),
 }
 
@@ -71,14 +70,14 @@ enum DurabilityStore {
 impl SyncDb for DurabilityStore {
     fn config(&self) -> &Config {
         match self {
-            Self::Local { db } => db.blocking_read().config(),
+            Self::Local(db) => db.config(),
             Self::Durable(db) => db.config(),
         }
     }
 
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
         match self {
-            Self::Local { .. } => crate::store::ConcurrencyModel::SingleProcess,
+            Self::Local(db) => db.concurrency_model(),
             Self::Durable(db) => db.concurrency_model(),
         }
     }
@@ -88,7 +87,7 @@ impl SyncDb for DurabilityStore {
         F: FnOnce(&dyn Store) -> R + Send,
     {
         match self {
-            Self::Local { db, .. } => db.blocking_read().with_read_ref(f),
+            Self::Local(db) => db.with_read_ref(f),
             Self::Durable(db) => db.with_read_ref(f),
         }
     }
@@ -98,7 +97,7 @@ impl SyncDb for DurabilityStore {
         F: FnOnce(&dyn Store) -> R + Send,
     {
         match self {
-            Self::Local { db, .. } => db.blocking_write().with_write_ref(f),
+            Self::Local(db) => db.with_write_ref(f),
             Self::Durable(db) => db.with_write_ref(f),
         }
     }
@@ -109,7 +108,7 @@ impl SyncDb for DurabilityStore {
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
         match self {
-            Self::Local { db, .. } => db.read().await.with_read(f).await,
+            Self::Local(db) => db.with_read(f).await,
             Self::Durable(db) => db.with_read(f).await,
         }
     }
@@ -120,28 +119,28 @@ impl SyncDb for DurabilityStore {
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
     {
         match self {
-            Self::Local { db, .. } => db.write().await.with_write(f).await,
+            Self::Local(db) => db.with_write(f).await,
             Self::Durable(db) => db.with_write(f).await,
         }
     }
 
     async fn snapshot(&mut self) -> Result<()> {
         match self {
-            Self::Local { db, .. } => db.write().await.snapshot().await,
+            Self::Local(db) => db.snapshot().await,
             Self::Durable(db) => db.snapshot().await,
         }
     }
 
     async fn refresh(&mut self) -> Result<()> {
         match self {
-            Self::Local { db, .. } => db.write().await.refresh().await,
+            Self::Local(db) => db.refresh().await,
             Self::Durable(db) => db.refresh().await,
         }
     }
 
     async fn sync(&mut self) -> Result<()> {
         match self {
-            Self::Local { db, .. } => db.write().await.sync().await,
+            Self::Local(db) => db.sync().await,
             Self::Durable(db) => db.sync().await,
         }
     }
@@ -170,9 +169,9 @@ impl S3Store {
     pub async fn new(config: &Config) -> Result<Self> {
         let mode = config.s3.mode;
         let db = match mode {
-            DurabilityMode::Local => DurabilityStore::Local {
-                db: Arc::new(RwLock::new(snapshot::SnapshotDb::new(config).await?)),
-            },
+            DurabilityMode::Local => {
+                DurabilityStore::Local(snapshot::SnapshotDb::new(config).await?)
+            }
             DurabilityMode::Durable => {
                 DurabilityStore::Durable(consistent::ConsistentDb::new(config).await?)
             }
@@ -316,7 +315,7 @@ impl Store for S3Store {
             .await?;
         Ok(Box::new(S3Admin {
             db: self.db.clone(),
-            inner: Arc::from(inner_admin),
+            worker_record: inner_admin.worker_record().clone(),
         }))
     }
 
@@ -331,7 +330,7 @@ impl Store for S3Store {
             .await?;
         Ok(Box::new(S3Admin {
             db: self.db.clone(),
-            inner: Arc::from(inner_admin),
+            worker_record: inner_admin.worker_record().clone(),
         }))
     }
 
@@ -510,7 +509,7 @@ where
     DB: SyncDb,
 {
     db: DB,
-    inner: Arc<dyn Admin>,
+    worker_record: crate::types::WorkerRecord,
 }
 
 #[async_trait]
@@ -519,48 +518,50 @@ where
     DB: SyncDb,
 {
     fn worker_record(&self) -> &crate::types::WorkerRecord {
-        self.inner.worker_record()
+        &self.worker_record
     }
 
     async fn status(&self) -> crate::error::Result<crate::types::WorkerStatus> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_read(|_| Box::pin(async move { inner.status().await }))
+            .with_read(|store| Box::pin(async move { store.workers().get_status(worker_id).await }))
             .await
     }
 
     async fn suspend(&self) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_write(|_| Box::pin(async move { inner.suspend().await }))
+            .with_write(|store| Box::pin(async move { store.workers().suspend(worker_id).await }))
             .await
     }
 
     async fn resume(&self) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_write(|_| Box::pin(async move { inner.resume().await }))
+            .with_write(|store| Box::pin(async move { store.workers().resume(worker_id).await }))
             .await
     }
 
     async fn shutdown(&self) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_write(|_| Box::pin(async move { inner.shutdown().await }))
+            .with_write(|store| Box::pin(async move { store.workers().shutdown(worker_id).await }))
             .await
     }
 
     async fn heartbeat(&self) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_write(|_| Box::pin(async move { inner.heartbeat().await }))
+            .with_write(|store| Box::pin(async move { store.workers().heartbeat(worker_id).await }))
             .await
     }
 
     async fn is_healthy(&self, max_age: chrono::Duration) -> crate::error::Result<bool> {
-        let inner = self.inner.clone();
+        let worker_id = self.worker_record.id;
         self.db
-            .with_read(|_| Box::pin(async move { inner.is_healthy(max_age).await }))
+            .with_read(|store| {
+                Box::pin(async move { store.workers().is_healthy(worker_id, max_age).await })
+            })
             .await
     }
 }
@@ -633,9 +634,14 @@ where
     DB: SyncDb,
 {
     async fn verify(&self) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_read(|_| Box::pin(async move { inner.verify().await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.verify().await
+                })
+            })
             .await
     }
 
@@ -643,47 +649,77 @@ where
         &self,
         queue_info: &crate::types::QueueRecord,
     ) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         let queue_info = queue_info.clone();
         self.db
-            .with_write(|_| Box::pin(async move { inner.delete_queue(&queue_info).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.delete_queue(&queue_info).await
+                })
+            })
             .await
     }
 
     async fn purge_queue(&self, name: &str) -> crate::error::Result<()> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         let name = name.to_string();
         self.db
-            .with_write(|_| Box::pin(async move { inner.purge_queue(&name).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.purge_queue(&name).await
+                })
+            })
             .await
     }
 
     async fn dlq(&self) -> crate::error::Result<Vec<i64>> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_write(|_| Box::pin(async move { inner.dlq().await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.dlq().await
+                })
+            })
             .await
     }
 
     async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::stats::QueueMetrics> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         let name = name.to_string();
         self.db
-            .with_read(|_| Box::pin(async move { inner.queue_metrics(&name).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.queue_metrics(&name).await
+                })
+            })
             .await
     }
 
     async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::stats::QueueMetrics>> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_read(|_| Box::pin(async move { inner.all_queues_metrics().await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.all_queues_metrics().await
+                })
+            })
             .await
     }
 
     async fn system_stats(&self) -> crate::error::Result<crate::stats::SystemStats> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_read(|_| Box::pin(async move { inner.system_stats().await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.system_stats().await
+                })
+            })
             .await
     }
 
@@ -692,11 +728,12 @@ where
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
     ) -> crate::error::Result<Vec<crate::stats::WorkerHealthStats>> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_read(|_| {
+            .with_write(|store| {
                 Box::pin(async move {
-                    inner
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin
                         .worker_health_stats(heartbeat_timeout, group_by_queue)
                         .await
                 })
@@ -708,17 +745,27 @@ where
         &self,
         queue_name: &str,
     ) -> crate::error::Result<crate::stats::WorkerStats> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         let queue_name = queue_name.to_string();
         self.db
-            .with_read(|_| Box::pin(async move { inner.worker_stats(&queue_name).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.worker_stats(&queue_name).await
+                })
+            })
             .await
     }
 
     async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_write(|_| Box::pin(async move { inner.delete_worker(worker_id).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.delete_worker(worker_id).await
+                })
+            })
             .await
     }
 
@@ -726,9 +773,14 @@ where
         &self,
         worker_id: i64,
     ) -> crate::error::Result<Vec<crate::types::QueueMessage>> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_read(|_| Box::pin(async move { inner.get_worker_messages(worker_id).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.get_worker_messages(worker_id).await
+                })
+            })
             .await
     }
 
@@ -737,41 +789,57 @@ where
         queue_id: i64,
         older_than: Option<chrono::Duration>,
     ) -> crate::error::Result<u64> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_write(|_| {
-                Box::pin(async move { inner.reclaim_messages(queue_id, older_than).await })
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.reclaim_messages(queue_id, older_than).await
+                })
             })
             .await
     }
 
     async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_write(|_| Box::pin(async move { inner.purge_old_workers(older_than).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.purge_old_workers(older_than).await
+                })
+            })
             .await
     }
 
     async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let inner = self.inner.clone();
+        let config = self.db.config().clone();
         self.db
-            .with_write(|_| Box::pin(async move { inner.release_worker_messages(worker_id).await }))
+            .with_write(|store| {
+                Box::pin(async move {
+                    let admin = store.admin_ephemeral(&config).await?;
+                    admin.release_worker_messages(worker_id).await
+                })
+            })
             .await
     }
 }
 
 fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
-    let full = dsn
-        .strip_prefix("s3://")
-        .or_else(|| dsn.strip_prefix("s3:"))
-        .ok_or_else(|| Error::InvalidConfig {
-            field: "dsn".to_string(),
-            message: format!("Invalid S3 DSN format: {}", dsn),
-        })?;
+    let url = Url::parse(dsn).map_err(|e| Error::InvalidConfig {
+        field: "dsn".to_string(),
+        message: format!("Invalid S3 DSN format: {dsn} ({e})"),
+    })?;
 
-    let mut parts = full.splitn(2, '/');
-    let bucket = parts.next().unwrap_or_default().trim();
-    let key = parts.next().unwrap_or_default().trim();
+    if url.scheme() != "s3" {
+        return Err(Error::InvalidConfig {
+            field: "dsn".to_string(),
+            message: format!("Invalid S3 DSN scheme '{}': {}", url.scheme(), dsn),
+        });
+    }
+
+    let bucket = url.host_str().unwrap_or_default().trim();
+    let key = url.path().trim_start_matches('/').trim();
 
     if bucket.is_empty() {
         return Err(Error::InvalidConfig {
@@ -786,7 +854,7 @@ fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
         });
     }
 
-    Ok((bucket.to_string(), key.to_string()))
+    Ok((bucket.to_owned(), key.to_owned()))
 }
 
 fn cache_prefix() -> String {
@@ -819,6 +887,14 @@ fn sanitize_cache_component(input: &str) -> String {
 }
 
 fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
+    let dir = s3_local_cache_dir_for_dsn(dsn)?;
+    Ok(format!(
+        "sqlite://{}?mode=rwc",
+        dir.join("bootstrap.sqlite").to_string_lossy()
+    ))
+}
+
+pub(crate) fn s3_local_cache_dir_for_dsn(dsn: &str) -> Result<PathBuf> {
     let (bucket, key) = parse_s3_bucket_and_key(dsn)?;
 
     let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
@@ -838,7 +914,12 @@ fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
         path = path.join(sanitize_cache_component(segment));
     }
 
-    Ok(format!("sqlite://{}?mode=rwc", path.to_string_lossy()))
+    std::fs::create_dir_all(&path).map_err(|e| Error::InvalidConfig {
+        field: "PGQRS_S3_LOCAL_CACHE_DIR".to_string(),
+        message: format!("Failed to create S3 cache path {}: {}", path.display(), e),
+    })?;
+
+    Ok(path)
 }
 
 /// Map an `s3://...` DSN to a deterministic local cache DSN.
@@ -848,7 +929,32 @@ pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::sqlite_cache_dsn_from_s3_dsn;
+    use super::{parse_s3_bucket_and_key, sqlite_cache_dsn_from_s3_dsn};
+
+    #[test]
+    fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
+        let (bucket, key) = parse_s3_bucket_and_key("s3://bucket/path/to/queue.db").unwrap();
+        assert_eq!(bucket, "bucket");
+        assert_eq!(key, "path/to/queue.db");
+    }
+
+    #[test]
+    fn parse_s3_bucket_and_key_rejects_missing_bucket() {
+        let err = parse_s3_bucket_and_key("s3:///queue.db").unwrap_err();
+        assert!(err.to_string().contains("missing bucket"));
+    }
+
+    #[test]
+    fn parse_s3_bucket_and_key_rejects_missing_key() {
+        let err = parse_s3_bucket_and_key("s3://bucket").unwrap_err();
+        assert!(err.to_string().contains("missing object key"));
+    }
+
+    #[test]
+    fn parse_s3_bucket_and_key_rejects_wrong_scheme() {
+        let err = parse_s3_bucket_and_key("sqlite://bucket/queue.db").unwrap_err();
+        assert!(err.to_string().contains("Invalid S3 DSN"));
+    }
 
     #[test]
     fn sqlite_cache_mapping_is_deterministic() {
@@ -861,6 +967,6 @@ mod tests {
     #[test]
     fn sqlite_cache_mapping_rejects_invalid_input() {
         let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
-        assert!(err.to_string().contains("Invalid S3 DSN format"));
+        assert!(err.to_string().contains("Invalid S3 DSN"));
     }
 }
