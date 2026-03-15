@@ -14,19 +14,16 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 pub struct ConsistentDb {
     inner: Arc<RwLock<SnapshotDb>>,
-    config: Config,
     concurrency_model: ConcurrencyModel,
 }
 
 impl ConsistentDb {
     pub async fn new(config: &Config) -> Result<Self> {
         let snapshot = SnapshotDb::new(config).await?;
-        let config = snapshot.config().clone();
         let concurrency_model = snapshot.concurrency_model();
 
         Ok(Self {
             inner: Arc::new(RwLock::new(snapshot)),
-            config,
             concurrency_model,
         })
     }
@@ -35,7 +32,7 @@ impl ConsistentDb {
 #[async_trait]
 impl SyncDb for ConsistentDb {
     fn config(&self) -> &Config {
-        &self.config
+        self.inner.blocking_read().config()
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {

@@ -63,10 +63,7 @@ pub enum DurabilityMode {
 
 #[derive(Clone)]
 enum DurabilityStore {
-    Local {
-        db: Arc<RwLock<snapshot::SnapshotDb>>,
-        config: Config,
-    },
+    Local { db: Arc<RwLock<snapshot::SnapshotDb>> },
     Durable(consistent::ConsistentDb),
 }
 
@@ -74,7 +71,7 @@ enum DurabilityStore {
 impl SyncDb for DurabilityStore {
     fn config(&self) -> &Config {
         match self {
-            Self::Local { config, .. } => config,
+            Self::Local { db } => db.blocking_read().config(),
             Self::Durable(db) => db.config(),
         }
     }
@@ -155,7 +152,6 @@ impl SyncDb for DurabilityStore {
 pub struct S3Store {
     db: DurabilityStore,
     tables: Tables<DurabilityStore>,
-    config: Config,
     mode: DurabilityMode,
 }
 
@@ -176,19 +172,13 @@ impl S3Store {
         let db = match mode {
             DurabilityMode::Local => DurabilityStore::Local {
                 db: Arc::new(RwLock::new(snapshot::SnapshotDb::new(config).await?)),
-                config: config.clone(),
             },
             DurabilityMode::Durable => {
                 DurabilityStore::Durable(consistent::ConsistentDb::new(config).await?)
             }
         };
         let tables = Tables::new(db.clone());
-        Ok(Self {
-            db,
-            tables,
-            config: config.clone(),
-            mode,
-        })
+        Ok(Self { db, tables, mode })
     }
 
     /// Access the mode captured from configuration.
@@ -277,7 +267,7 @@ impl Store for S3Store {
     }
 
     fn config(&self) -> &Config {
-        &self.config
+        self.db.config()
     }
 
     fn queues(&self) -> &dyn QueueTable {
