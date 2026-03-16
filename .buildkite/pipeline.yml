@@ -1,6 +1,8 @@
 steps:
   - label: ":rust: format"
     key: "format"
+    agents:
+      queue: "rvpro"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
