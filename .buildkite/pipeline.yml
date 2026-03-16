@@ -1,8 +1,30 @@
 steps:
   - label: ":rust: format"
     key: "format"
+    plugins:
+      - cache#v1.8.1:
+          manifest:
+            - "Cargo.lock"
+          path:
+            - "/root/.cargo/registry"
+            - "/root/.cargo/git"
+            - "/buildkite/builds/*/*/*/pgqrs/target"
+          restore: file
+          save: file
+          key-extra: "cargo-deps"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest:
+            - ".buildkite/scripts/bootstrap.sh"
+          path:
+            - "/root/.cargo/bin"
+            - "/root/.local/bin"
+          restore: file
+          save: file
+          key-extra: "bootstrap-tools"
+          soft-fail: true
     command:
-      - ".buildkite/scripts/bootstrap.sh"
+      - ".buildkite/scripts/bootstrap.sh check"
       - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=$HOME/.local/bin/uv make check"
 
   # - label: ":postgresql: test postgres"

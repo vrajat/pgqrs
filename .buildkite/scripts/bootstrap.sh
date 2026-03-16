@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+MODE="${1:-full}"
+
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required on the Buildkite agent" >&2
   exit 1
@@ -23,6 +25,19 @@ if ! command -v rustfmt >/dev/null 2>&1; then
     echo "rustfmt is required and rustup is not available to install it" >&2
     exit 1
   fi
+fi
+
+if ! command -v cargo-clippy >/dev/null 2>&1; then
+  if command -v rustup >/dev/null 2>&1; then
+    rustup component add clippy
+  else
+    echo "clippy is required and rustup is not available to install it" >&2
+    exit 1
+  fi
+fi
+
+if [[ "${MODE}" == "check" ]]; then
+  exit 0
 fi
 
 if ! command -v cargo-nextest >/dev/null 2>&1; then
