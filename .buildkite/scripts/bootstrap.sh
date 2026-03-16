@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v curl >/dev/null 2>&1; then
+  echo "curl is required on the Buildkite agent" >&2
+  exit 1
+fi
+
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "cargo is required on the Buildkite agent" >&2
+  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  export PATH="${HOME}/.cargo/bin:${PATH}"
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo could not be installed on the Buildkite agent" >&2
   exit 1
 fi
 
