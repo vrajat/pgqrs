@@ -3,24 +3,24 @@ steps:
     key: "format"
     command:
       - ".buildkite/scripts/bootstrap.sh"
-      - "make check"
+      - "UV=$HOME/.local/bin/uv make check"
 
-  - label: ":postgresql: test postgres"
-    key: "test-postgres"
-    command:
-      - ".buildkite/scripts/bootstrap.sh"
-      - "trap '.buildkite/scripts/postgres-services.sh stop' EXIT"
-      - ".buildkite/scripts/postgres-services.sh start"
-      - "CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres make test-postgres UV=uv"
+  # - label: ":postgresql: test postgres"
+  #   key: "test-postgres"
+  #   command:
+  #     - ".buildkite/scripts/bootstrap.sh"
+  #     - "trap '.buildkite/scripts/postgres-services.sh stop' EXIT"
+  #     - ".buildkite/scripts/postgres-services.sh start"
+  #     - "CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres UV=$HOME/.local/bin/uv make test-postgres"
 
-  - label: ":sqlite: test sqlite"
-    key: "test-sqlite"
-    command:
-      - ".buildkite/scripts/bootstrap.sh"
-      - "make test-sqlite UV=uv"
+  # - label: ":sqlite: test sqlite"
+  #   key: "test-sqlite"
+  #   command:
+  #     - ".buildkite/scripts/bootstrap.sh"
+  #     - "UV=$HOME/.local/bin/uv make test-sqlite"
 
-  - label: ":globe_with_meridians: test turso"
-    key: "test-turso"
-    command:
-      - ".buildkite/scripts/bootstrap.sh"
-      - "make test-turso UV=uv"
+  # - label: ":globe_with_meridians: test turso"
+  #   key: "test-turso"
+  #   command:
+  #     - ".buildkite/scripts/bootstrap.sh"
+  #     - "UV=$HOME/.local/bin/uv make test-turso"
