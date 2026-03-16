@@ -3,25 +3,39 @@ steps:
     key: "format"
     plugins:
       - cache#v1.8.1:
-          manifest:
-            - "Cargo.lock"
-          path:
-            - "/root/.cargo/registry"
-            - "/root/.cargo/git"
-            - "/buildkite/builds/*/*/*/pgqrs/target"
+          manifest: "Cargo.lock"
+          path: "/root/.cargo/registry"
           restore: file
           save: file
-          key-extra: "cargo-deps"
+          key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
-          manifest:
-            - ".buildkite/scripts/bootstrap.sh"
-          path:
-            - "/root/.cargo/bin"
-            - "/root/.local/bin"
+          manifest: "Cargo.lock"
+          path: "/root/.cargo/git"
           restore: file
           save: file
-          key-extra: "bootstrap-tools"
+          key-extra: "cargo-git"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: "Cargo.lock"
+          path: "target"
+          restore: file
+          save: file
+          key-extra: "cargo-target"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: ".buildkite/scripts/bootstrap.sh"
+          path: "/root/.cargo/bin"
+          restore: file
+          save: file
+          key-extra: "cargo-bin"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: ".buildkite/scripts/bootstrap.sh"
+          path: "/root/.local/bin"
+          restore: file
+          save: file
+          key-extra: "local-bin"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh check"
