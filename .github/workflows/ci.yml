@@ -1,14 +1,16 @@
 
 name: CI
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+  # Disabled in favor of Buildkite CI. Kept for manual runs/reference.
+  # push:
+  #   branches:
+  #     - main
+  #   tags:
+  #     - 'v*'
+  # pull_request:
+  #   branches:
+  #     - main
 jobs:
   build:
     permissions:
