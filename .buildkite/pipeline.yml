@@ -46,7 +46,7 @@ steps:
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh check"
-      - "PATH=/Users/rajatvenkatesh/.cargo/bin:/Users/rajatvenkatesh/.local/bin:$PATH UV=/Users/rajatvenkatesh/.local/bin/uv make check"
+      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make check"
 
   # - label: ":postgresql: test postgres"
   #   key: "test-postgres"
@@ -54,7 +54,7 @@ steps:
   #     - ".buildkite/scripts/bootstrap.sh"
   #     - "trap '.buildkite/scripts/postgres-services.sh stop' EXIT"
   #     - ".buildkite/scripts/postgres-services.sh start"
-  #     - "PATH=/Users/rajatvenkatesh/.cargo/bin:/Users/rajatvenkatesh/.local/bin:$PATH CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres UV=/Users/rajatvenkatesh/.local/bin/uv make test-postgres"
+  #     - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres UV=uv make test-postgres"
 
   - label: ":sqlite: test sqlite"
     key: "test-sqlite"
@@ -103,10 +103,10 @@ steps:
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh"
-      - "PATH=/Users/rajatvenkatesh/.cargo/bin:/Users/rajatvenkatesh/.local/bin:$PATH UV=/Users/rajatvenkatesh/.local/bin/uv make test-sqlite"
+      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-sqlite"
 
   # - label: ":globe_with_meridians: test turso"
   #   key: "test-turso"
   #   command:
   #     - ".buildkite/scripts/bootstrap.sh"
-  #     - "PATH=/Users/rajatvenkatesh/.cargo/bin:/Users/rajatvenkatesh/.local/bin:$PATH UV=/Users/rajatvenkatesh/.local/bin/uv make test-turso"
+  #     - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-turso"
