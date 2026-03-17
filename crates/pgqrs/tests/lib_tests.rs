@@ -600,6 +600,8 @@ async fn test_referential_integrity_checks() {
     let sql = match common::current_backend() {
         #[cfg(feature = "postgres")]
         pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
+        #[cfg(feature = "s3")]
+        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
         #[cfg(feature = "sqlite")]
         pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
         #[cfg(feature = "turso")]

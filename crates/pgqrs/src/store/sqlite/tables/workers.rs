@@ -219,7 +219,7 @@ impl SqliteWorkerTable {
 
     async fn poll(&self, worker_id: i64) -> Result<()> {
         let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = $1 AND status IN ('ready', 'interrupted', 'polling')",
+            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = $1 AND status IN ('ready', 'polling')",
         )
         .bind(worker_id)
         .execute(&self.pool)
@@ -235,7 +235,7 @@ impl SqliteWorkerTable {
             return Err(crate::error::Error::InvalidStateTransition {
                 from: current_status.to_string(),
                 to: "polling".to_string(),
-                reason: "Worker must be Ready or Interrupted to start polling".to_string(),
+                reason: "Worker must be Ready to start polling".to_string(),
             });
         }
         Ok(())

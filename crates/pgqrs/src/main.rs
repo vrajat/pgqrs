@@ -245,7 +245,14 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     let config = Config::load_with_schema_options(cli.dsn, cli.schema, cli.config)
         .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
 
+    #[cfg(feature = "s3")]
+    let mut store = pgqrs::connect_with_config(&config).await?;
+    #[cfg(not(feature = "s3"))]
     let store = pgqrs::connect_with_config(&config).await?;
+    #[cfg(feature = "s3")]
+    if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
+        s3_store.snapshot().await?;
+    }
 
     let writer = match cli.format.to_lowercase().as_str() {
         "json" => OutputWriter::Json(JsonOutputWriter),

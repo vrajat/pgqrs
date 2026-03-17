@@ -483,14 +483,16 @@ impl crate::store::MessageTable for TursoMessageTable {
     }
 
     async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let now_str = format_turso_timestamp(&chrono::Utc::now());
         let count: i64 = crate::store::turso::query_scalar(
             r#"
             SELECT COUNT(*)
             FROM pgqrs_messages
-            WHERE queue_id = ? AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            WHERE queue_id = ? AND (vt IS NULL OR vt <= ?) AND consumer_worker_id IS NULL AND archived_at IS NULL
             "#,
         )
         .bind(queue_id)
+        .bind(now_str)
         .fetch_one(&self.db)
         .await?;
         Ok(count)

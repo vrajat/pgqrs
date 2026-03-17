@@ -16,6 +16,7 @@ Documented outcomes and discussions from significant code reviews.
 - [Database Abstraction Review](db_abstraction_review.md)
 - [SQLite Store Review](sqlite_store_review.md)
 - [Turso Store Review](turso_store_review.md)
+- [S3 Store Test Plan](s3_store_test_plan.md)
 
 ## Review Document Format
 

@@ -1,27 +1,25 @@
 #![cfg(feature = "turso")]
 
-use pgqrs::store::turso::TursoStore;
+use pgqrs::store::AnyStore;
 use pgqrs::{Config, Store};
 use uuid::Uuid;
 
-async fn create_test_store() -> (TursoStore, String) {
-    let db_name = format!("test_turso_{}.db", Uuid::new_v4());
-    let dir = std::env::temp_dir();
-    let path = dir.join(db_name);
-    let path_str = path.to_str().expect("Valid path");
-    let dsn = format!("turso://{}", path_str);
+mod common;
 
-    let config = Config::default();
-    let store = TursoStore::new(&dsn, &config)
+async fn create_test_store() -> (AnyStore, String) {
+    let dsn = common::get_test_dsn("turso_hardening").await;
+
+    let config = Config::from_dsn(&dsn);
+    let store = pgqrs::connect_with_config(&config)
         .await
-        .expect("Failed to create TursoStore");
+        .expect("Failed to create store");
 
     pgqrs::admin(&store)
         .install()
         .await
         .expect("Failed to install schema");
 
-    (store, path_str.to_string())
+    (store, dsn)
 }
 
 #[tokio::test]
@@ -61,7 +59,7 @@ async fn test_foreign_key_enforcement() {
 
 #[tokio::test]
 async fn test_migration_versioning() {
-    let (store, _path) = create_test_store().await;
+    let (store, dsn) = create_test_store().await;
 
     // Verify pgqrs_schema_version has entries
     let count = store
@@ -71,9 +69,8 @@ async fn test_migration_versioning() {
     assert!(count >= 5);
 
     // Create new store on SAME path, should not fail and not re-run (idempotent)
-    let dsn = format!("turso://{}", _path);
-    let config = Config::default();
-    let _store2 = TursoStore::new(&dsn, &config)
+    let config = Config::from_dsn(&dsn);
+    let _store2 = pgqrs::connect_with_config(&config)
         .await
         .expect("Should succeed reopening");
 

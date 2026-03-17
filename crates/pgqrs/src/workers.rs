@@ -141,22 +141,29 @@ impl Producer {
 
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
-        self.store.workers().suspend(self.worker_record.id).await
+        self.store.workers().suspend(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
-        self.store.workers().resume(self.worker_record.id).await
+        self.store.workers().resume(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Shut down this worker.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
-        self.store.workers().shutdown(self.worker_record.id).await
+        self.store.workers().shutdown(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.store.workers().heartbeat(self.worker_record.id).await
+        self.store
+            .workers()
+            .heartbeat(self.worker_record.id)
+            .await?;
+        Ok(())
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -198,7 +205,8 @@ impl Producer {
             consumer_worker_id: None,
         };
 
-        self.store.messages().insert(new_message).await
+        let msg = self.store.messages().insert(new_message).await?;
+        Ok(msg)
     }
 
     /// Enqueue multiple messages immediately.
@@ -240,7 +248,8 @@ impl Producer {
             consumer_worker_id: None,
         };
 
-        self.store.messages().insert(new_message).await
+        let msg = self.store.messages().insert(new_message).await?;
+        Ok(msg)
     }
 
     /// Enqueue multiple messages using an explicit time reference.
@@ -270,7 +279,8 @@ impl Producer {
             )
             .await?;
 
-        self.store.messages().get_by_ids(&ids).await
+        let msgs = self.store.messages().get_by_ids(&ids).await?;
+        Ok(msgs)
     }
 
     /// Replay an archived DLQ message back into the queue.
@@ -278,7 +288,8 @@ impl Producer {
         &self,
         archived_msg_id: i64,
     ) -> crate::error::Result<Option<QueueMessage>> {
-        self.store.messages().replay_dlq(archived_msg_id).await
+        let out = self.store.messages().replay_dlq(archived_msg_id).await?;
+        Ok(out)
     }
 
     /// Return the validation config for this producer.
@@ -344,22 +355,29 @@ impl Consumer {
 
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
-        self.store.workers().suspend(self.worker_record.id).await
+        self.store.workers().suspend(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Mark this consumer as polling.
     pub async fn poll(&self) -> crate::error::Result<()> {
-        self.store.workers().poll(self.worker_record.id).await
+        self.store.workers().poll(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Interrupt this consumer's poll loop.
     pub async fn interrupt(&self) -> crate::error::Result<()> {
-        self.store.workers().interrupt(self.worker_record.id).await
+        self.store
+            .workers()
+            .interrupt(self.worker_record.id)
+            .await?;
+        Ok(())
     }
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
-        self.store.workers().resume(self.worker_record.id).await
+        self.store.workers().resume(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Shut down this worker if no messages are pending.
@@ -376,12 +394,17 @@ impl Consumer {
                 reason: format!("Consumer has {} pending messages", pending),
             });
         }
-        self.store.workers().shutdown(self.worker_record.id).await
+        self.store.workers().shutdown(self.worker_record.id).await?;
+        Ok(())
     }
 
     /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.store.workers().heartbeat(self.worker_record.id).await
+        self.store
+            .workers()
+            .heartbeat(self.worker_record.id)
+            .await?;
+        Ok(())
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -423,7 +446,8 @@ impl Consumer {
         vt: u32,
         now: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<Vec<QueueMessage>> {
-        self.store
+        let msgs = self
+            .store
             .messages()
             .dequeue_at(
                 self.queue_info.id,
@@ -433,7 +457,8 @@ impl Consumer {
                 now,
                 self.store.config().max_read_ct,
             )
-            .await
+            .await?;
+        Ok(msgs)
     }
 
     /// Extend the visibility timeout for a message.
@@ -458,26 +483,32 @@ impl Consumer {
 
     /// Delete multiple messages owned by this consumer.
     pub async fn delete_many(&self, message_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
-        self.store
+        let out = self
+            .store
             .messages()
             .delete_many_owned(&message_ids, self.worker_record.id)
-            .await
+            .await?;
+        Ok(out)
     }
 
     /// Archive a message owned by this consumer.
     pub async fn archive(&self, msg_id: i64) -> crate::error::Result<Option<QueueMessage>> {
-        self.store
+        let out = self
+            .store
             .messages()
             .archive(msg_id, self.worker_record.id)
-            .await
+            .await?;
+        Ok(out)
     }
 
     /// Archive multiple messages owned by this consumer.
     pub async fn archive_many(&self, msg_ids: Vec<i64>) -> crate::error::Result<Vec<bool>> {
-        self.store
+        let out = self
+            .store
             .messages()
             .archive_many(&msg_ids, self.worker_record.id)
-            .await
+            .await?;
+        Ok(out)
     }
 
     /// Release messages back to the queue.

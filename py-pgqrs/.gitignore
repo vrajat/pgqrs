@@ -3,4 +3,6 @@ __pycache__/
 dist/
 *.so
 *.abi3.so
+*.dylib.dSYM/
+*.dSYM/
 .pytest_cache/

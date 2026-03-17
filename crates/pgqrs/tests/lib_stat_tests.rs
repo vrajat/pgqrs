@@ -190,6 +190,8 @@ async fn test_worker_health_stats() {
     let sql = match common::current_backend() {
         #[cfg(feature = "postgres")]
         pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
+        #[cfg(feature = "s3")]
+        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
         #[cfg(feature = "sqlite")]
         pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
         #[cfg(feature = "turso")]
@@ -231,6 +233,10 @@ async fn test_worker_health_stats() {
         #[cfg(feature = "postgres")]
         pgqrs::store::BackendType::Postgres => {
             "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'"
+        }
+        #[cfg(feature = "s3")]
+        pgqrs::store::BackendType::S3 => {
+            "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'"
         }
         #[cfg(feature = "sqlite")]
         pgqrs::store::BackendType::Sqlite => {

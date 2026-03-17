@@ -69,6 +69,8 @@ async fn test_anystore_backend_name() {
     let expected = match common::current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => "postgres",
+        #[cfg(feature = "s3")]
+        BackendType::S3 => "s3",
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => "sqlite",
         #[cfg(feature = "turso")]
@@ -86,6 +88,8 @@ async fn test_anystore_concurrency_model() {
     let expected = match common::current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => ConcurrencyModel::MultiProcess,
+        #[cfg(feature = "s3")]
+        BackendType::S3 => ConcurrencyModel::SingleProcess,
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => ConcurrencyModel::SingleProcess,
         #[cfg(feature = "turso")]
@@ -106,6 +110,8 @@ async fn test_anystore_config_access() {
     match common::current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => assert!(config.dsn.contains("postgres")),
+        #[cfg(feature = "s3")]
+        BackendType::S3 => assert!(config.dsn.starts_with("s3://")),
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => assert!(config.dsn.contains("sqlite")),
         #[cfg(feature = "turso")]
@@ -122,6 +128,8 @@ async fn test_anystore_query_access() {
     let sql = match common::current_backend() {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => "SELECT 1::bigint", // Postgres returns int4 by default for SELECT 1
+        #[cfg(feature = "s3")]
+        BackendType::S3 => "SELECT 1",
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => "SELECT 1",
         #[cfg(feature = "turso")]
@@ -276,6 +284,8 @@ async fn test_anystore_connect_with_dsn() {
     let expected = match backend {
         #[cfg(feature = "postgres")]
         BackendType::Postgres => "postgres",
+        #[cfg(feature = "s3")]
+        BackendType::S3 => "s3",
         #[cfg(feature = "sqlite")]
         BackendType::Sqlite => "sqlite",
         #[cfg(feature = "turso")]
@@ -304,4 +314,14 @@ async fn test_anystore_invalid_dsn() {
         .unwrap_err()
         .to_string()
         .contains("Unsupported DSN format"));
+}
+
+#[cfg(feature = "s3")]
+#[tokio::test]
+async fn test_anystore_s3_dsn_creates_s3_variant() {
+    let config = pgqrs::config::Config::from_dsn("s3://bucket/queue.sqlite");
+    let store = pgqrs::connect_with_config(&config)
+        .await
+        .expect("Failed to connect using s3 dsn");
+    assert!(matches!(store, pgqrs::store::AnyStore::S3(_)));
 }

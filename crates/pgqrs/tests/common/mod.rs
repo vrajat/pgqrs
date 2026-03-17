@@ -30,53 +30,36 @@ pub fn current_backend() -> BackendType {
     }
 }
 
-#[allow(dead_code)]
-pub fn get_dsn_from_env(backend: BackendType) -> Option<Box<dyn TestResource>> {
-    match backend {
-        #[cfg(feature = "postgres")]
-        BackendType::Postgres => {
-            if std::env::var("PGQRS_TEST_SQLITE_DSN").is_ok()
-                || std::env::var("PGQRS_TEST_TURSO_DSN").is_ok()
-            {
-                panic!("Ambiguous configuration: DSN mismatch for Postgres");
-            }
-            std::env::var("PGQRS_TEST_POSTGRES_DSN")
-                .or_else(|_| std::env::var("PGQRS_TEST_DSN"))
-                .ok()
-                .map(|dsn| Box::new(resource::ExternalResource::new(dsn)) as Box<dyn TestResource>)
-        }
-        #[cfg(feature = "sqlite")]
-        BackendType::Sqlite => {
-            if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
-                panic!("Ambiguous configuration: DSN mismatch for Sqlite");
-            }
-            std::env::var("PGQRS_TEST_SQLITE_DSN").ok().map(|dsn| {
-                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
-            })
-        }
-        #[cfg(feature = "turso")]
-        BackendType::Turso => {
-            if std::env::var("PGQRS_TEST_POSTGRES_DSN").is_ok() {
-                panic!("Ambiguous configuration: DSN mismatch for Turso");
-            }
-            std::env::var("PGQRS_TEST_TURSO_DSN").ok().map(|dsn| {
-                Box::new(resource::ExternalFileResource::new(dsn)) as Box<dyn TestResource>
-            })
-        }
-    }
-}
-
 /// Create a store for the currently selected test backend.
 #[allow(dead_code)]
 pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
+    create_store_with_config(schema, |_: &mut pgqrs::config::Config| {}).await
+}
+
+/// Create a store for the currently selected test backend with config customization.
+#[allow(dead_code)]
+pub async fn create_store_with_config(
+    schema: &str,
+    mutator: impl FnOnce(&mut pgqrs::config::Config),
+) -> pgqrs::store::AnyStore {
     let dsn = get_test_dsn(schema).await;
 
     let config =
         pgqrs::config::Config::from_dsn_with_schema(&dsn, schema).expect("Failed to create config");
+    let mut config = config;
+    mutator(&mut config);
 
     let store = pgqrs::connect_with_config(&config)
         .await
         .unwrap_or_else(|e| panic!("Failed to create store with DSN: {}. Error: {:?}", dsn, e));
+
+    #[cfg(feature = "s3")]
+    if current_backend() == BackendType::S3 {
+        assert!(
+            matches!(store, pgqrs::store::AnyStore::S3(_)),
+            "Expected AnyStore::S3 when PGQRS_TEST_BACKEND=s3"
+        );
+    }
 
     // Install schema based on backend:
     // - Postgres: Uses global setup (setup_test_schemas binary), skip install
@@ -112,29 +95,51 @@ pub async fn get_test_dsn(schema: &str) -> String {
         return manager.resource.get_dsn(Some(schema)).await;
     }
 
-    let resource: Box<dyn TestResource> = if let Some(r) = get_dsn_from_env(backend) {
-        r
-    } else {
-        match backend {
-            #[cfg(feature = "postgres")]
-            BackendType::Postgres => {
-                // Postgres requires external database (from CI services or local Docker)
-                // If PGQRS_TEST_DSN is not set, tests will fail with connection error
+    #[cfg(any(feature = "postgres", feature = "s3"))]
+    let env_non_empty = |key: &str| std::env::var(key).ok().filter(|v| !v.trim().is_empty());
+    let resource: Box<dyn TestResource> = match backend {
+        #[cfg(feature = "postgres")]
+        BackendType::Postgres => {
+            if let Some(dsn) =
+                env_non_empty("PGQRS_TEST_POSTGRES_DSN").or_else(|| env_non_empty("PGQRS_TEST_DSN"))
+            {
+                Box::new(resource::ExternalResource::new(dsn))
+            } else {
                 panic!(
                     "Postgres backend requires PGQRS_TEST_DSN environment variable. \
                      Run 'make test-postgres' or set PGQRS_TEST_DSN manually."
                 );
             }
-            #[cfg(feature = "sqlite")]
-            BackendType::Sqlite => {
+        }
+        #[cfg(feature = "sqlite")]
+        BackendType::Sqlite => {
+            if let Ok(dsn) = std::env::var("PGQRS_TEST_SQLITE_DSN") {
+                Box::new(resource::ExternalFileResource::new(dsn))
+            } else {
                 let r = resource::FileResource::new("sqlite://".to_string());
                 r.initialize()
                     .await
                     .expect("Failed to init sqlite resource");
                 Box::new(r)
             }
-            #[cfg(feature = "turso")]
-            BackendType::Turso => {
+        }
+        #[cfg(feature = "s3")]
+        BackendType::S3 => {
+            if let Some(dsn) =
+                env_non_empty("PGQRS_TEST_S3_DSN").or_else(|| env_non_empty("PGQRS_TEST_DSN"))
+            {
+                Box::new(resource::ExternalS3FileResource::new(dsn))
+            } else {
+                let bucket = std::env::var("PGQRS_S3_BUCKET")
+                    .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
+                Box::new(resource::S3FileResource::new_generated(bucket))
+            }
+        }
+        #[cfg(feature = "turso")]
+        BackendType::Turso => {
+            if let Ok(dsn) = std::env::var("PGQRS_TEST_TURSO_DSN") {
+                Box::new(resource::ExternalFileResource::new(dsn))
+            } else {
                 let r = resource::FileResource::new("turso://".to_string());
                 r.initialize().await.expect("Failed to init turso resource");
                 Box::new(r)
@@ -170,18 +175,48 @@ macro_rules! skip_on_backend {
 
 #[dtor]
 fn drop_database() {
-    // Cleanup global resource
-    let mut guard = match RESOURCE_MANAGER.write() {
-        Ok(g) => g,
-        Err(e) => e.into_inner(),
+    if keep_test_data() {
+        return;
+    }
+
+    // Cleanup global resource. This dtor runs during process teardown; avoid panics and run
+    // async cleanup on a fresh thread so TLS-dependent SDKs still work reliably.
+    let manager = {
+        let mut guard = match RESOURCE_MANAGER.write() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        guard.take()
     };
 
-    if let Some(manager) = guard.take() {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create cleanup runtime");
-        rt.block_on(async {
-            if let Err(e) = manager.resource.cleanup().await {
-                eprintln!("Error during resource cleanup: {}", e);
+    if let Some(manager) = manager {
+        let cleanup_thread = std::thread::Builder::new()
+            .name("pgqrs-test-cleanup".to_string())
+            .spawn(move || match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(async {
+                    if let Err(e) = manager.resource.cleanup().await {
+                        eprintln!("Error during resource cleanup: {}", e);
+                    }
+                }),
+                Err(e) => eprintln!("Failed to create cleanup runtime: {}", e),
+            });
+
+        match cleanup_thread {
+            Ok(handle) => {
+                if handle.join().is_err() {
+                    eprintln!("Cleanup thread panicked");
+                }
             }
-        });
+            Err(e) => eprintln!("Failed to spawn cleanup thread: {}", e),
+        }
     }
+}
+
+fn keep_test_data() -> bool {
+    std::env::var("PGQRS_KEEP_TEST_DATA")
+        .map(|v| {
+            let lowered = v.trim().to_ascii_lowercase();
+            !(lowered.is_empty() || lowered == "0" || lowered == "false" || lowered == "no")
+        })
+        .unwrap_or(false)
 }

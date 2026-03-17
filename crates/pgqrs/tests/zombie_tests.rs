@@ -55,6 +55,8 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         let update_sql = match common::current_backend() {
             #[cfg(feature = "postgres")]
             pgqrs::store::BackendType::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
+            #[cfg(feature = "s3")]
+            pgqrs::store::BackendType::S3 => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
             #[cfg(feature = "sqlite")]
             pgqrs::store::BackendType::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
             #[cfg(feature = "turso")]
@@ -138,6 +140,11 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
                 needs_checkpoint = true;
             }
 
+            #[cfg(feature = "s3")]
+            if backend == pgqrs::store::BackendType::S3 {
+                needs_checkpoint = true;
+            }
+
             #[cfg(feature = "turso")]
             if backend == pgqrs::store::BackendType::Turso {
                 needs_checkpoint = true;
@@ -191,15 +198,26 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         );
 
         // Use existing DSN to ensure we connect to the same DB file
-        #[cfg(any(feature = "sqlite", feature = "turso"))]
+        #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
         let store = {
             let config = pgqrs::config::Config::from_dsn(&dsn_str);
             pgqrs::connect_with_config(&config)
                 .await
                 .expect("Failed to connect")
         };
-        #[cfg(not(any(feature = "sqlite", feature = "turso")))]
-        let store = common::create_store(schema).await;
+        #[cfg(feature = "s3")]
+        let store = {
+            let mut store = store;
+            if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
+                s3_store
+                    .snapshot()
+                    .await
+                    .expect("Failed to snapshot S3 state");
+            }
+            store
+        };
+        #[cfg(all(not(feature = "sqlite"), not(feature = "turso"), not(feature = "s3")))]
+        let store = { common::create_store(schema).await };
 
         let c2_worker = pgqrs::tables(&store).workers().get(c2_id).await?;
         assert!(

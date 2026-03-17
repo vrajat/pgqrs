@@ -414,14 +414,16 @@ impl crate::store::MessageTable for SqliteMessageTable {
     }
 
     async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+        let now_str = format_sqlite_timestamp(&chrono::Utc::now());
         let count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
             FROM pgqrs_messages
-            WHERE queue_id = $1 AND (vt IS NULL OR vt <= datetime('now')) AND consumer_worker_id IS NULL AND archived_at IS NULL
+            WHERE queue_id = $1 AND (vt IS NULL OR vt <= $2) AND consumer_worker_id IS NULL AND archived_at IS NULL
             "#,
         )
         .bind(queue_id)
+        .bind(now_str)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| crate::error::Error::QueryFailed {
@@ -429,7 +431,6 @@ impl crate::store::MessageTable for SqliteMessageTable {
             source: Box::new(e),
             context: format!("Failed to count pending messages for queue {}", queue_id),
         })?;
-
         Ok(count)
     }
 

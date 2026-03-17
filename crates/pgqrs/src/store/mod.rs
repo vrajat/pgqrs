@@ -19,6 +19,8 @@ pub mod any;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub(crate) mod query;
+#[cfg(feature = "s3")]
+pub mod s3;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "turso")]
@@ -29,25 +31,28 @@ pub use crate::workers::*;
 
 pub use any::AnyStore;
 
-#[cfg(any(feature = "sqlite", feature = "turso"))]
+// S3 store uses SQLite locally, so sqlite_utils are needed for `s3` too.
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 pub(crate) mod sqlite_utils {
     use crate::error::{Error, Result};
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, NaiveDateTime, Utc};
 
     /// Parse SQLite/Turso TEXT timestamp to DateTime<Utc>
     pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
-        // SQLite datetime() returns "YYYY-MM-DD HH:MM:SS" format
-        // We append +0000 to parse it as UTC
-        DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-            .map(|dt| dt.with_timezone(&Utc))
-            .map_err(|e| Error::Internal {
-                message: format!("Invalid timestamp: {}", e),
+        const TIMESTAMP_FORMATS: [&str; 2] = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
+
+        TIMESTAMP_FORMATS
+            .iter()
+            .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
+            .map(|dt| dt.and_utc())
+            .ok_or_else(|| Error::Internal {
+                message: format!("Invalid timestamp: {s}"),
             })
     }
 
     /// Format DateTime<Utc> for SQLite/Turso TEXT storage
     pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
-        dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
     }
 }
 
@@ -161,6 +166,8 @@ pub trait Store: Send + Sync + 'static {
 pub enum BackendType {
     #[cfg(feature = "postgres")]
     Postgres,
+    #[cfg(feature = "s3")]
+    S3,
     #[cfg(feature = "sqlite")]
     Sqlite,
     #[cfg(feature = "turso")]
@@ -171,6 +178,8 @@ impl BackendType {
     const POSTGRES_PREFIXES: &'static [&'static str] =
         &["postgres://", "postgresql://", "postgres", "pg"];
     const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
+    #[cfg(feature = "s3")]
+    const S3_PREFIXES: &'static [&'static str] = &["s3://", "s3:", "s3"];
     const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
 
     pub fn detect(dsn: &str) -> crate::error::Result<Self> {
@@ -182,6 +191,10 @@ impl BackendType {
                 field: "dsn".to_string(),
                 message: "Postgres backend is not enabled".to_string(),
             });
+        }
+        #[cfg(feature = "s3")]
+        if Self::S3_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
+            return Ok(Self::S3);
         }
         if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
             #[cfg(feature = "sqlite")]
@@ -205,5 +218,27 @@ impl BackendType {
             field: "dsn".to_string(),
             message: format!("Unsupported DSN format: {}", dsn),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BackendType;
+
+    #[test]
+    fn detect_rejects_unsupported_dsn() {
+        let err = BackendType::detect("invalid://dsn").unwrap_err();
+        assert!(err.to_string().contains("Unsupported DSN format"));
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn detect_s3_dsn_returns_s3_backend() {
+        assert_eq!(
+            BackendType::detect("s3://bucket/queue.sqlite").unwrap(),
+            BackendType::S3
+        );
+        assert_eq!(BackendType::detect("s3:").unwrap(), BackendType::S3);
+        assert_eq!(BackendType::detect("s3").unwrap(), BackendType::S3);
     }
 }

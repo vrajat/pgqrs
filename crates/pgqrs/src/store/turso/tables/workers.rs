@@ -169,7 +169,7 @@ impl TursoWorkerTable {
 
     pub async fn poll(&self, worker_id: i64) -> Result<()> {
         let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = ? AND status IN ('ready', 'interrupted', 'polling')",
+            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = ? AND status IN ('ready', 'polling')",
         )
         .bind(worker_id)
         .execute_once(&self.db)
@@ -180,7 +180,7 @@ impl TursoWorkerTable {
             return Err(crate::error::Error::InvalidStateTransition {
                 from: current_status.to_string(),
                 to: "polling".to_string(),
-                reason: "Worker must be Ready or Interrupted to start polling".to_string(),
+                reason: "Worker must be Ready to start polling".to_string(),
             });
         }
         Ok(())
