@@ -1,14 +1,14 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::store::s3::snapshot::SnapshotDb;
-use crate::store::s3::{StoreOpFuture, SyncDb};
+use crate::store::s3::{StoreOpFuture, SyncDb, SyncState};
 use crate::store::{ConcurrencyModel, Store};
 use async_trait::async_trait;
 
 /// SyncDb variant that enforces durable writes.
 ///
 /// Every write operation executes on snapshot write state and then immediately
-/// runs `sync()+refresh()` before returning.
+/// runs `sync()` before returning.
 #[derive(Clone)]
 pub struct ConsistentDb {
     inner: SnapshotDb,
@@ -24,6 +24,10 @@ impl ConsistentDb {
             inner: snapshot,
             concurrency_model,
         })
+    }
+
+    pub async fn state(&self) -> Result<SyncState> {
+        self.inner.state().await
     }
 }
 
@@ -68,16 +72,11 @@ impl SyncDb for ConsistentDb {
         let out = self.inner.with_write(f).await?;
         let mut inner = self.inner.clone();
         SyncDb::sync(&mut inner).await?;
-        SyncDb::refresh(&mut inner).await?;
         Ok(out)
     }
 
     async fn snapshot(&mut self) -> Result<()> {
         SyncDb::snapshot(&mut self.inner).await
-    }
-
-    async fn refresh(&mut self) -> Result<()> {
-        SyncDb::refresh(&mut self.inner).await
     }
 
     async fn sync(&mut self) -> Result<()> {

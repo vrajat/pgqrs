@@ -233,26 +233,12 @@ impl S3FileResource {
         }
     }
 
-    fn parse_s3_dsn(dsn: &str) -> Option<(String, String)> {
-        let full = dsn
-            .strip_prefix("s3://")
-            .or_else(|| dsn.strip_prefix("s3:"))?;
-        let mut parts = full.splitn(2, '/');
-        let bucket = parts.next()?.trim();
-        let key = parts.next()?.trim();
-        if bucket.is_empty() || key.is_empty() {
-            return None;
-        }
-        Some((bucket.to_string(), key.to_string()))
-    }
-
     async fn delete_remote_objects(dsns: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let mut by_bucket: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for dsn in dsns {
-            if let Some((bucket, key)) = Self::parse_s3_dsn(dsn) {
-                by_bucket.entry(bucket).or_default().push(key);
-            }
+            let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(dsn)?;
+            by_bucket.entry(bucket).or_default().push(key);
         }
         if by_bucket.is_empty() {
             return Ok(());
