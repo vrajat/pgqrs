@@ -18,6 +18,7 @@ Comprehensive technical design documentation for major features and components.
 - [SQLite Store Implementation](sqlite_store.md)
 - [Turso Store Implementation](turso_store.md)
 - [Store SQL Dialect Constants](store-sql-dialect-constants.md)
+- [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
 
 ## Design Doc Template
 
