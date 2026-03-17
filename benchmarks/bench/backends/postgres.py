@@ -1,0 +1,1 @@
+"""PostgreSQL benchmark backend adapter."""

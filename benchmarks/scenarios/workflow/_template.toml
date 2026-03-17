@@ -1,0 +1,21 @@
+id = "workflow.example"
+kind = "workflow"
+goal = "Describe what product question this benchmark answers."
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat"]
+
+[workload]
+step_profile = "control"
+step_count = 1
+workers = 1
+duration_seconds = 30
+
+[metrics]
+primary = "runs_per_second"
+secondary = ["p95_completion_latency_ms", "error_rate"]
+
+[notes]
+maintainer = "fill-me-in"
+limitations = "Add scenario-specific caveats here."

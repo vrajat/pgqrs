@@ -1,1 +1,0 @@
-Scenario: queue_unlogged_naive Consumers: 40, Producers: 5, Duration: 2m

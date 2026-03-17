@@ -1,0 +1,22 @@
+id = "queue.example"
+kind = "queue"
+goal = "Describe what product question this benchmark answers."
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat"]
+
+[workload]
+payload_profile = "small"
+producers = 1
+consumers = 1
+batch_size = 1
+duration_seconds = 30
+
+[metrics]
+primary = "messages_per_second"
+secondary = ["p95_latency_ms", "error_rate"]
+
+[notes]
+maintainer = "fill-me-in"
+limitations = "Add scenario-specific caveats here."
