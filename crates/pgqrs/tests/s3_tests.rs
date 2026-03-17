@@ -2,85 +2,18 @@
 
 mod common;
 
-use aws_config::{BehaviorVersion, Region};
-use aws_sdk_s3::config::Credentials;
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 use chrono::Utc;
-use pgqrs::store::s3::DurabilityMode;
+use object_store::path::Path as ObjectPath;
+use pgqrs::store::s3::{DurabilityMode, SyncState};
 use pgqrs::store::AnyStore;
 use pgqrs::types::NewQueueMessage;
 use pgqrs::Store;
 use std::env;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
-fn endpoint_host_port() -> (String, u16) {
-    let endpoint =
-        std::env::var("AWS_ENDPOINT_URL").unwrap_or_else(|_| "http://localhost:4566".to_string());
-    let without_scheme = endpoint
-        .strip_prefix("http://")
-        .or_else(|| endpoint.strip_prefix("https://"))
-        .unwrap_or(&endpoint);
-
-    let authority = without_scheme.split('/').next().unwrap_or("localhost:4566");
-    let mut parts = authority.split(':');
-    let host = parts.next().unwrap_or("localhost").to_string();
-    let port = parts
-        .next()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(4566);
-    (host, port)
-}
-
-#[test]
-fn localstack_s3_health_endpoint_is_reachable() {
-    let (host, port) = endpoint_host_port();
-    let addr = format!("{}:{}", host, port);
-
-    let mut stream = TcpStream::connect(&addr)
-        .unwrap_or_else(|e| panic!("failed to connect to LocalStack at {}: {}", addr, e));
-    stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
-
-    let request = format!(
-        "GET /_localstack/health HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        host
-    );
-    stream
-        .write_all(request.as_bytes())
-        .expect("failed to write HTTP request to LocalStack");
-
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("failed to read HTTP response from LocalStack");
-
-    assert!(
-        response.contains("200 OK"),
-        "unexpected LocalStack health response status: {}",
-        response
-    );
-    assert!(
-        response.contains("\"s3\""),
-        "LocalStack health payload does not report S3 service: {}",
-        response
-    );
-}
-
 fn s3_endpoint() -> String {
-    env::var("AWS_ENDPOINT_URL").unwrap_or_else(|_| "http://localhost:4566".to_string())
-}
-
-fn s3_region() -> String {
-    env::var("AWS_REGION")
-        .or_else(|_| env::var("AWS_DEFAULT_REGION"))
-        .unwrap_or_else(|_| "us-east-1".to_string())
-}
-
-fn s3_bucket() -> String {
-    env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string())
+    env::var("AWS_ENDPOINT_URL")
+        .expect("AWS_ENDPOINT_URL must be set for LocalStack-backed s3_tests")
 }
 
 fn prepare_localstack_tls_env() {
@@ -127,61 +60,45 @@ async fn s3_snapshot_store(store: &mut AnyStore) -> pgqrs::error::Result<()> {
     }
 }
 
-async fn localstack_client() -> Client {
+fn object_store_for_bucket(bucket: &str) -> std::sync::Arc<dyn object_store::ObjectStore> {
     prepare_localstack_tls_env();
-    let endpoint = s3_endpoint();
-    let region = s3_region();
-    let config = aws_sdk_s3::config::Builder::new()
-        .behavior_version(BehaviorVersion::latest())
-        .region(Region::new(region))
-        .credentials_provider(Credentials::new("test", "test", None, None, "localstack"))
-        .endpoint_url(endpoint)
-        .force_path_style(true)
-        .build();
-    Client::from_conf(config)
+    pgqrs::store::s3::S3Store::object_store_from_env(bucket).expect("object store should build")
 }
 
-async fn ensure_bucket(client: &Client, bucket: &str) {
-    let create_res = client.create_bucket().bucket(bucket).send().await;
-    if let Err(e) = create_res {
-        let msg = e.to_string();
-        assert!(
-            msg.contains("BucketAlreadyOwnedByYou")
-                || msg.contains("BucketAlreadyExists")
-                || msg.contains("OperationAborted"),
-            "create_bucket failed unexpectedly: {}",
-            msg
-        );
-    }
+async fn delete_key(bucket: &str, key: &str) {
+    let store = object_store_for_bucket(bucket);
+    let _ = store.delete(&ObjectPath::from(key)).await;
 }
 
-async fn delete_key(client: &Client, bucket: &str, key: &str) {
-    let _ = client.delete_object().bucket(bucket).key(key).send().await;
+async fn remote_etag(bucket: &str, key: &str, context: &str) -> String {
+    object_store_for_bucket(bucket)
+        .head(&ObjectPath::from(key))
+        .await
+        .expect(context)
+        .e_tag
+        .unwrap_or_default()
 }
 
-fn parse_s3_bucket_key(dsn: &str) -> (String, String) {
-    let full = dsn.strip_prefix("s3://").unwrap_or(dsn);
-    let mut parts = full.splitn(2, '/');
-    let bucket = parts.next().unwrap_or_default().trim().to_string();
-    let key = parts.next().unwrap_or_default().trim().to_string();
-    (bucket, key)
-}
-
-async fn wait_for_head_object(client: &Client, bucket: &str, key: &str) -> bool {
-    for _ in 0..10 {
-        if client
-            .head_object()
-            .bucket(bucket)
-            .key(key)
-            .send()
-            .await
-            .is_ok()
-        {
-            return true;
+async fn wait_for_remote_visible(store: &AnyStore) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    loop {
+        match store {
+            AnyStore::S3(s3_store) => {
+                if matches!(
+                    s3_store.state().await.expect("state should be queryable"),
+                    SyncState::InSync | SyncState::Diverged { .. }
+                ) {
+                    return true;
+                }
+            }
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    false
 }
 
 mod tables_tests {
@@ -333,12 +250,10 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn s3_bootstrap_creates_remote_state_when_key_is_missing() {
-        let client = localstack_client().await;
         let dsn =
             common::get_test_dsn("s3_bootstrap_creates_remote_state_when_key_is_missing").await;
-        let (bucket, key) = parse_s3_bucket_key(&dsn);
-        ensure_bucket(&client, &bucket).await;
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
@@ -354,7 +269,7 @@ mod snapshot_db_tests {
             .await
             .expect("sync should publish missing remote state");
 
-        let exists = wait_for_head_object(&client, &bucket, &key).await;
+        let exists = wait_for_remote_visible(&store).await;
         assert!(
             exists,
             "sync should publish missing remote state in LocalStack-backed bootstrap flow"
@@ -363,10 +278,6 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn s3_bootstrap_restores_existing_remote_state() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let seed_store = create_s3_store_for_test(
             "s3_bootstrap_restores_existing_remote_state_seed",
             DurabilityMode::Local,
@@ -441,11 +352,9 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn s3_bootstrap_is_idempotent() {
-        let client = localstack_client().await;
         let dsn = common::get_test_dsn("s3_bootstrap_is_idempotent").await;
-        let (bucket, key) = parse_s3_bucket_key(&dsn);
-        ensure_bucket(&client, &bucket).await;
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
@@ -460,16 +369,7 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should succeed");
 
-        let before = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should exist after bootstrap")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let before = remote_etag(&bucket, &key, "remote state should exist after bootstrap").await;
 
         s3_sync_store(&mut store)
             .await
@@ -478,16 +378,12 @@ mod snapshot_db_tests {
             .await
             .expect("third sync should be idempotent");
 
-        let after = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should still exist after repeated bootstrap")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let after = remote_etag(
+            &bucket,
+            &key,
+            "remote state should still exist after repeated bootstrap",
+        )
+        .await;
 
         assert_eq!(
             before, after,
@@ -497,10 +393,8 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn s3_bootstrap_recovers_when_remote_state_deleted() {
-        let client = localstack_client().await;
         let dsn = common::get_test_dsn("s3_bootstrap_recovers_when_remote_state_deleted").await;
-        let (bucket, key) = parse_s3_bucket_key(&dsn);
-        ensure_bucket(&client, &bucket).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&dsn).unwrap();
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
@@ -515,16 +409,13 @@ mod snapshot_db_tests {
             .await
             .expect("seed sync should publish initial remote state");
 
-        let head = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
+        let head = object_store_for_bucket(&bucket)
+            .head(&ObjectPath::from(key.as_str()))
             .await
             .expect("remote state should exist after bootstrap");
-        assert!(head.e_tag().is_some(), "remote state should include etag");
+        assert!(head.e_tag.is_some(), "remote state should include etag");
 
-        delete_key(&client, &bucket, &key).await;
+        delete_key(&bucket, &key).await;
 
         pgqrs::admin(&seed_store)
             .create_queue("recreated")
@@ -534,7 +425,7 @@ mod snapshot_db_tests {
             .await
             .expect("dirty sync should recreate missing remote state");
         assert!(
-            wait_for_head_object(&client, &bucket, &key).await,
+            wait_for_remote_visible(&seed_store).await,
             "dirty sync should recreate missing state object"
         );
     }
@@ -584,10 +475,6 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn given_matching_local_and_remote_etag_when_snapshot_then_returns_without_rewrite() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store = create_s3_store_for_test(
             "snapshot_db_matching_etag_is_idempotent",
             DurabilityMode::Local,
@@ -650,6 +537,15 @@ mod snapshot_db_tests {
             .await
             .expect("queue creation should succeed");
 
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::RemoteMissing { local_dirty: true }),
+            "unsynced dirty local state with no remote should report RemoteMissing {{ local_dirty: true }}, got: {state:?}"
+        );
+
         let err = s3_snapshot_store(&mut store)
             .await
             .expect_err("snapshot should fail when local state is dirty");
@@ -661,10 +557,6 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn given_clean_local_state_when_sync_then_returns_without_remote_change() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store =
             create_s3_store_for_test("snapshot_db_clean_sync_is_noop", DurabilityMode::Local).await;
 
@@ -676,17 +568,13 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should publish remote state");
 
-        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
-        let before = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should exist after initial sync")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        let before = remote_etag(
+            &bucket,
+            &key,
+            "remote state should exist after initial sync",
+        )
+        .await;
 
         let cache_dir = cache_dir_for_dsn(&store.config().dsn);
         let revision_files = non_bootstrap_sqlite_files(&cache_dir);
@@ -707,16 +595,21 @@ mod snapshot_db_tests {
             .await
             .expect("clean sync should be a no-op");
 
-        let after = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should still exist after no-op sync")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::InSync),
+            "clean synced state should report InSync, got: {state:?}"
+        );
+
+        let after = remote_etag(
+            &bucket,
+            &key,
+            "remote state should still exist after no-op sync",
+        )
+        .await;
         assert_eq!(before, after, "clean sync should not change remote etag");
 
         let after_modified = std::fs::metadata(revision_path)
@@ -732,10 +625,6 @@ mod snapshot_db_tests {
     #[tokio::test]
     async fn given_deleted_remote_object_and_clean_local_state_when_sync_then_returns_without_recreating_remote_state(
     ) {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store = create_s3_store_for_test(
             "snapshot_db_deleted_remote_clean_sync_stays_noop",
             DurabilityMode::Local,
@@ -750,25 +639,30 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should publish remote state");
 
-        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        delete_key(&bucket, &key).await;
+
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::RemoteMissing { local_dirty: false }),
+            "deleted remote + clean local should report RemoteMissing {{ local_dirty: false }}, got: {state:?}"
+        );
 
         s3_sync_store(&mut store)
             .await
             .expect("clean sync should remain a no-op even when remote is missing");
 
         assert!(
-            !wait_for_head_object(&client, &bucket, &key).await,
+            !wait_for_remote_visible(&store).await,
             "clean sync should not recreate deleted remote state"
         );
     }
 
     #[tokio::test]
     async fn given_dirty_local_state_when_sync_then_publishes_remote_state() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store =
             create_s3_store_for_test("snapshot_db_dirty_sync_publishes", DurabilityMode::Local)
                 .await;
@@ -801,10 +695,6 @@ mod snapshot_db_tests {
     #[tokio::test]
     async fn given_deleted_remote_object_and_dirty_local_state_when_sync_then_recreates_remote_state(
     ) {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store = create_s3_store_for_test(
             "snapshot_db_deleted_remote_dirty_sync_recreates",
             DurabilityMode::Local,
@@ -819,19 +709,29 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should publish remote state");
 
-        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
         pgqrs::admin(&store)
             .create_queue("recreated")
             .await
             .expect("local mutation after remote delete should succeed");
+
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::RemoteMissing { local_dirty: true }),
+            "deleted remote + dirty local should report RemoteMissing {{ local_dirty: true }}, got: {state:?}"
+        );
+
         s3_sync_store(&mut store)
             .await
             .expect("dirty sync should recreate missing remote state");
 
         assert!(
-            wait_for_head_object(&client, &bucket, &key).await,
+            wait_for_remote_visible(&store).await,
             "dirty sync should recreate deleted remote state"
         );
 
@@ -854,10 +754,6 @@ mod snapshot_db_tests {
     #[tokio::test]
     async fn given_successful_sync_when_remote_head_is_checked_then_etag_advances_and_dirty_state_is_cleared(
     ) {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store = create_s3_store_for_test(
             "snapshot_db_sync_advances_etag_and_clears_dirty",
             DurabilityMode::Local,
@@ -872,37 +768,43 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should publish remote state");
 
-        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
-        let before = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should exist after initial sync")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        let before = remote_etag(
+            &bucket,
+            &key,
+            "remote state should exist after initial sync",
+        )
+        .await;
 
         pgqrs::admin(&store)
             .create_queue("second")
             .await
             .expect("second queue creation should succeed");
+
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::Diverged { local_dirty: true }),
+            "dirty local state before sync should report Diverged {{ local_dirty: true }}, got: {state:?}"
+        );
+
         s3_sync_store(&mut store)
             .await
             .expect("dirty sync should publish updated remote state");
 
-        let after = client
-            .head_object()
-            .bucket(&bucket)
-            .key(&key)
-            .send()
-            .await
-            .expect("remote state should exist after second sync")
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default();
+        let after = remote_etag(&bucket, &key, "remote state should exist after second sync").await;
         assert_ne!(before, after, "successful sync should advance remote etag");
+
+        let state = match &store {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::InSync),
+            "successful sync should clear dirty state and report InSync, got: {state:?}"
+        );
 
         s3_snapshot_store(&mut store)
             .await
@@ -989,10 +891,6 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn given_changed_remote_state_when_snapshot_then_latest_remote_data_is_visible_locally() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut seed_store = create_s3_store_for_test(
             "snapshot_db_refreshes_changed_remote_state",
             DurabilityMode::Local,
@@ -1030,6 +928,15 @@ mod snapshot_db_tests {
             .await
             .expect("second sync should publish changed remote state");
 
+        let state = match &follower {
+            AnyStore::S3(s3_store) => s3_store.state().await.expect("state should be queryable"),
+            _ => panic!("Expected AnyStore::S3 for s3 tests"),
+        };
+        assert!(
+            matches!(state, SyncState::Diverged { local_dirty: false }),
+            "clean local follower with newer remote should report Diverged {{ local_dirty: false }}, got: {state:?}"
+        );
+
         s3_snapshot_store(&mut follower)
             .await
             .expect("snapshot after remote change should succeed");
@@ -1045,10 +952,6 @@ mod snapshot_db_tests {
 
     #[tokio::test]
     async fn given_missing_remote_object_when_snapshot_then_returns_not_found() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let mut store = create_s3_store_for_test(
             "snapshot_db_missing_remote_returns_not_found",
             DurabilityMode::Local,
@@ -1062,8 +965,8 @@ mod snapshot_db_tests {
             .await
             .expect("sync should publish initial remote state");
 
-        let (bucket, key) = parse_s3_bucket_key(&store.config().dsn);
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
         let err = s3_snapshot_store(&mut store)
             .await
@@ -1075,159 +978,11 @@ mod snapshot_db_tests {
     }
 }
 
-#[tokio::test]
-async fn localstack_s3_basic_ops_and_cas_etag() {
-    let client = localstack_client().await;
-    let bucket = s3_bucket();
-    let key = format!("smoke/etag-cas-{}.bin", uuid::Uuid::new_v4());
-
-    ensure_bucket(&client, &bucket).await;
-
-    let put_v1 = client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .body(ByteStream::from_static(b"payload-v1"))
-        .send()
-        .await
-        .expect("put v1 should succeed");
-
-    let etag_v1 = put_v1
-        .e_tag()
-        .expect("put v1 should return etag")
-        .to_string();
-
-    let head_v1 = client
-        .head_object()
-        .bucket(&bucket)
-        .key(&key)
-        .send()
-        .await
-        .expect("head should succeed");
-    let head_etag_v1 = head_v1
-        .e_tag()
-        .expect("head should include etag")
-        .to_string();
-    assert_eq!(etag_v1, head_etag_v1, "head etag should match put etag");
-
-    let get_v1 = client
-        .get_object()
-        .bucket(&bucket)
-        .key(&key)
-        .send()
-        .await
-        .expect("get should succeed");
-    let bytes_v1 = get_v1.body.collect().await.expect("read body").into_bytes();
-    assert_eq!(bytes_v1.as_ref(), b"payload-v1");
-
-    let put_v2 = client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .if_match(etag_v1.clone())
-        .body(ByteStream::from_static(b"payload-v2"))
-        .send()
-        .await
-        .expect("CAS put with current etag should succeed");
-    let etag_v2 = put_v2
-        .e_tag()
-        .expect("put v2 should return etag")
-        .to_string();
-    assert_ne!(etag_v1, etag_v2, "etag should change after update");
-
-    let _get_ok = client
-        .get_object()
-        .bucket(&bucket)
-        .key(&key)
-        .if_match(etag_v2)
-        .send()
-        .await
-        .expect("conditional get with latest etag should succeed");
-
-    let err = client
-        .get_object()
-        .bucket(&bucket)
-        .key(&key)
-        .if_match(etag_v1)
-        .send()
-        .await
-        .expect_err("conditional get with stale etag should fail");
-    let _ = err;
-
-    delete_key(&client, &bucket, &key).await;
-}
-
-#[tokio::test]
-async fn localstack_aws_adapter_round_trip() {
-    let client = localstack_client().await;
-    let bucket = s3_bucket();
-    let key = format!("smoke/adapter-{}.bin", uuid::Uuid::new_v4());
-
-    ensure_bucket(&client, &bucket).await;
-
-    let put_v1 = client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .body(ByteStream::from_static(b"adapter-v1"))
-        .send()
-        .await
-        .expect("adapter put v1");
-    let etag_v1 = put_v1
-        .e_tag()
-        .expect("adapter put should return etag")
-        .to_string();
-    let obj_v1 = client
-        .get_object()
-        .bucket(&bucket)
-        .key(&key)
-        .send()
-        .await
-        .expect("adapter get v1");
-    let bytes_v1 = obj_v1
-        .body
-        .collect()
-        .await
-        .expect("adapter read v1")
-        .into_bytes();
-    assert_eq!(bytes_v1.as_ref(), b"adapter-v1");
-
-    let _put_v2 = client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .if_match(etag_v1)
-        .body(ByteStream::from_static(b"adapter-v2"))
-        .send()
-        .await
-        .expect("adapter cas put v2");
-    let obj_v2 = client
-        .get_object()
-        .bucket(&bucket)
-        .key(&key)
-        .send()
-        .await
-        .expect("adapter get v2");
-    let bytes_v2 = obj_v2
-        .body
-        .collect()
-        .await
-        .expect("adapter read v2")
-        .into_bytes();
-    assert_eq!(bytes_v2.as_ref(), b"adapter-v2");
-
-    delete_key(&client, &bucket, &key).await;
-}
-
 mod consistent_db_tests {
     use super::*;
 
     #[tokio::test]
     async fn consistent_bootstrap_open_and_queue_lifecycle() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let store = create_s3_store_for_test(
             "consistent_bootstrap_open_and_queue_lifecycle",
             DurabilityMode::Durable,
@@ -1274,10 +1029,6 @@ mod consistent_db_tests {
 
     #[tokio::test]
     async fn consistent_across_connections() {
-        let client = localstack_client().await;
-        let bucket = s3_bucket();
-        ensure_bucket(&client, &bucket).await;
-
         let follower_base_store = create_s3_store_for_test(
             "consistent_bootstrap_compatibility_aliases",
             DurabilityMode::Durable,
@@ -1327,25 +1078,6 @@ mod consistent_db_tests {
             .expect("durable bootstrap should succeed");
         store
     }
-
-    async fn remote_etag(
-        client: &aws_sdk_s3::Client,
-        bucket: &str,
-        key: &str,
-        context: &str,
-    ) -> String {
-        client
-            .head_object()
-            .bucket(bucket)
-            .key(key)
-            .send()
-            .await
-            .expect(context)
-            .e_tag()
-            .map(|etag| etag.to_string())
-            .unwrap_or_default()
-    }
-
     async fn durable_config_for_missing_remote(schema: &str) -> pgqrs::config::Config {
         let dsn = common::get_test_dsn(schema).await;
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
@@ -1355,16 +1087,14 @@ mod consistent_db_tests {
 
     #[tokio::test]
     async fn given_missing_remote_state_when_consistent_bootstrap_then_creates_remote_state() {
-        let client = localstack_client().await;
         let config = durable_config_for_missing_remote("cboot_create_remote").await;
-        let (bucket, key) = parse_s3_bucket_key(&config.dsn);
-        ensure_bucket(&client, &bucket).await;
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&config.dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
-        let _store = reopen_durable_store(&config).await;
+        let store = reopen_durable_store(&config).await;
 
         assert!(
-            wait_for_head_object(&client, &bucket, &key).await,
+            wait_for_remote_visible(&store).await,
             "durable bootstrap should publish missing remote state without explicit sync"
         );
     }
@@ -1372,11 +1102,9 @@ mod consistent_db_tests {
     #[tokio::test]
     async fn given_missing_remote_state_when_consistent_bootstrap_then_state_is_immediately_readable_without_sync_or_refresh(
     ) {
-        let client = localstack_client().await;
         let config = durable_config_for_missing_remote("cboot_readable_no_sync").await;
-        let (bucket, key) = parse_s3_bucket_key(&config.dsn);
-        ensure_bucket(&client, &bucket).await;
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&config.dsn).unwrap();
+        delete_key(&bucket, &key).await;
         let store = reopen_durable_store(&config).await;
 
         let queue_exists = pgqrs::tables(&store)
@@ -1427,11 +1155,9 @@ mod consistent_db_tests {
     #[tokio::test]
     async fn given_unchanged_remote_state_when_consistent_bootstrap_repeated_then_state_is_unchanged(
     ) {
-        let client = localstack_client().await;
         let config = durable_config_for_missing_remote("cboot_repeat_same").await;
-        let (bucket, key) = parse_s3_bucket_key(&config.dsn);
-        ensure_bucket(&client, &bucket).await;
-        delete_key(&client, &bucket, &key).await;
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&config.dsn).unwrap();
+        delete_key(&bucket, &key).await;
 
         let store = reopen_durable_store(&config).await;
 
@@ -1441,7 +1167,6 @@ mod consistent_db_tests {
             .expect("queue creation should succeed");
 
         let before = remote_etag(
-            &client,
             &bucket,
             &key,
             "remote state should exist after durable bootstrap",
@@ -1462,7 +1187,6 @@ mod consistent_db_tests {
         );
 
         let after = remote_etag(
-            &client,
             &bucket,
             &key,
             "remote state should still exist after durable reopen",

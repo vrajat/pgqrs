@@ -1,6 +1,8 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::store::s3::{s3_local_cache_dir_for_dsn, StoreOpFuture, SyncDb};
+use crate::store::s3::{
+    parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, StoreOpFuture, SyncDb, SyncState,
+};
 use crate::store::sqlite::SqliteStore;
 use crate::store::Store;
 use async_trait::async_trait;
@@ -10,7 +12,6 @@ use object_store::{ObjectStore, PutMode, UpdateVersion};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use url::Url;
 
 #[derive(Clone)]
 /// Object-store-backed single-handle SQLite snapshot database.
@@ -117,41 +118,45 @@ impl SnapshotDb {
     pub(crate) fn write_gate(&self) -> &Arc<Mutex<()>> {
         &self.write_gate
     }
+
+    pub async fn state(&self) -> Result<SyncState> {
+        let (object_store, object_key, local_etag, is_dirty) = {
+            let guard = self.inner.read().await;
+            (
+                guard.object_store.clone(),
+                guard.object_key.clone(),
+                guard.last_etag.clone(),
+                guard.is_dirty,
+            )
+        };
+
+        let sqlite_path = sqlite_path_for_revision(&self.config.dsn, local_etag.as_deref())?;
+        if !sqlite_path.exists() {
+            return Ok(SyncState::LocalMissing);
+        }
+
+        let object_path = ObjectPath::from(object_key.as_str());
+        let remote_head = object_store.head(&object_path).await;
+        match remote_head {
+            Ok(head) => {
+                let remote_etag = head.e_tag;
+                if remote_etag == local_etag && !is_dirty {
+                    Ok(SyncState::InSync)
+                } else {
+                    Ok(SyncState::Diverged {
+                        local_dirty: is_dirty,
+                    })
+                }
+            }
+            Err(object_store::Error::NotFound { .. }) => Ok(SyncState::RemoteMissing {
+                local_dirty: is_dirty,
+            }),
+            Err(e) => Err(map_object_store_error("head", &object_key, &e)),
+        }
+    }
 }
 
-fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
-    let url = Url::parse(dsn).map_err(|e| Error::InvalidConfig {
-        field: "dsn".to_string(),
-        message: format!("Invalid S3 DSN format: {dsn} ({e})"),
-    })?;
-
-    if url.scheme() != "s3" {
-        return Err(Error::InvalidConfig {
-            field: "dsn".to_string(),
-            message: format!("Invalid S3 DSN scheme '{}': {}", url.scheme(), dsn),
-        });
-    }
-
-    let bucket = url.host_str().unwrap_or_default().trim();
-    let key = url.path().trim_start_matches('/').trim();
-
-    if bucket.is_empty() {
-        return Err(Error::InvalidConfig {
-            field: "dsn".to_string(),
-            message: format!("S3 DSN missing bucket: {}", dsn),
-        });
-    }
-    if key.is_empty() {
-        return Err(Error::InvalidConfig {
-            field: "dsn".to_string(),
-            message: format!("S3 DSN missing object key: {}", dsn),
-        });
-    }
-
-    Ok((bucket.to_owned(), key.to_owned()))
-}
-
-fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore>> {
+pub(crate) fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore>> {
     let region = std::env::var("AWS_REGION")
         .ok()
         .map(|v| v.trim().to_string())
@@ -319,11 +324,6 @@ impl SyncDb for SnapshotDb {
         Ok(())
     }
 
-    async fn refresh(&mut self) -> Result<()> {
-        self.reopen_sqlite_store("refresh").await?;
-        Ok(())
-    }
-
     async fn sync(&mut self) -> Result<()> {
         let (object_store, object_key, start_etag, is_dirty, start_write_version) = {
             let guard = self.inner.read().await;
@@ -415,24 +415,6 @@ impl SyncDb for SnapshotDb {
 
         guard.last_etag = next_etag;
         guard.is_dirty = false;
-        guard.sqlite_store = new_store;
-        Ok(())
-    }
-}
-
-impl SnapshotDb {
-    async fn reopen_sqlite_store(&self, operation: &str) -> Result<()> {
-        let current_revision = {
-            let guard = self.inner.read().await;
-            guard.last_etag.clone()
-        };
-        let sqlite_dsn = sqlite_dsn_for_revision(&self.config.dsn, current_revision.as_deref())?;
-        let new_store = SqliteStore::new(&sqlite_dsn, &self.config)
-            .await
-            .map_err(|e| Error::Internal {
-                message: format!("{operation} reopen sqlite store failed: {e}"),
-            })?;
-        let mut guard = self.inner.write().await;
         guard.sqlite_store = new_store;
         Ok(())
     }

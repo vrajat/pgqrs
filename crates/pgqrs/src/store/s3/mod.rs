@@ -9,9 +9,11 @@ pub mod snapshot;
 pub mod tables;
 
 use async_trait::async_trait;
+use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use url::Url;
 
 use crate::config::Config;
@@ -25,6 +27,28 @@ use crate::workers::{Admin, Worker};
 
 pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
 
+/// Internal stateful DB contract for the S3-backed store layers.
+///
+/// This trait sits below [`S3Store`] and above the concrete SQLite/object-store state machine.
+/// It is responsible for two things:
+///
+/// 1. exposing queue/table operations against the current local SQLite view
+/// 2. exposing explicit synchronization operations (`snapshot()` and `sync()`)
+///
+/// The important semantic boundary is:
+///
+/// - `with_read(...)` reads from the current local SQLite state
+/// - `with_write(...)` mutates local SQLite state
+/// - `snapshot(...)` pulls remote state into the local cache
+/// - `sync(...)` pushes local state to remote object storage
+///
+/// Implementations decide how much consistency policy they add on top:
+///
+/// - `SnapshotDb` is explicit and caller-driven
+/// - `ConsistentDb` sequences durable writes automatically
+///
+/// Engineers should treat this trait as the internal durability/replication boundary for the
+/// S3 backend, not as a generic cross-backend store abstraction.
 #[async_trait]
 pub trait SyncDb: Clone + Send + Sync + 'static {
     fn config(&self) -> &Config;
@@ -44,11 +68,26 @@ pub trait SyncDb: Clone + Send + Sync + 'static {
         R: Send,
         F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send;
     async fn snapshot(&mut self) -> Result<()>;
-    async fn refresh(&mut self) -> Result<()>;
     async fn sync(&mut self) -> Result<()>;
 }
 
 /// Durability behavior for S3-backed stores.
+///
+/// This enum controls how much synchronization policy the S3 backend adds on top of the local
+/// SQLite cache.
+///
+/// - `Durable`
+///   - writes are treated as durable writes
+///   - the store sequences local write -> remote sync before returning
+///   - callers do not need to call `sync()` after ordinary write operations
+///
+/// - `Local`
+///   - writes only affect the local SQLite cache
+///   - callers explicitly decide when to call `sync()` or `snapshot()`
+///   - useful for tests, staged synchronization, and explicit state management
+///
+/// This mode does not change the queue API surface; it changes the consistency semantics of the
+/// S3-backed implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DurabilityMode {
@@ -57,6 +96,49 @@ pub enum DurabilityMode {
     Durable,
     /// Local snapshot mode: write/read handles are split and app drives sync/refresh boundaries.
     Local,
+}
+
+/// Derived consistency status for an S3-backed store.
+///
+/// This is a diagnostic/read-only view computed on demand from:
+/// - the presence of the current local cache file
+/// - local dirty state
+/// - local last observed etag
+/// - remote object existence and remote etag
+///
+/// It is intentionally higher-level than the internal fields tracked by `SnapshotDb`.
+/// The enum does **not** attempt to prove which side is authoritative when state diverges; it
+/// only reports the observable relationship between local cache state and remote object state.
+///
+/// Interpretation:
+///
+/// - `LocalMissing`
+///   - the expected local cache file is missing
+///   - usually indicates local cleanup or corruption rather than a normal steady state
+///
+/// - `RemoteMissing { local_dirty }`
+///   - the local cache exists, but the remote object does not
+///   - `local_dirty = true` means there are unsynced local writes and a future `sync()` would
+///     recreate remote state
+///   - `local_dirty = false` means the local cache is clean and `sync()` is a no-op under the
+///     current semantics
+///
+/// - `InSync`
+///   - the local cache exists
+///   - the remote object exists
+///   - remote etag matches the local etag baseline
+///   - local state is not dirty
+///
+/// - `Diverged { local_dirty }`
+///   - local and remote are both present, but they are not currently aligned
+///   - this may mean remote advanced, local has unsynced writes, or both
+///   - the enum deliberately does not try to declare a winner/head revision
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncState {
+    LocalMissing,
+    RemoteMissing { local_dirty: bool },
+    InSync,
+    Diverged { local_dirty: bool },
 }
 
 #[derive(Clone)]
@@ -130,13 +212,6 @@ impl SyncDb for DurabilityStore {
         }
     }
 
-    async fn refresh(&mut self) -> Result<()> {
-        match self {
-            Self::Local(db) => db.refresh().await,
-            Self::Durable(db) => db.refresh().await,
-        }
-    }
-
     async fn sync(&mut self) -> Result<()> {
         match self {
             Self::Local(db) => db.sync().await,
@@ -191,13 +266,6 @@ impl S3Store {
         self.db.snapshot().await
     }
 
-    /// Reload local read handle from the current backing files.
-    ///
-    /// Reload local read handle from the current backing files.
-    pub async fn refresh(&mut self) -> Result<()> {
-        self.db.refresh().await
-    }
-
     /// Sync local write state to object storage.
     ///
     /// Sync local write state to object storage.
@@ -205,9 +273,20 @@ impl S3Store {
         self.db.sync().await
     }
 
+    pub async fn state(&self) -> Result<SyncState> {
+        match &self.db {
+            DurabilityStore::Local(db) => db.state().await,
+            DurabilityStore::Durable(db) => db.state().await,
+        }
+    }
+
     /// Parse `sqlite://` cache dsn from an `s3://` DSN.
     pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
         parse_and_cache_s3_dsn(dsn)
+    }
+
+    pub fn object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore>> {
+        snapshot::build_object_store_from_env(bucket)
     }
 }
 
@@ -824,7 +903,7 @@ where
     }
 }
 
-fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
+pub fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     let url = Url::parse(dsn).map_err(|e| Error::InvalidConfig {
         field: "dsn".to_string(),
         message: format!("Invalid S3 DSN format: {dsn} ({e})"),
