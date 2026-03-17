@@ -71,14 +71,6 @@ const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
 const ENV_SQLITE_USE_WAL: &str = "PGQRS_SQLITE_USE_WAL";
 #[cfg(feature = "s3")]
 const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
-#[cfg(feature = "s3")]
-const ENV_S3_FLUSH_INTERVAL_MS: &str = "PGQRS_S3_FLUSH_INTERVAL_MS";
-#[cfg(feature = "s3")]
-const ENV_S3_MAX_PENDING_OPS: &str = "PGQRS_S3_MAX_PENDING_OPS";
-#[cfg(feature = "s3")]
-const ENV_S3_MAX_BACKOFF_MS: &str = "PGQRS_S3_MAX_BACKOFF_MS";
-#[cfg(feature = "s3")]
-const ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS: &str = "PGQRS_S3_INITIAL_LOAD_MAX_ATTEMPTS";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -137,26 +129,6 @@ fn default_s3_mode() -> crate::store::s3::DurabilityMode {
 }
 
 #[cfg(feature = "s3")]
-fn default_s3_flush_interval_ms() -> u64 {
-    1000
-}
-
-#[cfg(feature = "s3")]
-fn default_s3_max_pending_ops() -> usize {
-    100
-}
-
-#[cfg(feature = "s3")]
-fn default_s3_max_backoff_ms() -> u64 {
-    30_000
-}
-
-#[cfg(feature = "s3")]
-fn default_s3_initial_load_max_attempts() -> usize {
-    8
-}
-
-#[cfg(feature = "s3")]
 fn default_s3_config() -> S3Config {
     S3Config::default()
 }
@@ -184,18 +156,6 @@ pub struct S3Config {
     /// S3-backed durability mode (only used for s3:// DSNs)
     #[serde(default = "default_s3_mode")]
     pub mode: crate::store::s3::DurabilityMode,
-    /// Periodic flush interval in milliseconds.
-    #[serde(default = "default_s3_flush_interval_ms")]
-    pub flush_interval_ms: u64,
-    /// Threshold for pending local operations before forcing a flush.
-    #[serde(default = "default_s3_max_pending_ops")]
-    pub max_pending_ops: usize,
-    /// Maximum retry backoff in milliseconds for transient sync errors.
-    #[serde(default = "default_s3_max_backoff_ms")]
-    pub max_backoff_ms: u64,
-    /// Number of retries for initial remote load while opening the store.
-    #[serde(default = "default_s3_initial_load_max_attempts")]
-    pub initial_load_max_attempts: usize,
 }
 
 #[cfg(feature = "s3")]
@@ -203,10 +163,6 @@ impl Default for S3Config {
     fn default() -> Self {
         Self {
             mode: default_s3_mode(),
-            flush_interval_ms: default_s3_flush_interval_ms(),
-            max_pending_ops: default_s3_max_pending_ops(),
-            max_backoff_ms: default_s3_max_backoff_ms(),
-            initial_load_max_attempts: default_s3_initial_load_max_attempts(),
         }
     }
 }
@@ -421,25 +377,7 @@ impl Config {
             .unwrap_or_else(default_s3_mode);
 
         #[cfg(feature = "s3")]
-        let s3 = S3Config {
-            mode: s3_mode,
-            flush_interval_ms: env::var(ENV_S3_FLUSH_INTERVAL_MS)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_s3_flush_interval_ms),
-            max_pending_ops: env::var(ENV_S3_MAX_PENDING_OPS)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_s3_max_pending_ops),
-            max_backoff_ms: env::var(ENV_S3_MAX_BACKOFF_MS)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_s3_max_backoff_ms),
-            initial_load_max_attempts: env::var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS)
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_s3_initial_load_max_attempts),
-        };
+        let s3 = S3Config { mode: s3_mode };
 
         Ok(Self {
             dsn,
@@ -601,10 +539,6 @@ mod tests {
         #[cfg(feature = "s3")]
         {
             env::remove_var(ENV_S3_MODE);
-            env::remove_var(ENV_S3_FLUSH_INTERVAL_MS);
-            env::remove_var(ENV_S3_MAX_PENDING_OPS);
-            env::remove_var(ENV_S3_MAX_BACKOFF_MS);
-            env::remove_var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS);
         }
     }
 
@@ -1053,17 +987,9 @@ schema: "invalid-schema-name"
 
         env::set_var(ENV_DSN, "s3://bucket/queue.sqlite");
         env::set_var(ENV_S3_MODE, "durable");
-        env::set_var(ENV_S3_FLUSH_INTERVAL_MS, "2500");
-        env::set_var(ENV_S3_MAX_PENDING_OPS, "42");
-        env::set_var(ENV_S3_MAX_BACKOFF_MS, "120000");
-        env::set_var(ENV_S3_INITIAL_LOAD_MAX_ATTEMPTS, "12");
 
         let config = Config::from_env().expect("Should load s3 settings from env");
         assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
-        assert_eq!(config.s3.flush_interval_ms, 2500);
-        assert_eq!(config.s3.max_pending_ops, 42);
-        assert_eq!(config.s3.max_backoff_ms, 120000);
-        assert_eq!(config.s3.initial_load_max_attempts, 12);
 
         clear_test_env_vars();
     }

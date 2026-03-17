@@ -2,10 +2,10 @@
 
 mod common;
 
-use aws_sdk_s3::primitives::ByteStream;
 use aws_config::{BehaviorVersion, Region};
-use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::Client;
 use chrono::Utc;
 use pgqrs::store::s3::DurabilityMode;
 use pgqrs::store::AnyStore;
@@ -1173,7 +1173,10 @@ async fn localstack_aws_adapter_round_trip() {
         .send()
         .await
         .expect("adapter put v1");
-    let etag_v1 = put_v1.e_tag().expect("adapter put should return etag").to_string();
+    let etag_v1 = put_v1
+        .e_tag()
+        .expect("adapter put should return etag")
+        .to_string();
     let obj_v1 = client
         .get_object()
         .bucket(&bucket)
@@ -1181,7 +1184,12 @@ async fn localstack_aws_adapter_round_trip() {
         .send()
         .await
         .expect("adapter get v1");
-    let bytes_v1 = obj_v1.body.collect().await.expect("adapter read v1").into_bytes();
+    let bytes_v1 = obj_v1
+        .body
+        .collect()
+        .await
+        .expect("adapter read v1")
+        .into_bytes();
     assert_eq!(bytes_v1.as_ref(), b"adapter-v1");
 
     let _put_v2 = client
@@ -1200,7 +1208,12 @@ async fn localstack_aws_adapter_round_trip() {
         .send()
         .await
         .expect("adapter get v2");
-    let bytes_v2 = obj_v2.body.collect().await.expect("adapter read v2").into_bytes();
+    let bytes_v2 = obj_v2
+        .body
+        .collect()
+        .await
+        .expect("adapter read v2")
+        .into_bytes();
     assert_eq!(bytes_v2.as_ref(), b"adapter-v2");
 
     delete_key(&client, &bucket, &key).await;

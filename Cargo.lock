@@ -2578,6 +2578,7 @@ dependencies = [
  "chrono",
  "clap",
  "ctor",
+ "futures-util",
  "humantime",
  "object_store",
  "once_cell",
