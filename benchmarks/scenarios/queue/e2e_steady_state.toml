@@ -1,0 +1,31 @@
+id = "queue.e2e.steady_state"
+kind = "queue"
+question = "Under a fixed cross-backend steady-state workload, what throughput and tail latency does the queue deliver?"
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat", "single_process"]
+
+[action.fixed]
+payload_profile = "small"
+producers = 1
+consumers = 1
+enqueue_batch_size = 10
+dequeue_batch_size = 10
+duration_seconds = 30
+queue_mode = "continuous"
+
+[answer]
+kind = "single_run_summary"
+primary = "completed_messages_per_second"
+series = [
+  "completed_messages_per_second",
+  "p95_dequeue_latency_ms",
+  "p95_archive_latency_ms",
+  "error_rate",
+  "queue_depth_at_end",
+]
+vary_by = []
+
+[notes]
+limitations = "This is a fixed-load regression scenario. It is not intended to find maximum throughput or the saturation knee."

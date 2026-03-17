@@ -1,22 +1,27 @@
 id = "queue.example"
 kind = "queue"
-goal = "Describe what product question this benchmark answers."
+question = "What do we want to learn from this benchmark?"
 
 backends = ["postgres", "sqlite", "turso"]
 bindings = ["rust", "python"]
 profiles = ["compat"]
 
-[workload]
+[action.fixed]
 payload_profile = "small"
 producers = 1
 consumers = 1
 batch_size = 1
 duration_seconds = 30
 
-[metrics]
+[action.variables]
+# consumers = [1, 2, 4]
+# batch_size = [1, 10, 50]
+
+[answer]
+kind = "series_family"
 primary = "messages_per_second"
-secondary = ["p95_latency_ms", "error_rate"]
+series = ["messages_per_second", "p95_latency_ms", "error_rate"]
+vary_by = ["consumers", "batch_size"]
 
 [notes]
-maintainer = "fill-me-in"
 limitations = "Add scenario-specific caveats here."

@@ -1,0 +1,36 @@
+id = "queue.e2e.capacity_knee"
+kind = "queue"
+question = "At what offered load does throughput stop improving materially while latency or backlog starts to rise?"
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["single_process"]
+
+[action.fixed]
+payload_profile = "small"
+duration_seconds = 20
+queue_mode = "continuous"
+producers = 1
+
+[action.variables]
+consumers = [1, 2, 4, 8]
+enqueue_batch_size = [1, 10, 50]
+dequeue_batch_size = [1, 10, 50]
+
+[answer]
+kind = "series_family"
+primary = "knee_throughput_messages_per_second"
+series = [
+  "throughput_curve",
+  "p95_dequeue_latency_ms",
+  "p95_archive_latency_ms",
+  "queue_depth_at_end",
+  "error_rate",
+]
+vary_by = ["consumers", "enqueue_batch_size", "dequeue_batch_size"]
+
+[analysis]
+knee_signal = "The first point where throughput gain flattens while latency or residual queue depth increases materially."
+
+[notes]
+limitations = "This is a search scenario, not a single-run regression scenario. It should record the full sweep so the dashboard can plot the throughput curve and selected knee."

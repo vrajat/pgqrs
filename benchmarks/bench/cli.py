@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 
+from benchmarks.bench.registry import SCENARIOS
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pgqrs-bench")
@@ -30,7 +31,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "list":
-        print("TODO: list scenarios from benchmarks.bench.registry")
+        for scenario in SCENARIOS:
+            print(scenario.scenario_id)
         return 0
 
     if args.command == "run":

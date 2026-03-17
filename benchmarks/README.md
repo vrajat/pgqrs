@@ -13,6 +13,7 @@ It contains:
 - placeholder Python orchestration modules
 - placeholder executor modules
 - scenario templates
+- three concrete starter queue scenarios
 - a placeholder Streamlit dashboard
 - storage conventions for benchmark artifacts
 
@@ -45,11 +46,18 @@ benchmarks/
 
 Start with a single benchmark scenario, for example:
 
-- `queue.enqueue.single`
 - `queue.e2e.steady_state`
+- `queue.drain_fixed_backlog`
+- `queue.e2e.capacity_knee`
 - `workflow.simple.1_step`
 
 Do not implement the entire matrix first.
+
+The current starter scenarios live in:
+
+- `benchmarks/scenarios/queue/e2e_steady_state.toml`
+- `benchmarks/scenarios/queue/drain_fixed_backlog.toml`
+- `benchmarks/scenarios/queue/e2e_capacity_knee.toml`
 
 ### 2. Write The Scenario Spec
 
@@ -63,11 +71,15 @@ Scenario specs should be declarative.
 They should describe:
 
 - benchmark ID
-- goal
+- question
 - backend support
 - binding support
-- workload parameters
-- primary metric
+- action
+- answer
+
+The question should be the thing we want to know.
+The action is the method used to answer it.
+The answer describes the curves, series, or summaries the dashboard should present.
 
 They should not contain execution logic.
 
