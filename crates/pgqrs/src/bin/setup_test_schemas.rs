@@ -1,10 +1,13 @@
 use std::env;
 
+#[cfg(feature = "s3")]
+use futures_util::TryStreamExt;
+#[cfg(feature = "s3")]
+use object_store::aws::AmazonS3Builder;
+#[cfg(feature = "s3")]
+use object_store::ObjectStore;
 #[cfg(feature = "postgres")]
 use sqlx::postgres::PgPoolOptions;
-
-#[cfg(feature = "s3")]
-use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig};
 
 #[cfg(feature = "postgres")]
 const TEST_DB_DSN_ENV: &str = "PGQRS_TEST_DSN";
@@ -106,51 +109,26 @@ async fn run_list_s3_sqlite_objects() -> Result<(), Box<dyn std::error::Error>> 
         .or_else(|_| env::var("AWS_DEFAULT_REGION"))
         .unwrap_or_else(|_| DEFAULT_S3_REGION.to_string());
     let bucket = env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| DEFAULT_S3_BUCKET.to_string());
-    let access_key = env::var("AWS_ACCESS_KEY_ID")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| Some("test".to_string()));
-    let secret_key = env::var("AWS_SECRET_ACCESS_KEY")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| Some("test".to_string()));
-
-    let client = build_aws_s3_client(AwsS3ClientConfig {
-        region,
-        endpoint: Some(endpoint),
-        access_key,
-        secret_key,
-        force_path_style: true,
-        credentials_provider_name: "pgqrs-test-listing",
-    })
-    .await;
+    let mut builder = AmazonS3Builder::from_env()
+        .with_bucket_name(&bucket)
+        .with_region(region)
+        .with_virtual_hosted_style_request(false);
+    if endpoint.starts_with("http://") {
+        builder = builder.with_allow_http(true);
+    }
+    if !endpoint.trim().is_empty() {
+        builder = builder.with_endpoint(endpoint);
+    }
+    let store = builder.build()?;
 
     println!("Listing sqlite objects in bucket '{}'...", bucket);
 
-    let mut continuation: Option<String> = None;
     let mut sqlite_keys: Vec<String> = Vec::new();
-
-    loop {
-        let mut req = client.list_objects_v2().bucket(&bucket);
-        if let Some(token) = continuation.as_deref() {
-            req = req.continuation_token(token.to_string());
-        }
-        let out = req.send().await?;
-
-        for obj in out.contents() {
-            if let Some(key) = obj.key() {
-                if key.ends_with(".sqlite") {
-                    sqlite_keys.push(key.to_string());
-                }
-            }
-        }
-
-        if out.is_truncated().unwrap_or(false) {
-            continuation = out
-                .next_continuation_token()
-                .map(std::string::ToString::to_string);
-        } else {
-            break;
+    let mut stream = store.list(None);
+    while let Some(meta) = stream.try_next().await? {
+        let key = meta.location.to_string();
+        if key.ends_with(".sqlite") {
+            sqlite_keys.push(key);
         }
     }
 

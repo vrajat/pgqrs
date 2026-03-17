@@ -3,9 +3,10 @@
 mod common;
 
 use aws_sdk_s3::primitives::ByteStream;
+use aws_config::{BehaviorVersion, Region};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::Credentials;
 use chrono::Utc;
-use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig, AwsS3ObjectStore};
 use pgqrs::store::s3::DurabilityMode;
 use pgqrs::store::AnyStore;
 use pgqrs::types::NewQueueMessage;
@@ -128,15 +129,16 @@ async fn s3_snapshot_store(store: &mut AnyStore) -> pgqrs::error::Result<()> {
 
 async fn localstack_client() -> Client {
     prepare_localstack_tls_env();
-    build_aws_s3_client(AwsS3ClientConfig {
-        region: s3_region(),
-        endpoint: Some(s3_endpoint()),
-        access_key: Some("test".to_string()),
-        secret_key: Some("test".to_string()),
-        force_path_style: true,
-        credentials_provider_name: "localstack",
-    })
-    .await
+    let endpoint = s3_endpoint();
+    let region = s3_region();
+    let config = aws_sdk_s3::config::Builder::new()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new(region))
+        .credentials_provider(Credentials::new("test", "test", None, None, "localstack"))
+        .endpoint_url(endpoint)
+        .force_path_style(true)
+        .build();
+    Client::from_conf(config)
 }
 
 async fn ensure_bucket(client: &Client, bucket: &str) {
@@ -1160,24 +1162,46 @@ async fn localstack_aws_adapter_round_trip() {
     let client = localstack_client().await;
     let bucket = s3_bucket();
     let key = format!("smoke/adapter-{}.bin", uuid::Uuid::new_v4());
-    let adapter = AwsS3ObjectStore::new(client.clone(), bucket.clone());
 
     ensure_bucket(&client, &bucket).await;
 
-    let etag_v1 = adapter
-        .put_object_if_match(&key, b"adapter-v1", None)
+    let put_v1 = client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(ByteStream::from_static(b"adapter-v1"))
+        .send()
         .await
         .expect("adapter put v1");
-    let obj_v1 = adapter.get_object(&key).await.expect("adapter get v1");
-    assert_eq!(obj_v1.bytes, b"adapter-v1");
-    assert_eq!(obj_v1.etag.as_deref(), Some(etag_v1.as_str()));
+    let etag_v1 = put_v1.e_tag().expect("adapter put should return etag").to_string();
+    let obj_v1 = client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .expect("adapter get v1");
+    let bytes_v1 = obj_v1.body.collect().await.expect("adapter read v1").into_bytes();
+    assert_eq!(bytes_v1.as_ref(), b"adapter-v1");
 
-    let _etag_v2 = adapter
-        .put_object_if_match(&key, b"adapter-v2", Some(&etag_v1))
+    let _put_v2 = client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .if_match(etag_v1)
+        .body(ByteStream::from_static(b"adapter-v2"))
+        .send()
         .await
         .expect("adapter cas put v2");
-    let obj_v2 = adapter.get_object(&key).await.expect("adapter get v2");
-    assert_eq!(obj_v2.bytes, b"adapter-v2");
+    let obj_v2 = client
+        .get_object()
+        .bucket(&bucket)
+        .key(&key)
+        .send()
+        .await
+        .expect("adapter get v2");
+    let bytes_v2 = obj_v2.body.collect().await.expect("adapter read v2").into_bytes();
+    assert_eq!(bytes_v2.as_ref(), b"adapter-v2");
 
     delete_key(&client, &bucket, &key).await;
 }

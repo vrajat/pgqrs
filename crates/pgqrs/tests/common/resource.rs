@@ -1,7 +1,11 @@
 use async_trait::async_trait;
-use once_cell::sync::Lazy;
 #[cfg(feature = "s3")]
-use pgqrs::store::s3::client::{build_aws_s3_client, AwsS3ClientConfig};
+use object_store::aws::AmazonS3Builder;
+#[cfg(feature = "s3")]
+use object_store::path::Path as ObjectPath;
+#[cfg(feature = "s3")]
+use object_store::ObjectStore;
+use once_cell::sync::Lazy;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
@@ -258,30 +262,21 @@ impl S3FileResource {
             .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
             .unwrap_or_else(|_| "us-east-1".to_string());
         let endpoint = std::env::var("AWS_ENDPOINT_URL").ok();
-        let access_key = std::env::var("AWS_ACCESS_KEY_ID")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
-        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
-        let client = build_aws_s3_client(AwsS3ClientConfig {
-            region,
-            endpoint,
-            access_key,
-            secret_key,
-            force_path_style: true,
-            credentials_provider_name: "pgqrs-s3-test-cleanup",
-        })
-        .await;
 
         for (bucket, keys) in by_bucket {
+            let mut builder = AmazonS3Builder::from_env()
+                .with_bucket_name(&bucket)
+                .with_region(region.clone())
+                .with_virtual_hosted_style_request(false);
+            if let Some(ep) = endpoint.clone().filter(|v| !v.trim().is_empty()) {
+                if ep.starts_with("http://") {
+                    builder = builder.with_allow_http(true);
+                }
+                builder = builder.with_endpoint(ep);
+            }
+            let store = builder.build()?;
             for key in keys {
-                let _ = client
-                    .delete_object()
-                    .bucket(&bucket)
-                    .key(&key)
-                    .send()
-                    .await;
+                let _ = store.delete(&ObjectPath::from(key.as_str())).await;
             }
         }
         Ok(())

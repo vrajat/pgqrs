@@ -4,7 +4,6 @@
 //! configuration/model types. The implementation uses an internal durability-backed
 //! DB holder and direct `S3Store` wiring for table and worker operations.
 
-pub mod client;
 pub mod consistent;
 pub mod snapshot;
 pub mod tables;
