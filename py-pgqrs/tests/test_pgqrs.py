@@ -9,6 +9,9 @@ from pgqrs.decorators import workflow, step
 # Helper to setup a store and admin
 async def setup_test(dsn, schema):
     config = pgqrs.Config(dsn, schema=schema)
+    return await setup_test_with_config(config)
+
+async def setup_test_with_config(config):
     store = await pgqrs.connect_with(config)
     admin = pgqrs.admin(store)
     await admin.install()
@@ -138,6 +141,45 @@ async def test_config_properties(test_dsn):
 
     c.heartbeat_interval_seconds = 15
     assert c.heartbeat_interval_seconds == 15
+
+    c.max_payload_size_bytes = 2048
+    assert c.max_payload_size_bytes == 2048
+
+    c.max_string_length = 256
+    assert c.max_string_length == 256
+
+    c.max_object_depth = 8
+    assert c.max_object_depth == 8
+
+    c.forbidden_keys = ["__proto__", "constructor", "forbidden"]
+    assert c.forbidden_keys == ["__proto__", "constructor", "forbidden"]
+
+    c.required_keys = ["job_id"]
+    assert c.required_keys == ["job_id"]
+
+    c.max_enqueue_per_second = None
+    assert c.max_enqueue_per_second is None
+
+    c.max_enqueue_burst = None
+    assert c.max_enqueue_burst is None
+
+
+@pytest.mark.asyncio
+async def test_disable_enqueue_rate_limit_via_config(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    config.max_enqueue_per_second = None
+    config.max_enqueue_burst = None
+
+    store, admin = await setup_test_with_config(config)
+    queue_name = "test_disable_enqueue_rate_limit_via_config"
+    await store.queue(queue_name)
+
+    producer = await store.producer(queue_name)
+    payloads = [{"job": i} for i in range(200)]
+
+    msg_ids = await pgqrs.enqueue_batch(producer, payloads)
+
+    assert len(msg_ids) == len(payloads)
 
 
 @pytest.mark.asyncio

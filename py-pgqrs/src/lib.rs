@@ -252,6 +252,76 @@ impl PyConfig {
     fn set_heartbeat_interval_seconds(&mut self, interval: u64) {
         self.inner.heartbeat_interval = interval;
     }
+
+    #[getter]
+    fn get_max_payload_size_bytes(&self) -> usize {
+        self.inner.validation_config.max_payload_size_bytes
+    }
+
+    #[setter]
+    fn set_max_payload_size_bytes(&mut self, size: usize) {
+        self.inner.validation_config.max_payload_size_bytes = size;
+    }
+
+    #[getter]
+    fn get_max_string_length(&self) -> usize {
+        self.inner.validation_config.max_string_length
+    }
+
+    #[setter]
+    fn set_max_string_length(&mut self, length: usize) {
+        self.inner.validation_config.max_string_length = length;
+    }
+
+    #[getter]
+    fn get_max_object_depth(&self) -> usize {
+        self.inner.validation_config.max_object_depth
+    }
+
+    #[setter]
+    fn set_max_object_depth(&mut self, depth: usize) {
+        self.inner.validation_config.max_object_depth = depth;
+    }
+
+    #[getter]
+    fn get_forbidden_keys(&self) -> Vec<String> {
+        self.inner.validation_config.forbidden_keys.clone()
+    }
+
+    #[setter]
+    fn set_forbidden_keys(&mut self, keys: Vec<String>) {
+        self.inner.validation_config.forbidden_keys = keys;
+    }
+
+    #[getter]
+    fn get_required_keys(&self) -> Vec<String> {
+        self.inner.validation_config.required_keys.clone()
+    }
+
+    #[setter]
+    fn set_required_keys(&mut self, keys: Vec<String>) {
+        self.inner.validation_config.required_keys = keys;
+    }
+
+    #[getter]
+    fn get_max_enqueue_per_second(&self) -> Option<u32> {
+        self.inner.validation_config.max_enqueue_per_second
+    }
+
+    #[setter]
+    fn set_max_enqueue_per_second(&mut self, rate: Option<u32>) {
+        self.inner.validation_config.max_enqueue_per_second = rate;
+    }
+
+    #[getter]
+    fn get_max_enqueue_burst(&self) -> Option<u32> {
+        self.inner.validation_config.max_enqueue_burst
+    }
+
+    #[setter]
+    fn set_max_enqueue_burst(&mut self, burst: Option<u32>) {
+        self.inner.validation_config.max_enqueue_burst = burst;
+    }
 }
 
 /// Backoff strategy for step retries

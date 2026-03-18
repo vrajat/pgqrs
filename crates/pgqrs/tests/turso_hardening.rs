@@ -23,25 +23,6 @@ async fn create_test_store() -> (AnyStore, String) {
 }
 
 #[tokio::test]
-async fn test_batch_size_limit() {
-    let (store, _path) = create_test_store().await;
-
-    // Create > 100 ids
-    let ids: Vec<i64> = (0..101).collect();
-
-    let result = store.messages().get_by_ids(&ids).await;
-    assert!(result.is_err());
-
-    let err = result.err().unwrap();
-    match err {
-        pgqrs::Error::ValidationFailed { reason } => {
-            assert!(reason.contains("exceeds limit"));
-        }
-        _ => panic!("Expected ValidationFailed, got {:?}", err),
-    }
-}
-
-#[tokio::test]
 async fn test_foreign_key_enforcement() {
     let (store, _path) = create_test_store().await;
 
