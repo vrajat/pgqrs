@@ -13,8 +13,6 @@ const INSERT_MESSAGE: &str = r#"
     RETURNING id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at;
 "#;
 
-const MAX_BATCH_SIZE: usize = 100;
-
 const GET_MESSAGE_BY_ID: &str = r#"
     SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
     FROM pgqrs_messages
@@ -258,12 +256,6 @@ impl crate::store::MessageTable for TursoMessageTable {
     async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
         if ids.is_empty() {
             return Ok(vec![]);
-        }
-
-        if ids.len() > MAX_BATCH_SIZE {
-            return Err(crate::error::Error::ValidationFailed {
-                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
-            });
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
@@ -821,12 +813,6 @@ impl crate::store::MessageTable for TursoMessageTable {
     async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
         if ids.is_empty() {
             return Ok(vec![]);
-        }
-
-        if ids.len() > MAX_BATCH_SIZE {
-            return Err(crate::error::Error::ValidationFailed {
-                reason: format!("Batch size {} exceeds limit {}", ids.len(), MAX_BATCH_SIZE),
-            });
         }
 
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
