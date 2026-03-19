@@ -31,6 +31,10 @@ class DequeueBuilder:
         self._inner.poll_interval(interval_ms)
         return self
 
+    def at(self, time: str) -> "DequeueBuilder":
+        self._inner.at(time)
+        return self
+
     def handle(self, handler: Any) -> "DequeueBuilder":
         self._inner.handle(handler)
         return self

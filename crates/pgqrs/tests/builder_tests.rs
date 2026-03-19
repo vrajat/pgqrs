@@ -12,6 +12,36 @@ async fn create_ergonomics_store() -> pgqrs::store::AnyStore {
     common::create_store("pgqrs_builder_ergonomics_test").await
 }
 
+async fn wait_for_worker_status(
+    store: &pgqrs::store::AnyStore,
+    worker_id: i64,
+    expected: pgqrs::types::WorkerStatus,
+) -> pgqrs::types::WorkerRecord {
+    for _ in 0..50 {
+        let worker = pgqrs::tables(store).workers().get(worker_id).await.unwrap();
+        if worker.status == expected {
+            return worker;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("worker {} did not reach status {:?}", worker_id, expected);
+}
+
+async fn wait_for_worker_heartbeat_advance(
+    store: &pgqrs::store::AnyStore,
+    worker_id: i64,
+    after: chrono::DateTime<chrono::Utc>,
+) -> pgqrs::types::WorkerRecord {
+    for _ in 0..80 {
+        let worker = pgqrs::tables(store).workers().get(worker_id).await.unwrap();
+        if worker.heartbeat_at > after {
+            return worker;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("worker {} heartbeat did not advance", worker_id);
+}
+
 #[tokio::test]
 async fn test_enqueue_all_options() {
     let store = create_store().await;
@@ -669,6 +699,287 @@ async fn test_builder_delay_behavior() {
     assert_eq!(msg.unwrap().payload, payload);
 
     // Cleanup
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_single_handler_rejects_batch_size_gt_one() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_single_handler_batch_validation";
+    let queue_info = store.queue(queue_name).await.unwrap();
+
+    let execute_err = pgqrs::dequeue()
+        .from(queue_name)
+        .batch(2)
+        .handle(|_msg| async move { Ok(()) })
+        .execute(&store)
+        .await
+        .unwrap_err();
+
+    match execute_err {
+        pgqrs::error::Error::ValidationFailed { reason } => {
+            assert!(
+                reason.contains("single-message handlers require batch size = 1"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("Expected ValidationFailed, got {:?}", other),
+    }
+
+    let poll_err = pgqrs::dequeue()
+        .from(queue_name)
+        .batch(2)
+        .handle(|_msg| async move { Ok(()) })
+        .poll(&store)
+        .await
+        .unwrap_err();
+
+    match poll_err {
+        pgqrs::error::Error::ValidationFailed { reason } => {
+            assert!(
+                reason.contains("single-message handlers require batch size = 1"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("Expected ValidationFailed, got {:?}", other),
+    }
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_single_handler_poll_exits_cleanly_when_consumer_suspended() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_single_handler_poll_suspended";
+    let queue_info = store.queue(queue_name).await.unwrap();
+    let consumer = pgqrs::consumer("host", 9999, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    consumer.suspend().await.unwrap();
+
+    let err = pgqrs::dequeue()
+        .worker(&consumer)
+        .handle(|_msg| async move { Ok(()) })
+        .poll(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::Suspended { ref reason } if reason == "worker suspended"
+    ));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_fetch_all_exits_cleanly_when_consumer_suspended() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_fetch_all_suspended";
+    let queue_info = store.queue(queue_name).await.unwrap();
+    let consumer = pgqrs::consumer("host", 9998, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    consumer.suspend().await.unwrap();
+
+    let err = pgqrs::dequeue()
+        .worker(&consumer)
+        .fetch_all(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::Suspended { ref reason } if reason == "worker suspended"
+    ));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_fetch_one_exits_cleanly_when_consumer_suspended() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_fetch_one_suspended";
+    let queue_info = store.queue(queue_name).await.unwrap();
+    let consumer = pgqrs::consumer("host", 9997, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    consumer.suspend().await.unwrap();
+
+    let err = pgqrs::dequeue()
+        .worker(&consumer)
+        .fetch_one(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::Suspended { ref reason } if reason == "worker suspended"
+    ));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_batch_handler_poll_exits_cleanly_when_consumer_suspended() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_batch_handler_poll_suspended";
+    let queue_info = store.queue(queue_name).await.unwrap();
+    let consumer = pgqrs::consumer("host", 9996, queue_name)
+        .create(&store)
+        .await
+        .unwrap();
+
+    consumer.suspend().await.unwrap();
+
+    let err = pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(5)
+        .handle_batch(|_msgs| async move { Ok(()) })
+        .poll(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::Suspended { ref reason } if reason == "worker suspended"
+    ));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_single_handler_execute_propagates_handler_error() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_single_handler_execute_error";
+    let queue_info = store.queue(queue_name).await.unwrap();
+
+    pgqrs::enqueue()
+        .message(&json!({"err": true}))
+        .to(queue_name)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    let err = pgqrs::dequeue()
+        .from(queue_name)
+        .handle(|_msg| async move {
+            Err(pgqrs::error::Error::ValidationFailed {
+                reason: "handler failed".to_string(),
+            })
+        })
+        .execute(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::ValidationFailed { ref reason } if reason == "handler failed"
+    ));
+
+    let visible = pgqrs::dequeue()
+        .from(queue_name)
+        .fetch_one(&store)
+        .await
+        .unwrap();
+    assert!(
+        visible.is_some(),
+        "message should be released back to the queue"
+    );
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_updates_worker_heartbeat_while_idle() {
+    let store = common::create_store_with_config("pgqrs_builder_test", |config| {
+        config.heartbeat_interval = 1;
+        config.poll_interval_ms = 2_000;
+    })
+    .await;
+    let queue_name = "test_dequeue_poll_heartbeat";
+
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+
+    let consumer = pgqrs::consumer("heartbeat-host", 9910, queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+    let fixed_now = chrono::Utc::now();
+
+    let store_task = store.clone();
+    let consumer_task_handle = consumer.clone();
+    let task = tokio::spawn(async move {
+        pgqrs::dequeue()
+            .worker(&consumer_task_handle)
+            .batch(1)
+            .at(fixed_now)
+            .handle(|_msg| Box::pin(async { Ok(()) }))
+            .poll(&store_task)
+            .await
+    });
+
+    let worker_before = wait_for_worker_status(
+        &store,
+        consumer.worker_id(),
+        pgqrs::types::WorkerStatus::Polling,
+    )
+    .await;
+    let worker_after =
+        wait_for_worker_heartbeat_advance(&store, consumer.worker_id(), worker_before.heartbeat_at)
+            .await;
+
+    assert!(
+        worker_after.heartbeat_at > worker_before.heartbeat_at,
+        "expected heartbeat_at to advance while polling idle"
+    );
+
+    consumer.interrupt().await.unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(res, Err(pgqrs::error::Error::Suspended { .. })));
+
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)

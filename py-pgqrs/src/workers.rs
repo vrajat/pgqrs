@@ -286,6 +286,17 @@ impl PyWorkers {
                 .collect::<Vec<_>>())
         })
     }
+
+    fn get<'a>(&self, py: Python<'a>, worker_id: i64) -> PyResult<&'a PyAny> {
+        let store = self.store.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let worker = rust_pgqrs::Store::workers(&store)
+                .get(worker_id)
+                .await
+                .map_err(to_py_err)?;
+            Ok(PyWorkerInfo::from(worker))
+        })
+    }
 }
 
 #[pyclass(name = "WorkerInfo")]
@@ -298,6 +309,8 @@ pub struct PyWorkerInfo {
     pub status: String,
     #[pyo3(get)]
     pub queue_id: Option<i64>,
+    #[pyo3(get)]
+    pub heartbeat_at: String,
 }
 
 impl From<RustWorkerInfo> for PyWorkerInfo {
@@ -307,6 +320,7 @@ impl From<RustWorkerInfo> for PyWorkerInfo {
             hostname: r.hostname,
             status: r.status.to_string(),
             queue_id: r.queue_id,
+            heartbeat_at: r.heartbeat_at.to_rfc3339(),
         }
     }
 }

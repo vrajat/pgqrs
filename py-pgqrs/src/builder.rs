@@ -1,9 +1,36 @@
 use crate::tables::PyQueueMessage;
 use crate::{to_py_err, PyStore};
+use ::pgqrs::store::Store as _;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use std::sync::Arc;
 use tokio::time::Duration;
+
+fn validate_handler_configuration(
+    batch_size: usize,
+    handle_one: &Option<PyObject>,
+    handle_batch: &Option<PyObject>,
+    handle_workflow: &Option<PyObject>,
+) -> PyResult<()> {
+    let num_handlers =
+        handle_one.is_some() as u8 + handle_batch.is_some() as u8 + handle_workflow.is_some() as u8;
+    if num_handlers != 1 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "exactly one of handle(), handle_batch() or handle_workflow() is required",
+        ));
+    }
+
+    if handle_one.is_some() && batch_size != 1 {
+        return Err(to_py_err(::pgqrs::Error::ValidationFailed {
+            reason: format!(
+                "single-message handlers require batch size = 1, got {}",
+                batch_size
+            ),
+        }));
+    }
+
+    Ok(())
+}
 
 #[pyclass(name = "DequeueBuilder")]
 pub struct PyDequeueBuilder {
@@ -11,6 +38,7 @@ pub struct PyDequeueBuilder {
     batch_size: usize,
     queue_name: Option<String>,
     poll_interval_ms: Option<u64>,
+    at: Option<chrono::DateTime<chrono::Utc>>,
     handle_one: Option<PyObject>,
     handle_batch: Option<PyObject>,
     handle_workflow: Option<PyObject>,
@@ -23,6 +51,7 @@ impl Default for PyDequeueBuilder {
             batch_size: 1,
             queue_name: None,
             poll_interval_ms: None,
+            at: None,
             handle_one: None,
             handle_batch: None,
             handle_workflow: None,
@@ -58,6 +87,14 @@ impl PyDequeueBuilder {
     pub fn poll_interval(mut slf: PyRefMut<'_, Self>, interval_ms: u64) -> PyRefMut<'_, Self> {
         slf.poll_interval_ms = Some(interval_ms);
         slf
+    }
+
+    pub fn at(mut slf: PyRefMut<'_, Self>, time: String) -> PyResult<PyRefMut<'_, Self>> {
+        let time = chrono::DateTime::parse_from_rfc3339(&time)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            .with_timezone(&chrono::Utc);
+        slf.at = Some(time);
+        Ok(slf)
     }
 
     #[getter]
@@ -96,100 +133,154 @@ impl PyDequeueBuilder {
 
     pub fn poll<'a>(&self, py: Python<'a>, store: PyStore) -> PyResult<&'a PyAny> {
         let worker = self.worker.clone();
+        let queue_name = self.queue_name.clone();
         let batch_size = self.batch_size;
-        let poll_interval = Duration::from_millis(self.poll_interval_ms.unwrap_or(50));
+        let poll_interval_ms = self.poll_interval_ms;
+        let at = self.at;
         let handle_one = self.handle_one.clone();
         let handle_batch = self.handle_batch.clone();
         let handle_workflow = self.handle_workflow.clone();
 
         pyo3_asyncio::tokio::future_into_py::<_, ()>(py, async move {
-            let worker = worker
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("worker is required"))?;
+            validate_handler_configuration(
+                batch_size,
+                &handle_one,
+                &handle_batch,
+                &handle_workflow,
+            )?;
 
-            let num_handlers = handle_one.is_some() as u8
-                + handle_batch.is_some() as u8
-                + handle_workflow.is_some() as u8;
-            if num_handlers != 1 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "exactly one of handle(), handle_batch() or handle_workflow() is required",
-                ));
-            }
+            let store_inner = store.inner.clone();
+            let consumer = worker
+                .as_ref()
+                .map(|worker| Python::with_gil(|py| worker.borrow(py).inner.as_ref().clone()));
 
-            let consumer = Python::with_gil(|py| Arc::clone(&worker.borrow(py).inner));
-            let _store = store.inner.clone();
-
-            consumer.poll().await.map_err(to_py_err)?;
-
-            loop {
-                let status = consumer.status().await.map_err(to_py_err)?;
-                if status == ::pgqrs::types::WorkerStatus::Interrupted {
-                    consumer.suspend().await.map_err(to_py_err)?;
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "worker interrupted",
-                    ));
-                }
-
-                let msgs = consumer.dequeue_many(batch_size).await.map_err(to_py_err)?;
-                if msgs.is_empty() {
-                    tokio::time::sleep(poll_interval).await;
-                    continue;
-                }
-
-                if let Some(handler) = &handle_one {
-                    for msg in msgs {
-                        let py_msg = PyQueueMessage::from(msg.clone());
-                        let handler = handler.clone();
+            if let Some(handler) = handle_one {
+                let rust_handler = move |msg: ::pgqrs::QueueMessage| {
+                    let handler = handler.clone();
+                    async move {
+                        let py_msg = PyQueueMessage::from(msg);
                         let res = Python::with_gil(|py| -> PyResult<_> {
                             let fut = handler.call1(py, (py_msg,))?;
                             pyo3_asyncio::tokio::into_future(fut.as_ref(py))
+                        })
+                        .map_err(|e| ::pgqrs::Error::Internal {
+                            message: e.to_string(),
                         })?
                         .await;
 
-                        match res {
-                            Ok(_) => {
-                                consumer.archive(msg.id).await.map_err(to_py_err)?;
-                            }
-                            Err(e) => {
-                                consumer
-                                    .release_messages(&[msg.id])
-                                    .await
-                                    .map_err(to_py_err)?;
-                                return Err(e);
-                            }
-                        }
+                        res.map_err(|e| ::pgqrs::Error::Internal {
+                            message: e.to_string(),
+                        })?;
+                        Ok(())
                     }
-                } else if let Some(handler) = &handle_batch {
-                    let py_msgs = msgs
-                        .iter()
-                        .cloned()
-                        .map(PyQueueMessage::from)
-                        .collect::<Vec<_>>();
-                    let handler = handler.clone();
-                    let res = Python::with_gil(|py| -> PyResult<_> {
-                        let fut = handler.call1(py, (py_msgs,))?;
-                        pyo3_asyncio::tokio::into_future(fut.as_ref(py))
-                    })?
-                    .await;
+                };
 
-                    match res {
-                        Ok(_) => {
-                            let msg_ids = msgs.into_iter().map(|m| m.id).collect::<Vec<_>>();
-                            consumer.archive_many(msg_ids).await.map_err(to_py_err)?;
-                        }
-                        Err(e) => {
-                            let msg_ids = msgs.into_iter().map(|m| m.id).collect::<Vec<_>>();
-                            consumer
-                                .release_messages(&msg_ids)
-                                .await
-                                .map_err(to_py_err)?;
-                            return Err(e);
-                        }
+                let mut builder = ::pgqrs::dequeue().batch(batch_size);
+                if let Some(interval_ms) = poll_interval_ms {
+                    builder = builder.poll_interval(Duration::from_millis(interval_ms));
+                }
+                if let Some(at) = at {
+                    builder = builder.at(at);
+                }
+
+                if let Some(consumer) = consumer.as_ref() {
+                    builder
+                        .worker(consumer)
+                        .handle(rust_handler)
+                        .poll(&store_inner)
+                        .await
+                        .map_err(to_py_err)?;
+                } else if let Some(queue_name) = queue_name.as_deref() {
+                    builder
+                        .from(queue_name)
+                        .handle(rust_handler)
+                        .poll(&store_inner)
+                        .await
+                        .map_err(to_py_err)?;
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "Queue name is required. Use .from_queue(\"queue-name\") or .worker(consumer)",
+                    ));
+                }
+            } else if let Some(handler) = handle_batch {
+                let rust_handler = move |msgs: Vec<::pgqrs::QueueMessage>| {
+                    let handler = handler.clone();
+                    async move {
+                        let py_msgs = msgs
+                            .into_iter()
+                            .map(PyQueueMessage::from)
+                            .collect::<Vec<_>>();
+                        let res = Python::with_gil(|py| -> PyResult<_> {
+                            let fut = handler.call1(py, (py_msgs,))?;
+                            pyo3_asyncio::tokio::into_future(fut.as_ref(py))
+                        })
+                        .map_err(|e| ::pgqrs::Error::Internal {
+                            message: e.to_string(),
+                        })?
+                        .await;
+
+                        res.map_err(|e| ::pgqrs::Error::Internal {
+                            message: e.to_string(),
+                        })?;
+                        Ok(())
                     }
-                } else if let Some(handler) = &handle_workflow {
+                };
+
+                let mut builder = ::pgqrs::dequeue().batch(batch_size);
+                if let Some(interval_ms) = poll_interval_ms {
+                    builder = builder.poll_interval(Duration::from_millis(interval_ms));
+                }
+                if let Some(at) = at {
+                    builder = builder.at(at);
+                }
+
+                if let Some(consumer) = consumer.as_ref() {
+                    builder
+                        .worker(consumer)
+                        .handle_batch(rust_handler)
+                        .poll(&store_inner)
+                        .await
+                        .map_err(to_py_err)?;
+                } else if let Some(queue_name) = queue_name.as_deref() {
+                    builder
+                        .from(queue_name)
+                        .handle_batch(rust_handler)
+                        .poll(&store_inner)
+                        .await
+                        .map_err(to_py_err)?;
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "Queue name is required. Use .from_queue(\"queue-name\") or .worker(consumer)",
+                    ));
+                }
+            } else if let Some(handler) = &handle_workflow {
+                let consumer = if let Some(consumer) = consumer {
+                    consumer
+                } else if let Some(queue_name) = queue_name.as_deref() {
+                    store_inner
+                        .consumer_ephemeral(queue_name, store_inner.config())
+                        .await
+                        .map_err(to_py_err)?
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "Queue name is required. Use .from_queue(\"queue-name\") or .worker(consumer)",
+                    ));
+                };
+
+                loop {
+                    let mut builder = ::pgqrs::dequeue().batch(batch_size).worker(&consumer);
+                    if let Some(interval_ms) = poll_interval_ms {
+                        builder = builder.poll_interval(Duration::from_millis(interval_ms));
+                    }
+                    if let Some(at) = at {
+                        builder = builder.at(at);
+                    }
+                    let msgs = builder.poll(&store_inner).await.map_err(to_py_err)?;
+
                     for msg in msgs {
                         let inner_msg = msg.clone();
                         let handler = handler.clone();
-                        let store_clone = _store.clone();
+                        let store_clone = store_inner.clone();
                         let workflow_id = inner_msg.id; // workflow run ID corresponds to msg.id
 
                         let rust_run = ::pgqrs::run()
@@ -228,7 +319,6 @@ impl PyDequeueBuilder {
                 }
             }
 
-            #[allow(unreachable_code)]
             Ok(())
         })
     }

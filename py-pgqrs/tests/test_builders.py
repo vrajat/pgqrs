@@ -1,10 +1,31 @@
-import pytest
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
 import pgqrs
 from pgqrs.decorators import WorkflowDef, workflow, step
+
+
+async def wait_for_worker(store, worker_id: int, expected_status: str):
+    workers = await store.get_workers()
+    for _ in range(80):
+        worker = await workers.get(worker_id)
+        if worker.status == expected_status:
+            return worker
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"worker {worker_id} did not reach status {expected_status}")
+
+
+async def wait_for_heartbeat_advance(store, worker_id: int, after: str):
+    workers = await store.get_workers()
+    after_dt = datetime.fromisoformat(after)
+    for _ in range(80):
+        worker = await workers.get(worker_id)
+        if datetime.fromisoformat(worker.heartbeat_at) > after_dt:
+            return worker
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"worker {worker_id} heartbeat did not advance")
 
 
 @pytest.mark.asyncio
@@ -95,3 +116,65 @@ async def test_workflow_decorators_with_builders(test_dsn, schema):
     result2 = await my_workflow(run, "hello")
     assert result2 == "echo_hello"
     assert step_called == 1  # Still 1
+
+
+@pytest.mark.asyncio
+async def test_dequeue_builder_single_handler_rejects_batch_gt_one(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    queue_name = "builder_single_handler_batch_validation"
+    await store.queue(queue_name)
+    consumer = await store.consumer(queue_name)
+
+    async def handler(_msg):
+        return True
+
+    with pytest.raises(pgqrs.ValidationError):
+        await pgqrs.dequeue().worker(consumer).batch(2).handle(handler).poll(store)
+
+
+@pytest.mark.asyncio
+async def test_dequeue_builder_poll_updates_heartbeat_while_idle(test_dsn, schema):
+    config = pgqrs.Config(test_dsn, schema=schema)
+    config.heartbeat_interval_seconds = 1
+    store = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    queue_name = "builder_poll_heartbeat"
+    await store.queue(queue_name)
+    consumer = await store.consumer(queue_name)
+    fixed_now = datetime.now(timezone.utc).isoformat()
+
+    async def handler(_msg):
+        return True
+
+    task = asyncio.create_task(
+        pgqrs.dequeue()
+        .worker(consumer)
+        .batch(1)
+        .at(fixed_now)
+        .poll_interval(2000)
+        .handle(handler)
+        .poll(store)
+    )
+
+    worker_before = await wait_for_worker(store, consumer.worker_id, "polling")
+    worker_after = await wait_for_heartbeat_advance(
+        store, consumer.worker_id, worker_before.heartbeat_at
+    )
+
+    assert datetime.fromisoformat(worker_after.heartbeat_at) > datetime.fromisoformat(
+        worker_before.heartbeat_at
+    )
+
+    try:
+        await consumer.interrupt()
+    except pgqrs.StateTransitionError:
+        pass
+
+    with pytest.raises(Exception):
+        await asyncio.wait_for(task, timeout=5)
