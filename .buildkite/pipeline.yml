@@ -139,7 +139,7 @@ steps:
       - ".buildkite/scripts/bootstrap.sh"
       - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-turso"
 
-  - label: ":postgresql: test postgres"
+  - label: ":postgres: test postgres"
     key: "test-postgres"
     depends_on: "format"
     agents:

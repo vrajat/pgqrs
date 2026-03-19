@@ -928,7 +928,7 @@ async fn test_dequeue_single_handler_execute_propagates_handler_error() {
 
 #[tokio::test]
 async fn test_dequeue_poll_updates_worker_heartbeat_while_idle() {
-    let store = common::create_store_with_config("pgqrs_builder_poll_heartbeat_test", |config| {
+    let store = common::create_store_with_config("pgqrs_builder_test", |config| {
         config.heartbeat_interval = 1;
         config.poll_interval_ms = 2_000;
     })
