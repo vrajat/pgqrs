@@ -42,6 +42,32 @@ benchmarks/
 
 ## Getting Started
 
+### 0. Bootstrap The Benchmark Environment
+
+Use the repository Make target:
+
+```bash
+make benchmark-bootstrap
+```
+
+This does two things:
+
+- builds and installs the local `pgqrs` wheel into `.venv`
+- installs the benchmark package, CLI, dashboard dependencies, and Python tooling into `.venv`
+
+After bootstrap, the recommended entrypoints are:
+
+```bash
+make benchmark-list
+make benchmark-run SCENARIO=queue.drain_fixed_backlog BACKEND=sqlite BINDING=python
+make benchmark-dashboard
+uv run python -m benchmarks.bench.cli run --help
+```
+
+The benchmark CLI uses `Typer`.
+By default it shows phase progress bars.
+Use `--verbose` for benchmark logs and `--no-progress` if you need plain output.
+
 ### 1. Pick One Scenario
 
 Start with a single benchmark scenario, for example:
@@ -178,7 +204,7 @@ Bad candidates to check in:
 The dashboard entrypoint is:
 
 ```bash
-streamlit run benchmarks/dashboard/app.py
+make benchmark-dashboard
 ```
 
 The dashboard should help answer:

@@ -47,6 +47,26 @@ build: requirements  ## Build Rust library and Python bindings
 build-python: requirements  ## Build Python bindings only (for tests)
 	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
 
+python-wheel: requirements  ## Build a local Python wheel into dist/
+	rm -rf dist/py-pgqrs
+	mkdir -p dist/py-pgqrs
+	$(UV) run maturin build --release --out dist/py-pgqrs -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
+
+install-python-wheel: python-wheel  ## Install the built wheel into .venv
+	$(UV) pip install --force-reinstall dist/py-pgqrs/pgqrs-*.whl
+
+benchmark-bootstrap:  ## Prepare .venv for running benchmarks and dashboard
+	$(MAKE) -C benchmarks bootstrap UV="$(UV)"
+
+benchmark-list:  ## List available benchmark scenarios
+	$(MAKE) -C benchmarks list UV="$(UV)"
+
+benchmark-run:  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFILE=compat])
+	$(MAKE) -C benchmarks run UV="$(UV)" SCENARIO="$(SCENARIO)" BACKEND="$(BACKEND)" BINDING="$(BINDING)" PROFILE="$(PROFILE)"
+
+benchmark-dashboard:  ## Run the Streamlit benchmark dashboard
+	$(MAKE) -C benchmarks dashboard UV="$(UV)"
+
 install-nextest: ## Install cargo-nextest
 	cargo install cargo-nextest --locked
 
@@ -251,6 +271,7 @@ test-backends:  ## Run tests on specified backends (BACKENDS=postgres,sqlite)
 
 fmt:  ## Format code
 	cargo fmt --all
+	$(MAKE) -C benchmarks fmt UV="$(UV)"
 
 clippy:  ## Run clippy
 	cargo clippy --workspace --all-targets --all-features
@@ -258,6 +279,7 @@ clippy:  ## Run clippy
 check:  ## Run all checks (fmt, clippy, deny)
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets --all-features
+	$(MAKE) -C benchmarks check UV="$(UV)"
 
 clean:  ## Clean artifacts
 	cargo clean

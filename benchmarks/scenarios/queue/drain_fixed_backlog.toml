@@ -12,7 +12,7 @@ prefill_jobs = 50000
 queue_mode = "drain"
 
 [action.variables]
-consumers = [1, 2, 4, 8]
+consumers = [1, 2, 4]
 dequeue_batch_size = [1, 10, 50]
 
 [answer]

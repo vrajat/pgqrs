@@ -1,50 +1,170 @@
-"""CLI entrypoint for the benchmark program.
-
-This module is intentionally lightweight for now.
-It defines the shape of the command surface without locking us into
-scenario-specific behavior too early.
-"""
+"""CLI entrypoint for the benchmark program."""
 
 from __future__ import annotations
 
-import argparse
+import asyncio
+import uuid
+from pathlib import Path
 
-from benchmarks.bench.registry import SCENARIOS
+import typer
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pgqrs-bench")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+from benchmarks.bench.loader import expand_points, load_scenario
+from benchmarks.bench.reporting import TyperRunObserver, configure_logging
+from benchmarks.bench.registry import SCENARIOS, get_registration
+from benchmarks.bench.results import append_jsonl, default_output_path, init_jsonl
+from benchmarks.bench.runtime import resolve_backend_runtime
+from benchmarks.bench.schema import RunSpec
 
-    subparsers.add_parser("list", help="List known benchmark scenarios")
-
-    run_parser = subparsers.add_parser("run", help="Run a benchmark scenario")
-    run_parser.add_argument("--scenario", required=True)
-    run_parser.add_argument("--backend", required=True)
-    run_parser.add_argument("--binding", required=True)
-    run_parser.add_argument("--profile", default="compat")
-
-    return parser
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Run and inspect pgqrs benchmark scenarios.",
+)
 
 
-def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+def _validate_registration(
+    *,
+    scenario_id: str,
+    backend: str,
+    binding: str,
+    profile: str,
+):
+    registration = get_registration(scenario_id)
 
-    if args.command == "list":
-        for scenario in SCENARIOS:
-            print(scenario.scenario_id)
-        return 0
-
-    if args.command == "run":
-        print(
-            "TODO: run scenario="
-            f"{args.scenario} backend={args.backend} binding={args.binding} profile={args.profile}"
+    if backend not in registration.backends:
+        raise SystemExit(
+            f"Backend {backend!r} is not valid for scenario {registration.scenario_id!r}."
         )
-        return 0
+    if binding not in registration.bindings:
+        raise SystemExit(
+            f"Binding {binding!r} is not valid for scenario {registration.scenario_id!r}."
+        )
+    if profile not in registration.profiles:
+        raise SystemExit(
+            f"Profile {profile!r} is not valid for scenario {registration.scenario_id!r}."
+        )
+    return registration, load_scenario(registration.scenario_path)
 
-    parser.error(f"unknown command: {args.command}")
-    return 2
+
+async def _run_python_queue(
+    *,
+    scenario_id: str,
+    backend: str,
+    binding: str,
+    profile: str,
+    output: Path | None,
+    verbose: bool,
+    progress: bool,
+) -> int:
+    try:
+        from benchmarks.executors.python.queue import run_drain_fixed_backlog
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "Python benchmark execution requires the pgqrs Python package to be available "
+            "in the current interpreter."
+        ) from exc
+
+    configure_logging(verbose=verbose)
+    registration, scenario = _validate_registration(
+        scenario_id=scenario_id,
+        backend=backend,
+        binding=binding,
+        profile=profile,
+    )
+    if registration.executor_hint != "queue":
+        raise SystemExit(f"Unsupported executor hint: {registration.executor_hint}")
+    if scenario.scenario_id != "queue.drain_fixed_backlog":
+        raise SystemExit(
+            f"Python runner not implemented yet for {scenario.scenario_id!r}"
+        )
+
+    backend_runtime = resolve_backend_runtime(backend)
+    observer = TyperRunObserver(show_progress=progress)
+    try:
+        run_id = uuid.uuid4().hex
+        points = expand_points(scenario)
+        output_path = output
+        if output_path is None:
+            output_path = default_output_path(
+                RunSpec(
+                    run_id=run_id,
+                    scenario_id=scenario.scenario_id,
+                    backend=backend,
+                    binding=binding,
+                    profile=profile,
+                    question=scenario.question,
+                )
+            )
+        init_jsonl(Path(output_path))
+
+        for index, point in enumerate(points, start=1):
+            observer.point_started(
+                index=index,
+                total=len(points),
+                point_parameters=point,
+            )
+            spec = RunSpec(
+                run_id=run_id,
+                scenario_id=scenario.scenario_id,
+                backend=backend,
+                binding=binding,
+                profile=profile,
+                question=scenario.question,
+                fixed_parameters=dict(scenario.action.fixed),
+                point_parameters=point,
+                output_path=str(output_path),
+            )
+            result = await run_drain_fixed_backlog(
+                spec,
+                backend_runtime,
+                observer=observer,
+            )
+            observer.point_finished(result=result)
+            append_jsonl(Path(output_path), result)
+
+        typer.echo(str(output_path))
+        return 0
+    finally:
+        observer.close()
+        backend_runtime.cleanup()
+
+
+@app.command("list")
+def list_scenarios() -> None:
+    """List known benchmark scenarios."""
+
+    for scenario in SCENARIOS:
+        typer.echo(scenario.scenario_id)
+
+
+@app.command()
+def run(
+    scenario: str = typer.Option(..., "--scenario"),
+    backend: str = typer.Option(..., "--backend"),
+    binding: str = typer.Option(..., "--binding"),
+    profile: str = typer.Option("compat", "--profile"),
+    output: Path | None = typer.Option(None, "--output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    progress: bool = typer.Option(True, "--progress/--no-progress"),
+) -> None:
+    """Run a benchmark scenario."""
+
+    if binding == "python":
+        raise SystemExit(
+            asyncio.run(
+                _run_python_queue(
+                    scenario_id=scenario,
+                    backend=backend,
+                    binding=binding,
+                    profile=profile,
+                    output=output,
+                    verbose=verbose,
+                    progress=progress,
+                )
+            )
+        )
+    raise SystemExit(f"Binding {binding!r} is not implemented yet.")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    app()
