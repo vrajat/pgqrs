@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::store::query::{QueryBuilder, QueryParam};
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
+use crate::store::tables::DialectStepTable;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -169,6 +171,28 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
         Ok(result.rows_affected())
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_acquire_step(self, run_id, step_name).await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_clear_retry(self, id).await
+    }
+
+    async fn complete_step(&self, id: i64, output: Value) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_complete_step(self, id, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: Value,
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_fail_step(self, id, error, retry_at, retry_count).await
+    }
+
     async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
         let mut builder = sqlx::query(query.sql());
         for param in query.params() {
@@ -195,4 +219,8 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
 
         Self::map_row(row)
     }
+}
+
+impl DialectStepTable for SqliteStepRecordTable {
+    type Dialect = SqliteDialect;
 }

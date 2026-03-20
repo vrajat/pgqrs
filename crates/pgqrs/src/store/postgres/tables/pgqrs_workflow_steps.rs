@@ -1,5 +1,7 @@
 use crate::error::Result;
+use crate::store::postgres::dialect::PostgresDialect;
 use crate::store::query::{QueryBuilder, QueryParam};
+use crate::store::tables::DialectStepTable;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -141,6 +143,28 @@ impl crate::store::StepRecordTable for StepRecords {
         Ok(res.rows_affected())
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_acquire_step(self, run_id, step_name).await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_clear_retry(self, id).await
+    }
+
+    async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_complete_step(self, id, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: serde_json::Value,
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_fail_step(self, id, error, retry_at, retry_count).await
+    }
+
     async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
         let mut builder = sqlx::query(query.sql());
         for param in query.params() {
@@ -179,6 +203,10 @@ impl crate::store::StepRecordTable for StepRecords {
             retry_count: row.try_get("retry_count")?,
         })
     }
+}
+
+impl DialectStepTable for StepRecords {
+    type Dialect = PostgresDialect;
 }
 
 #[allow(dead_code)]

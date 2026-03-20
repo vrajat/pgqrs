@@ -68,8 +68,7 @@ impl Poller {
             if matches!(
                 &e,
                 Error::InvalidStateTransition { from, to, .. }
-                    if from == "interrupted" && to == "polling"
-                        || from == "suspended" && to == "polling"
+                    if (from == "interrupted" || from == "suspended") && to == "polling"
             ) {
                 self.check_terminal_status().await?;
             }

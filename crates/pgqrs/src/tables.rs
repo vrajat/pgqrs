@@ -218,6 +218,20 @@ pub trait StepRecordTable: Send + Sync {
     async fn list(&self) -> crate::error::Result<Vec<StepRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> crate::error::Result<StepRecord>;
+    async fn clear_retry(&self, id: i64) -> crate::error::Result<StepRecord>;
+    async fn complete_step(
+        &self,
+        id: i64,
+        output: serde_json::Value,
+    ) -> crate::error::Result<StepRecord>;
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: serde_json::Value,
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        retry_count: i32,
+    ) -> crate::error::Result<StepRecord>;
     async fn execute(
         &self,
         query: crate::store::query::QueryBuilder,

@@ -689,6 +689,55 @@ where
             .await
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        let step_name = step_name.to_string();
+        self.db
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .workflow_steps()
+                        .acquire_step(run_id, &step_name)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_steps().clear_retry(id).await })
+            })
+            .await
+    }
+
+    async fn complete_step(&self, id: i64, output: Value) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_steps().complete_step(id, output).await })
+            })
+            .await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: Value,
+        retry_at: Option<DateTime<Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .workflow_steps()
+                        .fail_step(id, error, retry_at, retry_count)
+                        .await
+                })
+            })
+            .await
+    }
+
     async fn execute(&self, query: crate::store::query::QueryBuilder) -> Result<StepRecord> {
         self.db
             .with_write(|store| {
