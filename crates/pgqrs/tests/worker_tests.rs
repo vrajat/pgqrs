@@ -3,7 +3,7 @@
 use chrono::Duration;
 use pgqrs::store::AnyStore;
 use pgqrs::types::WorkerStatus;
-use pgqrs::Store;
+use pgqrs::{Store, Worker};
 use serde_json::json;
 
 mod common;
@@ -656,6 +656,48 @@ async fn test_admin_worker_management() {
     assert_eq!(stats.total_workers, 1);
     assert_eq!(stats.ready_workers, 1);
     assert_eq!(stats.stopped_workers, 0);
+}
+
+#[tokio::test]
+async fn test_admin_registration_persists_worker_record() {
+    let store = create_store().await;
+
+    let admin = store
+        .admin("admin-host", 9100, &store.config().clone())
+        .await
+        .unwrap();
+    let ephemeral_admin = store
+        .admin_ephemeral(&store.config().clone())
+        .await
+        .unwrap();
+
+    let admin_worker = store.workers().get(admin.worker_id()).await.unwrap();
+    assert_eq!(admin_worker.id, admin.worker_id());
+    assert_eq!(admin_worker.hostname, "admin-host");
+    assert_eq!(admin_worker.port, 9100);
+    assert_eq!(admin_worker.queue_id, None);
+    assert_eq!(admin_worker.status, WorkerStatus::Ready);
+
+    let ephemeral_worker = store
+        .workers()
+        .get(ephemeral_admin.worker_id())
+        .await
+        .unwrap();
+    assert_eq!(ephemeral_worker.id, ephemeral_admin.worker_id());
+    assert_eq!(ephemeral_worker.queue_id, None);
+    assert_eq!(ephemeral_worker.status, WorkerStatus::Ready);
+
+    admin.suspend().await.unwrap();
+    admin.shutdown().await.unwrap();
+    store.workers().delete(admin.worker_id()).await.unwrap();
+
+    ephemeral_admin.suspend().await.unwrap();
+    ephemeral_admin.shutdown().await.unwrap();
+    store
+        .workers()
+        .delete(ephemeral_admin.worker_id())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
