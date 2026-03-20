@@ -216,22 +216,6 @@ impl SyncDb for SnapshotDb {
         crate::store::ConcurrencyModel::SingleProcess
     }
 
-    fn with_read_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        let guard = self.inner.blocking_read();
-        f(&guard.sqlite_store)
-    }
-
-    fn with_write_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        let guard = self.inner.blocking_write();
-        f(&guard.sqlite_store)
-    }
-
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,

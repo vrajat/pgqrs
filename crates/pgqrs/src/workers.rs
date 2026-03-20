@@ -659,13 +659,7 @@ impl Run {
         let row = self
             .store
             .workflow_steps()
-            .execute(
-                crate::store::query::QueryBuilder::new(
-                    self.store.workflow_steps().sql_acquire_step(),
-                )
-                .bind_i64(self.record.id)
-                .bind_string(step_name_string.clone()),
-            )
+            .acquire_step(self.record.id, &step_name_string)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "SQL_ACQUIRE_STEP".into(),
@@ -691,12 +685,7 @@ impl Run {
 
                 self.store
                     .workflow_steps()
-                    .execute(
-                        crate::store::query::QueryBuilder::new(
-                            self.store.workflow_steps().sql_clear_retry(),
-                        )
-                        .bind_i64(row.id),
-                    )
+                    .clear_retry(row.id)
                     .await
                     .map(|_| ())
                     .map_err(|e| crate::error::Error::QueryFailed {
@@ -794,11 +783,11 @@ impl Step {
 
     /// Complete the step with an output payload.
     pub async fn complete(&mut self, output: serde_json::Value) -> crate::error::Result<()> {
-        let query =
-            crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_complete_step())
-                .bind_i64(self.record.id)
-                .bind_json(output);
-        self.store.workflow_steps().execute(query).await.map(|_| ())
+        self.store
+            .workflow_steps()
+            .complete_step(self.record.id, output)
+            .await
+            .map(|_| ())
     }
 
     /// Fail the step with a structured error payload.
@@ -825,14 +814,12 @@ impl Step {
         if is_transient {
             let policy = crate::StepRetryPolicy::default();
             if !policy.should_retry(self.record.retry_count as u32) {
-                let query = crate::store::query::QueryBuilder::new(
-                    self.store.workflow_steps().sql_fail_step(),
-                )
-                .bind_i64(self.record.id)
-                .bind_json(error_record)
-                .bind_datetime(None)
-                .bind_i32(self.record.retry_count);
-                return self.store.workflow_steps().execute(query).await.map(|_| ());
+                return self
+                    .store
+                    .workflow_steps()
+                    .fail_step(self.record.id, error_record, None, self.record.retry_count)
+                    .await
+                    .map(|_| ());
             }
 
             let delay_seconds =
@@ -842,22 +829,24 @@ impl Step {
             let retry_at = current_time + chrono::Duration::seconds(delay_i64);
             let new_retry_count = self.record.retry_count + 1;
 
-            let query =
-                crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_fail_step())
-                    .bind_i64(self.record.id)
-                    .bind_json(error_record)
-                    .bind_datetime(Some(retry_at))
-                    .bind_i32(new_retry_count);
-            return self.store.workflow_steps().execute(query).await.map(|_| ());
+            return self
+                .store
+                .workflow_steps()
+                .fail_step(
+                    self.record.id,
+                    error_record,
+                    Some(retry_at),
+                    new_retry_count,
+                )
+                .await
+                .map(|_| ());
         }
 
-        let query =
-            crate::store::query::QueryBuilder::new(self.store.workflow_steps().sql_fail_step())
-                .bind_i64(self.record.id)
-                .bind_json(error_record)
-                .bind_datetime(None)
-                .bind_i32(self.record.retry_count);
-        self.store.workflow_steps().execute(query).await.map(|_| ())
+        self.store
+            .workflow_steps()
+            .fail_step(self.record.id, error_record, None, self.record.retry_count)
+            .await
+            .map(|_| ())
     }
 
     /// Complete the step with a serializable payload.

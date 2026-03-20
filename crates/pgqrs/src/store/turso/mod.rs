@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use turso::{Database, Row};
 
+pub(crate) mod dialect;
 pub mod tables;
 pub mod worker;
 

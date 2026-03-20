@@ -1,5 +1,7 @@
 use crate::error::Result;
 use crate::store::query::{QueryBuilder, QueryParam};
+use crate::store::tables::DialectStepTable;
+use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::parse_turso_timestamp;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
@@ -12,44 +14,6 @@ use turso::Database;
 pub struct TursoStepRecordTable {
     db: Arc<Database>,
 }
-
-const SQL_ACQUIRE_STEP: &str = r#"
-    INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
-    VALUES (?, ?, 'RUNNING', datetime('now'), 0)
-    ON CONFLICT (run_id, step_name) DO UPDATE
-    SET status = CASE
-        WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'
-        WHEN pgqrs_workflow_steps.status = 'ERROR' THEN 'ERROR'
-        ELSE 'RUNNING'
-    END,
-    started_at = CASE
-        WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
-        ELSE datetime('now')
-    END
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_CLEAR_RETRY: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'RUNNING', retry_at = NULL, error = NULL
-    WHERE id = ?
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_COMPLETE_STEP: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'SUCCESS', output = ?2, completed_at = datetime('now')
-    WHERE id = ?1
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_FAIL_STEP: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'ERROR', error = ?2, completed_at = datetime('now'),
-        retry_at = ?3, retry_count = ?4
-    WHERE id = ?1
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
 
 impl TursoStepRecordTable {
     pub fn new(db: Arc<Database>) -> Self {
@@ -180,6 +144,28 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
         Ok(count)
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_acquire_step(self, run_id, step_name).await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_clear_retry(self, id).await
+    }
+
+    async fn complete_step(&self, id: i64, output: Value) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_complete_step(self, id, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: Value,
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_fail_step(self, id, error, retry_at, retry_count).await
+    }
+
     async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
         let mut builder = crate::store::turso::query(query.sql());
         for param in query.params() {
@@ -200,20 +186,8 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
 
         Self::map_row(&row)
     }
+}
 
-    fn sql_acquire_step(&self) -> &'static str {
-        SQL_ACQUIRE_STEP
-    }
-
-    fn sql_clear_retry(&self) -> &'static str {
-        SQL_CLEAR_RETRY
-    }
-
-    fn sql_complete_step(&self) -> &'static str {
-        SQL_COMPLETE_STEP
-    }
-
-    fn sql_fail_step(&self) -> &'static str {
-        SQL_FAIL_STEP
-    }
+impl DialectStepTable for TursoStepRecordTable {
+    type Dialect = TursoDialect;
 }

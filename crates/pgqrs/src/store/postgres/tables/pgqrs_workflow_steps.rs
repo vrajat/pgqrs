@@ -1,5 +1,7 @@
 use crate::error::Result;
+use crate::store::postgres::dialect::PostgresDialect;
 use crate::store::query::{QueryBuilder, QueryParam};
+use crate::store::tables::DialectStepTable;
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -9,44 +11,6 @@ use sqlx::{PgPool, Row};
 pub struct StepRecords {
     pool: PgPool,
 }
-
-const SQL_ACQUIRE_STEP: &str = r#"
-INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
-VALUES ($1, $2, 'RUNNING'::pgqrs_workflow_status, NOW(), 0)
-ON CONFLICT (run_id, step_name) DO UPDATE
-SET status = CASE
-    WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'::pgqrs_workflow_status
-    WHEN pgqrs_workflow_steps.status = 'ERROR' THEN 'ERROR'::pgqrs_workflow_status
-    ELSE 'RUNNING'::pgqrs_workflow_status
-END,
-started_at = CASE
-    WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
-    ELSE NOW()
-END
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
-"#;
-
-const SQL_CLEAR_RETRY: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'RUNNING'::pgqrs_workflow_status, retry_at = NULL, error = NULL
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
-"#;
-
-const SQL_COMPLETE_STEP: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW()
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
-"#;
-
-const SQL_FAIL_STEP: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW(),
-    retry_at = $3, retry_count = $4
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, started_at
-"#;
 
 impl StepRecords {
     pub fn new(pool: PgPool) -> Self {
@@ -179,6 +143,28 @@ impl crate::store::StepRecordTable for StepRecords {
         Ok(res.rows_affected())
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_acquire_step(self, run_id, step_name).await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_clear_retry(self, id).await
+    }
+
+    async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_complete_step(self, id, output).await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: serde_json::Value,
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        <Self as DialectStepTable>::dialect_fail_step(self, id, error, retry_at, retry_count).await
+    }
+
     async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
         let mut builder = sqlx::query(query.sql());
         for param in query.params() {
@@ -217,22 +203,10 @@ impl crate::store::StepRecordTable for StepRecords {
             retry_count: row.try_get("retry_count")?,
         })
     }
+}
 
-    fn sql_acquire_step(&self) -> &'static str {
-        SQL_ACQUIRE_STEP
-    }
-
-    fn sql_clear_retry(&self) -> &'static str {
-        SQL_CLEAR_RETRY
-    }
-
-    fn sql_complete_step(&self) -> &'static str {
-        SQL_COMPLETE_STEP
-    }
-
-    fn sql_fail_step(&self) -> &'static str {
-        SQL_FAIL_STEP
-    }
+impl DialectStepTable for StepRecords {
+    type Dialect = PostgresDialect;
 }
 
 #[allow(dead_code)]

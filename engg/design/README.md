@@ -16,6 +16,7 @@ Comprehensive technical design documentation for major features and components.
 - [Database Abstraction Design](database_abstraction_design.md)
 - [SQLite Store Implementation](sqlite_store.md)
 - [Turso Store Implementation](turso_store.md)
+- [Store SQL Dialect Constants](store-sql-dialect-constants.md)
 
 ## Design Doc Template
 

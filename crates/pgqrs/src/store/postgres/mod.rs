@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
 
+pub(crate) mod dialect;
 pub mod tables;
 pub mod worker;
 

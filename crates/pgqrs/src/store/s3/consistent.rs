@@ -41,20 +41,6 @@ impl SyncDb for ConsistentDb {
         self.concurrency_model
     }
 
-    fn with_read_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        self.inner.with_read_ref(f)
-    }
-
-    fn with_write_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        self.inner.with_write_ref(f)
-    }
-
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,

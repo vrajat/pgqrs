@@ -12,44 +12,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
-const SQL_ACQUIRE_STEP: &str = r#"
-INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
-VALUES ($1, $2, 'RUNNING', datetime('now'), 0)
-ON CONFLICT (run_id, step_name) DO UPDATE
-SET status = CASE
-    WHEN status = 'SUCCESS' THEN 'SUCCESS'
-    WHEN status = 'ERROR' THEN 'ERROR'
-    ELSE 'RUNNING'
-END,
-started_at = CASE
-    WHEN status IN ('SUCCESS', 'ERROR') THEN started_at
-    ELSE datetime('now')
-END
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
-"#;
-
-const SQL_CLEAR_RETRY: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'RUNNING', retry_at = NULL, error = NULL
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
-"#;
-
-const SQL_COMPLETE_STEP: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'SUCCESS', output = $2, completed_at = datetime('now')
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
-"#;
-
-const SQL_FAIL_STEP: &str = r#"
-UPDATE pgqrs_workflow_steps
-SET status = 'ERROR', error = $2, completed_at = datetime('now'),
-    retry_at = $3, retry_count = $4
-WHERE id = $1
-RETURNING id, run_id, step_name, status, input, output, error, retry_count, retry_at, created_at, updated_at
-"#;
-
 /// Basic table facade: direct delegation to read/write stores.
 #[derive(Clone)]
 pub struct Tables<DB>
@@ -727,27 +689,60 @@ where
             .await
     }
 
+    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        let step_name = step_name.to_string();
+        self.db
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .workflow_steps()
+                        .acquire_step(run_id, &step_name)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_steps().clear_retry(id).await })
+            })
+            .await
+    }
+
+    async fn complete_step(&self, id: i64, output: Value) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_steps().complete_step(id, output).await })
+            })
+            .await
+    }
+
+    async fn fail_step(
+        &self,
+        id: i64,
+        error: Value,
+        retry_at: Option<DateTime<Utc>>,
+        retry_count: i32,
+    ) -> Result<StepRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move {
+                    store
+                        .workflow_steps()
+                        .fail_step(id, error, retry_at, retry_count)
+                        .await
+                })
+            })
+            .await
+    }
+
     async fn execute(&self, query: crate::store::query::QueryBuilder) -> Result<StepRecord> {
         self.db
             .with_write(|store| {
                 Box::pin(async move { store.workflow_steps().execute(query).await })
             })
             .await
-    }
-
-    fn sql_acquire_step(&self) -> &'static str {
-        SQL_ACQUIRE_STEP
-    }
-
-    fn sql_clear_retry(&self) -> &'static str {
-        SQL_CLEAR_RETRY
-    }
-
-    fn sql_complete_step(&self) -> &'static str {
-        SQL_COMPLETE_STEP
-    }
-
-    fn sql_fail_step(&self) -> &'static str {
-        SQL_FAIL_STEP
     }
 }

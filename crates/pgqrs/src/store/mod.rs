@@ -16,6 +16,7 @@ pub enum ConcurrencyModel {
 }
 
 pub mod any;
+pub(crate) mod dialect;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub(crate) mod query;
@@ -23,6 +24,7 @@ pub(crate) mod query;
 pub mod s3;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+pub(crate) mod tables;
 #[cfg(feature = "turso")]
 pub mod turso;
 
