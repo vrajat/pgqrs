@@ -118,9 +118,9 @@ Rust does not need inheritance to model shared backend behavior here.
 
 Backends with significant overlap, such as SQLite and Turso, should share reusable SQL bundles and capability constants by composition:
 
-- shared structs in `store/dialect.rs`
-- shared constant bundles for SQLite-family behavior
-- backend dialect types that point to those bundles
+- shared structs and traits in `store/dialect.rs`
+- backend-local constant bundles in each store's `dialect.rs`
+- backend dialect types that point to those local bundles
 
 This preserves backend-specific identities while allowing substantial reuse without runtime indirection.
 
@@ -262,10 +262,10 @@ If nothing else needs synchronous metadata access through `SyncDb`, `with_read_r
 
 The smallest useful refactor is:
 
-1. introduce `store/dialect.rs` with the shared SQL bundle structs and `SqlDialect` trait
+1. introduce `store/dialect.rs` with the shared trait and SQL bundle types
 2. add `sqlite/dialect.rs`, `postgres/dialect.rs`, and `turso/dialect.rs`
 3. move workflow step SQL into those files
-4. have SQLite, Turso, and S3 use shared SQLite-family constant bundles where appropriate
+4. have SQLite, Turso, and S3 use backend-local dialect constants where appropriate
 5. keep `StepRecordTable::sql_*` temporarily for compatibility
 
 This reduces duplication immediately while limiting churn.
@@ -315,25 +315,21 @@ This combines:
 
 ### 7.4 Reuse Across Backend Families
 
-The dialect layer should support substantial reuse between SQLite-family backends.
+The dialect layer should support substantial reuse between SQLite-family backends, but the SQL constants should still live in backend modules rather than the top-level dialect module.
 
 Example:
 
 ```rust
-pub(crate) const SQLITE_FAMILY_STEP_SQL: StepSql = StepSql { ... };
+// sqlite/dialect.rs
+const SQLITE_STEP_SQL: StepSql = StepSql { ... };
 
 pub(crate) struct SqliteDialect;
 impl SqlDialect for SqliteDialect {
-    const STEP: StepSql = SQLITE_FAMILY_STEP_SQL;
-}
-
-pub(crate) struct TursoDialect;
-impl SqlDialect for TursoDialect {
-    const STEP: StepSql = SQLITE_FAMILY_STEP_SQL;
+    const STEP: StepSql = SQLITE_STEP_SQL;
 }
 ```
 
-This is not inheritance. It is composition through shared constant bundles.
+This is not inheritance. It is composition through backend-local constant bundles.
 
 If Turso diverges later for one query family, it can override only that family while continuing to share the rest.
 
@@ -407,7 +403,7 @@ No direct API change is required beyond callers no longer depending on `workflow
 
 - add an internal shared trait in `store/dialect.rs`
 - define backend zero-sized dialect types in each backend's `dialect.rs`
-- allow SQLite-family backends to share constant bundles by composition
+- keep SQL constants in backend-specific dialect modules
 
 **Result**: SQL and backend capability differences become a first-class internal design concept without polluting the public API.
 
@@ -431,7 +427,7 @@ No direct API change is required beyond callers no longer depending on `workflow
 1. Create `store/dialect.rs` with shared SQL bundle structs and the `SqlDialect` trait.
 2. Add `sqlite/dialect.rs`, `postgres/dialect.rs`, and `turso/dialect.rs`.
 3. Move existing workflow step SQL constants into those files.
-4. Reuse shared SQLite-family constant bundles for Turso and S3 where appropriate.
+4. Reuse backend-specific dialect types for S3 and share code across similar stores only where it does not force constants back into the top-level module.
 
 ### Phase 2: Migrate Callers
 
@@ -545,7 +541,7 @@ Cons:
 - would not materially simplify query-family reuse
 - risks turning dialect selection into an unnecessary type hierarchy
 
-Rejected in favor of composition through shared constant bundles and backend dialect types.
+Rejected in favor of composition through backend-local constant bundles and backend dialect types.
 
 ---
 
@@ -562,9 +558,9 @@ Rejected in favor of composition through shared constant bundles and backend dia
 
 Proceed with a staged refactor:
 
-1. Introduce `store/dialect.rs` with the internal `SqlDialect` trait and shared query-family structs.
+1. Introduce `store/dialect.rs` with the internal `SqlDialect` trait and shared query-family structs only.
 2. Add a single `dialect.rs` file per backend.
-3. Have S3 reuse `SqliteDialect` directly and let Turso reuse SQLite-family bundles by composition.
+3. Have S3 reuse `SqliteDialect` directly and keep SQL constants in backend-specific dialect files.
 4. Migrate callers away from `StepRecordTable::sql_*`.
 5. Remove the sync SQL accessors from `StepRecordTable`.
 6. Remove `with_read_ref` / `with_write_ref` from `SyncDb` if they remain unused.
