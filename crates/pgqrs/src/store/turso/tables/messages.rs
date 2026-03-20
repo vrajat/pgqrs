@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::QueueMessage;
 use async_trait::async_trait;
@@ -173,6 +175,54 @@ impl crate::store::MessageTable for TursoMessageTable {
             messages.push(Self::map_row(&row)?);
         }
         Ok(messages)
+    }
+
+    async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = crate::store::turso::query(TursoDialect::MESSAGE.list_by_consumer_worker)
+            .bind(worker_id)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(&row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
+        crate::store::turso::query_scalar(TursoDialect::MESSAGE.count_by_consumer_worker)
+            .bind(worker_id)
+            .fetch_one(&self.db)
+            .await
+    }
+
+    async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
+        crate::store::turso::query_scalar(TursoDialect::MESSAGE.count_worker_references)
+            .bind(worker_id)
+            .bind(worker_id)
+            .fetch_one(&self.db)
+            .await
+    }
+
+    async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
+        let rows = crate::store::turso::query(TursoDialect::MESSAGE.move_to_dlq)
+            .bind(max_read_ct)
+            .fetch_all(&self.db)
+            .await?;
+
+        let mut ids = Vec::with_capacity(rows.len());
+        for row in rows {
+            ids.push(row.get(0)?);
+        }
+        Ok(ids)
+    }
+
+    async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
+        crate::store::turso::query(TursoDialect::MESSAGE.release_by_consumer_worker)
+            .bind(worker_id)
+            .execute_once(&self.db)
+            .await
     }
 
     async fn batch_insert(

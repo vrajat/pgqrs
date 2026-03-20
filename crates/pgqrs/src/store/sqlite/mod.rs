@@ -2,9 +2,10 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::ConcurrencyModel;
 use crate::store::{
-    MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
+    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
-use crate::{Admin, Worker};
+use crate::Worker;
 
 use async_trait::async_trait;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
@@ -13,8 +14,8 @@ use std::sync::Arc;
 
 pub(crate) mod dialect;
 pub mod tables;
-pub mod worker;
 
+use self::tables::db_state::SqliteDbState;
 use self::tables::messages::SqliteMessageTable;
 use self::tables::queues::SqliteQueueTable;
 use self::tables::runs::SqliteRunRecordTable;
@@ -29,6 +30,7 @@ pub struct SqliteStore {
     queues: Arc<SqliteQueueTable>,
     messages: Arc<SqliteMessageTable>,
     workers: Arc<SqliteWorkerTable>,
+    db_state: Arc<SqliteDbState>,
     workflows: Arc<SqliteWorkflowTable>,
     workflow_runs: Arc<SqliteRunRecordTable>,
     workflow_steps: Arc<SqliteStepRecordTable>,
@@ -70,6 +72,7 @@ impl SqliteStore {
             queues: Arc::new(SqliteQueueTable::new(pool.clone())),
             messages: Arc::new(SqliteMessageTable::new(pool.clone())),
             workers: Arc::new(SqliteWorkerTable::new(pool.clone())),
+            db_state: Arc::new(SqliteDbState::new(pool.clone())),
             workflows: Arc::new(SqliteWorkflowTable::new(pool.clone())),
             workflow_runs: Arc::new(SqliteRunRecordTable::new(pool.clone())),
             workflow_steps: Arc::new(SqliteStepRecordTable::new(pool)),
@@ -142,6 +145,10 @@ impl Store for SqliteStore {
         self.workers.as_ref()
     }
 
+    fn db_state(&self) -> &dyn DbStateTable {
+        self.db_state.as_ref()
+    }
+
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -162,16 +169,20 @@ impl Store for SqliteStore {
         Ok(())
     }
 
-    async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
-        use self::worker::admin::SqliteAdmin;
-        let admin = SqliteAdmin::new(self.pool.clone(), hostname, port, config.clone()).await?;
-        Ok(Box::new(admin))
+    async fn admin(
+        &self,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new(crate::store::AnyStore::Sqlite(self.clone()), hostname, port)
+            .await
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> Result<Box<dyn Admin>> {
-        use self::worker::admin::SqliteAdmin;
-        let admin = SqliteAdmin::new_ephemeral(self.pool.clone(), config.clone()).await?;
-        Ok(Box::new(admin))
+    async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Sqlite(self.clone())).await
     }
 
     async fn producer(
@@ -303,10 +314,9 @@ impl Store for SqliteStore {
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        use self::worker::SqliteWorkerHandle;
         let worker_record = self.workers.get(id).await?;
-        Ok(Box::new(SqliteWorkerHandle::new(
-            self.pool.clone(),
+        Ok(Box::new(crate::workers::WorkerHandle::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
             worker_record,
         )))
     }

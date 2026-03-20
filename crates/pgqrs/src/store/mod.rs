@@ -92,6 +92,7 @@ pub trait Store: Send + Sync + 'static {
     fn queues(&self) -> &dyn QueueTable;
     fn messages(&self) -> &dyn MessageTable;
     fn workers(&self) -> &dyn WorkerTable;
+    fn db_state(&self) -> &dyn DbStateTable;
     fn workflows(&self) -> &dyn WorkflowTable;
     fn workflow_runs(&self) -> &dyn RunRecordTable;
     fn workflow_steps(&self) -> &dyn StepRecordTable;
@@ -105,10 +106,11 @@ pub trait Store: Send + Sync + 'static {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Admin>>;
+    ) -> crate::error::Result<crate::workers::Admin>;
 
     /// Get an ephemeral admin worker interface.
-    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>>;
+    async fn admin_ephemeral(&self, config: &Config)
+        -> crate::error::Result<crate::workers::Admin>;
 
     /// Get a producer interface for a specific queue with worker identity.
     async fn producer(

@@ -1,6 +1,8 @@
 //! Worker, producer, and consumer interfaces.
 
+use crate::error::{Error, Result};
 use crate::rate_limit::RateLimitStatus;
+use crate::stats::WorkerStats;
 use crate::store::{AnyStore, Store};
 pub use crate::types::{
     QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
@@ -29,61 +31,314 @@ pub trait Worker: Send + Sync {
     async fn is_healthy(&self, max_age: Duration) -> crate::error::Result<bool>;
 }
 
-/// Admin operations for queues, workers, and stats.
-#[async_trait]
-pub trait Admin: Worker {
-    /// Verify the pgqrs schema is correctly installed.
-    async fn verify(&self) -> crate::error::Result<()>;
+/// Administrative worker for queues, workers, and stats.
+#[derive(Clone, Debug)]
+pub struct Admin {
+    pub(crate) store: AnyStore,
+    pub(crate) worker_record: WorkerRecord,
+}
 
-    /// Delete a queue.
-    async fn delete_queue(&self, queue_info: &QueueRecord) -> crate::error::Result<()>;
+/// Generic worker handle backed by a store and worker record.
+#[derive(Clone, Debug)]
+pub struct WorkerHandle {
+    pub(crate) store: AnyStore,
+    pub(crate) worker_record: WorkerRecord,
+}
 
-    /// Purge all messages and workers from a queue.
-    async fn purge_queue(&self, name: &str) -> crate::error::Result<()>;
+impl Admin {
+    pub(crate) async fn new(store: AnyStore, hostname: &str, port: i32) -> Result<Self> {
+        let worker_record = store.workers().register(None, hostname, port).await?;
+        Ok(Self {
+            store,
+            worker_record,
+        })
+    }
 
-    /// Get IDs of messages in the dead letter queue.
-    async fn dlq(&self) -> crate::error::Result<Vec<i64>>;
+    pub(crate) async fn new_ephemeral(store: AnyStore) -> Result<Self> {
+        let worker_record = store.workers().register_ephemeral(None).await?;
+        Ok(Self {
+            store,
+            worker_record,
+        })
+    }
 
-    /// Get metrics for a specific queue.
-    async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::stats::QueueMetrics>;
+    pub async fn verify(&self) -> Result<()> {
+        self.store.db_state().verify().await
+    }
 
-    /// Get metrics for all queues.
-    async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::stats::QueueMetrics>>;
+    pub async fn delete_queue(&self, queue_info: &QueueRecord) -> Result<()> {
+        let total_workers = self.store.workers().count_by_fk(queue_info.id).await?;
+        if total_workers > 0 {
+            return Err(Error::ValidationFailed {
+                reason: format!(
+                    "Cannot delete queue '{}': {} worker(s) are still assigned to this queue. Delete workers first.",
+                    queue_info.queue_name, total_workers
+                ),
+            });
+        }
 
-    /// Get system-wide statistics.
-    async fn system_stats(&self) -> crate::error::Result<crate::stats::SystemStats>;
+        let total_references = self.store.messages().count_by_fk(queue_info.id).await?;
+        if total_references > 0 {
+            return Err(Error::ValidationFailed {
+                reason: format!(
+                    "Cannot delete queue '{}': {} references exist in messages table. Purge data first.",
+                    queue_info.queue_name, total_references
+                ),
+            });
+        }
 
-    /// Get worker health statistics.
-    async fn worker_health_stats(
+        self.store.queues().delete(queue_info.id).await?;
+        Ok(())
+    }
+
+    pub async fn purge_queue(&self, name: &str) -> Result<()> {
+        let queue = self.store.queues().get_by_name(name).await?;
+        self.store.db_state().purge_queue(queue.id).await
+    }
+
+    pub async fn dlq(&self) -> Result<Vec<i64>> {
+        self.store
+            .messages()
+            .move_to_dlq(self.store.config().max_read_ct)
+            .await
+    }
+
+    pub async fn queue_metrics(&self, name: &str) -> Result<crate::QueueMetrics> {
+        let queue = self.store.queues().get_by_name(name).await?;
+        self.store.db_state().queue_metrics(queue.id).await
+    }
+
+    pub async fn all_queues_metrics(&self) -> Result<Vec<crate::QueueMetrics>> {
+        self.store.db_state().all_queues_metrics().await
+    }
+
+    pub async fn system_stats(&self) -> Result<crate::SystemStats> {
+        self.store.db_state().system_stats().await
+    }
+
+    pub async fn worker_health_stats(
         &self,
-        heartbeat_timeout: Duration,
+        heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
-    ) -> crate::error::Result<Vec<crate::stats::WorkerHealthStats>>;
+    ) -> Result<Vec<crate::WorkerHealthStats>> {
+        self.store
+            .db_state()
+            .worker_health_stats(heartbeat_timeout, group_by_queue)
+            .await
+    }
 
-    /// Get worker statistics for a queue.
-    async fn worker_stats(
-        &self,
-        queue_name: &str,
-    ) -> crate::error::Result<crate::stats::WorkerStats>;
+    pub async fn worker_stats(&self, queue_name: &str) -> Result<WorkerStats> {
+        let queue_id = self.store.queues().get_by_name(queue_name).await?.id;
+        let workers = self.store.workers().filter_by_fk(queue_id).await?;
 
-    /// Delete a worker by ID.
-    async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
+        let total_workers = workers.len() as u32;
+        let ready_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Ready)
+            .count() as u32;
+        let polling_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Polling)
+            .count() as u32;
+        let interrupted_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Interrupted)
+            .count() as u32;
+        let suspended_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Suspended)
+            .count() as u32;
+        let stopped_workers = workers
+            .iter()
+            .filter(|w| w.status == WorkerStatus::Stopped)
+            .count() as u32;
 
-    /// Get messages currently held by a worker.
-    async fn get_worker_messages(&self, worker_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
+        let mut total_messages = 0u64;
+        for worker in &workers {
+            total_messages += self
+                .store
+                .messages()
+                .count_by_consumer_worker(worker.id)
+                .await? as u64;
+        }
 
-    /// Reclaim messages that have exceeded their visibility timeout.
-    async fn reclaim_messages(
+        let average_messages_per_worker = if total_workers > 0 {
+            total_messages as f64 / total_workers as f64
+        } else {
+            0.0
+        };
+
+        let now = Utc::now();
+        let oldest_worker_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.started_at))
+            .max()
+            .unwrap_or(chrono::Duration::zero());
+        let newest_heartbeat_age = workers
+            .iter()
+            .map(|w| now.signed_duration_since(w.heartbeat_at))
+            .min()
+            .unwrap_or(chrono::Duration::zero());
+
+        Ok(WorkerStats {
+            total_workers,
+            ready_workers,
+            polling_workers,
+            interrupted_workers,
+            suspended_workers,
+            stopped_workers,
+            average_messages_per_worker,
+            oldest_worker_age,
+            newest_heartbeat_age,
+        })
+    }
+
+    pub async fn delete_worker(&self, worker_id: i64) -> Result<u64> {
+        let reference_count = self
+            .store
+            .messages()
+            .count_worker_references(worker_id)
+            .await?;
+        if reference_count > 0 {
+            return Err(Error::ValidationFailed {
+                reason: format!(
+                    "Worker has {} references (associated messages/archives)",
+                    reference_count
+                ),
+            });
+        }
+
+        self.store.workers().delete(worker_id).await
+    }
+
+    pub async fn get_worker_messages(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        let worker = self.store.workers().get(worker_id).await?;
+        if worker.queue_id.is_none() {
+            return Err(Error::ValidationFailed {
+                reason: "Cannot get messages for admin worker".to_string(),
+            });
+        }
+
+        self.store
+            .messages()
+            .list_by_consumer_worker(worker_id)
+            .await
+    }
+
+    pub async fn reclaim_messages(
         &self,
         queue_id: i64,
-        older_than: Option<Duration>,
-    ) -> crate::error::Result<u64>;
+        older_than: Option<chrono::Duration>,
+    ) -> Result<u64> {
+        let timeout = older_than.unwrap_or_else(|| {
+            chrono::Duration::seconds(self.store.config().heartbeat_interval as i64)
+        });
+        let zombies = self
+            .store
+            .workers()
+            .list_zombies_for_queue(queue_id, timeout)
+            .await?;
 
-    /// Purge workers that haven't sent a heartbeat recently.
-    async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64>;
+        let mut total_released = 0;
+        for zombie in zombies {
+            total_released += self
+                .store
+                .messages()
+                .release_by_consumer_worker(zombie.id)
+                .await?;
+            self.store.workers().mark_stopped(zombie.id).await?;
+        }
 
-    /// Release all messages held by a worker.
-    async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64>;
+        Ok(total_released)
+    }
+
+    pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
+        self.store.db_state().purge_old_workers(older_than).await
+    }
+
+    pub async fn release_worker_messages(&self, worker_id: i64) -> Result<u64> {
+        self.store
+            .messages()
+            .release_by_consumer_worker(worker_id)
+            .await
+    }
+}
+
+impl WorkerHandle {
+    pub(crate) fn new(store: AnyStore, worker_record: WorkerRecord) -> Self {
+        Self {
+            store,
+            worker_record,
+        }
+    }
+}
+
+#[async_trait]
+impl crate::store::Worker for Admin {
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.store.workers().get_status(self.worker_record.id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        self.store.workers().resume(self.worker_record.id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        self.store.workers().shutdown(self.worker_record.id).await
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.store.workers().heartbeat(self.worker_record.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.store
+            .workers()
+            .is_healthy(self.worker_record.id, max_age)
+            .await
+    }
+}
+
+#[async_trait]
+impl crate::store::Worker for WorkerHandle {
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.store.workers().get_status(self.worker_record.id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        self.store.workers().resume(self.worker_record.id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        self.store.workers().shutdown(self.worker_record.id).await
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.store.workers().heartbeat(self.worker_record.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.store
+            .workers()
+            .is_healthy(self.worker_record.id, max_age)
+            .await
+    }
 }
 
 /// Producer for enqueueing messages to a queue.

@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
@@ -330,6 +332,14 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         .fetch_one(&self.db)
         .await?;
         Ok(count)
+    }
+
+    async fn mark_stopped(&self, id: i64) -> Result<()> {
+        crate::store::turso::query(TursoDialect::WORKER.mark_stopped)
+            .bind(id)
+            .execute_once(&self.db)
+            .await?;
+        Ok(())
     }
 
     async fn count_for_queue(

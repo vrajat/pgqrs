@@ -212,11 +212,10 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
                 .fetch_one(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "STEP_EXECUTE".into(),
+                    query: "SQLITE_EXECUTE_STEP".into(),
                     source: Box::new(e),
-                    context: "Failed to execute step query".into(),
+                    context: "Failed to execute sqlite workflow step query".into(),
                 })?;
-
         Self::map_row(row)
     }
 }

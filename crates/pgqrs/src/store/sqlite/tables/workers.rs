@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
@@ -386,6 +388,19 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                     context: format!("Failed to count workers for queue {}", queue_id),
                 })?;
         Ok(count)
+    }
+
+    async fn mark_stopped(&self, id: i64) -> Result<()> {
+        sqlx::query(SqliteDialect::WORKER.mark_stopped)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "MARK_WORKER_STOPPED".into(),
+                source: Box::new(e),
+                context: format!("Failed to mark worker {} as stopped", id),
+            })?;
+        Ok(())
     }
 
     async fn count_for_queue(

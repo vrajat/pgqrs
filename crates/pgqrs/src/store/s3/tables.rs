@@ -1,7 +1,8 @@
 use crate::error::Result;
 use crate::store::s3::SyncDb;
 use crate::store::{
-    MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable, WorkflowTable,
+    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
+    WorkflowTable,
 };
 use crate::types::{
     BatchInsertParams, NewQueueMessage, NewQueueRecord, NewRunRecord, NewStepRecord,
@@ -77,6 +78,48 @@ where
         self.db
             .with_read(|store| {
                 Box::pin(async move { store.messages().filter_by_fk(queue_id).await })
+            })
+            .await
+    }
+
+    async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        self.db
+            .with_read(|store| {
+                Box::pin(async move { store.messages().list_by_consumer_worker(worker_id).await })
+            })
+            .await
+    }
+
+    async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
+        self.db
+            .with_read(|store| {
+                Box::pin(async move { store.messages().count_by_consumer_worker(worker_id).await })
+            })
+            .await
+    }
+
+    async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
+        self.db
+            .with_read(|store| {
+                Box::pin(async move { store.messages().count_worker_references(worker_id).await })
+            })
+            .await
+    }
+
+    async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.messages().move_to_dlq(max_read_ct).await })
+            })
+            .await
+    }
+
+    async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
+        self.db
+            .with_write(|store| {
+                Box::pin(
+                    async move { store.messages().release_by_consumer_worker(worker_id).await },
+                )
             })
             .await
     }
@@ -347,6 +390,12 @@ where
             .await
     }
 
+    async fn mark_stopped(&self, id: i64) -> Result<()> {
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().mark_stopped(id).await }))
+            .await
+    }
+
     async fn count_for_queue(&self, queue_id: i64, state: WorkerStatus) -> Result<i64> {
         self.db
             .with_read(|store| {
@@ -465,6 +514,71 @@ where
         self.db
             .with_read(|store| {
                 Box::pin(async move { store.workers().is_healthy(id, max_age).await })
+            })
+            .await
+    }
+}
+
+#[async_trait]
+impl<DB> DbStateTable for Tables<DB>
+where
+    DB: SyncDb,
+{
+    async fn verify(&self) -> Result<()> {
+        self.db
+            .with_read(|store| Box::pin(async move { store.db_state().verify().await }))
+            .await
+    }
+
+    async fn purge_queue(&self, queue_id: i64) -> Result<()> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.db_state().purge_queue(queue_id).await })
+            })
+            .await
+    }
+
+    async fn queue_metrics(&self, queue_id: i64) -> Result<crate::QueueMetrics> {
+        self.db
+            .with_read(|store| {
+                Box::pin(async move { store.db_state().queue_metrics(queue_id).await })
+            })
+            .await
+    }
+
+    async fn all_queues_metrics(&self) -> Result<Vec<crate::QueueMetrics>> {
+        self.db
+            .with_read(|store| Box::pin(async move { store.db_state().all_queues_metrics().await }))
+            .await
+    }
+
+    async fn system_stats(&self) -> Result<crate::SystemStats> {
+        self.db
+            .with_read(|store| Box::pin(async move { store.db_state().system_stats().await }))
+            .await
+    }
+
+    async fn worker_health_stats(
+        &self,
+        heartbeat_timeout: Duration,
+        group_by_queue: bool,
+    ) -> Result<Vec<crate::WorkerHealthStats>> {
+        self.db
+            .with_read(|store| {
+                Box::pin(async move {
+                    store
+                        .db_state()
+                        .worker_health_stats(heartbeat_timeout, group_by_queue)
+                        .await
+                })
+            })
+            .await
+    }
+
+    async fn purge_old_workers(&self, older_than: Duration) -> Result<u64> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.db_state().purge_old_workers(older_than).await })
             })
             .await
     }

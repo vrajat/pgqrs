@@ -20,10 +20,9 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::s3::tables::Tables;
 use crate::store::{
-    AnyStore, ConcurrencyModel, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
-    WorkerTable, WorkflowTable,
+    AnyStore, ConcurrencyModel, DbStateTable, MessageTable, QueueTable, RunRecordTable,
+    StepRecordTable, Store, WorkerTable, WorkflowTable,
 };
-use crate::workers::{Admin, Worker};
 
 pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
 
@@ -333,6 +332,10 @@ impl Store for S3Store {
         &self.tables
     }
 
+    fn db_state(&self) -> &dyn DbStateTable {
+        &self.tables
+    }
+
     fn workflows(&self) -> &dyn WorkflowTable {
         &self.tables
     }
@@ -356,34 +359,14 @@ impl Store for S3Store {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn crate::Admin>> {
-        let hostname = hostname.to_string();
-        let config = config.clone();
-        let inner_admin = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move { store.admin(&hostname, port, &config).await })
-            })
-            .await?;
-        Ok(Box::new(S3Admin {
-            db: self.db.clone(),
-            worker_record: inner_admin.worker_record().clone(),
-        }))
+    ) -> crate::error::Result<crate::Admin> {
+        let _ = config;
+        crate::workers::Admin::new(crate::store::AnyStore::S3(self.clone()), hostname, port).await
     }
 
-    async fn admin_ephemeral(
-        &self,
-        config: &Config,
-    ) -> crate::error::Result<Box<dyn crate::Admin>> {
-        let config = config.clone();
-        let inner_admin = self
-            .db
-            .with_write(|store| Box::pin(async move { store.admin_ephemeral(&config).await }))
-            .await?;
-        Ok(Box::new(S3Admin {
-            db: self.db.clone(),
-            worker_record: inner_admin.worker_record().clone(),
-        }))
+    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<crate::Admin> {
+        let _ = config;
+        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::S3(self.clone())).await
     }
 
     async fn producer(
@@ -483,10 +466,10 @@ impl Store for S3Store {
             .db
             .with_read(|store| Box::pin(async move { store.workers().get(id).await }))
             .await?;
-        Ok(Box::new(S3Worker {
-            db: self.db.clone(),
+        Ok(Box::new(crate::workers::WorkerHandle::new(
+            crate::store::AnyStore::S3(self.clone()),
             worker_record,
-        }))
+        )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
@@ -553,327 +536,6 @@ impl Store for S3Store {
             queue_info,
             worker_record,
         ))
-    }
-}
-
-struct S3Admin<DB>
-where
-    DB: SyncDb,
-{
-    db: DB,
-    worker_record: crate::types::WorkerRecord,
-}
-
-#[async_trait]
-impl<DB> Worker for S3Admin<DB>
-where
-    DB: SyncDb,
-{
-    fn worker_record(&self) -> &crate::types::WorkerRecord {
-        &self.worker_record
-    }
-
-    async fn status(&self) -> crate::error::Result<crate::types::WorkerStatus> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_read(|store| Box::pin(async move { store.workers().get_status(worker_id).await }))
-            .await
-    }
-
-    async fn suspend(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().suspend(worker_id).await }))
-            .await
-    }
-
-    async fn resume(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().resume(worker_id).await }))
-            .await
-    }
-
-    async fn shutdown(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().shutdown(worker_id).await }))
-            .await
-    }
-
-    async fn heartbeat(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().heartbeat(worker_id).await }))
-            .await
-    }
-
-    async fn is_healthy(&self, max_age: chrono::Duration) -> crate::error::Result<bool> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_read(|store| {
-                Box::pin(async move { store.workers().is_healthy(worker_id, max_age).await })
-            })
-            .await
-    }
-}
-
-struct S3Worker<DB>
-where
-    DB: SyncDb,
-{
-    db: DB,
-    worker_record: crate::types::WorkerRecord,
-}
-
-#[async_trait]
-impl<DB> Worker for S3Worker<DB>
-where
-    DB: SyncDb,
-{
-    fn worker_record(&self) -> &crate::types::WorkerRecord {
-        &self.worker_record
-    }
-
-    async fn status(&self) -> crate::error::Result<crate::types::WorkerStatus> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_read(|store| Box::pin(async move { store.workers().get_status(worker_id).await }))
-            .await
-    }
-
-    async fn suspend(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().suspend(worker_id).await }))
-            .await
-    }
-
-    async fn resume(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().resume(worker_id).await }))
-            .await
-    }
-
-    async fn shutdown(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().shutdown(worker_id).await }))
-            .await
-    }
-
-    async fn heartbeat(&self) -> crate::error::Result<()> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_write(|store| Box::pin(async move { store.workers().heartbeat(worker_id).await }))
-            .await
-    }
-
-    async fn is_healthy(&self, max_age: chrono::Duration) -> crate::error::Result<bool> {
-        let worker_id = self.worker_record.id;
-        self.db
-            .with_read(|store| {
-                Box::pin(async move { store.workers().is_healthy(worker_id, max_age).await })
-            })
-            .await
-    }
-}
-
-#[async_trait]
-impl<DB> Admin for S3Admin<DB>
-where
-    DB: SyncDb,
-{
-    async fn verify(&self) -> crate::error::Result<()> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.verify().await
-                })
-            })
-            .await
-    }
-
-    async fn delete_queue(
-        &self,
-        queue_info: &crate::types::QueueRecord,
-    ) -> crate::error::Result<()> {
-        let config = self.db.config().clone();
-        let queue_info = queue_info.clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.delete_queue(&queue_info).await
-                })
-            })
-            .await
-    }
-
-    async fn purge_queue(&self, name: &str) -> crate::error::Result<()> {
-        let config = self.db.config().clone();
-        let name = name.to_string();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.purge_queue(&name).await
-                })
-            })
-            .await
-    }
-
-    async fn dlq(&self) -> crate::error::Result<Vec<i64>> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.dlq().await
-                })
-            })
-            .await
-    }
-
-    async fn queue_metrics(&self, name: &str) -> crate::error::Result<crate::stats::QueueMetrics> {
-        let config = self.db.config().clone();
-        let name = name.to_string();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.queue_metrics(&name).await
-                })
-            })
-            .await
-    }
-
-    async fn all_queues_metrics(&self) -> crate::error::Result<Vec<crate::stats::QueueMetrics>> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.all_queues_metrics().await
-                })
-            })
-            .await
-    }
-
-    async fn system_stats(&self) -> crate::error::Result<crate::stats::SystemStats> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.system_stats().await
-                })
-            })
-            .await
-    }
-
-    async fn worker_health_stats(
-        &self,
-        heartbeat_timeout: chrono::Duration,
-        group_by_queue: bool,
-    ) -> crate::error::Result<Vec<crate::stats::WorkerHealthStats>> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin
-                        .worker_health_stats(heartbeat_timeout, group_by_queue)
-                        .await
-                })
-            })
-            .await
-    }
-
-    async fn worker_stats(
-        &self,
-        queue_name: &str,
-    ) -> crate::error::Result<crate::stats::WorkerStats> {
-        let config = self.db.config().clone();
-        let queue_name = queue_name.to_string();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.worker_stats(&queue_name).await
-                })
-            })
-            .await
-    }
-
-    async fn delete_worker(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.delete_worker(worker_id).await
-                })
-            })
-            .await
-    }
-
-    async fn get_worker_messages(
-        &self,
-        worker_id: i64,
-    ) -> crate::error::Result<Vec<crate::types::QueueMessage>> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.get_worker_messages(worker_id).await
-                })
-            })
-            .await
-    }
-
-    async fn reclaim_messages(
-        &self,
-        queue_id: i64,
-        older_than: Option<chrono::Duration>,
-    ) -> crate::error::Result<u64> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.reclaim_messages(queue_id, older_than).await
-                })
-            })
-            .await
-    }
-
-    async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.purge_old_workers(older_than).await
-                })
-            })
-            .await
-    }
-
-    async fn release_worker_messages(&self, worker_id: i64) -> crate::error::Result<u64> {
-        let config = self.db.config().clone();
-        self.db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let admin = store.admin_ephemeral(&config).await?;
-                    admin.release_worker_messages(worker_id).await
-                })
-            })
-            .await
     }
 }
 

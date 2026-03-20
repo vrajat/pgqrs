@@ -1,4 +1,4 @@
-use crate::store::dialect::{SqlDialect, StepSql};
+use crate::store::dialect::{DbStateSql, MessageSql, SqlDialect, StepSql, WorkerSql};
 
 pub(crate) struct TursoDialect;
 
@@ -37,6 +37,146 @@ impl SqlDialect for TursoDialect {
         retry_at = ?3, retry_count = ?4
     WHERE id = ?1
     RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#,
+    };
+
+    const MESSAGE: MessageSql = MessageSql {
+        list_by_consumer_worker: r#"
+SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+FROM pgqrs_messages
+WHERE consumer_worker_id = ?
+ORDER BY id
+"#,
+        count_by_consumer_worker: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages
+WHERE consumer_worker_id = ? AND archived_at IS NULL
+"#,
+        count_worker_references: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages
+WHERE producer_worker_id = ? OR consumer_worker_id = ?
+"#,
+        move_to_dlq: r#"
+UPDATE pgqrs_messages
+SET archived_at = datetime('now')
+WHERE read_ct >= ? AND archived_at IS NULL
+RETURNING id
+"#,
+        release_by_consumer_worker: r#"
+UPDATE pgqrs_messages
+SET vt = datetime('now'), consumer_worker_id = NULL
+WHERE consumer_worker_id = ? AND archived_at IS NULL
+"#,
+    };
+
+    const WORKER: WorkerSql = WorkerSql {
+        mark_stopped: r#"
+UPDATE pgqrs_workers
+SET status = 'stopped',
+    shutdown_at = datetime('now')
+WHERE id = ?
+"#,
+    };
+
+    const DB_STATE: DbStateSql = DbStateSql {
+        check_table_exists: r#"
+SELECT EXISTS (
+    SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+)
+"#,
+        check_orphaned_messages: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages m
+LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+WHERE q.id IS NULL
+"#,
+        check_orphaned_message_workers: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages m
+LEFT OUTER JOIN pgqrs_workers pw ON m.producer_worker_id = pw.id
+LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
+WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+   OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
+"#,
+        purge_queue_messages: r#"
+DELETE FROM pgqrs_messages WHERE queue_id = ?
+"#,
+        purge_queue_workers: r#"
+DELETE FROM pgqrs_workers WHERE queue_id = ?
+"#,
+        queue_metrics: r#"
+SELECT
+    q.queue_name,
+    COUNT(m.id),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+    MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END),
+    MAX(m.enqueued_at)
+FROM pgqrs_queues q
+LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+WHERE q.id = ?
+GROUP BY q.id, q.queue_name
+"#,
+        all_queues_metrics: r#"
+SELECT
+    q.queue_name,
+    COUNT(m.id),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+    MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END),
+    MAX(m.enqueued_at)
+FROM pgqrs_queues q
+LEFT JOIN pgqrs_messages m ON q.id = m.queue_id AND m.archived_at IS NULL
+GROUP BY q.id, q.queue_name
+"#,
+        system_stats: r#"
+SELECT
+    (SELECT COUNT(*) FROM pgqrs_queues),
+    (SELECT COUNT(*) FROM pgqrs_workers),
+    (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready'),
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL),
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL),
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL),
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL),
+    '0.5.0'
+"#,
+        worker_health_global: r#"
+SELECT
+    'Global',
+    COUNT(*),
+    SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN status = 'polling' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN status IN ('ready', 'polling') AND heartbeat_at < ? THEN 1 ELSE 0 END)
+FROM pgqrs_workers
+"#,
+        worker_health_by_queue: r#"
+SELECT
+    COALESCE(q.queue_name, 'Admin'),
+    COUNT(w.id),
+    SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN w.status = 'polling' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN w.status = 'interrupted' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END),
+    SUM(CASE WHEN w.status IN ('ready', 'polling') AND w.heartbeat_at < ? THEN 1 ELSE 0 END)
+FROM pgqrs_workers w
+LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+GROUP BY q.queue_name
+"#,
+        purge_old_workers: r#"
+SELECT w.id FROM pgqrs_workers w
+LEFT JOIN pgqrs_messages m ON m.producer_worker_id = w.id OR m.consumer_worker_id = w.id
+WHERE w.status = 'stopped'
+  AND w.heartbeat_at < ?
+  AND m.id IS NULL
+GROUP BY w.id
 "#,
     };
 }

@@ -172,7 +172,7 @@ impl crate::store::StepRecordTable for StepRecords {
                 QueryParam::I64(value) => builder.bind(*value),
                 QueryParam::I32(value) => builder.bind(*value),
                 QueryParam::String(value) => builder.bind(value),
-                QueryParam::Json(value) => builder.bind(value.clone()),
+                QueryParam::Json(value) => builder.bind(value),
                 QueryParam::DateTime(value) => builder.bind(*value),
             };
         }
@@ -182,9 +182,9 @@ impl crate::store::StepRecordTable for StepRecords {
                 .fetch_one(&self.pool)
                 .await
                 .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "STEP_EXECUTE".into(),
+                    query: "POSTGRES_EXECUTE_STEP".into(),
                     source: Box::new(e),
-                    context: "Failed to execute step query".into(),
+                    context: "Failed to execute postgres workflow step query".into(),
                 })?;
 
         let started_at: chrono::DateTime<Utc> = row.try_get("started_at")?;
