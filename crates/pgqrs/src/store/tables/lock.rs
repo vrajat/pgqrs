@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::store::s3::SyncDb;
+use crate::store::dblock::DbLock;
 use crate::store::{
     DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable,
     WorkflowTable,
@@ -17,14 +17,14 @@ use serde_json::Value;
 #[derive(Clone)]
 pub struct Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     db: DB,
 }
 
 impl<DB> Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     pub fn new(db: DB) -> Self {
         Self { db }
@@ -42,7 +42,7 @@ where
 #[async_trait]
 impl<DB> MessageTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewQueueMessage) -> Result<QueueMessage> {
         self.db
@@ -344,7 +344,7 @@ where
 #[async_trait]
 impl<DB> WorkerTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewWorkerRecord) -> Result<WorkerRecord> {
         self.db
@@ -522,7 +522,7 @@ where
 #[async_trait]
 impl<DB> DbStateTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn verify(&self) -> Result<()> {
         self.db
@@ -587,7 +587,7 @@ where
 #[async_trait]
 impl<DB> QueueTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewQueueRecord) -> Result<QueueRecord> {
         self.db
@@ -644,7 +644,7 @@ where
 #[async_trait]
 impl<DB> WorkflowTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         self.db
@@ -687,7 +687,7 @@ where
 #[async_trait]
 impl<DB> RunRecordTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
         self.db
@@ -771,7 +771,7 @@ where
 #[async_trait]
 impl<DB> StepRecordTable for Tables<DB>
 where
-    DB: SyncDb,
+    DB: DbLock,
 {
     async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
         self.db
