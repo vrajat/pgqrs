@@ -4,6 +4,8 @@
 //! on the `pgqrs_workers` table.
 
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -478,6 +480,19 @@ impl crate::store::WorkerTable for Workers {
                 context: format!("Failed to count workers for queue {}", queue_id),
             })?;
         Ok(count)
+    }
+
+    async fn mark_stopped(&self, id: i64) -> Result<()> {
+        sqlx::query(PostgresDialect::WORKER.mark_stopped)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "MARK_WORKER_STOPPED".into(),
+                source: Box::new(e),
+                context: format!("Failed to mark worker {} as stopped", id),
+            })?;
+        Ok(())
     }
 
     async fn count_for_queue(

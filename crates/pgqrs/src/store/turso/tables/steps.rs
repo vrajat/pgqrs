@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::tables::DialectStepTable;
 use crate::store::turso::dialect::TursoDialect;
-use crate::store::turso::parse_turso_timestamp;
+use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -175,7 +175,7 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
                 QueryParam::String(value) => turso::Value::Text(value.clone()),
                 QueryParam::Json(value) => turso::Value::Text(value.to_string()),
                 QueryParam::DateTime(value) => match value {
-                    Some(dt) => turso::Value::Text(crate::store::turso::format_turso_timestamp(dt)),
+                    Some(dt) => turso::Value::Text(format_turso_timestamp(dt)),
                     None => turso::Value::Null,
                 },
             };
@@ -183,7 +183,6 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
         }
 
         let row = builder.fetch_one_once(&self.db).await?;
-
         Self::map_row(&row)
     }
 }

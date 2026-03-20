@@ -1,7 +1,7 @@
 //! Postgres implementation of the Store trait.
 
 use crate::store::{
-    Admin as AdminTrait, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
+    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
     Worker as WorkerTrait, WorkerTable, WorkflowTable,
 };
 use async_trait::async_trait;
@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 pub(crate) mod dialect;
 pub mod tables;
-pub mod worker;
 
+use self::tables::db_state::DbState as PostgresDbState;
 use self::tables::pgqrs_messages::Messages as PostgresMessageTable;
 use self::tables::pgqrs_queues::Queues as PostgresQueueTable;
 use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
@@ -19,9 +19,9 @@ use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
 use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
 
-use self::worker::admin::Admin as PostgresAdmin;
-
 use crate::config::Config;
+
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
 #[derive(Debug, Clone)]
 pub struct PostgresStore {
@@ -30,6 +30,7 @@ pub struct PostgresStore {
     queues: Arc<PostgresQueueTable>,
     messages: Arc<PostgresMessageTable>,
     workers: Arc<PostgresWorkerTable>,
+    db_state: Arc<PostgresDbState>,
     workflows: Arc<PostgresWorkflowTable>,
     workflow_runs: Arc<PostgresRunRecordTable>,
     workflow_steps: Arc<PostgresStepRecordTable>,
@@ -43,6 +44,7 @@ impl PostgresStore {
             queues: Arc::new(PostgresQueueTable::new(pool.clone())),
             messages: Arc::new(PostgresMessageTable::new(pool.clone())),
             workers: Arc::new(PostgresWorkerTable::new(pool.clone())),
+            db_state: Arc::new(PostgresDbState::new(pool.clone())),
             workflows: Arc::new(PostgresWorkflowTable::new(pool.clone())),
             workflow_runs: Arc::new(PostgresRunRecordTable::new(pool.clone())),
             workflow_steps: Arc::new(PostgresStepRecordTable::new(pool)),
@@ -115,6 +117,10 @@ impl Store for PostgresStore {
         self.workers.as_ref()
     }
 
+    fn db_state(&self) -> &dyn DbStateTable {
+        self.db_state.as_ref()
+    }
+
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -128,7 +134,6 @@ impl Store for PostgresStore {
     }
 
     async fn bootstrap(&self) -> crate::error::Result<()> {
-        use self::worker::admin::MIGRATOR;
         MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
@@ -138,14 +143,22 @@ impl Store for PostgresStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn AdminTrait>> {
-        let admin = PostgresAdmin::new(self.pool.clone(), hostname, port, config.clone()).await?;
-        Ok(Box::new(admin))
+    ) -> crate::error::Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            hostname,
+            port,
+        )
+        .await
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn AdminTrait>> {
-        let admin = PostgresAdmin::new_ephemeral(self.pool.clone(), config.clone()).await?;
-        Ok(Box::new(admin))
+    async fn admin_ephemeral(
+        &self,
+        config: &Config,
+    ) -> crate::error::Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Postgres(self.clone())).await
     }
 
     async fn producer(
@@ -283,8 +296,8 @@ impl Store for PostgresStore {
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn WorkerTrait>> {
         let worker_record = self.workers.get(id).await?;
-        Ok(Box::new(self::worker::WorkerHandle::new(
-            self.pool.clone(),
+        Ok(Box::new(crate::workers::WorkerHandle::new(
+            crate::store::AnyStore::Postgres(self.clone()),
             worker_record,
         )))
     }

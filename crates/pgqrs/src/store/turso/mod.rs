@@ -2,9 +2,10 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::store::{BackendType, ConcurrencyModel};
 use crate::store::{
-    MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable, WorkflowTable,
+    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
-use crate::{Admin, Worker};
+use crate::Worker;
 
 use crate::types::NewQueueRecord;
 use async_trait::async_trait;
@@ -14,8 +15,8 @@ use turso::{Database, Row};
 
 pub(crate) mod dialect;
 pub mod tables;
-pub mod worker;
 
+use self::tables::db_state::TursoDbState;
 use self::tables::messages::TursoMessageTable;
 use self::tables::queues::TursoQueueTable;
 use self::tables::runs::TursoRunRecordTable;
@@ -30,6 +31,7 @@ pub struct TursoStore {
     queues: Arc<TursoQueueTable>,
     messages: Arc<TursoMessageTable>,
     workers: Arc<TursoWorkerTable>,
+    db_state: Arc<TursoDbState>,
     workflows: Arc<TursoWorkflowTable>,
     workflow_runs: Arc<TursoRunRecordTable>,
     workflow_steps: Arc<TursoStepRecordTable>,
@@ -93,6 +95,7 @@ impl TursoStore {
             queues: Arc::new(TursoQueueTable::new(Arc::clone(&db))),
             messages: Arc::new(TursoMessageTable::new(Arc::clone(&db))),
             workers: Arc::new(TursoWorkerTable::new(Arc::clone(&db))),
+            db_state: Arc::new(TursoDbState::new(Arc::clone(&db))),
             workflows: Arc::new(TursoWorkflowTable::new(Arc::clone(&db))),
             workflow_runs: Arc::new(TursoRunRecordTable::new(Arc::clone(&db))),
             workflow_steps: Arc::new(TursoStepRecordTable::new(Arc::clone(&db))),
@@ -592,6 +595,10 @@ impl Store for TursoStore {
         self.workers.as_ref()
     }
 
+    fn db_state(&self) -> &dyn DbStateTable {
+        self.db_state.as_ref()
+    }
+
     fn workflows(&self) -> &dyn WorkflowTable {
         self.workflows.as_ref()
     }
@@ -666,16 +673,20 @@ impl Store for TursoStore {
         Ok(())
     }
 
-    async fn admin(&self, hostname: &str, port: i32, config: &Config) -> Result<Box<dyn Admin>> {
-        use self::worker::admin::TursoAdmin;
-        let admin = TursoAdmin::new(self.db.clone(), hostname, port, config.clone()).await?;
-        Ok(Box::new(admin))
+    async fn admin(
+        &self,
+        hostname: &str,
+        port: i32,
+        config: &Config,
+    ) -> Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new(crate::store::AnyStore::Turso(self.clone()), hostname, port)
+            .await
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> Result<Box<dyn Admin>> {
-        use self::worker::admin::TursoAdmin;
-        let admin = TursoAdmin::new_ephemeral(self.db.clone(), config.clone()).await?;
-        Ok(Box::new(admin))
+    async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
+        let _ = config;
+        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Turso(self.clone())).await
     }
 
     async fn producer(
@@ -833,10 +844,9 @@ impl Store for TursoStore {
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        use self::worker::TursoWorkerHandle;
         let worker_record = self.workers.get(id).await?;
-        Ok(Box::new(TursoWorkerHandle::new(
-            self.db.clone(),
+        Ok(Box::new(crate::workers::WorkerHandle::new(
+            crate::store::AnyStore::Turso(self.clone()),
             worker_record,
         )))
     }

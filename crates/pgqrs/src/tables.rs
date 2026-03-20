@@ -4,6 +4,7 @@ use crate::types::{
     NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkflowRecord, QueueMessage, QueueRecord,
     RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
+use crate::{QueueMetrics, SystemStats, WorkerHealthStats};
 
 use async_trait::async_trait;
 
@@ -32,6 +33,14 @@ pub trait MessageTable: Send + Sync {
     async fn count(&self) -> crate::error::Result<i64>;
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
     async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn list_by_consumer_worker(
+        &self,
+        worker_id: i64,
+    ) -> crate::error::Result<Vec<QueueMessage>>;
+    async fn count_by_consumer_worker(&self, worker_id: i64) -> crate::error::Result<i64>;
+    async fn count_worker_references(&self, worker_id: i64) -> crate::error::Result<i64>;
+    async fn move_to_dlq(&self, max_read_ct: i32) -> crate::error::Result<Vec<i64>>;
+    async fn release_by_consumer_worker(&self, worker_id: i64) -> crate::error::Result<u64>;
 
     async fn batch_insert(
         &self,
@@ -130,6 +139,7 @@ pub trait WorkerTable: Send + Sync {
     async fn delete(&self, id: i64) -> crate::error::Result<u64>;
     async fn filter_by_fk(&self, queue_id: i64) -> crate::error::Result<Vec<WorkerRecord>>;
     async fn count_by_fk(&self, queue_id: i64) -> crate::error::Result<i64>;
+    async fn mark_stopped(&self, id: i64) -> crate::error::Result<()>;
 
     async fn count_for_queue(
         &self,
@@ -173,6 +183,22 @@ pub trait WorkerTable: Send + Sync {
     async fn interrupt(&self, id: i64) -> crate::error::Result<()>;
     async fn heartbeat(&self, id: i64) -> crate::error::Result<()>;
     async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> crate::error::Result<bool>;
+}
+
+/// Cross-table repository operations used by admin/reporting paths.
+#[async_trait]
+pub trait DbStateTable: Send + Sync {
+    async fn verify(&self) -> crate::error::Result<()>;
+    async fn purge_queue(&self, queue_id: i64) -> crate::error::Result<()>;
+    async fn queue_metrics(&self, queue_id: i64) -> crate::error::Result<QueueMetrics>;
+    async fn all_queues_metrics(&self) -> crate::error::Result<Vec<QueueMetrics>>;
+    async fn system_stats(&self) -> crate::error::Result<SystemStats>;
+    async fn worker_health_stats(
+        &self,
+        heartbeat_timeout: chrono::Duration,
+        group_by_queue: bool,
+    ) -> crate::error::Result<Vec<WorkerHealthStats>>;
+    async fn purge_old_workers(&self, older_than: chrono::Duration) -> crate::error::Result<u64>;
 }
 
 /// Workflow definition persistence operations.

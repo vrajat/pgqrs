@@ -53,7 +53,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
         self.store
     }
 
-    async fn get_admin(&self) -> Result<Box<dyn crate::store::Admin>> {
+    async fn get_admin(&self) -> Result<crate::Admin> {
         if let (Some(hostname), Some(port)) = (&self.hostname, self.port) {
             self.store.admin(hostname, port, self.store.config()).await
         } else {

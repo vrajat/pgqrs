@@ -1,4 +1,4 @@
-use crate::store::dialect::{SqlDialect, StepSql};
+use crate::store::dialect::{DbStateSql, MessageSql, SqlDialect, StepSql, WorkerSql};
 
 pub(crate) struct SqliteDialect;
 
@@ -41,4 +41,149 @@ RETURNING id, run_id, step_name, status, input, output, error, retry_count, retr
 
 impl SqlDialect for SqliteDialect {
     const STEP: StepSql = SQLITE_STEP_SQL;
+
+    const MESSAGE: MessageSql = MessageSql {
+        list_by_consumer_worker: r#"
+SELECT id, queue_id, producer_worker_id, consumer_worker_id, payload, vt, enqueued_at, read_ct, dequeued_at, archived_at
+FROM pgqrs_messages
+WHERE consumer_worker_id = ?
+ORDER BY id
+"#,
+        count_by_consumer_worker: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages
+WHERE consumer_worker_id = ? AND archived_at IS NULL
+"#,
+        count_worker_references: r#"
+SELECT COUNT(*) as total_references FROM (
+    SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = ? OR consumer_worker_id = ?
+) refs
+"#,
+        move_to_dlq: r#"
+UPDATE pgqrs_messages
+SET archived_at = datetime('now')
+WHERE read_ct >= ? AND archived_at IS NULL
+RETURNING id
+"#,
+        release_by_consumer_worker: r#"
+UPDATE pgqrs_messages
+SET vt = datetime('now'), consumer_worker_id = NULL
+WHERE consumer_worker_id = ? AND archived_at IS NULL
+"#,
+    };
+
+    const WORKER: WorkerSql = WorkerSql {
+        mark_stopped: r#"
+UPDATE pgqrs_workers
+SET status = 'stopped',
+    shutdown_at = datetime('now')
+WHERE id = ?
+"#,
+    };
+
+    const DB_STATE: DbStateSql = DbStateSql {
+        check_table_exists: r#"
+SELECT EXISTS (
+    SELECT 1 FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+)
+"#,
+        check_orphaned_messages: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages m
+LEFT OUTER JOIN pgqrs_queues q ON m.queue_id = q.id
+WHERE q.id IS NULL
+"#,
+        check_orphaned_message_workers: r#"
+SELECT COUNT(*)
+FROM pgqrs_messages m
+LEFT OUTER JOIN pgqrs_workers pw ON m.producer_worker_id = pw.id
+LEFT OUTER JOIN pgqrs_workers cw ON m.consumer_worker_id = cw.id
+WHERE (m.producer_worker_id IS NOT NULL AND pw.id IS NULL)
+   OR (m.consumer_worker_id IS NOT NULL AND cw.id IS NULL)
+"#,
+        purge_queue_messages: r#"
+DELETE FROM pgqrs_messages WHERE queue_id = ?
+"#,
+        purge_queue_workers: r#"
+DELETE FROM pgqrs_workers WHERE queue_id = ?
+"#,
+        queue_metrics: r#"
+SELECT
+    q.queue_name as name,
+    COUNT(m.id) as total_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0) as archived_messages,
+    MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
+    MAX(m.enqueued_at) as newest_message
+FROM pgqrs_queues q
+LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+WHERE q.id = ?
+GROUP BY q.id, q.queue_name
+"#,
+        all_queues_metrics: r#"
+SELECT
+    q.queue_name as name,
+    COUNT(m.id) as total_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as pending_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.consumer_worker_id IS NOT NULL AND m.archived_at IS NULL THEN 1 ELSE 0 END), 0) as locked_messages,
+    COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND m.archived_at IS NOT NULL THEN 1 ELSE 0 END), 0) as archived_messages,
+    MIN(CASE WHEN m.consumer_worker_id IS NULL AND m.archived_at IS NULL THEN m.enqueued_at END) as oldest_pending_message,
+    MAX(m.enqueued_at) as newest_message
+FROM pgqrs_queues q
+LEFT JOIN pgqrs_messages m ON q.id = m.queue_id
+GROUP BY q.id, q.queue_name
+"#,
+        system_stats: r#"
+SELECT
+    (SELECT COUNT(*) FROM pgqrs_queues) as total_queues,
+    (SELECT COUNT(*) FROM pgqrs_workers) as total_workers,
+    (SELECT COUNT(*) FROM pgqrs_workers WHERE status = 'ready') as active_workers,
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL) as total_messages,
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NULL AND archived_at IS NULL) as pending_messages,
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL AND archived_at IS NULL) as locked_messages,
+    (SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NOT NULL) as archived_messages,
+    '0.5.0' as schema_version
+"#,
+        worker_health_global: r#"
+SELECT
+    'Global' as queue_name,
+    COUNT(*) as total_workers,
+    SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
+    SUM(CASE WHEN status = 'polling' THEN 1 ELSE 0 END) as polling_workers,
+    SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END) as interrupted_workers,
+    SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
+    SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
+    SUM(CASE WHEN status IN ('ready', 'polling') AND heartbeat_at < ? THEN 1 ELSE 0 END) as stale_workers
+FROM pgqrs_workers
+"#,
+        worker_health_by_queue: r#"
+SELECT
+    COALESCE(q.queue_name, 'Admin') as queue_name,
+    COUNT(w.id) as total_workers,
+    SUM(CASE WHEN w.status = 'ready' THEN 1 ELSE 0 END) as ready_workers,
+    SUM(CASE WHEN w.status = 'polling' THEN 1 ELSE 0 END) as polling_workers,
+    SUM(CASE WHEN w.status = 'interrupted' THEN 1 ELSE 0 END) as interrupted_workers,
+    SUM(CASE WHEN w.status = 'suspended' THEN 1 ELSE 0 END) as suspended_workers,
+    SUM(CASE WHEN w.status = 'stopped' THEN 1 ELSE 0 END) as stopped_workers,
+    SUM(CASE WHEN w.status IN ('ready', 'polling') AND w.heartbeat_at < ? THEN 1 ELSE 0 END) as stale_workers
+FROM pgqrs_workers w
+LEFT JOIN pgqrs_queues q ON w.queue_id = q.id
+GROUP BY q.queue_name
+"#,
+        purge_old_workers: r#"
+DELETE FROM pgqrs_workers
+WHERE status = 'stopped'
+  AND heartbeat_at < ?
+  AND id NOT IN (
+      SELECT DISTINCT worker_id
+      FROM (
+          SELECT producer_worker_id as worker_id FROM pgqrs_messages WHERE producer_worker_id IS NOT NULL
+          UNION
+          SELECT consumer_worker_id as worker_id FROM pgqrs_messages WHERE consumer_worker_id IS NOT NULL
+      ) refs
+  )
+"#,
+    };
 }

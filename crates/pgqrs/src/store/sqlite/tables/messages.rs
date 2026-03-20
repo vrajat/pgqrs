@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::types::QueueMessage;
 use async_trait::async_trait;
@@ -192,6 +194,83 @@ impl crate::store::MessageTable for SqliteMessageTable {
             messages.push(Self::map_row(row)?);
         }
         Ok(messages)
+    }
+
+    async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+        let rows = sqlx::query(SqliteDialect::MESSAGE.list_by_consumer_worker)
+            .bind(worker_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_MESSAGES_BY_CONSUMER_WORKER".into(),
+                source: Box::new(e),
+                context: format!("Failed to list messages for worker {}", worker_id),
+            })?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(Self::map_row(row)?);
+        }
+        Ok(messages)
+    }
+
+    async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
+        sqlx::query_scalar(SqliteDialect::MESSAGE.count_by_consumer_worker)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_MESSAGES_BY_CONSUMER_WORKER".into(),
+                source: Box::new(e),
+                context: format!("Failed to count messages for worker {}", worker_id),
+            })
+    }
+
+    async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
+        sqlx::query_scalar(SqliteDialect::MESSAGE.count_worker_references)
+            .bind(worker_id)
+            .bind(worker_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COUNT_MESSAGE_WORKER_REFERENCES".into(),
+                source: Box::new(e),
+                context: format!(
+                    "Failed to count message references for worker {}",
+                    worker_id
+                ),
+            })
+    }
+
+    async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
+        let rows = sqlx::query(SqliteDialect::MESSAGE.move_to_dlq)
+            .bind(max_read_ct)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "MOVE_MESSAGES_TO_DLQ".into(),
+                source: Box::new(e),
+                context: format!("Failed to archive messages with read_ct >= {}", max_read_ct),
+            })?;
+
+        let mut ids = Vec::with_capacity(rows.len());
+        for row in rows {
+            ids.push(row.try_get(0)?);
+        }
+        Ok(ids)
+    }
+
+    async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
+        let result = sqlx::query(SqliteDialect::MESSAGE.release_by_consumer_worker)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "RELEASE_MESSAGES_BY_CONSUMER_WORKER".into(),
+                source: Box::new(e),
+                context: format!("Failed to release messages for worker {}", worker_id),
+            })?;
+        Ok(result.rows_affected())
     }
 
     async fn batch_insert(

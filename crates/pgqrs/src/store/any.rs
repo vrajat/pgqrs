@@ -263,6 +263,19 @@ impl Store for AnyStore {
         }
     }
 
+    fn db_state(&self) -> &dyn DbStateTable {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(s) => s.db_state(),
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(s) => s.db_state(),
+            #[cfg(feature = "s3")]
+            AnyStore::S3(s) => s.db_state(),
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(s) => s.db_state(),
+        }
+    }
+
     fn workflows(&self) -> &dyn WorkflowTable {
         match self {
             #[cfg(feature = "postgres")]
@@ -346,7 +359,7 @@ impl Store for AnyStore {
         hostname: &str,
         port: i32,
         config: &Config,
-    ) -> crate::error::Result<Box<dyn Admin>> {
+    ) -> crate::error::Result<crate::workers::Admin> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.admin(hostname, port, config).await,
@@ -359,7 +372,10 @@ impl Store for AnyStore {
         }
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<Box<dyn Admin>> {
+    async fn admin_ephemeral(
+        &self,
+        config: &Config,
+    ) -> crate::error::Result<crate::workers::Admin> {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.admin_ephemeral(config).await,
