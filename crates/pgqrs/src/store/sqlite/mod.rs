@@ -11,6 +11,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 use std::sync::Arc;
 
+pub(crate) mod dialect;
 pub mod tables;
 pub mod worker;
 

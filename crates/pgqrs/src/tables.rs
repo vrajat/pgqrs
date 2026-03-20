@@ -222,8 +222,4 @@ pub trait StepRecordTable: Send + Sync {
         &self,
         query: crate::store::query::QueryBuilder,
     ) -> crate::error::Result<StepRecord>;
-    fn sql_acquire_step(&self) -> &'static str;
-    fn sql_clear_retry(&self) -> &'static str;
-    fn sql_complete_step(&self) -> &'static str;
-    fn sql_fail_step(&self) -> &'static str;
 }

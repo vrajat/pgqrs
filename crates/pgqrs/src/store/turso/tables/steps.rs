@@ -13,44 +13,6 @@ pub struct TursoStepRecordTable {
     db: Arc<Database>,
 }
 
-const SQL_ACQUIRE_STEP: &str = r#"
-    INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
-    VALUES (?, ?, 'RUNNING', datetime('now'), 0)
-    ON CONFLICT (run_id, step_name) DO UPDATE
-    SET status = CASE
-        WHEN pgqrs_workflow_steps.status = 'SUCCESS' THEN 'SUCCESS'
-        WHEN pgqrs_workflow_steps.status = 'ERROR' THEN 'ERROR'
-        ELSE 'RUNNING'
-    END,
-    started_at = CASE
-        WHEN pgqrs_workflow_steps.status IN ('SUCCESS', 'ERROR') THEN pgqrs_workflow_steps.started_at
-        ELSE datetime('now')
-    END
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_CLEAR_RETRY: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'RUNNING', retry_at = NULL, error = NULL
-    WHERE id = ?
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_COMPLETE_STEP: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'SUCCESS', output = ?2, completed_at = datetime('now')
-    WHERE id = ?1
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
-const SQL_FAIL_STEP: &str = r#"
-    UPDATE pgqrs_workflow_steps
-    SET status = 'ERROR', error = ?2, completed_at = datetime('now'),
-        retry_at = ?3, retry_count = ?4
-    WHERE id = ?1
-    RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-"#;
-
 impl TursoStepRecordTable {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
@@ -199,21 +161,5 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
         let row = builder.fetch_one_once(&self.db).await?;
 
         Self::map_row(&row)
-    }
-
-    fn sql_acquire_step(&self) -> &'static str {
-        SQL_ACQUIRE_STEP
-    }
-
-    fn sql_clear_retry(&self) -> &'static str {
-        SQL_CLEAR_RETRY
-    }
-
-    fn sql_complete_step(&self) -> &'static str {
-        SQL_COMPLETE_STEP
-    }
-
-    fn sql_fail_step(&self) -> &'static str {
-        SQL_FAIL_STEP
     }
 }

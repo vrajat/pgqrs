@@ -5,12 +5,19 @@
 
 use super::*;
 use crate::config::Config;
+use crate::store::dialect::{SqlDialect, StepSql};
+#[cfg(feature = "postgres")]
+use crate::store::postgres::dialect::PostgresDialect;
 #[cfg(feature = "postgres")]
 use crate::store::postgres::PostgresStore;
 #[cfg(feature = "s3")]
 use crate::store::s3::S3Store;
 #[cfg(feature = "sqlite")]
+use crate::store::sqlite::dialect::SqliteDialect;
+#[cfg(feature = "sqlite")]
 use crate::store::sqlite::SqliteStore;
+#[cfg(feature = "turso")]
+use crate::store::turso::dialect::TursoDialect;
 #[cfg(feature = "turso")]
 use crate::store::turso::TursoStore;
 #[cfg(feature = "postgres")]
@@ -123,6 +130,19 @@ impl AnyStore {
     pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
         let config = Config::from_dsn(dsn);
         Self::connect(&config).await
+    }
+
+    pub(crate) fn step_sql(&self) -> StepSql {
+        match self {
+            #[cfg(feature = "postgres")]
+            AnyStore::Postgres(_) => PostgresDialect::STEP,
+            #[cfg(feature = "sqlite")]
+            AnyStore::Sqlite(_) => SqliteDialect::STEP,
+            #[cfg(feature = "s3")]
+            AnyStore::S3(_) => SqliteDialect::STEP,
+            #[cfg(feature = "turso")]
+            AnyStore::Turso(_) => TursoDialect::STEP,
+        }
     }
 }
 

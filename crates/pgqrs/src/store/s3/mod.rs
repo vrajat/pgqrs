@@ -53,12 +53,6 @@ pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<
 pub trait SyncDb: Clone + Send + Sync + 'static {
     fn config(&self) -> &Config;
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel;
-    fn with_read_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send;
-    fn with_write_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send;
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
@@ -160,26 +154,6 @@ impl SyncDb for DurabilityStore {
         match self {
             Self::Local(db) => db.concurrency_model(),
             Self::Durable(db) => db.concurrency_model(),
-        }
-    }
-
-    fn with_read_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        match self {
-            Self::Local(db) => db.with_read_ref(f),
-            Self::Durable(db) => db.with_read_ref(f),
-        }
-    }
-
-    fn with_write_ref<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&dyn Store) -> R + Send,
-    {
-        match self {
-            Self::Local(db) => db.with_write_ref(f),
-            Self::Durable(db) => db.with_write_ref(f),
         }
     }
 
