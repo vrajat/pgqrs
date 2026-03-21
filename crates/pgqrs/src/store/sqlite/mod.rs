@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::store::dblock::DbLock;
 use crate::store::ConcurrencyModel;
 use crate::store::{
-    DbStateTable, DbTables, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
-    WorkerTable, WorkflowTable,
+    DbStateTable, DbTables, MessageTable, QueueTable, RunRecordTable, SerializedLock,
+    StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
 use crate::Worker;
 
@@ -81,7 +82,8 @@ impl SqliteTables {
 
 #[derive(Clone)]
 pub struct SqliteStore {
-    inner: SqliteTables,
+    db: SerializedLock<SqliteTables>,
+    tables: Tables<SerializedLock<SqliteTables>>,
 }
 
 impl std::fmt::Debug for SqliteStore {
@@ -93,9 +95,9 @@ impl std::fmt::Debug for SqliteStore {
 impl SqliteStore {
     /// Create a new SQLite store with default optimizations.
     pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
-        Ok(Self {
-            inner: SqliteTables::new(dsn, config).await?,
-        })
+        let db = SerializedLock::new(SqliteTables::new(dsn, config).await?);
+        let tables = Tables::new(db.clone());
+        Ok(Self { db, tables })
     }
 
     fn any_store(&self) -> crate::store::AnyStore {
@@ -200,65 +202,85 @@ impl DbTables for SqliteTables {
 #[async_trait]
 impl Store for SqliteStore {
     async fn execute_raw(&self, sql: &str) -> Result<()> {
-        self.inner.execute_raw(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw(&sql).await }))
+            .await
     }
 
     async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
-        self.inner.execute_raw_with_i64(sql, param).await
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw_with_i64(&sql, param).await }))
+            .await
     }
 
     async fn execute_raw_with_two_i64(&self, sql: &str, param1: i64, param2: i64) -> Result<()> {
-        self.inner
-            .execute_raw_with_two_i64(sql, param1, param2)
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| {
+                Box::pin(async move { db.execute_raw_with_two_i64(&sql, param1, param2).await })
+            })
             .await
     }
 
     async fn query_int(&self, sql: &str) -> Result<i64> {
-        self.inner.query_int(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_int(&sql).await }))
+            .await
     }
 
     async fn query_string(&self, sql: &str) -> Result<String> {
-        self.inner.query_string(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_string(&sql).await }))
+            .await
     }
 
     async fn query_bool(&self, sql: &str) -> Result<bool> {
-        self.inner.query_bool(sql).await
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_bool(&sql).await }))
+            .await
     }
 
     fn config(&self) -> &Config {
-        self.inner.config()
+        self.db.config()
     }
 
     fn queues(&self) -> &dyn QueueTable {
-        self.inner.queues()
+        &self.tables
     }
 
     fn messages(&self) -> &dyn MessageTable {
-        self.inner.messages()
+        &self.tables
     }
 
     fn workers(&self) -> &dyn WorkerTable {
-        self.inner.workers()
+        &self.tables
     }
 
     fn db_state(&self) -> &dyn DbStateTable {
-        self.inner.db_state()
+        &self.tables
     }
 
     fn workflows(&self) -> &dyn WorkflowTable {
-        self.inner.workflows()
+        &self.tables
     }
 
     fn workflow_runs(&self) -> &dyn RunRecordTable {
-        self.inner.workflow_runs()
+        &self.tables
     }
 
     fn workflow_steps(&self) -> &dyn StepRecordTable {
-        self.inner.workflow_steps()
+        &self.tables
     }
 
     async fn bootstrap(&self) -> Result<()> {
-        self.inner.bootstrap().await
+        self.db
+            .with_write(|db| Box::pin(async move { db.bootstrap().await }))
+            .await
     }
 
     async fn admin(
@@ -283,12 +305,9 @@ impl Store for SqliteStore {
         port: i32,
         config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.inner.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .inner
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Producer::new(
             self.any_store(),
@@ -306,12 +325,9 @@ impl Store for SqliteStore {
         config: &Config,
     ) -> Result<crate::workers::Consumer> {
         let _ = config;
-        let queue_info = self.inner.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .inner
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Consumer::new(
             self.any_store(),
@@ -321,60 +337,60 @@ impl Store for SqliteStore {
     }
 
     async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
-        let queue_exists = self.inner.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if queue_exists {
             return Err(crate::error::Error::QueueAlreadyExists {
                 name: name.to_string(),
             });
         }
 
-        self.inner
-            .queues
-            .insert(crate::types::NewQueueRecord {
+        QueueTable::insert(
+            &self.tables,
+            crate::types::NewQueueRecord {
                 queue_name: name.to_string(),
-            })
-            .await
+            },
+        )
+        .await
     }
 
     async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
-        let queue_exists = self.inner.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if !queue_exists {
-            let _queue = self
-                .inner
-                .queues
-                .insert(crate::types::NewQueueRecord {
+            let _queue = QueueTable::insert(
+                &self.tables,
+                crate::types::NewQueueRecord {
                     queue_name: name.to_string(),
-                })
-                .await?;
+                },
+            )
+            .await?;
         }
 
-        let queue = self.inner.queues.get_by_name(name).await?;
+        let queue = QueueTable::get_by_name(&self.tables, name).await?;
 
-        self.inner
-            .workflows
-            .insert(crate::types::NewWorkflowRecord {
+        WorkflowTable::insert(
+            &self.tables,
+            crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
-            })
-            .await
-            .map_err(|e| {
-                if let crate::error::Error::QueryFailed { source, .. } = &e {
-                    if let Some(sqlx::Error::Database(db_err)) =
-                        source.downcast_ref::<sqlx::Error>()
-                    {
-                        if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
-                            return crate::error::Error::WorkflowAlreadyExists {
-                                name: name.to_string(),
-                            };
-                        }
+            },
+        )
+        .await
+        .map_err(|e| {
+            if let crate::error::Error::QueryFailed { source, .. } = &e {
+                if let Some(sqlx::Error::Database(db_err)) = source.downcast_ref::<sqlx::Error>() {
+                    if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
+                        return crate::error::Error::WorkflowAlreadyExists {
+                            name: name.to_string(),
+                        };
                     }
                 }
-                e
-            })
+            }
+            e
+        })
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
-        match self.inner.workflow_runs.get_by_message_id(message.id).await {
+        match RunRecordTable::get_by_message_id(&self.tables, message.id).await {
             Ok(record) => {
                 return Ok(crate::workers::Run::new(self.any_store(), record));
             }
@@ -382,24 +398,24 @@ impl Store for SqliteStore {
             Err(e) => return Err(e),
         }
 
-        let queue = self.inner.queues.get(message.queue_id).await?;
-        let workflow = self.inner.workflows.get_by_name(&queue.queue_name).await?;
+        let queue = QueueTable::get(&self.tables, message.queue_id).await?;
+        let workflow = WorkflowTable::get_by_name(&self.tables, &queue.queue_name).await?;
 
-        let run_rec = self
-            .inner
-            .workflow_runs
-            .insert(crate::types::NewRunRecord {
+        let run_rec = RunRecordTable::insert(
+            &self.tables,
+            crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 message_id: message.id,
                 input: Some(message.payload.clone()),
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(crate::workers::Run::new(self.any_store(), run_rec))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        let worker_record = self.inner.workers.get(id).await?;
+        let worker_record = WorkerTable::get(&self.tables, id).await?;
         Ok(Box::new(crate::workers::WorkerHandle::new(
             self.any_store(),
             worker_record,
@@ -407,7 +423,7 @@ impl Store for SqliteStore {
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
-        self.inner.concurrency_model()
+        self.db.concurrency_model()
     }
 
     fn backend_name(&self) -> &'static str {
@@ -419,12 +435,9 @@ impl Store for SqliteStore {
         queue: &str,
         config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.inner.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .inner
-            .workers
-            .register_ephemeral(Some(queue_info.id))
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Producer::new(
             self.any_store(),
@@ -440,12 +453,9 @@ impl Store for SqliteStore {
         config: &Config,
     ) -> Result<crate::workers::Consumer> {
         let _ = config;
-        let queue_info = self.inner.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .inner
-            .workers
-            .register_ephemeral(Some(queue_info.id))
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Consumer::new(
             self.any_store(),

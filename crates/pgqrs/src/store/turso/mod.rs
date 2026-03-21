@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::store::dblock::DbLock;
 use crate::store::{BackendType, ConcurrencyModel};
 use crate::store::{
-    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
+    DbStateTable, DbTables, MessageTable, QueueTable, RunRecordTable, SerializedLock,
+    StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
 use crate::Worker;
 
@@ -25,7 +26,7 @@ use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
 
 #[derive(Debug, Clone)]
-pub struct TursoStore {
+pub(crate) struct TursoTables {
     db: Arc<Database>,
     config: Config,
     queues: Arc<TursoQueueTable>,
@@ -37,8 +38,8 @@ pub struct TursoStore {
     workflow_steps: Arc<TursoStepRecordTable>,
 }
 
-impl TursoStore {
-    pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
+impl TursoTables {
+    pub(crate) async fn new(dsn: &str, config: &Config) -> Result<Self> {
         let path = BackendType::TURSO_PREFIXES
             .iter()
             .find_map(|prefix| dsn.strip_prefix(prefix))
@@ -100,6 +101,30 @@ impl TursoStore {
             workflow_runs: Arc::new(TursoRunRecordTable::new(Arc::clone(&db))),
             workflow_steps: Arc::new(TursoStepRecordTable::new(Arc::clone(&db))),
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct TursoStore {
+    db: SerializedLock<TursoTables>,
+    tables: Tables<SerializedLock<TursoTables>>,
+}
+
+impl std::fmt::Debug for TursoStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TursoStore").finish()
+    }
+}
+
+impl TursoStore {
+    pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
+        let db = SerializedLock::new(TursoTables::new(dsn, config).await?);
+        let tables = Tables::new(db.clone());
+        Ok(Self { db, tables })
+    }
+
+    fn any_store(&self) -> crate::store::AnyStore {
+        crate::store::AnyStore::Turso(self.clone())
     }
 }
 
@@ -547,7 +572,7 @@ pub fn query_scalar(sql: &str) -> GenericScalarBuilder {
 }
 
 #[async_trait]
-impl Store for TursoStore {
+impl DbTables for TursoTables {
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         query(sql).execute_once(&self.db).await?;
         Ok(())
@@ -581,6 +606,10 @@ impl Store for TursoStore {
 
     fn config(&self) -> &Config {
         &self.config
+    }
+
+    fn concurrency_model(&self) -> ConcurrencyModel {
+        ConcurrencyModel::SingleProcess
     }
 
     fn queues(&self) -> &dyn QueueTable {
@@ -672,6 +701,91 @@ impl Store for TursoStore {
         }
         Ok(())
     }
+}
+
+#[async_trait]
+impl Store for TursoStore {
+    async fn execute_raw(&self, sql: &str) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw(&sql).await }))
+            .await
+    }
+
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw_with_i64(&sql, param).await }))
+            .await
+    }
+
+    async fn execute_raw_with_two_i64(&self, sql: &str, param1: i64, param2: i64) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| {
+                Box::pin(async move { db.execute_raw_with_two_i64(&sql, param1, param2).await })
+            })
+            .await
+    }
+
+    async fn query_int(&self, sql: &str) -> Result<i64> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_int(&sql).await }))
+            .await
+    }
+
+    async fn query_string(&self, sql: &str) -> Result<String> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_string(&sql).await }))
+            .await
+    }
+
+    async fn query_bool(&self, sql: &str) -> Result<bool> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_bool(&sql).await }))
+            .await
+    }
+
+    fn config(&self) -> &Config {
+        self.db.config()
+    }
+
+    fn queues(&self) -> &dyn QueueTable {
+        &self.tables
+    }
+
+    fn messages(&self) -> &dyn MessageTable {
+        &self.tables
+    }
+
+    fn workers(&self) -> &dyn WorkerTable {
+        &self.tables
+    }
+
+    fn db_state(&self) -> &dyn DbStateTable {
+        &self.tables
+    }
+
+    fn workflows(&self) -> &dyn WorkflowTable {
+        &self.tables
+    }
+
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
+        &self.tables
+    }
+
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
+        &self.tables
+    }
+
+    async fn bootstrap(&self) -> Result<()> {
+        self.db
+            .with_write(|db| Box::pin(async move { db.bootstrap().await }))
+            .await
+    }
 
     async fn admin(
         &self,
@@ -680,13 +794,12 @@ impl Store for TursoStore {
         config: &Config,
     ) -> Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new(crate::store::AnyStore::Turso(self.clone()), hostname, port)
-            .await
+        crate::workers::Admin::new(self.any_store(), hostname, port).await
     }
 
     async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Turso(self.clone())).await
+        crate::workers::Admin::new_ephemeral(self.any_store()).await
     }
 
     async fn producer(
@@ -694,19 +807,17 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue_name).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Turso(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
@@ -715,108 +826,111 @@ impl Store for TursoStore {
         queue_name: &str,
         hostname: &str,
         port: i32,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Consumer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let _ = config;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue_name).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Turso(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
         ))
     }
 
     async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
-        let queue_exists = self.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if queue_exists {
             return Err(crate::error::Error::QueueAlreadyExists {
                 name: name.to_string(),
             });
         }
 
-        self.queues
-            .insert(NewQueueRecord {
+        QueueTable::insert(
+            &self.tables,
+            NewQueueRecord {
                 queue_name: name.to_string(),
-            })
-            .await
+            },
+        )
+        .await
     }
 
     async fn producer_ephemeral(
         &self,
         queue_name: &str,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue_name).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Turso(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
     async fn consumer_ephemeral(
         &self,
         queue_name: &str,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Consumer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+        let _ = config;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue_name).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Turso(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
         ))
     }
 
     async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
-        let queue_exists = self.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if !queue_exists {
-            let _queue = self
-                .queues
-                .insert(NewQueueRecord {
+            let _queue = QueueTable::insert(
+                &self.tables,
+                NewQueueRecord {
                     queue_name: name.to_string(),
-                })
-                .await?;
+                },
+            )
+            .await?;
         }
 
-        let queue = self.queues.get_by_name(name).await?;
+        let queue = QueueTable::get_by_name(&self.tables, name).await?;
 
-        let workflow_record = self
-            .workflows
-            .insert(crate::types::NewWorkflowRecord {
+        let workflow_record = WorkflowTable::insert(
+            &self.tables,
+            crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
-            })
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
-                    return crate::error::Error::WorkflowAlreadyExists {
-                        name: name.to_string(),
-                    };
-                }
-                e
-            })?;
+            },
+        )
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
+                return crate::error::Error::WorkflowAlreadyExists {
+                    name: name.to_string(),
+                };
+            }
+            e
+        })?;
 
         Ok(workflow_record)
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
         // Try to find existing run by message_id
-        match self.workflow_runs.get_by_message_id(message.id).await {
+        match RunRecordTable::get_by_message_id(&self.tables, message.id).await {
             Ok(record) => {
-                return Ok(crate::workers::Run::new(
-                    crate::store::AnyStore::Turso(self.clone()),
-                    record,
-                ));
+                return Ok(crate::workers::Run::new(self.any_store(), record));
             }
             Err(crate::error::Error::NotFound { .. }) => {
                 // Not found, continue to create new run
@@ -825,34 +939,32 @@ impl Store for TursoStore {
         }
 
         // Otherwise, it's a new trigger. Create run record.
-        let queue = self.queues.get(message.queue_id).await?;
-        let workflow = self.workflows.get_by_name(&queue.queue_name).await?;
+        let queue = QueueTable::get(&self.tables, message.queue_id).await?;
+        let workflow = WorkflowTable::get_by_name(&self.tables, &queue.queue_name).await?;
 
-        let run_rec = self
-            .workflow_runs
-            .insert(crate::types::NewRunRecord {
+        let run_rec = RunRecordTable::insert(
+            &self.tables,
+            crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 message_id: message.id,
                 input: Some(message.payload.clone()),
-            })
-            .await?;
+            },
+        )
+        .await?;
 
-        Ok(crate::workers::Run::new(
-            crate::store::AnyStore::Turso(self.clone()),
-            run_rec,
-        ))
+        Ok(crate::workers::Run::new(self.any_store(), run_rec))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        let worker_record = self.workers.get(id).await?;
+        let worker_record = WorkerTable::get(&self.tables, id).await?;
         Ok(Box::new(crate::workers::WorkerHandle::new(
-            crate::store::AnyStore::Turso(self.clone()),
+            self.any_store(),
             worker_record,
         )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
-        ConcurrencyModel::SingleProcess
+        self.db.concurrency_model()
     }
 
     fn backend_name(&self) -> &'static str {
