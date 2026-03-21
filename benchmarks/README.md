@@ -61,12 +61,13 @@ After bootstrap, the recommended entrypoints are:
 make benchmark-list
 make benchmark-run SCENARIO=queue.drain_fixed_backlog BACKEND=sqlite BINDING=python
 make benchmark-dashboard
-uv run python -m benchmarks.bench.cli run --help
+.venv/bin/python -m benchmarks.bench.cli run --help
 ```
 
 The benchmark CLI uses `Typer`.
 By default it shows phase progress bars.
 Use `--verbose` for benchmark logs and `--no-progress` if you need plain output.
+Rust benchmark executors should run in release mode for any result you intend to compare or promote.
 
 ### 1. Pick One Scenario
 

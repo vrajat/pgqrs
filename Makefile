@@ -61,8 +61,8 @@ benchmark-bootstrap:  ## Prepare .venv for running benchmarks and dashboard
 benchmark-list:  ## List available benchmark scenarios
 	$(MAKE) -C benchmarks list UV="$(UV)"
 
-benchmark-run:  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFILE=compat])
-	$(MAKE) -C benchmarks run UV="$(UV)" SCENARIO="$(SCENARIO)" BACKEND="$(BACKEND)" BINDING="$(BINDING)" PROFILE="$(PROFILE)"
+benchmark-run:  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFILE=compat] [PREFILL_JOBS=...])
+	$(MAKE) -C benchmarks run UV="$(UV)" SCENARIO="$(SCENARIO)" BACKEND="$(BACKEND)" BINDING="$(BINDING)" PROFILE="$(PROFILE)" PREFILL_JOBS="$(PREFILL_JOBS)"
 
 benchmark-dashboard:  ## Run the Streamlit benchmark dashboard
 	$(MAKE) -C benchmarks dashboard UV="$(UV)"

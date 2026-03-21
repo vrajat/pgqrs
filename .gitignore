@@ -1,4 +1,5 @@
 /target
+benchmarks/executors/rust/target/
 crates/pgqrs/target/
 docs/api
 .cache
