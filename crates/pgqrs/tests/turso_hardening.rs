@@ -2,6 +2,7 @@
 
 use pgqrs::store::AnyStore;
 use pgqrs::{Config, Store};
+use serde_json::json;
 use uuid::Uuid;
 
 mod common;
