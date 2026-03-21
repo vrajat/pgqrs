@@ -1,10 +1,9 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::store::s3::{
-    parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, StoreOpFuture, SyncDb, SyncState,
-};
-use crate::store::sqlite::SqliteStore;
-use crate::store::Store;
+use crate::store::dblock::DbLock;
+use crate::store::s3::{parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, SyncDb, SyncState};
+use crate::store::sqlite::SqliteTables;
+use crate::store::{DbOpFuture, DbTables};
 use async_trait::async_trait;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
@@ -83,7 +82,7 @@ struct SnapshotState {
     last_etag: Option<String>,
     is_dirty: bool,
     write_version: u64,
-    sqlite_store: SqliteStore,
+    sqlite_tables: SqliteTables,
 }
 
 impl SnapshotDb {
@@ -99,7 +98,7 @@ impl SnapshotDb {
         config.sqlite.use_wal = false;
 
         let sqlite_dsn = sqlite_dsn_for_revision(&config.dsn, None)?;
-        let sqlite_store = SqliteStore::new(&sqlite_dsn, &config).await?;
+        let sqlite_tables = SqliteTables::new(&sqlite_dsn, &config).await?;
 
         Ok(Self {
             inner: Arc::new(RwLock::new(SnapshotState {
@@ -108,7 +107,7 @@ impl SnapshotDb {
                 last_etag: None,
                 is_dirty: false,
                 write_version: 0,
-                sqlite_store,
+                sqlite_tables,
             })),
             write_gate: Arc::new(Mutex::new(())),
             config,
@@ -207,7 +206,7 @@ pub(crate) fn build_object_store_from_env(bucket: &str) -> Result<Arc<dyn Object
 }
 
 #[async_trait]
-impl SyncDb for SnapshotDb {
+impl DbLock for SnapshotDb {
     fn config(&self) -> &Config {
         &self.config
     }
@@ -219,24 +218,27 @@ impl SyncDb for SnapshotDb {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let guard = self.inner.read().await;
-        f(&guard.sqlite_store).await
+        f(&guard.sqlite_tables).await
     }
 
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let mut guard = self.inner.write().await;
-        let out = f(&guard.sqlite_store).await?;
+        let out = f(&guard.sqlite_tables).await?;
         guard.is_dirty = true;
         guard.write_version = guard.write_version.saturating_add(1);
         Ok(out)
     }
+}
 
+#[async_trait]
+impl SyncDb for SnapshotDb {
     async fn snapshot(&mut self) -> Result<()> {
         let (object_store, object_key, local_etag, is_dirty) = {
             let guard = self.inner.read().await;
@@ -286,7 +288,7 @@ impl SyncDb for SnapshotDb {
         })?;
 
         let sqlite_dsn = sqlite_dsn_for_revision(&self.config.dsn, remote_etag.as_deref())?;
-        let new_store = SqliteStore::new(&sqlite_dsn, &self.config)
+        let new_tables = SqliteTables::new(&sqlite_dsn, &self.config)
             .await
             .map_err(|e| Error::Internal {
                 message: format!("snapshot reopen sqlite store failed: {e}"),
@@ -304,7 +306,7 @@ impl SyncDb for SnapshotDb {
 
         guard.last_etag = remote_etag;
         guard.is_dirty = false;
-        guard.sqlite_store = new_store;
+        guard.sqlite_tables = new_tables;
         Ok(())
     }
 
@@ -378,7 +380,7 @@ impl SyncDb for SnapshotDb {
             })?;
         }
         let sqlite_dsn = sqlite_dsn_for_revision(&self.config.dsn, next_etag.as_deref())?;
-        let new_store = SqliteStore::new(&sqlite_dsn, &self.config)
+        let new_tables = SqliteTables::new(&sqlite_dsn, &self.config)
             .await
             .map_err(|e| Error::Internal {
                 message: format!("sync reopen sqlite store failed: {e}"),
@@ -399,7 +401,7 @@ impl SyncDb for SnapshotDb {
 
         guard.last_etag = next_etag;
         guard.is_dirty = false;
-        guard.sqlite_store = new_store;
+        guard.sqlite_tables = new_tables;
         Ok(())
     }
 }

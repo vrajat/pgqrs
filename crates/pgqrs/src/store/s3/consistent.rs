@@ -1,8 +1,9 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::store::dblock::DbLock;
 use crate::store::s3::snapshot::SnapshotDb;
-use crate::store::s3::{StoreOpFuture, SyncDb, SyncState};
-use crate::store::{ConcurrencyModel, Store};
+use crate::store::s3::{SyncDb, SyncState};
+use crate::store::{ConcurrencyModel, DbOpFuture, DbTables};
 use async_trait::async_trait;
 
 /// SyncDb variant that enforces durable writes.
@@ -32,7 +33,7 @@ impl ConsistentDb {
 }
 
 #[async_trait]
-impl SyncDb for ConsistentDb {
+impl DbLock for ConsistentDb {
     fn config(&self) -> &Config {
         self.inner.config()
     }
@@ -44,7 +45,7 @@ impl SyncDb for ConsistentDb {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         self.inner.with_read(f).await
     }
@@ -52,7 +53,7 @@ impl SyncDb for ConsistentDb {
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let _write_guard = self.inner.write_gate().lock().await;
         let out = self.inner.with_write(f).await?;
@@ -60,7 +61,10 @@ impl SyncDb for ConsistentDb {
         SyncDb::sync(&mut inner).await?;
         Ok(out)
     }
+}
 
+#[async_trait]
+impl SyncDb for ConsistentDb {
     async fn snapshot(&mut self) -> Result<()> {
         SyncDb::snapshot(&mut self.inner).await
     }

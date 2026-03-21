@@ -6,25 +6,20 @@
 
 pub mod consistent;
 pub mod snapshot;
-pub mod tables;
 
 use async_trait::async_trait;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use url::Url;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::store::s3::tables::Tables;
 use crate::store::{
-    AnyStore, ConcurrencyModel, DbStateTable, MessageTable, QueueTable, RunRecordTable,
-    StepRecordTable, Store, WorkerTable, WorkflowTable,
+    AnyStore, ConcurrencyModel, DbLock, DbOpFuture, DbStateTable, DbTables, MessageTable,
+    QueueTable, RunRecordTable, StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
-
-pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
 
 /// Internal stateful DB contract for the S3-backed store layers.
 ///
@@ -49,17 +44,7 @@ pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<
 /// Engineers should treat this trait as the internal durability/replication boundary for the
 /// S3 backend, not as a generic cross-backend store abstraction.
 #[async_trait]
-pub trait SyncDb: Clone + Send + Sync + 'static {
-    fn config(&self) -> &Config;
-    fn concurrency_model(&self) -> crate::store::ConcurrencyModel;
-    async fn with_read<R, F>(&self, f: F) -> Result<R>
-    where
-        R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send;
-    async fn with_write<R, F>(&self, f: F) -> Result<R>
-    where
-        R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send;
+pub trait SyncDb: DbLock {
     async fn snapshot(&mut self) -> Result<()>;
     async fn sync(&mut self) -> Result<()>;
 }
@@ -141,7 +126,7 @@ enum DurabilityStore {
 }
 
 #[async_trait]
-impl SyncDb for DurabilityStore {
+impl DbLock for DurabilityStore {
     fn config(&self) -> &Config {
         match self {
             Self::Local(db) => db.config(),
@@ -159,7 +144,7 @@ impl SyncDb for DurabilityStore {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         match self {
             Self::Local(db) => db.with_read(f).await,
@@ -170,14 +155,17 @@ impl SyncDb for DurabilityStore {
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn Store) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         match self {
             Self::Local(db) => db.with_write(f).await,
             Self::Durable(db) => db.with_write(f).await,
         }
     }
+}
 
+#[async_trait]
+impl SyncDb for DurabilityStore {
     async fn snapshot(&mut self) -> Result<()> {
         match self {
             Self::Local(db) => db.snapshot().await,
@@ -376,23 +364,10 @@ impl Store for S3Store {
         port: i32,
         config: &Config,
     ) -> crate::error::Result<crate::Producer> {
-        let queue = queue.to_string();
-        let hostname = hostname.to_string();
         let validation_config = config.validation_config.clone();
-
-        let (queue_info, worker_record) = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let queue_info = store.queues().get_by_name(&queue).await?;
-                    let worker_record = store
-                        .workers()
-                        .register(Some(queue_info.id), &hostname, port)
-                        .await?;
-                    Ok((queue_info, worker_record))
-                })
-            })
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Producer::new(
             AnyStore::S3(self.clone()),
@@ -409,22 +384,9 @@ impl Store for S3Store {
         port: i32,
         _config: &Config,
     ) -> crate::error::Result<crate::Consumer> {
-        let queue = queue.to_string();
-        let hostname = hostname.to_string();
-
-        let (queue_info, worker_record) = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let queue_info = store.queues().get_by_name(&queue).await?;
-                    let worker_record = store
-                        .workers()
-                        .register(Some(queue_info.id), &hostname, port)
-                        .await?;
-                    Ok((queue_info, worker_record))
-                })
-            })
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Consumer::new(
             AnyStore::S3(self.clone()),
@@ -434,38 +396,82 @@ impl Store for S3Store {
     }
 
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
-        let name = name.to_string();
-        self.db
-            .with_write(|store| Box::pin(async move { store.queue(&name).await }))
-            .await
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
+        if queue_exists {
+            return Err(crate::error::Error::QueueAlreadyExists {
+                name: name.to_string(),
+            });
+        }
+
+        QueueTable::insert(
+            &self.tables,
+            crate::types::NewQueueRecord {
+                queue_name: name.to_string(),
+            },
+        )
+        .await
     }
 
     async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
-        let name = name.to_string();
-        self.db
-            .with_write(|store| Box::pin(async move { store.workflow(&name).await }))
-            .await
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
+        if !queue_exists {
+            let _queue = QueueTable::insert(
+                &self.tables,
+                crate::types::NewQueueRecord {
+                    queue_name: name.to_string(),
+                },
+            )
+            .await?;
+        }
+
+        let queue = QueueTable::get_by_name(&self.tables, name).await?;
+
+        WorkflowTable::insert(
+            &self.tables,
+            crate::types::NewWorkflowRecord {
+                name: name.to_string(),
+                queue_id: queue.id,
+            },
+        )
+        .await
+        .map_err(|e| {
+            if let crate::error::Error::QueryFailed { source, .. } = &e {
+                if let Some(sqlx::Error::Database(db_err)) = source.downcast_ref::<sqlx::Error>() {
+                    if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
+                        return crate::error::Error::WorkflowAlreadyExists {
+                            name: name.to_string(),
+                        };
+                    }
+                }
+            }
+            e
+        })
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<crate::Run> {
-        let record = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let run = store.run(message).await?;
-                    Ok(run.record().clone())
-                })
-            })
-            .await?;
+        let record = match RunRecordTable::get_by_message_id(&self.tables, message.id).await {
+            Ok(record) => record,
+            Err(crate::error::Error::NotFound { .. }) => {
+                let queue = QueueTable::get(&self.tables, message.queue_id).await?;
+                let workflow = WorkflowTable::get_by_name(&self.tables, &queue.queue_name).await?;
+                RunRecordTable::insert(
+                    &self.tables,
+                    crate::types::NewRunRecord {
+                        workflow_id: workflow.id,
+                        message_id: message.id,
+                        input: Some(message.payload.clone()),
+                    },
+                )
+                .await?
+            }
+            Err(e) => return Err(e),
+        };
 
         Ok(crate::workers::Run::new(AnyStore::S3(self.clone()), record))
     }
 
     async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn crate::Worker>> {
-        let worker_record = self
-            .db
-            .with_read(|store| Box::pin(async move { store.workers().get(id).await }))
-            .await?;
+        let worker_record = WorkerTable::get(&self.tables, id).await?;
         Ok(Box::new(crate::workers::WorkerHandle::new(
             crate::store::AnyStore::S3(self.clone()),
             worker_record,
@@ -485,22 +491,10 @@ impl Store for S3Store {
         queue: &str,
         config: &Config,
     ) -> crate::error::Result<crate::Producer> {
-        let queue = queue.to_string();
         let validation_config = config.validation_config.clone();
-
-        let (queue_info, worker_record) = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let queue_info = store.queues().get_by_name(&queue).await?;
-                    let worker_record = store
-                        .workers()
-                        .register_ephemeral(Some(queue_info.id))
-                        .await?;
-                    Ok((queue_info, worker_record))
-                })
-            })
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Producer::new(
             AnyStore::S3(self.clone()),
@@ -515,21 +509,9 @@ impl Store for S3Store {
         queue: &str,
         _config: &Config,
     ) -> crate::error::Result<crate::Consumer> {
-        let queue = queue.to_string();
-
-        let (queue_info, worker_record) = self
-            .db
-            .with_write(|store| {
-                Box::pin(async move {
-                    let queue_info = store.queues().get_by_name(&queue).await?;
-                    let worker_record = store
-                        .workers()
-                        .register_ephemeral(Some(queue_info.id))
-                        .await?;
-                    Ok((queue_info, worker_record))
-                })
-            })
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Consumer::new(
             AnyStore::S3(self.clone()),

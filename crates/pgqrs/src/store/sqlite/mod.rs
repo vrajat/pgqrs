@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::store::dblock::DbLock;
 use crate::store::ConcurrencyModel;
 use crate::store::{
-    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
+    DbStateTable, DbTables, MessageTable, QueueTable, RunRecordTable, SerializedLock,
+    StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
 use crate::Worker;
 
@@ -24,7 +25,7 @@ use self::tables::workers::SqliteWorkerTable;
 use self::tables::workflows::SqliteWorkflowTable;
 
 #[derive(Debug, Clone)]
-pub struct SqliteStore {
+pub(crate) struct SqliteTables {
     pool: SqlitePool,
     config: Config,
     queues: Arc<SqliteQueueTable>,
@@ -36,9 +37,8 @@ pub struct SqliteStore {
     workflow_steps: Arc<SqliteStepRecordTable>,
 }
 
-impl SqliteStore {
-    /// Create a new SQLite store with default optimizations.
-    pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
+impl SqliteTables {
+    pub(crate) async fn new(dsn: &str, config: &Config) -> Result<Self> {
         let journal_mode = if config.sqlite.use_wal {
             "WAL"
         } else {
@@ -80,11 +80,36 @@ impl SqliteStore {
     }
 }
 
+#[derive(Clone)]
+pub struct SqliteStore {
+    db: SerializedLock<SqliteTables>,
+    tables: Tables<SerializedLock<SqliteTables>>,
+}
+
+impl std::fmt::Debug for SqliteStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteStore").finish()
+    }
+}
+
+impl SqliteStore {
+    /// Create a new SQLite store with default optimizations.
+    pub async fn new(dsn: &str, config: &Config) -> Result<Self> {
+        let db = SerializedLock::new(SqliteTables::new(dsn, config).await?);
+        let tables = Tables::new(db.clone());
+        Ok(Self { db, tables })
+    }
+
+    fn any_store(&self) -> crate::store::AnyStore {
+        crate::store::AnyStore::Sqlite(self.clone())
+    }
+}
+
 pub use crate::store::sqlite_utils::format_timestamp as format_sqlite_timestamp;
 pub use crate::store::sqlite_utils::parse_timestamp as parse_sqlite_timestamp;
 
 #[async_trait]
-impl Store for SqliteStore {
+impl DbTables for SqliteTables {
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         sqlx::query(sql)
             .execute(&self.pool)
@@ -133,6 +158,10 @@ impl Store for SqliteStore {
         &self.config
     }
 
+    fn concurrency_model(&self) -> ConcurrencyModel {
+        ConcurrencyModel::SingleProcess
+    }
+
     fn queues(&self) -> &dyn QueueTable {
         self.queues.as_ref()
     }
@@ -168,6 +197,91 @@ impl Store for SqliteStore {
             .map_err(|e| crate::error::Error::Database(e.into()))?;
         Ok(())
     }
+}
+
+#[async_trait]
+impl Store for SqliteStore {
+    async fn execute_raw(&self, sql: &str) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw(&sql).await }))
+            .await
+    }
+
+    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| Box::pin(async move { db.execute_raw_with_i64(&sql, param).await }))
+            .await
+    }
+
+    async fn execute_raw_with_two_i64(&self, sql: &str, param1: i64, param2: i64) -> Result<()> {
+        let sql = sql.to_string();
+        self.db
+            .with_write(|db| {
+                Box::pin(async move { db.execute_raw_with_two_i64(&sql, param1, param2).await })
+            })
+            .await
+    }
+
+    async fn query_int(&self, sql: &str) -> Result<i64> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_int(&sql).await }))
+            .await
+    }
+
+    async fn query_string(&self, sql: &str) -> Result<String> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_string(&sql).await }))
+            .await
+    }
+
+    async fn query_bool(&self, sql: &str) -> Result<bool> {
+        let sql = sql.to_string();
+        self.db
+            .with_read(|db| Box::pin(async move { db.query_bool(&sql).await }))
+            .await
+    }
+
+    fn config(&self) -> &Config {
+        self.db.config()
+    }
+
+    fn queues(&self) -> &dyn QueueTable {
+        &self.tables
+    }
+
+    fn messages(&self) -> &dyn MessageTable {
+        &self.tables
+    }
+
+    fn workers(&self) -> &dyn WorkerTable {
+        &self.tables
+    }
+
+    fn db_state(&self) -> &dyn DbStateTable {
+        &self.tables
+    }
+
+    fn workflows(&self) -> &dyn WorkflowTable {
+        &self.tables
+    }
+
+    fn workflow_runs(&self) -> &dyn RunRecordTable {
+        &self.tables
+    }
+
+    fn workflow_steps(&self) -> &dyn StepRecordTable {
+        &self.tables
+    }
+
+    async fn bootstrap(&self) -> Result<()> {
+        self.db
+            .with_write(|db| Box::pin(async move { db.bootstrap().await }))
+            .await
+    }
 
     async fn admin(
         &self,
@@ -176,153 +290,140 @@ impl Store for SqliteStore {
         config: &Config,
     ) -> Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new(crate::store::AnyStore::Sqlite(self.clone()), hostname, port)
-            .await
+        crate::workers::Admin::new(self.any_store(), hostname, port).await
     }
 
     async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Sqlite(self.clone())).await
+        crate::workers::Admin::new_ephemeral(self.any_store()).await
     }
 
     async fn producer(
         &self,
-        queue_name: &str,
+        queue: &str,
         hostname: &str,
         port: i32,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
     async fn consumer(
         &self,
-        queue_name: &str,
+        queue: &str,
         hostname: &str,
         port: i32,
-        _config: &Config,
+        config: &Config,
     ) -> Result<crate::workers::Consumer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let _ = config;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
         ))
     }
 
     async fn queue(&self, name: &str) -> Result<crate::types::QueueRecord> {
-        let queue_exists = self.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if queue_exists {
             return Err(crate::error::Error::QueueAlreadyExists {
                 name: name.to_string(),
             });
         }
 
-        self.queues
-            .insert(crate::types::NewQueueRecord {
+        QueueTable::insert(
+            &self.tables,
+            crate::types::NewQueueRecord {
                 queue_name: name.to_string(),
-            })
-            .await
+            },
+        )
+        .await
     }
 
     async fn workflow(&self, name: &str) -> Result<crate::types::WorkflowRecord> {
-        let queue_exists = self.queues.exists(name).await?;
+        let queue_exists = QueueTable::exists(&self.tables, name).await?;
         if !queue_exists {
-            let _queue = self
-                .queues
-                .insert(crate::types::NewQueueRecord {
+            let _queue = QueueTable::insert(
+                &self.tables,
+                crate::types::NewQueueRecord {
                     queue_name: name.to_string(),
-                })
-                .await?;
+                },
+            )
+            .await?;
         }
 
-        let queue = self.queues.get_by_name(name).await?;
+        let queue = QueueTable::get_by_name(&self.tables, name).await?;
 
-        let workflow_record = self
-            .workflows
-            .insert(crate::types::NewWorkflowRecord {
+        WorkflowTable::insert(
+            &self.tables,
+            crate::types::NewWorkflowRecord {
                 name: name.to_string(),
                 queue_id: queue.id,
-            })
-            .await
-            .map_err(|e| {
-                if let crate::error::Error::QueryFailed { source, .. } = &e {
-                    if let Some(sqlx::Error::Database(db_err)) =
-                        source.downcast_ref::<sqlx::Error>()
-                    {
-                        if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
-                            return crate::error::Error::WorkflowAlreadyExists {
-                                name: name.to_string(),
-                            };
-                        }
+            },
+        )
+        .await
+        .map_err(|e| {
+            if let crate::error::Error::QueryFailed { source, .. } = &e {
+                if let Some(sqlx::Error::Database(db_err)) = source.downcast_ref::<sqlx::Error>() {
+                    if matches!(db_err.code().as_deref(), Some("2067" | "1555" | "19")) {
+                        return crate::error::Error::WorkflowAlreadyExists {
+                            name: name.to_string(),
+                        };
                     }
                 }
-                e
-            })?;
-
-        Ok(workflow_record)
+            }
+            e
+        })
     }
 
     async fn run(&self, message: crate::types::QueueMessage) -> Result<crate::workers::Run> {
-        // Try to find existing run by message_id
-        match self.workflow_runs.get_by_message_id(message.id).await {
+        match RunRecordTable::get_by_message_id(&self.tables, message.id).await {
             Ok(record) => {
-                return Ok(crate::workers::Run::new(
-                    crate::store::AnyStore::Sqlite(self.clone()),
-                    record,
-                ));
+                return Ok(crate::workers::Run::new(self.any_store(), record));
             }
-            Err(crate::error::Error::NotFound { .. }) => {
-                // Not found, continue to create new run
-            }
+            Err(crate::error::Error::NotFound { .. }) => {}
             Err(e) => return Err(e),
         }
 
-        // Otherwise, it's a new trigger. Create run record.
-        let queue = self.queues.get(message.queue_id).await?;
-        let workflow = self.workflows.get_by_name(&queue.queue_name).await?;
+        let queue = QueueTable::get(&self.tables, message.queue_id).await?;
+        let workflow = WorkflowTable::get_by_name(&self.tables, &queue.queue_name).await?;
 
-        let run_rec = self
-            .workflow_runs
-            .insert(crate::types::NewRunRecord {
+        let run_rec = RunRecordTable::insert(
+            &self.tables,
+            crate::types::NewRunRecord {
                 workflow_id: workflow.id,
                 message_id: message.id,
                 input: Some(message.payload.clone()),
-            })
-            .await?;
+            },
+        )
+        .await?;
 
-        Ok(crate::workers::Run::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
-            run_rec,
-        ))
+        Ok(crate::workers::Run::new(self.any_store(), run_rec))
     }
 
     async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        let worker_record = self.workers.get(id).await?;
+        let worker_record = WorkerTable::get(&self.tables, id).await?;
         Ok(Box::new(crate::workers::WorkerHandle::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
+            self.any_store(),
             worker_record,
         )))
     }
 
     fn concurrency_model(&self) -> ConcurrencyModel {
-        ConcurrencyModel::SingleProcess
+        self.db.concurrency_model()
     }
 
     fn backend_name(&self) -> &'static str {
@@ -331,30 +432,33 @@ impl Store for SqliteStore {
 
     async fn producer_ephemeral(
         &self,
-        queue_name: &str,
-        _config: &Config,
+        queue: &str,
+        config: &Config,
     ) -> Result<crate::workers::Producer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
     async fn consumer_ephemeral(
         &self,
-        queue_name: &str,
-        _config: &Config,
+        queue: &str,
+        config: &Config,
     ) -> Result<crate::workers::Consumer> {
-        let queue_info = self.queues.get_by_name(queue_name).await?;
-        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+        let _ = config;
+        let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
+        let worker_record =
+            WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Sqlite(self.clone()),
+            self.any_store(),
             queue_info,
             worker_record,
         ))
