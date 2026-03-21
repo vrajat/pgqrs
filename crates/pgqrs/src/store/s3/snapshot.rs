@@ -1,11 +1,9 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::dblock::DbLock;
-use crate::store::s3::{
-    parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, StoreOpFuture, SyncDb, SyncState,
-};
+use crate::store::s3::{parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, SyncDb, SyncState};
 use crate::store::sqlite::SqliteTables;
-use crate::store::DbTables;
+use crate::store::{DbOpFuture, DbTables};
 use async_trait::async_trait;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
@@ -220,7 +218,7 @@ impl DbLock for SnapshotDb {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let guard = self.inner.read().await;
         f(&guard.sqlite_tables).await
@@ -229,7 +227,7 @@ impl DbLock for SnapshotDb {
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let mut guard = self.inner.write().await;
         let out = f(&guard.sqlite_tables).await?;

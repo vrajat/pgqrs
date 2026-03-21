@@ -33,7 +33,7 @@ pub use crate::tables::*;
 pub use crate::workers::*;
 
 pub use any::AnyStore;
-pub use dblock::{DbLock, DbTables, SerializedLock, StoreOpFuture, Tables};
+pub use dblock::{DbLock, DbOpFuture, DbTables, SerializedLock, Tables};
 
 // S3 store uses SQLite locally, so sqlite_utils are needed for `s3` too.
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]

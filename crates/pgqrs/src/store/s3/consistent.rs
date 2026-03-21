@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::store::dblock::DbLock;
 use crate::store::s3::snapshot::SnapshotDb;
-use crate::store::s3::{StoreOpFuture, SyncDb, SyncState};
-use crate::store::{ConcurrencyModel, DbTables};
+use crate::store::s3::{SyncDb, SyncState};
+use crate::store::{ConcurrencyModel, DbOpFuture, DbTables};
 use async_trait::async_trait;
 
 /// SyncDb variant that enforces durable writes.
@@ -45,7 +45,7 @@ impl DbLock for ConsistentDb {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         self.inner.with_read(f).await
     }
@@ -53,7 +53,7 @@ impl DbLock for ConsistentDb {
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let _write_guard = self.inner.write_gate().lock().await;
         let out = self.inner.with_write(f).await?;

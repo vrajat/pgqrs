@@ -11,18 +11,15 @@ use async_trait::async_trait;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use url::Url;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::{
-    AnyStore, ConcurrencyModel, DbLock, DbStateTable, DbTables, MessageTable, QueueTable,
-    RunRecordTable, StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
+    AnyStore, ConcurrencyModel, DbLock, DbOpFuture, DbStateTable, DbTables, MessageTable,
+    QueueTable, RunRecordTable, StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
-
-pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
 
 /// Internal stateful DB contract for the S3-backed store layers.
 ///
@@ -147,7 +144,7 @@ impl DbLock for DurabilityStore {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         match self {
             Self::Local(db) => db.with_read(f).await,
@@ -158,7 +155,7 @@ impl DbLock for DurabilityStore {
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         match self {
             Self::Local(db) => db.with_write(f).await,

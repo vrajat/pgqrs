@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 pub use crate::store::tables::Tables;
 
-pub type StoreOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
+pub type DbOpFuture<'a, R> = Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>>;
 
 #[async_trait]
 pub trait DbTables: Send + Sync + 'static {
@@ -41,12 +41,12 @@ pub trait DbLock: Clone + Send + Sync + 'static {
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send;
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send;
 
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send;
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ where
     async fn with_read<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         f(&self.inner).await
     }
@@ -92,7 +92,7 @@ where
     async fn with_write<R, F>(&self, f: F) -> Result<R>
     where
         R: Send,
-        F: for<'a> FnOnce(&'a dyn DbTables) -> StoreOpFuture<'a, R> + Send,
+        F: for<'a> FnOnce(&'a dyn DbTables) -> DbOpFuture<'a, R> + Send,
     {
         let _guard = self.write_gate.lock().await;
         f(&self.inner).await
