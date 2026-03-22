@@ -26,6 +26,7 @@ PGQRS_S3_TEST_BUCKET ?= pgqrs-test-bucket
 # Test-only features to always enable for test runs
 TEST_FEATURES ?= --features test-utils
 CARGO_TARGET_DIR_EFFECTIVE := $(if $(strip $(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),target)
+PGQRS_CLI_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/pgqrs
 SETUP_TEST_SCHEMAS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/setup_test_schemas
 
 .venv:  ## Set up Python virtual environment
@@ -86,11 +87,15 @@ check-nextest:
 	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
 
 build-setup-test-schemas: $(SETUP_TEST_SCHEMAS_BIN) ## Build the test schema helper for the active backend
+build-pgqrs-cli: $(PGQRS_CLI_BIN) ## Build the pgqrs CLI binary for the active backend
+
+$(PGQRS_CLI_BIN):
+	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 
 $(SETUP_TEST_SCHEMAS_BIN):
 	cargo build -p pgqrs --bin setup_test_schemas $(CARGO_FEATURES)
 
-test-rust: check-nextest ## Run Rust tests only (using nextest)
+test-rust: check-nextest build-pgqrs-cli ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
@@ -102,7 +107,7 @@ else
 endif
 
 
-test: build-python check-nextest  ## Run all tests
+test: build-python build-pgqrs-cli check-nextest  ## Run all tests
 	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
