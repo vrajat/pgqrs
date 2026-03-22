@@ -2,20 +2,20 @@ steps:
   - label: ":rust: format"
     key: "format"
     agents:
-      queue: "rvpro"
+      queue: "getafix"
     env:
-      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/Users/rajatvenkatesh/.local/buildkite-agent/cache"
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/registry"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
           restore: file
           save: file
           key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/git"
+          path: "/var/lib/buildkite-agent/.cargo/git"
           restore: file
           save: file
           key-extra: "cargo-git"
@@ -28,41 +28,34 @@ steps:
           key-extra: "cargo-target"
           soft-fail: true
       - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.cargo/bin"
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
           restore: file
           save: file
-          key-extra: "cargo-bin"
-          soft-fail: true
-      - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.local/bin"
-          restore: file
-          save: file
-          key-extra: "local-bin"
+          key-extra: "mise-data"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh check"
-      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make check"
+      - "mise exec -- make check"
 
   - label: ":sqlite: test sqlite"
     key: "test-sqlite"
     depends_on: "format"
     agents:
-      queue: "rvpro"
+      queue: "getafix"
     env:
-      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/Users/rajatvenkatesh/.local/buildkite-agent/cache"
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/registry"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
           restore: file
           save: file
           key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/git"
+          path: "/var/lib/buildkite-agent/.cargo/git"
           restore: file
           save: file
           key-extra: "cargo-git"
@@ -75,41 +68,34 @@ steps:
           key-extra: "cargo-target"
           soft-fail: true
       - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.cargo/bin"
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
           restore: file
           save: file
-          key-extra: "cargo-bin"
-          soft-fail: true
-      - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.local/bin"
-          restore: file
-          save: file
-          key-extra: "local-bin"
+          key-extra: "mise-data"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh"
-      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-sqlite"
+      - "mise exec -- make test-sqlite"
 
   - label: ":globe_with_meridians: test turso"
     key: "test-turso"
     depends_on: "format"
     agents:
-      queue: "rvpro"
+      queue: "getafix"
     env:
-      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/Users/rajatvenkatesh/.local/buildkite-agent/cache"
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/registry"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
           restore: file
           save: file
           key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/git"
+          path: "/var/lib/buildkite-agent/.cargo/git"
           restore: file
           save: file
           key-extra: "cargo-git"
@@ -122,41 +108,34 @@ steps:
           key-extra: "cargo-target"
           soft-fail: true
       - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.cargo/bin"
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
           restore: file
           save: file
-          key-extra: "cargo-bin"
-          soft-fail: true
-      - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.local/bin"
-          restore: file
-          save: file
-          key-extra: "local-bin"
+          key-extra: "mise-data"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh"
-      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-turso"
+      - "mise exec -- make test-turso"
 
   - label: ":postgres: test postgres"
     key: "test-postgres"
     depends_on: "format"
     agents:
-      queue: "rvpro"
+      queue: "getafix"
     env:
-      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/Users/rajatvenkatesh/.local/buildkite-agent/cache"
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/registry"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
           restore: file
           save: file
           key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/git"
+          path: "/var/lib/buildkite-agent/.cargo/git"
           restore: file
           save: file
           key-extra: "cargo-git"
@@ -169,43 +148,36 @@ steps:
           key-extra: "cargo-target"
           soft-fail: true
       - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.cargo/bin"
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
           restore: file
           save: file
-          key-extra: "cargo-bin"
-          soft-fail: true
-      - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.local/bin"
-          restore: file
-          save: file
-          key-extra: "local-bin"
+          key-extra: "mise-data"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh"
       - "trap '.buildkite/scripts/postgres-services.sh stop' EXIT"
       - ".buildkite/scripts/postgres-services.sh start"
-      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres UV=uv make test-postgres"
+      - "CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres mise exec -- make test-postgres"
 
   - label: ":bucket: test localstack"
     key: "test-localstack"
     depends_on: "format"
     agents:
-      queue: "rvpro"
+      queue: "getafix"
     env:
-      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/Users/rajatvenkatesh/.local/buildkite-agent/cache"
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
     plugins:
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/registry"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
           restore: file
           save: file
           key-extra: "cargo-registry"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "Cargo.lock"
-          path: "/Users/rajatvenkatesh/.cargo/git"
+          path: "/var/lib/buildkite-agent/.cargo/git"
           restore: file
           save: file
           key-extra: "cargo-git"
@@ -218,19 +190,12 @@ steps:
           key-extra: "cargo-target"
           soft-fail: true
       - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.cargo/bin"
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
           restore: file
           save: file
-          key-extra: "cargo-bin"
-          soft-fail: true
-      - cache#v1.8.1:
-          manifest: ".buildkite/scripts/bootstrap.sh"
-          path: "/Users/rajatvenkatesh/.local/bin"
-          restore: file
-          save: file
-          key-extra: "local-bin"
+          key-extra: "mise-data"
           soft-fail: true
     command:
       - ".buildkite/scripts/bootstrap.sh"
-      - "PATH=$HOME/.cargo/bin:$HOME/.local/bin:$PATH UV=uv make test-localstack"
+      - "mise exec -- make test-localstack"

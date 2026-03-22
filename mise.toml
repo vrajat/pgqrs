@@ -1,0 +1,5 @@
+[tools]
+rust = { version = "stable", profile = "default" }
+python = "3.11"
+uv = "latest"
+"cargo:cargo-nextest" = "latest"
