@@ -22,8 +22,8 @@ opt-level = 1
 [target.aarch64-apple-darwin]
 # Use faster linker on macOS (Apple Silicon)
 # The default linker is already fast on macOS, but we ensure it's used
-rustflags = ["-C", "link-arg=-fuse-ld=ld"]
+rustflags = ["-C", "link-arg=-fuse-ld=ld", "-C", "split-debuginfo=packed"]
 
 [target.x86_64-apple-darwin]
 # Use faster linker on macOS (Intel)
-rustflags = ["-C", "link-arg=-fuse-ld=ld"]
+rustflags = ["-C", "link-arg=-fuse-ld=ld", "-C", "split-debuginfo=packed"]

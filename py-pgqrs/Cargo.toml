@@ -18,6 +18,7 @@ postgres = ["pgqrs/postgres"]
 sqlite = ["pgqrs/sqlite"]
 turso = ["pgqrs/turso"]
 s3 = ["pgqrs/s3"]
+test-utils = ["pgqrs/test-utils"]
 
 [dependencies]
 pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38"] }

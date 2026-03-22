@@ -25,29 +25,38 @@ PGQRS_S3_TEST_BUCKET ?= pgqrs-test-bucket
 
 # Test-only features to always enable for test runs
 TEST_FEATURES ?= --features test-utils
+CARGO_TARGET_DIR_EFFECTIVE := $(if $(strip $(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),target)
+SETUP_TEST_SCHEMAS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/setup_test_schemas
 
 .venv:  ## Set up Python virtual environment
 	$(UV) venv
 
-docs-requirements: .venv  ## Install documentation dependencies only
+docs-requirements: .venv  ## Install documentation/build dependencies
 	$(UV) pip install maturin "mkdocs-material[imaging]" mkdocs-catppuccin
 
-requirements: .venv/requirements.timestamp  ## Install all Python requirements
+requirements: test-requirements  ## Backward-compatible alias for test Python requirements
 
-.venv/requirements.timestamp: py-pgqrs/pyproject.toml py-pgqrs/Cargo.toml
+test-requirements: .venv/test-requirements.timestamp  ## Install Python test requirements
+
+.venv/test-requirements.timestamp: py-pgqrs/pyproject.toml py-pgqrs/Cargo.toml
 	$(MAKE) docs-requirements
-	$(UV) pip install -e "py-pgqrs[test]"
-	@touch .venv/requirements.timestamp
+	$(UV) pip install \
+		"pytest>=7.0" \
+		"pytest-asyncio>=0.21" \
+		"testcontainers[postgres]>=3.7" \
+		"boto3>=1.34" \
+		"urllib3<2.0"
+	@touch .venv/test-requirements.timestamp
 
 
-build: requirements  ## Build Rust library and Python bindings
+build: test-requirements  ## Build Rust library and Python bindings
 	cargo build -p pgqrs $(CARGO_FEATURES)
-	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
+	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES) $(TEST_FEATURES)
 
-build-python: requirements  ## Build Python bindings only (for tests)
-	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
+build-python: test-requirements  ## Build Python bindings only (for tests)
+	$(UV) run maturin develop -m py-pgqrs/Cargo.toml $(CARGO_FEATURES) $(TEST_FEATURES)
 
-python-wheel: requirements  ## Build a local Python wheel into dist/
+python-wheel: docs-requirements  ## Build a local Python wheel into dist/
 	rm -rf dist/py-pgqrs
 	mkdir -p dist/py-pgqrs
 	$(UV) run maturin build --release --out dist/py-pgqrs -m py-pgqrs/Cargo.toml $(CARGO_FEATURES)
@@ -76,20 +85,25 @@ install-nextest: ## Install cargo-nextest
 check-nextest:
 	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
 
+build-setup-test-schemas: $(SETUP_TEST_SCHEMAS_BIN) ## Build the test schema helper for the active backend
+
+$(SETUP_TEST_SCHEMAS_BIN):
+	cargo build -p pgqrs --bin setup_test_schemas $(CARGO_FEATURES)
+
 test-rust: check-nextest ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
 endif
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 endif
 
 
 test: build-python check-nextest  ## Run all tests
-	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev --workspace $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Optional selectors for Python tests
@@ -141,13 +155,13 @@ else
 	docker rm -f pgqrs-test-db || true
 endif
 
-test-setup-postgres: start-pgbouncer ## Provision schemas (uses CI database if available)
+test-setup-postgres: start-pgbouncer build-setup-test-schemas ## Provision schemas (uses CI database if available)
 ifdef CI_POSTGRES_RUNNING
 	@echo "Using CI Postgres database"
-	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" cargo run -p pgqrs --bin setup_test_schemas
+	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" $(SETUP_TEST_SCHEMAS_BIN)
 else
 	@echo "Using local Postgres database"
-	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" cargo run -p pgqrs --bin setup_test_schemas
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" $(SETUP_TEST_SCHEMAS_BIN)
 endif
 
 test-postgres: test-setup-postgres ## Run tests on Postgres backend (supports CI and local modes)
@@ -166,18 +180,18 @@ else
 	$(MAKE) stop-postgres
 endif
 
-test-cleanup-postgres: ## Drop all test schemas (respects PGQRS_KEEP_TEST_DATA)
+test-cleanup-postgres: build-setup-test-schemas ## Drop all test schemas (respects PGQRS_KEEP_TEST_DATA)
 ifdef PGQRS_KEEP_TEST_DATA
 	@echo "Skipping cleanup: PGQRS_KEEP_TEST_DATA is set"
 else
 ifdef CI_POSTGRES_RUNNING
 	@echo "Cleaning up CI Postgres schemas"
 	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" \
-		cargo run -p pgqrs --bin setup_test_schemas --features postgres -- --cleanup
+		$(SETUP_TEST_SCHEMAS_BIN) --cleanup
 else
 	@echo "Cleaning up local Postgres schemas"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
-		cargo run -p pgqrs --bin setup_test_schemas --features postgres -- --cleanup
+		$(SETUP_TEST_SCHEMAS_BIN) --cleanup
 endif
 endif
 
@@ -214,6 +228,7 @@ endif
 test-localstack: start-localstack ## Run full test suite against LocalStack-backed S3 backend
 ifdef CI_LOCALSTACK_RUNNING
 	@echo "Running full test suite with CI LocalStack (S3 backend)"
+	$(MAKE) build-setup-test-schemas PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"
 	AWS_ENDPOINT_URL="$${AWS_ENDPOINT_URL:-http://localhost:4566}" \
 	AWS_REGION="$${AWS_REGION:-$(LOCALSTACK_REGION)}" \
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
@@ -226,9 +241,10 @@ ifdef CI_LOCALSTACK_RUNNING
 	PGQRS_S3_BUCKET="$${PGQRS_S3_BUCKET:-$(PGQRS_S3_TEST_BUCKET)}" \
 	AWS_ACCESS_KEY_ID="$${AWS_ACCESS_KEY_ID:-test}" \
 	AWS_SECRET_ACCESS_KEY="$${AWS_SECRET_ACCESS_KEY:-test}" \
-	cargo run -p pgqrs --bin setup_test_schemas --no-default-features --features s3 -- --list-s3-sqlite
+	$(SETUP_TEST_SCHEMAS_BIN) --list-s3-sqlite
 else
 	@echo "Running full test suite with local LocalStack (S3 backend)"
+	$(MAKE) build-setup-test-schemas PGQRS_TEST_BACKEND=s3 CARGO_FEATURES="--no-default-features --features s3"
 	@AWS_ENDPOINT_URL="http://localhost:$(LOCALSTACK_PORT)" \
 	AWS_REGION="$(LOCALSTACK_REGION)" \
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
@@ -241,7 +257,7 @@ else
 	PGQRS_S3_BUCKET="$(PGQRS_S3_TEST_BUCKET)" \
 	AWS_ACCESS_KEY_ID="test" \
 	AWS_SECRET_ACCESS_KEY="test" \
-	cargo run -p pgqrs --bin setup_test_schemas --no-default-features --features s3 -- --list-s3-sqlite; \
+	$(SETUP_TEST_SCHEMAS_BIN) --list-s3-sqlite; \
 	list_status=$$?; \
 	$(MAKE) stop-localstack; \
 	if [ $$test_status -ne 0 ]; then exit $$test_status; fi; \
@@ -300,11 +316,11 @@ help:  ## Display this help screen
 	@echo "Usage: make [target]"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-release-dry-run: requirements  ## Dry run of the release process
+release-dry-run: docs-requirements  ## Dry run of the release process
 	cargo release $${LEVEL:-minor} --no-push --no-publish
 	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
 
-release: requirements  ## Execute the release process (LEVEL=patch|minor|major, default=minor)
+release: docs-requirements  ## Execute the release process (LEVEL=patch|minor|major, default=minor)
 	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
