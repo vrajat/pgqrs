@@ -32,6 +32,16 @@ Each step executes exactly once. State persists in the database. Processes resum
     See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/).
     pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
 
+### Benchmark Highlights
+
+Current queue benchmark baselines show:
+
+- **PostgreSQL scales with consumers and batch size** in the fixed-backlog drain scenario
+- **SQLite benefits from larger batch sizes** but does **not** scale with more consumers in that same scenario
+- **Turso benchmark guidance is still WIP**
+
+[:octicons-arrow-right-24: See benchmark methodology and scenario writeups](benchmarks/index.md)
+
 ## Job Queue
 
 Simple, reliable message queue for background processing:

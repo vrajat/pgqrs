@@ -39,6 +39,18 @@ PostgreSQL is the production-ready choice for most deployments.
 - Distributed systems
 - High write throughput requirements
 
+### Benchmark-backed Behavior
+
+In the current `queue.drain_fixed_backlog` benchmark:
+
+- PostgreSQL scales with consumer count
+- PostgreSQL also benefits strongly from larger dequeue batch sizes
+- latency remains comparatively flat as concurrency rises
+
+See the curated benchmark writeup for the exact scenario and charts:
+
+- [Queue Drain Fixed Backlog](../../benchmarks/queue-drain-fixed-backlog.md)
+
 ### DSN Examples
 
 ```
@@ -86,6 +98,20 @@ pgqrs automatically configures SQLite for the best possible concurrency:
 - Embedded applications
 - Development environments
 - Desktop applications
+
+### Benchmark-backed Behavior
+
+In the current `queue.drain_fixed_backlog` benchmark:
+
+- SQLite benefits strongly from larger dequeue batch sizes
+- SQLite does not scale with more consumers in this workload
+- latency rises sharply as concurrency increases
+
+That is consistent with SQLite's single-writer concurrency model.
+
+See the curated benchmark writeup for the exact scenario and charts:
+
+- [Queue Drain Fixed Backlog](../../benchmarks/queue-drain-fixed-backlog.md)
 
 ### DSN Examples
 
@@ -135,6 +161,12 @@ pgqrs automatically configures Turso for the best possible concurrency:
 - Embedded applications
 - Development environments
 - Desktop applications
+
+### Benchmark-backed Behavior
+
+Turso benchmarks are still being stabilized for the current queue scenarios.
+
+Treat Turso benchmark guidance as a work in progress until dedicated scenario writeups are published.
 
 ### DSN Examples
 

@@ -81,6 +81,9 @@ nav:
       - Delayed Messages: user-guide/guides/delayed-messages.md
       - Worker Management: user-guide/guides/worker-management.md
     - CLI Reference: user-guide/cli-reference.md
+  - Benchmarks:
+    - benchmarks/index.md
+    - Queue Drain Fixed Backlog: benchmarks/queue-drain-fixed-backlog.md
   - Development:
     - development/index.md
     - Contributing: development/contributing.md

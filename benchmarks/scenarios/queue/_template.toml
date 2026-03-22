@@ -1,0 +1,27 @@
+id = "queue.example"
+kind = "queue"
+question = "What do we want to learn from this benchmark?"
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat"]
+
+[action.fixed]
+payload_profile = "small"
+producers = 1
+consumers = 1
+batch_size = 1
+duration_seconds = 30
+
+[action.variables]
+# consumers = [1, 2, 4]
+# batch_size = [1, 10, 50]
+
+[answer]
+kind = "series_family"
+primary = "messages_per_second"
+series = ["messages_per_second", "p95_latency_ms", "error_rate"]
+vary_by = ["consumers", "batch_size"]
+
+[notes]
+limitations = "Add scenario-specific caveats here."

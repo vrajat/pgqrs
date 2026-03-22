@@ -1,0 +1,26 @@
+id = "workflow.example"
+kind = "workflow"
+question = "What do we want to learn from this benchmark?"
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat"]
+
+[action.fixed]
+step_profile = "control"
+step_count = 1
+workers = 1
+duration_seconds = 30
+
+[action.variables]
+# workers = [1, 2, 4]
+# step_count = [1, 5, 20]
+
+[answer]
+kind = "series_family"
+primary = "runs_per_second"
+series = ["runs_per_second", "p95_completion_latency_ms", "error_rate"]
+vary_by = ["workers", "step_count"]
+
+[notes]
+limitations = "Add scenario-specific caveats here."

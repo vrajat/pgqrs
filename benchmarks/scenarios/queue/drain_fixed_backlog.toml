@@ -1,0 +1,30 @@
+id = "queue.drain_fixed_backlog"
+kind = "queue"
+question = "For a fixed pre-populated backlog, how do throughput and completion time vary with consumer count and dequeue batch size?"
+
+backends = ["postgres", "sqlite", "turso"]
+bindings = ["rust", "python"]
+profiles = ["compat", "single_process"]
+
+[action.fixed]
+payload_profile = "small"
+prefill_jobs = 50000
+queue_mode = "drain"
+
+[action.variables]
+consumers = [1, 2, 4]
+dequeue_batch_size = [1, 10, 50]
+
+[answer]
+kind = "series_family"
+primary = "drain_messages_per_second"
+series = [
+  "drain_messages_per_second",
+  "total_drain_time_ms",
+  "p95_dequeue_latency_ms",
+  "error_rate",
+]
+vary_by = ["consumers", "dequeue_batch_size"]
+
+[notes]
+limitations = "This scenario is intended to isolate consumer-side drain capacity after queue prefill, not producer throughput."

@@ -1,4 +1,5 @@
 /target
+benchmarks/executors/rust/target/
 crates/pgqrs/target/
 docs/api
 .cache
@@ -13,6 +14,8 @@ __pycache__/
 *_worktree/
 site/
 .tmp/
+dist/
+benchmarks/*.egg-info/
 # Bug report files (should be filed as issues, not committed)
 BUG_REPORT_*.md
 WORKFLOW_RESTART_BUG.md
