@@ -1,1 +1,0 @@
-"""Turso benchmark backend adapter."""

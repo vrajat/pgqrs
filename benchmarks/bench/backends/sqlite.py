@@ -1,1 +1,0 @@
-"""SQLite benchmark backend adapter."""
