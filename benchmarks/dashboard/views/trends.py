@@ -97,7 +97,7 @@ def render(frame: pd.DataFrame) -> None:
         )
         .properties(height=420)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     table = filtered[
         [
@@ -111,4 +111,4 @@ def render(frame: pd.DataFrame) -> None:
             "throughput_delta_pct",
         ]
     ].sort_values("run_timestamp", ascending=False)
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.dataframe(table, width="stretch", hide_index=True)

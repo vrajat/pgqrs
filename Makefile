@@ -67,6 +67,9 @@ benchmark-run:  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFIL
 benchmark-dashboard:  ## Run the Streamlit benchmark dashboard
 	$(MAKE) -C benchmarks dashboard UV="$(UV)"
 
+benchmark-doc-charts:  ## Generate static benchmark charts for docs
+	$(MAKE) -C benchmarks docs-charts UV="$(UV)"
+
 install-nextest: ## Install cargo-nextest
 	cargo install cargo-nextest --locked
 

@@ -143,7 +143,7 @@ def _render_throughput_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     )
     chart_cols[0].altair_chart(
         consumers_chart,
-        use_container_width=True,
+        width="stretch",
         key=f"{key_prefix}_throughput_by_consumers",
     )
 
@@ -168,13 +168,54 @@ def _render_throughput_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     )
     chart_cols[1].altair_chart(
         batch_chart,
-        use_container_width=True,
+        width="stretch",
         key=f"{key_prefix}_throughput_by_batch",
     )
 
 
 def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
-    st.markdown("#### Latency Changes")
+    st.markdown("#### Latency Scaling")
+
+    cards = st.columns(4)
+    value, delta = _scale_summary(
+        frame,
+        metric="p95_dequeue_latency_ms",
+        start_consumers=1,
+        start_batch=1,
+        end_consumers=4,
+        end_batch=1,
+    )
+    cards[0].metric("P95 dequeue 1→4 @ batch 1", value, delta)
+
+    value, delta = _scale_summary(
+        frame,
+        metric="p95_dequeue_latency_ms",
+        start_consumers=1,
+        start_batch=50,
+        end_consumers=4,
+        end_batch=50,
+    )
+    cards[1].metric("P95 dequeue 1→4 @ batch 50", value, delta)
+
+    value, delta = _scale_summary(
+        frame,
+        metric="p95_archive_latency_ms",
+        start_consumers=1,
+        start_batch=1,
+        end_consumers=4,
+        end_batch=1,
+    )
+    cards[2].metric("P95 archive 1→4 @ batch 1", value, delta)
+
+    value, delta = _scale_summary(
+        frame,
+        metric="p95_archive_latency_ms",
+        start_consumers=1,
+        start_batch=50,
+        end_consumers=4,
+        end_batch=50,
+    )
+    cards[3].metric("P95 archive 1→4 @ batch 50", value, delta)
 
     latency_cols = st.columns(2)
 
@@ -195,7 +236,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     )
     latency_cols[0].altair_chart(
         dequeue_chart,
-        use_container_width=True,
+        width="stretch",
         key=f"{key_prefix}_dequeue_latency",
     )
 
@@ -216,7 +257,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     )
     latency_cols[1].altair_chart(
         archive_chart,
-        use_container_width=True,
+        width="stretch",
         key=f"{key_prefix}_archive_latency",
     )
 
@@ -268,6 +309,6 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
                     "p95_archive_latency_ms",
                 ]
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )

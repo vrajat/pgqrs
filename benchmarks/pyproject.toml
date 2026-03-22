@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.43",
     "typer>=0.16",
+    "watchdog>=6.0",
 ]
 
 [project.optional-dependencies]

@@ -104,7 +104,7 @@ def render(frame: pd.DataFrame) -> None:
         )
         .properties(height=420)
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     pivot = combined.pivot_table(
         index=["consumers", "dequeue_batch_size"],
@@ -116,4 +116,4 @@ def render(frame: pd.DataFrame) -> None:
             "p95_archive_latency_ms",
         ],
     )
-    st.dataframe(pivot, use_container_width=True)
+    st.dataframe(pivot, width="stretch")

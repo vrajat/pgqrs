@@ -208,6 +208,12 @@ The dashboard entrypoint is:
 make benchmark-dashboard
 ```
 
+Static chart assets for the docs can be regenerated with:
+
+```bash
+make benchmark-doc-charts
+```
+
 The dashboard should help answer:
 
 - what scenarios have been run?

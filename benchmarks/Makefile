@@ -25,6 +25,9 @@ run: bootstrap  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFIL
 dashboard: deps  ## Run the Streamlit benchmark dashboard
 	cd .. && .venv/bin/streamlit run benchmarks/dashboard/app.py
 
+docs-charts: deps  ## Generate static benchmark charts for docs
+	cd .. && .venv/bin/python benchmarks/scripts/export_docs_charts.py
+
 fmt: deps  ## Format benchmark Python code
 	cd .. && .venv/bin/ruff check benchmarks --fix
 	cd .. && .venv/bin/ruff format benchmarks

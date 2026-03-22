@@ -20,8 +20,6 @@ Each step executes exactly once. State persists in the database. Processes resum
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 
-
-
 ## Choose Your Backend
 
 | Scenario | Recommended Backend | Why |
@@ -33,6 +31,19 @@ Each step executes exactly once. State persists in the database. Processes resum
 | High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
 
 > ⚠️ **SQLite/Turso Concurrency Limit**: SQLite and Turso use database-level locks. With many concurrent writers, you may hit lock contention. See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/). pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
+
+### Benchmark Highlights
+
+Current queue benchmark baselines show:
+
+- **PostgreSQL scales with consumers and batch size** in the fixed-backlog drain scenario
+- **SQLite benefits from larger batch sizes** but does **not** scale with more consumers in that same scenario
+- **Turso benchmark guidance is still WIP**
+
+See:
+
+- [Benchmark overview](docs/benchmarks/index.md)
+- [Queue Drain Fixed Backlog](docs/benchmarks/queue-drain-fixed-backlog.md)
 
 ## Quick Start
 
