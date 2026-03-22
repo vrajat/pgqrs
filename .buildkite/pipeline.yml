@@ -25,7 +25,7 @@ steps:
           path: "target"
           restore: file
           save: file
-          key-extra: "cargo-target"
+          key-extra: "cargo-target-check"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "mise.toml"
@@ -65,7 +65,7 @@ steps:
           path: "target"
           restore: file
           save: file
-          key-extra: "cargo-target"
+          key-extra: "cargo-target-sqlite"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "mise.toml"
@@ -105,7 +105,7 @@ steps:
           path: "target"
           restore: file
           save: file
-          key-extra: "cargo-target"
+          key-extra: "cargo-target-turso"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "mise.toml"
@@ -145,7 +145,7 @@ steps:
           path: "target"
           restore: file
           save: file
-          key-extra: "cargo-target"
+          key-extra: "cargo-target-postgres"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "mise.toml"
@@ -187,7 +187,7 @@ steps:
           path: "target"
           restore: file
           save: file
-          key-extra: "cargo-target"
+          key-extra: "cargo-target-s3"
           soft-fail: true
       - cache#v1.8.1:
           manifest: "mise.toml"
