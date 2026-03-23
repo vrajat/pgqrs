@@ -41,7 +41,7 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     pgqrs = { version = "0.15.0", features = ["full"] }
 
     # Required dependencies
-    tokio = { version = "1", features = ["full"] }
+    tokio = { version = "0.15.0", features = ["full"] }
     serde_json = "1"
     ```
 
