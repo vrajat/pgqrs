@@ -5,7 +5,7 @@ This guide will walk you through creating your first queue, sending messages, an
 ## Prerequisites
 
 - pgqrs installed ([Configuration](../api/configuration.md))
-- A running PostgreSQL database
+- A supported backend DSN (examples below use PostgreSQL)
 - pgqrs schema installed (`pgqrs admin install`)
 
 ## Step 1: Create a Queue
@@ -280,6 +280,8 @@ Here's a complete example showing a producer and consumer working together:
     ```
 
 ## What's Next?
+
+- Want an object-storage-backed queue? See [S3 Queue Guide](../guides/s3-queue.md)
 
 - [Workflow API](../api/workflows.md): Detailed API reference
 - [Producer API](../api/producer.md) - Learn about batch operations and delayed messages

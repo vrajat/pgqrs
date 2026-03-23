@@ -36,6 +36,8 @@ The Admin API provides queue management, schema administration, and monitoring c
 
 Install the pgqrs schema (tables, indexes, constraints). It is idempotent and safe to call multiple times.
 
+For `s3://...` DSNs, `install()` bootstraps the remote SQLite object if it does not exist yet. If remote state already exists, bootstrap returns a conflict instead of overwriting it.
+
 === "Rust"
 
     ```rust
@@ -53,6 +55,8 @@ Install the pgqrs schema (tables, indexes, constraints). It is idempotent and sa
 ### verify
 
 Verify that the pgqrs schema is correctly installed. Returns/Raises error if schema is missing.
+
+For S3-backed queues, verification runs against the current local view of the store. In Rust, call `snapshot()` first if you need to refresh from remote state before verifying.
 
 === "Rust"
 

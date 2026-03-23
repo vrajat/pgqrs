@@ -29,7 +29,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/vrajat/pgqrs"
 Repository = "https://github.com/vrajat/pgqrs"
-Documentation = "https://github.com/vrajat/pgqrs"
+Documentation = "https://pgqrs.vrajat.com"
 "Issue Tracker" = "https://github.com/vrajat/pgqrs/issues"
 
 [project.optional-dependencies]

@@ -4,12 +4,14 @@ This guide covers how to install pgqrs for both Rust and Python projects.
 
 ## Choose Your Backend
 
-pgqrs supports both PostgreSQL and SQLite. Choose based on your needs:
+pgqrs supports PostgreSQL, SQLite, Turso, and S3-backed queues. Choose based on your needs:
 
 | Backend | Best For | Prerequisites |
 |---------|----------|---------------|
 | **PostgreSQL** | Production, multi-worker | PostgreSQL 12+ server |
 | **SQLite** | CLI tools, testing, embedded | None (embedded) |
+| **Turso** | Embedded SQLite-compatible deployments | Turso or local Turso database |
+| **S3** | Remote queue durability without a database server | S3 bucket and AWS-compatible credentials |
 
 See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
 
@@ -24,16 +26,22 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     ```toml
     [dependencies]
     # PostgreSQL only (default)
-    pgqrs = "0.14.0"
+    pgqrs = "0.15.0"
 
     # SQLite only
-    pgqrs = { version = "0.14.0", default-features = false, features = ["sqlite"] }
+    pgqrs = { version = "0.15.0", default-features = false, features = ["sqlite"] }
 
-    # Both backends
-    pgqrs = { version = "0.14.0", features = ["full"] }
+    # Turso only
+    pgqrs = { version = "0.15.0", default-features = false, features = ["turso"] }
+
+    # S3 only
+    pgqrs = { version = "0.15.0", default-features = false, features = ["s3"] }
+
+    # All backends
+    pgqrs = { version = "0.15.0", features = ["full"] }
 
     # Required dependencies
-    tokio = { version = "0.14.0", features = ["full"] }
+    tokio = { version = "1", features = ["full"] }
     serde_json = "1"
     ```
 
@@ -50,6 +58,9 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
 
         // SQLite (requires `sqlite` feature)
         let sqlite_config = Config::from_dsn("sqlite:///path/to/db.sqlite");
+
+        // S3 (requires `s3` feature plus AWS environment variables)
+        let s3_config = Config::from_dsn("s3://my-bucket/queue.sqlite");
 
         println!("pgqrs configured successfully!");
     }
@@ -82,9 +93,11 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     print("pgqrs installed successfully!")
     ```
 
-## PostgreSQL Setup
+## Backend Setup
 
-### Option 1: Docker (Recommended for Development)
+### PostgreSQL Setup
+
+#### Option 1: Docker (Recommended for Development)
 
 ```bash
 # Start a PostgreSQL container
@@ -97,7 +110,7 @@ docker run --name pgqrs-postgres \
 # postgresql://postgres:postgres@localhost:5432/postgres
 ```
 
-### Option 2: Local PostgreSQL
+#### Option 2: Local PostgreSQL
 
 Install PostgreSQL using your system package manager:
 
@@ -116,7 +129,7 @@ Install PostgreSQL using your system package manager:
     sudo systemctl start postgresql
     ```
 
-### Option 3: Cloud PostgreSQL
+#### Option 3: Cloud PostgreSQL
 
 pgqrs works with any PostgreSQL-compatible database:
 
@@ -126,9 +139,42 @@ pgqrs works with any PostgreSQL-compatible database:
 - **Supabase** - Get connection string from project settings
 - **Neon** - Get connection string from dashboard
 
+### SQLite and Turso Setup
+
+SQLite and Turso do not require a separate schema server process. Point pgqrs at a file path:
+
+```text
+sqlite:///var/lib/myapp/queue.db
+turso:///var/lib/myapp/queue.db
+```
+
+### S3 Setup
+
+The S3 backend requires an object-store endpoint plus credentials in the environment.
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+
+# Optional for LocalStack or other S3-compatible endpoints
+export AWS_ENDPOINT_URL=http://localhost:4566
+
+# Optional; defaults to durable for s3:// DSNs
+export PGQRS_S3_MODE=durable
+```
+
+Then use an S3 DSN such as:
+
+```text
+s3://my-bucket/queue.sqlite
+```
+
 ## Installing the pgqrs Schema
 
 Before using pgqrs, you need to install its schema in your database. You can do this via the CLI or programmatically.
+
+For `s3://...` DSNs, this step bootstraps the remote object if it does not exist yet.
 
 === "CLI"
 
@@ -191,6 +237,8 @@ Before using pgqrs, you need to install its schema in your database. You can do 
 
 ## Custom Schema
 
+Custom schemas apply to SQL backends such as PostgreSQL. SQLite, Turso, and S3-backed queues ignore the schema name.
+
 By default, pgqrs creates tables in the `public` schema. To use a custom schema:
 
 === "CLI"
@@ -222,4 +270,5 @@ By default, pgqrs creates tables in the `public` schema. To use a custom schema:
 ## What's Next?
 
 - [Quickstart](quickstart.md) - Create your first queue and send messages
+- [S3 Queue Guide](../guides/s3-queue.md) - Bootstrap and operate an S3-backed queue
 - [Architecture](../concepts/architecture.md) - Understand how pgqrs works

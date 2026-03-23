@@ -20,7 +20,7 @@ Each release publishes:
 |----------|----------|
 | Rust crate | [crates.io/crates/pgqrs](https://crates.io/crates/pgqrs) |
 | Python package | [PyPI pgqrs](https://pypi.org/project/pgqrs/) |
-| Documentation | [pgqrs.com](https://pgqrs.com) |
+| Documentation | [pgqrs.vrajat.com](https://pgqrs.vrajat.com) |
 | GitHub Release | [Releases](https://github.com/vrajat/pgqrs/releases) |
 
 ## Release Checklist
@@ -160,7 +160,7 @@ maturin publish
 
 ### 9. Update Documentation
 
-Documentation is automatically deployed from `main` branch.
+Documentation is automatically deployed from `main` branch to `https://pgqrs.vrajat.com`.
 
 ## Automated Releases (CI)
 

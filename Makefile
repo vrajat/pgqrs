@@ -86,29 +86,26 @@ install-nextest: ## Install cargo-nextest
 check-nextest:
 	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
 
-build-setup-test-schemas: $(SETUP_TEST_SCHEMAS_BIN) ## Build the test schema helper for the active backend
-build-pgqrs-cli: $(PGQRS_CLI_BIN) ## Build the pgqrs CLI binary for the active backend
-
-$(PGQRS_CLI_BIN):
-	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
-
-$(SETUP_TEST_SCHEMAS_BIN):
+build-setup-test-schemas: ## Build the test schema helper for the active backend
 	cargo build -p pgqrs --bin setup_test_schemas $(CARGO_FEATURES)
+
+build-pgqrs-cli: ## Build the pgqrs CLI binary for the active backend
+	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 
 test-rust: check-nextest build-pgqrs-cli ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
 endif
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 endif
 
 
 test: build-python build-pgqrs-cli check-nextest  ## Run all tests
-	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Optional selectors for Python tests

@@ -5,7 +5,7 @@ Welcome to the pgqrs User Guide. This guide covers everything you need to know t
 
 ## Overview
 
-pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and reliability. Unlike traditional message queues that require separate infrastructure, pgqrs leverages your existing PostgreSQL database.
+pgqrs is a library-only durable execution engine with multiple storage backends. PostgreSQL remains the primary production backend, while SQLite, Turso, and S3-backed queues cover embedded, portable, and object-storage-backed deployments.
 
 ## Guide Structure
 
@@ -27,6 +27,7 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
     Understand the core architecture and design principles.
 
     - [Architecture](concepts/architecture.md)
+    - [Backend Selection](concepts/backends.md)
     - [Producer & Consumer](concepts/producer-consumer.md)
     - [Workers](concepts/workers.md)
     - [Message Lifecycle](concepts/message-lifecycle.md)
@@ -61,6 +62,7 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
     Step-by-step tutorials for common use cases.
 
     - [Basic Workflow](guides/basic-workflow.md)
+    - [S3 Queue Guide](guides/s3-queue.md)
     - [Durable Workflows](guides/durable-workflows.md)
     - [Batch Processing](guides/batch-processing.md)
     - [Delayed Messages](guides/delayed-messages.md)
@@ -80,16 +82,19 @@ pgqrs is a library-only PostgreSQL-backed job queue designed for simplicity and 
 
 Before using pgqrs, ensure you have:
 
-- **PostgreSQL 12+** - pgqrs uses features like `SKIP LOCKED` available in PostgreSQL 12 and later
-- **Rust 1.70+** (for Rust applications) or **Python 3.8+** (for Python applications)
+- **One supported backend**:
+  PostgreSQL 12+, SQLite, Turso, or an S3 bucket plus AWS-compatible credentials
+- **Rust 1.70+** (for Rust applications) or **Python 3.11+** (for Python applications)
 
 ## Quick Links
 
 | Topic | Description |
 |-------|-------------|
 | [Installation](getting-started/installation.md) | How to install pgqrs for Rust or Python |
+| [Backend Selection](concepts/backends.md) | Choose between PostgreSQL, SQLite, Turso, and S3 |
 | [Architecture](concepts/architecture.md) | System design and components |
 | [Producer](api/producer.md) | Creating and sending messages |
 | [Consumer](api/consumer.md) | Processing messages |
+| [S3 Queue Guide](guides/s3-queue.md) | Bootstrapping and syncing an S3-backed queue |
 | [Durable Workflows](guides/durable-workflows.md) | Multi-step, crash-resistant workflows |
 | [Admin, Queue, and Worker CLI](cli-reference.md) | Command-line operations |

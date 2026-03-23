@@ -45,7 +45,14 @@ export PGQRS_MAX_CONNECTIONS=32
 export PGQRS_CONNECTION_TIMEOUT=60
 export PGQRS_DEFAULT_LOCK_TIME=10
 export PGQRS_DEFAULT_BATCH_SIZE=200
+export PGQRS_S3_MODE=durable
 export PGQRS_CONFIG_FILE="path/to/config.yaml"
+
+# S3 / LocalStack settings when using s3://... DSNs
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_ENDPOINT_URL=http://localhost:4566
 ```
 
 ### Configuration File
@@ -59,9 +66,19 @@ max_connections: 16
 connection_timeout_seconds: 30
 default_lock_time_seconds: 5
 default_max_batch_size: 100
+s3:
+  mode: durable
 ```
 
 ---
+
+## S3-Backed CLI Usage
+
+When `PGQRS_DSN` uses `s3://...`, the CLI opens the S3 store and snapshots remote state into the local cache before running the requested command.
+
+- `pgqrs admin install` bootstraps missing remote state
+- `pgqrs admin verify`, `queue ...`, and `worker ...` commands operate on the refreshed local view
+- `PGQRS_S3_MODE=local` is mainly for advanced Rust workflows that explicitly manage `sync()` boundaries
 
 ## Admin Commands
 
@@ -70,6 +87,8 @@ Administrative operations for managing the pgqrs installation and system-wide st
 ### install
 
 Install the pgqrs schema in your database.
+
+For S3-backed queues, this creates the remote SQLite object if it does not exist yet.
 
 !!! warning
     The target schema (e.g., `public` or your custom schema) must already exist.

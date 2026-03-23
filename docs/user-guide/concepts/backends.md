@@ -9,6 +9,7 @@ pgqrs supports multiple storage backends, giving you flexibility to choose the r
 | PostgreSQL | `postgresql://host/db` | `postgres` (default) |
 | SQLite | `sqlite:///path/to/file.db` | `sqlite` |
 | Turso | `turso:///path/to/file.db` | `turso` |
+| S3 | `s3://bucket/key.sqlite` | `s3` |
 
 ## Decision Matrix
 
@@ -18,6 +19,7 @@ pgqrs supports multiple storage backends, giving you flexibility to choose the r
 | CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
 | Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
 | Embedded applications | **SQLite / Turso** | Single-file database, no server required |
+| Portable remote queue state in object storage | **S3** | SQLite state replicated through a single S3 object |
 | High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
 | Distributed systems | **PostgreSQL** | Multiple processes can connect simultaneously |
 
@@ -175,6 +177,63 @@ turso:///path/to/database.db
 turso:///var/lib/myapp/queue.db
 ```
 
+## S3
+
+S3 stores the queue as a SQLite database file backed by object storage.
+
+### Advantages
+
+- **Remote durable state**: Queue data lives in an S3 object instead of a local disk file
+- **Portable deployment**: No PostgreSQL server is required for simple queue workloads
+- **Explicit replication model**: Rust applications can choose automatic durable syncs or explicit sync boundaries
+- **SQLite-compatible internals**: The backend keeps the queue API surface aligned with the other stores
+
+### Durability Modes
+
+pgqrs exposes two S3 durability modes:
+
+- **`Durable`**: ordinary writes are synchronized to S3 before the call returns
+- **`Local`**: writes stay in the local cache until the Rust application explicitly calls `sync()`
+
+`Durable` is the default when `PGQRS_DSN` uses `s3://...`.
+
+### When to Use
+
+- Simple deployments that want remote queue durability without running PostgreSQL
+- CLI and operational workflows where queue state should live in object storage
+- Rust applications that benefit from explicit `snapshot()` / `sync()` control
+
+### Limitations
+
+!!! warning "Not A Replacement For PostgreSQL Concurrency"
+    The S3 backend is still built on a SQLite local cache. It is designed around explicit object synchronization, not PostgreSQL-style concurrent writers.
+
+    Prefer PostgreSQL when you need high write throughput or many workers writing concurrently.
+
+### Operational Model
+
+- `bootstrap()` creates the remote state if it does not exist and returns a conflict if it already exists
+- `snapshot()` pulls remote state into the local cache
+- `sync()` publishes dirty local state back to S3
+- `state()` reports whether local and remote state are aligned
+
+### Environment Requirements
+
+The S3 backend reads its object store settings from AWS-compatible environment variables:
+
+- `AWS_REGION`
+- `AWS_ENDPOINT_URL` for LocalStack or other S3-compatible endpoints
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `PGQRS_S3_MODE` with `durable` or `local`
+
+### DSN Examples
+
+```
+s3://my-bucket/queue.sqlite
+s3://my-bucket/orders/prod.sqlite
+```
+
 ## Cargo Feature Configuration
 
 ### Rust
@@ -182,21 +241,24 @@ turso:///var/lib/myapp/queue.db
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.14.0"
+pgqrs = "0.15.0"
 
 # SQLite only
-pgqrs = { version = "0.14.0", default-features = false, features = ["sqlite"] }
+pgqrs = { version = "0.15.0", default-features = false, features = ["sqlite"] }
 
 # Turso only
-pgqrs = { version = "0.14.0", default-features = false, features = ["turso"] }
+pgqrs = { version = "0.15.0", default-features = false, features = ["turso"] }
+
+# S3 only
+pgqrs = { version = "0.15.0", default-features = false, features = ["s3"] }
 
 # All backends
-pgqrs = { version = "0.14.0", features = ["full"] }
+pgqrs = { version = "0.15.0", features = ["full"] }
 ```
 
 ### Python
 
-The Python package includes both backends by default.
+Python uses the backend support compiled into the installed wheel or local build.
 
 ## API Compatibility
 
@@ -227,6 +289,9 @@ let store = pgqrs::connect("sqlite:///path/to/db.sqlite").await?;
 
 // Turso
 let store = pgqrs::connect("turso:///path/to/db.db").await?;
+
+// S3
+let store = pgqrs::connect("s3://my-bucket/queue.sqlite").await?;
 
 // Same code works with any backend!
 process_jobs(&store).await?;
