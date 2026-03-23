@@ -167,7 +167,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
     // 9. Run CLI command using pre-built binary
     assert!(!dsn_str.is_empty());
 
-    let output = Command::new(assert_cmd::cargo_bin!("pgqrs"))
+    let output = Command::new(common::pgqrs_cli_bin())
         .args([
             "-d",
             &dsn_str,

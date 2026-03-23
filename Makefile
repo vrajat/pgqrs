@@ -95,17 +95,17 @@ build-pgqrs-cli: ## Build the pgqrs CLI binary for the active backend
 test-rust: check-nextest build-pgqrs-cli ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
 endif
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 endif
 
 
 test: build-python build-pgqrs-cli check-nextest  ## Run all tests
-	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Optional selectors for Python tests
