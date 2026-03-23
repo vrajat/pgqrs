@@ -1,72 +1,94 @@
 # Testing Guide
 
-How to run and write tests for pgqrs.
+How to run pgqrs tests locally and in CI.
 
 ## Prerequisites
 
-- Rust 1.70+
-- PostgreSQL 14+ (running instance)
-- Docker (optional, for containerized testing)
+- Rust toolchain
+- `uv`
+- `cargo-nextest` for Rust test runs (`make install-nextest`)
+- Docker for `make test-postgres` and `make test-localstack`
+- Turso credentials only if you run `make test-turso`
 
-## Running Tests
-
-### Quick Start (Make Targets)
+## Quick Start
 
 ```bash
-# Install dependencies and build bindings
+# Install test and docs dependencies
 make requirements
 
-# Build Rust + Python bindings
+# Build Rust and Python bindings for the active backend
 make build
 
-# Run full test suite on SQLite
+# Fastest full-suite option with no external services
 make test-sqlite
 
-# Run Python tests only (SQLite backend)
-make test-py PGQRS_TEST_BACKEND=sqlite
+# Full Postgres suite with Docker-managed Postgres + PgBouncer
+make test-postgres
 ```
 
-### Test Categories
+## Test Targets
 
-#### Rust Tests (nextest)
+`make test` and `make test-rust` use `PGQRS_TEST_BACKEND`, which defaults to `postgres`.
+
+| Target | What it does |
+| --- | --- |
+| `make test` | Runs the Rust and Python test suites for the active backend |
+| `make test-rust` | Runs Rust tests only via `cargo nextest` |
+| `make test-py` | Runs Python tests only via `pytest` |
+| `make test-postgres` | Runs the full suite on Postgres, including setup and cleanup |
+| `make test-setup-postgres` | Provisions Postgres test schemas |
+| `make test-cleanup-postgres` | Drops Postgres test schemas unless `PGQRS_KEEP_TEST_DATA` is set |
+| `make test-sqlite` | Runs the full suite on SQLite |
+| `make test-turso` | Runs the full suite on Turso |
+| `make test-localstack` | Runs the full suite on the S3 backend against LocalStack |
+| `make test-s3` | Alias for `make test-localstack` |
+| `make test-all-backends` | Runs the suite across the supported backends that are configured locally |
+| `make test-backends BACKENDS=sqlite,turso` | Runs selected backends that are already configured |
+
+## Running Specific Tests
 
 ```bash
-# Run all Rust tests (uses PGQRS_TEST_BACKEND)
+# Rust tests only on the default backend (postgres unless overridden)
 make test-rust
 
-# Run a specific test file
+# Rust tests on SQLite
+make test-rust PGQRS_TEST_BACKEND=sqlite
+
+# A specific Rust test file
 make test-rust TEST=workflow_tests
 
-# Run a specific test inside a file
-make test-rust TEST=workflow_tests FILTER="test_workflow_scenario_success"
+# A specific Rust test inside that file
+make test-rust TEST=workflow_tests FILTER='test_workflow_scenario_success'
+
+# Python tests on SQLite
+make test-py PGQRS_TEST_BACKEND=sqlite
+
+# A specific Python test file
+make test-py PGQRS_TEST_BACKEND=sqlite PYTEST_TARGET=py-pgqrs/tests/test_guides.py
+
+# Additional pytest arguments
+make test-py PGQRS_TEST_BACKEND=sqlite PYTEST_ARGS='-k guides -q'
 ```
 
-#### Python Tests (pytest)
+## Backend Setup
+
+### Postgres (Local Docker)
+
+`make test-postgres` is the preferred one-shot target. It starts Postgres and PgBouncer, provisions schemas, runs tests, cleans up, and stops containers.
+
+If you need the steps individually:
 
 ```bash
-# Run all Python tests (uses PGQRS_TEST_BACKEND)
-make test-py PGQRS_TEST_BACKEND=postgres
-
-# Run a specific test file
-PGQRS_TEST_BACKEND=sqlite uv run pytest py-pgqrs/tests/test_concurrency.py
-```
-
-## Test Database Setup
-
-### Postgres (Docker + PgBouncer)
-
-```bash
-# Start local Postgres + PgBouncer containers
 make start-pgbouncer
-
-# Provision test schemas
 make test-setup-postgres
+make test PGQRS_TEST_BACKEND=postgres CARGO_FEATURES="--no-default-features --features postgres"
+make test-cleanup-postgres
+make stop-postgres
 ```
 
-### Postgres (CI)
+### Postgres (Existing CI or External Database)
 
 ```bash
-# Use an existing CI Postgres instance
 export CI_POSTGRES_RUNNING=true
 export PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5432/postgres"
 export PGBOUNCER_TEST_DSN="postgres://postgres@localhost:6432/postgres"
@@ -77,289 +99,60 @@ make test-postgres
 ### SQLite
 
 ```bash
-# Use the SQLite backend (no external DB required)
 make test-sqlite
 ```
 
 ### Turso
 
 ```bash
-# Use the Turso backend (requires Turso credentials)
 make test-turso
 ```
 
-## Writing Tests
-
-### Unit Tests
-
-Place in the same file as the code:
-
-```rust
-// src/config.rs
-pub fn parse_dsn(dsn: &str) -> Result<Config> {
-    // ...
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_dsn_basic() {
-        let config = parse_dsn("postgresql://localhost/db").unwrap();
-        assert_eq!(config.database, "db");
-    }
-
-    #[test]
-    fn test_parse_dsn_with_port() {
-        let config = parse_dsn("postgresql://localhost:5433/db").unwrap();
-        assert_eq!(config.port, 5433);
-    }
-
-    #[test]
-    fn test_parse_dsn_invalid() {
-        let result = parse_dsn("invalid");
-        assert!(result.is_err());
-    }
-}
-```
-
-### Integration Tests
-
-Place in `tests/` directory:
-
-```rust
-// tests/queue_tests.rs
-use pgqrs::{Admin, Config};
-
-#[tokio::test]
-async fn test_create_queue() {
-    let config = Config::from_env().expect("PGQRS_DSN required");
-    let admin = pgqrs::connect(dsn).await.unwrap();
-
-    // Setup
-    admin.install().await.unwrap();
-
-    // Test
-    let queue = store.queue("test_queue").await.unwrap();
-    assert_eq!(queue.queue_name, "test_queue");
-
-    // Cleanup
-    admin.delete_queue("test_queue").await.ok();
-}
-```
-
-### Test Fixtures
-
-Create reusable test setup:
-
-```rust
-// tests/common/mod.rs
-use pgqrs::{Admin, Config};
-
-pub struct TestFixture {
-    pub admin: Admin,
-    pub queue_name: String,
-}
-
-impl TestFixture {
-    pub async fn new() -> Self {
-        let config = Config::from_env().unwrap();
-        let admin = pgqrs::connect(dsn).await.unwrap();
-
-        admin.install().await.unwrap();
-
-        let queue_name = format!("test_{}", uuid::Uuid::new_v4());
-        store.queue(&queue_name).await.unwrap();
-
-        Self { admin, queue_name }
-    }
-
-    pub async fn cleanup(&self) {
-        self.admin.delete_queue(&self.queue_name).await.ok();
-    }
-}
-
-// Usage
-#[tokio::test]
-async fn test_with_fixture() {
-    let fixture = TestFixture::new().await;
-
-    // Your test code here
-
-    fixture.cleanup().await;
-}
-```
-
-### Async Tests
-
-Use `tokio::test` for async tests:
-
-```rust
-#[tokio::test]
-async fn test_async_operation() {
-    let result = some_async_function().await;
-    assert!(result.is_ok());
-}
-
-// With custom runtime
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_concurrent_operations() {
-    // Tests that need multiple threads
-}
-```
-
-## Python Tests
-
-### Setup
+### S3 / LocalStack
 
 ```bash
-# Install Python deps and editable bindings
-make requirements
+make test-localstack
 ```
 
-### Running Python Tests
+## Test Layout
 
-```bash
-# Run all Python tests (uses PGQRS_TEST_BACKEND)
-make test-py PGQRS_TEST_BACKEND=postgres
+- Rust integration tests live in `crates/pgqrs/tests/`.
+- Shared Rust test helpers live in `crates/pgqrs/tests/common/mod.rs`.
+- Python tests live in `py-pgqrs/tests/`.
+- Guide-level coverage lives in `crates/pgqrs/tests/guide_tests.rs` and `py-pgqrs/tests/test_guides.py`.
 
-# Run a specific test file
-PGQRS_TEST_BACKEND=sqlite uv run pytest py-pgqrs/tests/test_concurrency.py
-
-# With verbose output
-PGQRS_TEST_BACKEND=sqlite uv run pytest -v py-pgqrs/tests/test_concurrency.py
-```
-
-### Writing Python Tests
-
-```python
-# tests/test_producer.py
-import pytest
-import pytest_asyncio
-from pgqrs import Admin, Producer
-
-@pytest_asyncio.fixture
-async def admin():
-    admin = Admin("postgresql://localhost/test")
-    await admin.install()
-    yield admin
-
-@pytest_asyncio.fixture
-async def queue(admin):
-    queue = await store.queue("test_queue")
-    yield queue
-    await admin.delete_queue("test_queue")
-
-@pytest.mark.asyncio
-async def test_enqueue(queue):
-    producer = Producer(
-        "postgresql://localhost/test",
-        "test_queue",
-        "test-host",
-        3000,
-    )
-
-    msg_id = await producer.enqueue({"task": "test"})
-
-    assert msg_id is not None
-    assert isinstance(msg_id, int)
-```
-
-## Test Coverage
-
-### Rust Coverage
-
-Using `cargo-llvm-cov`:
-
-```bash
-# Install
-cargo install cargo-llvm-cov
-
-# Run with coverage
-cargo llvm-cov
-
-# Generate HTML report
-cargo llvm-cov --html
-open target/llvm-cov/html/index.html
-```
-
-### Python Coverage
-
-```bash
-pytest --cov=pgqrs --cov-report=html
-open htmlcov/index.html
-```
-
-## CI/CD Tests
-
-Tests run automatically on:
-
-- Every push
-- Every pull request
-
-### CI Configuration
-
-The project uses GitHub Actions:
-
-```yaml
-# .github/workflows/test.yml
-name: Test
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Run tests
-        env:
-          PGQRS_DSN: postgresql://postgres:postgres@localhost:5432/postgres
-        run: cargo test
-```
-
-## Best Practices
-
-1. **Isolate tests** - Each test should clean up after itself
-2. **Use unique names** - Avoid conflicts with UUIDs or timestamps
-3. **Test edge cases** - Empty inputs, nulls, large values
-4. **Test errors** - Verify error handling works correctly
-5. **Keep tests fast** - Mock expensive operations when possible
-6. **Document tests** - Explain what each test verifies
+When adding tests, prefer the existing backend-aware helpers instead of wiring DSNs manually in each file.
 
 ## Troubleshooting
 
-### Connection Issues
+### `cargo-nextest` Missing
 
 ```bash
-# Check PostgreSQL is running
-pg_isready -h localhost
-
-# Test connection
-psql $PGQRS_DSN -c "SELECT 1"
+make install-nextest
 ```
 
-### Cleanup Failures
+### Keep Postgres Test Data for Debugging
 
 ```bash
-# Manually clean up test data
-psql $PGQRS_DSN -c "DROP SCHEMA pgqrs_test CASCADE"
+PGQRS_KEEP_TEST_DATA=true make test-postgres
 ```
 
-### Flaky Tests
+### Clean Up Postgres Schemas Manually
 
-- Check for race conditions
-- Ensure proper async handling
-- Use explicit waits when needed
+```bash
+export CI_POSTGRES_RUNNING=true
+export PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5432/postgres"
+
+make test-cleanup-postgres
+```
+
+### Backend Selection Notes
+
+- `make test-postgres` is the safest way to run Postgres tests locally because it manages setup and cleanup for you.
+- `make test-backends` assumes each selected backend is already configured.
+- `make test-localstack` requires Docker because it starts a LocalStack container.
+
+## Related Docs
+
+- [Contributing Guide](contributing.md)
+- [Release Process](release-process.md)

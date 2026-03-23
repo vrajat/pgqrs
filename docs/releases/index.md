@@ -6,13 +6,13 @@ Version history and release notes for pgqrs.
 
 <div class="grid cards" markdown>
 
--   :material-tag:{ .lg .middle } **v0.14.0**
+-   :material-tag:{ .lg .middle } **v0.15.0**
 
     ---
 
-    Workflow trigger/worker redesign, retries and pausing, and docs overhaul.
+    S3-backed queue storage, benchmark docs, and cross-backend runtime polish.
 
-    [:octicons-arrow-right-24: Release Notes](changelog.md#0140-2026-02-21)
+    [:octicons-arrow-right-24: Release Notes](changelog.md#0150-2026-03-23)
 
 </div>
 
@@ -50,6 +50,7 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| [0.15.0](changelog.md#0150-2026-03-23) | 2026-03-23 | S3-backed queue storage, benchmark docs |
 | [0.14.0](changelog.md#0140-2026-02-21) | 2026-02-21 | Workflow trigger/worker redesign, retries, pausing |
 | [0.13.0](changelog.md#0130-2025-10-03) | 2025-10-03 | Turso backend support |
 | [0.12.0](changelog.md#0120-2025-12-xx) | 2025-12-XX | Single-table model migration |

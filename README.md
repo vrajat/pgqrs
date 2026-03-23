@@ -131,52 +131,77 @@ Orchestrate multi-step processes that survive crashes:
 use pgqrs;
 use serde_json::json;
 
-async fn app_workflow(run: pgqrs::Run, input: serde_json::Value) -> Result<serde_json::Value, pgqrs::Error> {
-    let files = pgqrs::workflow_step(&run, "list_files", || async {
+// A workflow definition is just async code plus durable steps.
+#[pgqrs::pgqrs_workflow(name = "archive_files")]
+async fn archive_files(
+    run: &pgqrs::Run,
+    input: serde_json::Value,
+) -> Result<serde_json::Value, pgqrs::Error> {
+    // Step results are persisted. If the worker crashes after this step,
+    // pgqrs will replay the cached result instead of re-running it.
+    let files = pgqrs::workflow_step(run, "list_files", || async {
         Ok::<_, pgqrs::Error>(vec![input["path"].as_str().unwrap().to_string()])
     })
     .await?;
 
-    let archive = pgqrs::workflow_step(&run, "create_archive", || async {
+    // The second step sees the output of the first step just like normal async code.
+    let archive_path = pgqrs::workflow_step(run, "create_archive", || async {
         Ok::<_, pgqrs::Error>(format!("{}.zip", files[0]))
     })
     .await?;
 
-    Ok(json!({"archive": archive}))
+    Ok(json!({ "archive": archive_path }))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+
+    // Install schema once per database.
     pgqrs::admin(&store).install().await?;
 
+    // Register the workflow definition. This is idempotent.
     pgqrs::workflow()
-        .name("archive_files")
-        .store(&store)
+        .name(archive_files)
         .create()
         .await?;
 
-    let consumer = pgqrs::consumer("worker-1", 8080, "archive_files")
+    // Start a worker for this workflow queue.
+    //
+    // For a quickstart, spawning the worker in the same process keeps the example
+    // self-contained. In production, run this polling loop in a dedicated worker
+    // service instead.
+    let consumer = pgqrs::consumer("workflow-worker", 8080, archive_files.name())
         .create(&store)
         .await?;
-
-    let handler = pgqrs::workflow_handler(store.clone(), move |run, input| async move {
-        app_workflow(run, input).await
+    let store_for_worker = store.clone();
+    let consumer_for_worker = consumer.clone();
+    let worker_task = tokio::spawn(async move {
+        pgqrs::workflow()
+            .name(archive_files)
+            .consumer(&consumer_for_worker)
+            .poll(&store_for_worker)
+            .await
     });
-    let handler = { let handler = handler.clone(); move |msg| (handler)(msg) };
 
-    pgqrs::workflow()
-        .name("archive_files")
-        .store(&store)
+    // Trigger a new workflow run. This only enqueues work; it does not execute it inline.
+    let message = pgqrs::workflow()
+        .name(archive_files)
         .trigger(&json!({"path": "/tmp/report.csv"}))?
         .execute()
         .await?;
 
-    pgqrs::dequeue()
-        .worker(&consumer)
-        .handle(handler)
-        .execute(&store)
+    // Wait for the workflow result while the worker polls in the background.
+    let result: serde_json::Value = pgqrs::run()
+        .message(message)
+        .store(&store)
+        .result()
         .await?;
+    println!("Workflow result: {:?}", result);
+
+    // Stop the background worker before exiting the example.
+    consumer.interrupt().await?;
+    let _ = worker_task.await;
 
     Ok(())
 }
@@ -187,38 +212,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```python
 import asyncio
 import pgqrs
+from pgqrs.decorators import step as step_def
+from pgqrs.decorators import workflow as workflow_def
+
+
+@workflow_def(name="archive_files")
+async def archive_files_wf(ctx, input_data: dict) -> dict:
+    # Decorated steps persist their results automatically.
+    @step_def
+    async def list_files(step_ctx):
+        return [input_data["path"]]
+
+    @step_def
+    async def create_archive(step_ctx, files):
+        return f"{files[0]}.zip"
+
+    files = await list_files(ctx)
+    archive_path = await create_archive(ctx, files)
+    return {"archive": archive_path}
+
 
 async def main():
     store = await pgqrs.connect("postgresql://localhost/mydb")
     admin = pgqrs.admin(store)
+
+    # Install schema once per database.
     await admin.install()
 
+    # Register the workflow definition. This is idempotent.
     await pgqrs.workflow().name("archive_files").store(store).create()
 
-    consumer = await pgqrs.consumer("worker-1", 8080, "archive_files").create(store)
-    await pgqrs.workflow() \
-        .name("archive_files") \
-        .store(store) \
-        .trigger({"path": "/tmp/report.csv"}) \
+    # Start a worker for the workflow queue.
+    #
+    # For a quickstart, running it as a background task keeps the example small.
+    # In production, run the polling loop in a separate worker process.
+    consumer = await store.consumer("archive_files")
+    worker_task = asyncio.create_task(
+        pgqrs.dequeue()
+        .worker(consumer)
+        .handle_workflow(archive_files_wf)
+        .poll(store)
+    )
+
+    # Trigger a workflow run. This only enqueues the input payload.
+    message = await (
+        pgqrs.workflow()
+        .name("archive_files")
+        .store(store)
+        .trigger({"path": "/tmp/report.csv"})
         .execute()
+    )
 
-    messages = await consumer.dequeue(batch_size=1)
-    msg = messages[0]
+    # Wait for the workflow result while the worker polls in the background.
+    result = await pgqrs.run().message(message).store(store).result()
+    print(f"Workflow result: {result}")
 
-    run = await pgqrs.run().message(msg).store(store).execute()
-    step = await run.acquire_step("list_files", current_time=run.current_time)
-    if step.status == "EXECUTE":
-        await step.guard.success([msg.payload["path"]])
-
-    step = await run.acquire_step("create_archive", current_time=run.current_time)
-    if step.status == "EXECUTE":
-        await step.guard.success(f"{msg.payload['path']}.zip")
-
-    await run.complete({"archive": f"{msg.payload['path']}.zip"})
-    await consumer.archive(msg.id)
+    # Stop the background worker before exiting the example.
+    await consumer.interrupt()
+    try:
+        await worker_task
+    except Exception:
+        pass
 
 asyncio.run(main())
 ```
+
+For a fuller walkthrough, see the [Durable Workflows Guide](docs/user-guide/guides/durable-workflows.md).
 
 ## Installation
 

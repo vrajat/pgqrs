@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-03-23
+
+### Added
+- **S3-backed queue storage** via `s3://bucket/key.sqlite` DSNs for queue state backed by object storage
+- **Explicit S3 durability lifecycle** with `bootstrap()`, `snapshot()`, `sync()`, sync-state reporting, and `Local` vs `Durable` write modes
+- **Benchmark documentation** with curated queue benchmark baselines and scenario writeups for backend behavior
+
+### Changed
+- **Python configuration parity** by exposing validation and enqueue rate-limit settings on `py-pgqrs.Config`
+- **Dequeue builder behavior** aligned across Rust and Python with a simpler poller model and consistent worker stop handling
+- **Admin behavior across backends** unified so PostgreSQL, SQLite, Turso, and S3 share the same store-backed admin paths
+- **SQLite/Turso locking internals** refactored to serialize table access more reliably under contention
+
+### Fixed
+- **Single-message dequeue handlers** now validate `batch_size == 1` instead of relying on hidden coercion
+- **Polling loops** now exit cleanly for interrupted and suspended workers instead of diverging by backend or wrapper path
+
 ## [0.14.0] - 2026-02-21
 
 ### Added
