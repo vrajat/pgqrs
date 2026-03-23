@@ -76,6 +76,7 @@ nav:
       - user-guide/guides/index.md
       - Basic Queue: user-guide/guides/basic-queue.md
       - Basic Workflow: user-guide/guides/basic-workflow.md
+      - S3 Queue: user-guide/guides/s3-queue.md
       - Durable Workflows: user-guide/guides/durable-workflows.md
       - Batch Processing: user-guide/guides/batch-processing.md
       - Delayed Messages: user-guide/guides/delayed-messages.md

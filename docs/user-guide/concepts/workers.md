@@ -38,7 +38,7 @@ Workers are automatically registered when creating Producers or Consumers:
     import pgqrs
 
     async def main():
-        config = pgqrs.config("postgresql://localhost/mydb")
+        config = pgqrs.Config("postgresql://localhost/mydb")
         store = await pgqrs.connect_with(config)
 
         # Create a managed worker
