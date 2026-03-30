@@ -144,12 +144,25 @@ class TyperRunObserver:
 
     def point_finished(self, *, result: RunPointResult) -> None:
         summary = result.summary
-        typer.echo(
-            "  "
-            f"throughput={summary['drain_messages_per_second']} msg/s "
-            f"drain_ms={summary['total_drain_time_ms']} "
-            f"errors={summary['error_rate']}"
-        )
+        if "drain_messages_per_second" in summary:
+            typer.echo(
+                "  "
+                f"throughput={summary['drain_messages_per_second']} msg/s "
+                f"drain_ms={summary['total_drain_time_ms']} "
+                f"errors={summary['error_rate']}"
+            )
+            return
+        if "smoke_ok" in summary:
+            typer.echo(
+                "  "
+                f"smoke_ok={summary['smoke_ok']} "
+                f"sync_ms={summary.get('sync_latency_ms')} "
+                f"snapshot_ms={summary.get('snapshot_latency_ms')}"
+            )
+            return
+
+        fields = ", ".join(f"{key}={value}" for key, value in list(summary.items())[:3])
+        typer.echo(f"  {fields}")
 
     def close(self) -> None:
         self.phase_finished(name=self._active_phase or "")

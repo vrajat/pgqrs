@@ -7,6 +7,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Barrier;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -111,8 +112,10 @@ async fn consumer_loop(
     consumer: pgqrs::workers::Consumer,
     batch_size: usize,
     state: Arc<DrainState>,
+    start_barrier: Arc<Barrier>,
 ) -> Result<ConsumerStats, Box<dyn std::error::Error + Send + Sync>> {
     let mut stats = ConsumerStats::default();
+    start_barrier.wait().await;
 
     loop {
         if state.done() {
@@ -176,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     prefill_queue(&producer, args.prefill_jobs, &args.payload_profile).await?;
 
     let state = Arc::new(DrainState::new(args.prefill_jobs));
+    let start_barrier = Arc::new(Barrier::new(args.consumers + 1));
     let mut handles = Vec::with_capacity(args.consumers);
     for index in 0..args.consumers {
         let consumer = pgqrs::consumer(
@@ -189,10 +193,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             consumer,
             args.dequeue_batch_size,
             Arc::clone(&state),
+            Arc::clone(&start_barrier),
         )));
     }
 
     let start = Instant::now();
+    start_barrier.wait().await;
     let mut all_stats = Vec::with_capacity(args.consumers);
     for handle in handles {
         all_stats.push(handle.await??);

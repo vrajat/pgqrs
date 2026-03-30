@@ -36,16 +36,20 @@ def _parse_int_env(name: str, default: int) -> int:
 def _prepare_s3_run(
     backend: str,
     backend_runtime,
+    *,
+    default_durability_mode: str | None = None,
 ) -> dict[str, object]:
     if backend != "s3":
         return {}
 
     profile = os.environ.get("PGQRS_BENCH_S3_LATENCY_PROFILE", "toxiproxy_baseline")
-    durability_mode = os.environ.get("PGQRS_BENCH_S3_DURABILITY_MODE", "durable")
     result: dict[str, object] = {
-        "durability_mode": durability_mode,
         "s3_latency_profile": profile,
     }
+    durability_mode = os.environ.get("PGQRS_BENCH_S3_DURABILITY_MODE")
+    if durability_mode is None:
+        durability_mode = default_durability_mode or "durable"
+    result["durability_mode"] = durability_mode
 
     if profile == "direct_localstack":
         endpoint_url = os.environ.get(
@@ -176,11 +180,15 @@ async def _run_python_queue(
     backend_runtime = resolve_backend_runtime(backend)
     observer = TyperRunObserver(show_progress=progress)
     try:
-        s3_parameters = _prepare_s3_run(backend, backend_runtime)
+        fixed_parameters = dict(scenario.action.fixed)
+        s3_parameters = _prepare_s3_run(
+            backend,
+            backend_runtime,
+            default_durability_mode=fixed_parameters.get("durability_mode"),
+        )
         with backend_runtime.activate_env():
             run_id = uuid.uuid4().hex
             points = expand_points(scenario)
-            fixed_parameters = dict(scenario.action.fixed)
             if prefill_jobs is not None:
                 fixed_parameters["prefill_jobs"] = prefill_jobs
             fixed_parameters.update(s3_parameters)
@@ -200,6 +208,11 @@ async def _run_python_queue(
             init_jsonl(Path(output_path))
 
             for index, point in enumerate(points, start=1):
+                point_backend_runtime = (
+                    resolve_backend_runtime(backend)
+                    if backend == "s3"
+                    else backend_runtime
+                )
                 observer.point_started(
                     index=index,
                     total=len(points),
@@ -218,11 +231,13 @@ async def _run_python_queue(
                 )
                 result = await run_drain_fixed_backlog(
                     spec,
-                    backend_runtime,
+                    point_backend_runtime,
                     observer=observer,
                 )
                 observer.point_finished(result=result)
                 append_jsonl(Path(output_path), result)
+                if point_backend_runtime is not backend_runtime:
+                    point_backend_runtime.cleanup()
 
             typer.echo(str(output_path))
             return 0
@@ -256,11 +271,15 @@ async def _run_rust_queue(
     backend_runtime = resolve_backend_runtime(backend)
     observer = TyperRunObserver(show_progress=progress)
     try:
-        s3_parameters = _prepare_s3_run(backend, backend_runtime)
+        fixed_parameters = dict(scenario.action.fixed)
+        s3_parameters = _prepare_s3_run(
+            backend,
+            backend_runtime,
+            default_durability_mode=fixed_parameters.get("durability_mode"),
+        )
         with backend_runtime.activate_env():
             run_id = uuid.uuid4().hex
             points = expand_points(scenario)
-            fixed_parameters = dict(scenario.action.fixed)
             if prefill_jobs is not None:
                 fixed_parameters["prefill_jobs"] = prefill_jobs
             fixed_parameters.update(s3_parameters)
@@ -280,6 +299,11 @@ async def _run_rust_queue(
             init_jsonl(Path(output_path))
 
             for index, point in enumerate(points, start=1):
+                point_backend_runtime = (
+                    resolve_backend_runtime(backend)
+                    if backend == "s3"
+                    else backend_runtime
+                )
                 observer.point_started(
                     index=index,
                     total=len(points),
@@ -295,6 +319,8 @@ async def _run_rust_queue(
                     "--no-default-features",
                     "--features",
                     backend,
+                    "--bin",
+                    "pgqrs-bench-rust",
                     "--",
                     "--run-id",
                     run_id,
@@ -307,7 +333,7 @@ async def _run_rust_queue(
                     "--profile",
                     profile,
                     "--dsn",
-                    backend_runtime.dsn,
+                    point_backend_runtime.dsn,
                     "--prefill-jobs",
                     str(fixed_parameters["prefill_jobs"]),
                     "--consumers",
@@ -345,6 +371,8 @@ async def _run_rust_queue(
                 )
                 observer.point_finished(result=result)
                 append_jsonl(Path(output_path), result)
+                if point_backend_runtime is not backend_runtime:
+                    point_backend_runtime.cleanup()
 
             typer.echo(str(output_path))
             return 0
@@ -467,6 +495,11 @@ def run(
     """Run a benchmark scenario."""
 
     if binding == "python":
+        registration = get_registration(scenario)
+        if registration.executor_hint != "queue":
+            raise SystemExit(
+                f"Binding {binding!r} is not implemented for {registration.executor_hint!r}."
+            )
         raise SystemExit(
             asyncio.run(
                 _run_python_queue(
@@ -482,18 +515,21 @@ def run(
             )
         )
     if binding == "rust":
-        raise SystemExit(
-            asyncio.run(
-                _run_rust_queue(
-                    scenario_id=scenario,
-                    backend=backend,
-                    profile=profile,
-                    output=output,
-                    progress=progress,
-                    prefill_jobs=prefill_jobs,
+        registration = get_registration(scenario)
+        if registration.executor_hint == "queue":
+            raise SystemExit(
+                asyncio.run(
+                    _run_rust_queue(
+                        scenario_id=scenario,
+                        backend=backend,
+                        profile=profile,
+                        output=output,
+                        progress=progress,
+                        prefill_jobs=prefill_jobs,
+                    )
                 )
             )
-        )
+        raise SystemExit(f"Unsupported executor hint: {registration.executor_hint}")
     raise SystemExit(f"Binding {binding!r} is not implemented yet.")
 
 
