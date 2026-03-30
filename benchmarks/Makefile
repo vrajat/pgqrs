@@ -22,6 +22,13 @@ run: bootstrap  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFIL
 		--profile "$${PROFILE:-compat}" \
 		$(if $(PREFILL_JOBS),--prefill-jobs "$(PREFILL_JOBS)",)
 
+s3-smoke: bootstrap  ## Run the S3 smoke check through Toxiproxy
+	cd .. && .venv/bin/python -m benchmarks.bench.cli s3-smoke \
+		--latency-ms "$${LATENCY_MS:-60}" \
+		--jitter-ms "$${JITTER_MS:-0}" \
+		--toxiproxy-api-url "$${TOXIPROXY_API_URL:-http://localhost:8474}" \
+		--toxiproxy-upstream "$${TOXIPROXY_UPSTREAM:-host.docker.internal:4566}"
+
 dashboard: deps  ## Run the Streamlit benchmark dashboard
 	cd .. && .venv/bin/streamlit run benchmarks/dashboard/app.py
 

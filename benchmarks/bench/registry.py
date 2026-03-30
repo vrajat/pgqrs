@@ -34,7 +34,7 @@ SCENARIOS: tuple[ScenarioRegistration, ...] = (
     ScenarioRegistration(
         scenario_id="queue.drain_fixed_backlog",
         scenario_path="benchmarks/scenarios/queue/drain_fixed_backlog.toml",
-        backends=("postgres", "sqlite", "turso"),
+        backends=("postgres", "sqlite", "turso", "s3"),
         bindings=("rust", "python"),
         profiles=("compat", "single_process"),
         executor_hint="queue",

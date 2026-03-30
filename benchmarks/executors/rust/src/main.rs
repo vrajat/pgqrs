@@ -1,4 +1,5 @@
 use clap::Parser;
+use pgqrs::store::s3::DurabilityMode;
 use pgqrs::{self, Config, Store};
 use serde_json::{json, Value};
 use std::sync::{
@@ -29,6 +30,8 @@ struct Args {
     dequeue_batch_size: usize,
     #[arg(long, default_value = "small")]
     payload_profile: String,
+    #[arg(long, default_value = "durable")]
+    durability_mode: String,
 }
 
 #[derive(Default)]
@@ -150,6 +153,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut config = Config::from_dsn(&args.dsn);
     config.validation_config.max_enqueue_per_second = None;
     config.validation_config.max_enqueue_burst = None;
+    if args.backend == "s3" {
+        config.s3.mode = match args.durability_mode.as_str() {
+            "local" => DurabilityMode::Local,
+            _ => DurabilityMode::Durable,
+        };
+    }
 
     let store = pgqrs::connect_with_config(&config).await?;
     pgqrs::admin(&store).install().await?;
@@ -215,6 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "payload_profile": args.payload_profile,
                 "prefill_jobs": args.prefill_jobs,
                 "queue_mode": "drain",
+                "durability_mode": args.durability_mode,
             },
             "point_parameters": {
                 "consumers": args.consumers,
