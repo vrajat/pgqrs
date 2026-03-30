@@ -3,6 +3,8 @@ use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+#[cfg(feature = "s3")]
+use rust_pgqrs::store::s3::S3Store as RustS3Store;
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
 
@@ -322,6 +324,30 @@ impl PyConfig {
     fn set_max_enqueue_burst(&mut self, burst: Option<u32>) {
         self.inner.validation_config.max_enqueue_burst = burst;
     }
+
+    #[cfg(feature = "s3")]
+    #[getter]
+    fn get_s3_mode(&self) -> String {
+        match self.inner.s3.mode {
+            rust_pgqrs::store::s3::DurabilityMode::Durable => "durable".to_string(),
+            rust_pgqrs::store::s3::DurabilityMode::Local => "local".to_string(),
+        }
+    }
+
+    #[cfg(feature = "s3")]
+    #[setter]
+    fn set_s3_mode(&mut self, mode: String) -> PyResult<()> {
+        self.inner.s3.mode = match mode.as_str() {
+            "durable" => rust_pgqrs::store::s3::DurabilityMode::Durable,
+            "local" => rust_pgqrs::store::s3::DurabilityMode::Local,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "s3_mode must be 'durable' or 'local'",
+                ))
+            }
+        };
+        Ok(())
+    }
 }
 
 /// Backoff strategy for step retries
@@ -507,6 +533,33 @@ impl PyStore {
     }
 }
 
+#[cfg(feature = "s3")]
+#[pyclass(name = "S3StoreHandle")]
+#[derive(Clone)]
+pub struct PyS3StoreHandle {
+    pub(crate) inner: RustS3Store,
+}
+
+#[cfg(feature = "s3")]
+#[pymethods]
+impl PyS3StoreHandle {
+    fn snapshot<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let mut store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(
+            py,
+            async move { store.snapshot().await.map_err(to_py_err) },
+        )
+    }
+
+    fn sync<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let mut store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(
+            py,
+            async move { store.sync().await.map_err(to_py_err) },
+        )
+    }
+}
+
 #[pyfunction]
 fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -526,6 +579,20 @@ fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
             .map_err(to_py_err)?;
         Ok(PyStore { inner: store })
     })
+}
+
+#[cfg(feature = "s3")]
+#[pyfunction]
+fn as_s3(store: &PyStore) -> PyResult<PyS3StoreHandle> {
+    match &store.inner {
+        AnyStore::S3(store) => Ok(PyS3StoreHandle {
+            inner: store.clone(),
+        }),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+            "store backend is '{}', expected 's3'",
+            store.inner.backend_name()
+        ))),
+    }
 }
 
 #[pyclass(name = "Admin")]
@@ -646,6 +713,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepRecord>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyStore>()?;
+    #[cfg(feature = "s3")]
+    m.add_class::<PyS3StoreHandle>()?;
     m.add_class::<PyQueueMessage>()?;
     m.add_class::<PyQueueInfo>()?;
     m.add_class::<PyRun>()?;
@@ -697,6 +766,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;
+    #[cfg(feature = "s3")]
+    m.add_function(wrap_pyfunction!(as_s3, m)?)?;
     m.add_function(wrap_pyfunction!(admin, m)?)?;
     m.add_function(wrap_pyfunction!(produce, m)?)?;
     m.add_function(wrap_pyfunction!(produce_batch, m)?)?;
