@@ -1,10 +1,10 @@
 #![allow(non_local_definitions)]
 use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
 #[cfg(feature = "s3")]
 use pyo3::basic::CompareOp;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 #[cfg(feature = "s3")]
 use rust_pgqrs::store::s3::S3Store as RustS3Store;
 use rust_pgqrs::store::{AnyStore, Store};
