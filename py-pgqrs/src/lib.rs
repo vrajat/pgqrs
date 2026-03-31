@@ -1,8 +1,12 @@
 #![allow(non_local_definitions)]
 use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
+#[cfg(feature = "s3")]
+use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+#[cfg(feature = "s3")]
+use rust_pgqrs::store::s3::S3Store as RustS3Store;
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
 
@@ -147,6 +151,80 @@ pub(crate) fn py_to_json(py: Python, val: &PyAny) -> PyResult<serde_json::Value>
         .extract::<String>()?;
     serde_json::from_str(&json_str)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[cfg(feature = "s3")]
+fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'static str {
+    match mode {
+        rust_pgqrs::store::s3::DurabilityMode::Durable => "durable",
+        rust_pgqrs::store::s3::DurabilityMode::Local => "local",
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pyclass(name = "DurabilityMode", frozen)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PyDurabilityMode {
+    inner: rust_pgqrs::store::s3::DurabilityMode,
+}
+
+#[cfg(feature = "s3")]
+impl From<rust_pgqrs::store::s3::DurabilityMode> for PyDurabilityMode {
+    fn from(inner: rust_pgqrs::store::s3::DurabilityMode) -> Self {
+        Self { inner }
+    }
+}
+
+#[cfg(feature = "s3")]
+impl From<PyDurabilityMode> for rust_pgqrs::store::s3::DurabilityMode {
+    fn from(mode: PyDurabilityMode) -> Self {
+        mode.inner
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pymethods]
+impl PyDurabilityMode {
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn DURABLE() -> Self {
+        rust_pgqrs::store::s3::DurabilityMode::Durable.into()
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn LOCAL() -> Self {
+        rust_pgqrs::store::s3::DurabilityMode::Local.into()
+    }
+
+    #[getter]
+    fn value(&self) -> &'static str {
+        durability_mode_to_str(self.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner {
+            rust_pgqrs::store::s3::DurabilityMode::Durable => "DurabilityMode.DURABLE".to_string(),
+            rust_pgqrs::store::s3::DurabilityMode::Local => "DurabilityMode.LOCAL".to_string(),
+        }
+    }
+
+    fn __str__(&self) -> &'static str {
+        durability_mode_to_str(self.inner)
+    }
+
+    fn __richcmp__(
+        &self,
+        other: PyRef<'_, PyDurabilityMode>,
+        op: CompareOp,
+        py: Python<'_>,
+    ) -> PyObject {
+        match op {
+            CompareOp::Eq => (self.inner == other.inner).into_py(py),
+            CompareOp::Ne => (self.inner != other.inner).into_py(py),
+            _ => py.NotImplemented(),
+        }
+    }
 }
 
 #[pyclass(name = "Config")]
@@ -321,6 +399,18 @@ impl PyConfig {
     #[setter]
     fn set_max_enqueue_burst(&mut self, burst: Option<u32>) {
         self.inner.validation_config.max_enqueue_burst = burst;
+    }
+
+    #[cfg(feature = "s3")]
+    #[getter]
+    fn get_s3_mode(&self) -> PyDurabilityMode {
+        self.inner.s3.mode.into()
+    }
+
+    #[cfg(feature = "s3")]
+    #[setter]
+    fn set_s3_mode(&mut self, mode: PyDurabilityMode) {
+        self.inner.s3.mode = mode.into();
     }
 }
 
@@ -507,6 +597,33 @@ impl PyStore {
     }
 }
 
+#[cfg(feature = "s3")]
+#[pyclass(name = "S3StoreHandle")]
+#[derive(Clone)]
+pub struct PyS3StoreHandle {
+    pub(crate) inner: RustS3Store,
+}
+
+#[cfg(feature = "s3")]
+#[pymethods]
+impl PyS3StoreHandle {
+    fn snapshot<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let mut store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(
+            py,
+            async move { store.snapshot().await.map_err(to_py_err) },
+        )
+    }
+
+    fn sync<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let mut store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(
+            py,
+            async move { store.sync().await.map_err(to_py_err) },
+        )
+    }
+}
+
 #[pyfunction]
 fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -526,6 +643,20 @@ fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
             .map_err(to_py_err)?;
         Ok(PyStore { inner: store })
     })
+}
+
+#[cfg(feature = "s3")]
+#[pyfunction]
+fn as_s3(store: &PyStore) -> PyResult<PyS3StoreHandle> {
+    match &store.inner {
+        AnyStore::S3(store) => Ok(PyS3StoreHandle {
+            inner: store.clone(),
+        }),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+            "store backend is '{}', expected 's3'",
+            store.inner.backend_name()
+        ))),
+    }
 }
 
 #[pyclass(name = "Admin")]
@@ -633,6 +764,8 @@ fn admin(store: PyStore) -> PyAdmin {
 
 #[pymodule]
 fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
+    #[cfg(feature = "s3")]
+    m.add_class::<PyDurabilityMode>()?;
     m.add_class::<PyAdmin>()?;
     m.add_class::<PyProducer>()?;
     m.add_class::<PyConsumer>()?;
@@ -646,6 +779,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepRecord>()?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyStore>()?;
+    #[cfg(feature = "s3")]
+    m.add_class::<PyS3StoreHandle>()?;
     m.add_class::<PyQueueMessage>()?;
     m.add_class::<PyQueueInfo>()?;
     m.add_class::<PyRun>()?;
@@ -697,6 +832,8 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;
+    #[cfg(feature = "s3")]
+    m.add_function(wrap_pyfunction!(as_s3, m)?)?;
     m.add_function(wrap_pyfunction!(admin, m)?)?;
     m.add_function(wrap_pyfunction!(produce, m)?)?;
     m.add_function(wrap_pyfunction!(produce_batch, m)?)?;
