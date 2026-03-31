@@ -36,7 +36,7 @@ async def test_step_returns_not_ready_on_transient_error(test_dsn, schema):
     step_name = "transient_step"
     result = await wf.acquire_step(step_name)
 
-    assert result.status == "EXECUTE", "Step should execute first time"
+    assert result.status == pgqrs.StepResultStatus.Execute, "Step should execute first time"
     guard = result.guard
 
     # Fail with transient error
@@ -62,7 +62,7 @@ async def test_step_ready_after_retry_at(test_dsn, schema):
 
     # Fail with transient error
     result = await wf.acquire_step(step_name)
-    assert result.status == "EXECUTE"
+    assert result.status == pgqrs.StepResultStatus.Execute
     await result.guard.fail_transient("TIMEOUT", "Initial failure")
 
     # Get retry_at
@@ -75,14 +75,14 @@ async def test_step_ready_after_retry_at(test_dsn, schema):
 
     # Should be able to acquire now
     result = await wf.acquire_step(step_name, current_time=future_time.isoformat())
-    assert result.status == "EXECUTE", "Step should execute after retry_at"
+    assert result.status == pgqrs.StepResultStatus.Execute, "Step should execute after retry_at"
 
     # Succeed
     await result.guard.success({"msg": "success_after_retry"})
 
     # Verify cached
     result = await wf.acquire_step(step_name)
-    assert result.status == "SKIPPED"
+    assert result.status == pgqrs.StepResultStatus.Skipped
     assert result.value["msg"] == "success_after_retry"
 
 
@@ -174,7 +174,7 @@ async def test_custom_retry_after_delay(test_dsn, schema):
     # Try with time advanced by 11 seconds - should be ready
     time2 = base_time + timedelta(seconds=11)
     result = await wf.acquire_step(step_name, current_time=time2.isoformat())
-    assert result.status == "EXECUTE", "Step should be ready after custom delay"
+    assert result.status == pgqrs.StepResultStatus.Execute, "Step should be ready after custom delay"
 
     await result.guard.success({"msg": "success"})
 

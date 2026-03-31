@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator, ClassVar
 from .decorators import WorkflowDef, workflow as workflow, step as step
 
@@ -24,6 +25,24 @@ class DurabilityMode:
     LOCAL: ClassVar["DurabilityMode"]
     @property
     def value(self) -> str: ...
+
+class WorkerStatus(Enum):
+    Ready: "WorkerStatus"
+    Polling: "WorkerStatus"
+    Suspended: "WorkerStatus"
+    Interrupted: "WorkerStatus"
+    Stopped: "WorkerStatus"
+
+class WorkflowStatus(Enum):
+    Queued: "WorkflowStatus"
+    Running: "WorkflowStatus"
+    Paused: "WorkflowStatus"
+    Success: "WorkflowStatus"
+    Error: "WorkflowStatus"
+
+class StepResultStatus(Enum):
+    Execute: "StepResultStatus"
+    Skipped: "StepResultStatus"
 
 class BackoffStrategy:
     """Backoff strategy for step retries."""
@@ -171,10 +190,15 @@ class S3StoreHandle:
     async def sync(self) -> None: ...
 
 class Producer:
+    @property
+    def worker_id(self) -> int: ...
     async def enqueue(self, payload: Any) -> int: ...
     async def enqueue_delayed(self, payload: Any, delay_seconds: int) -> int: ...
 
 class Consumer:
+    @property
+    def worker_id(self) -> int: ...
+    async def status(self) -> WorkerStatus: ...
     async def dequeue(
         self, batch_size: Optional[int] = None
     ) -> List["QueueMessage"]: ...
@@ -242,7 +266,7 @@ class WorkerInfo:
     @property
     def hostname(self) -> str: ...
     @property
-    def status(self) -> str: ...
+    def status(self) -> WorkerStatus: ...
     @property
     def queue_id(self) -> Optional[int]: ...
     @property
@@ -262,7 +286,7 @@ class RunRecord:
     @property
     def workflow_id(self) -> int: ...
     @property
-    def status(self) -> str: ...
+    def status(self) -> WorkflowStatus: ...
     @property
     def input(self) -> Optional[Any]: ...
     @property
@@ -282,7 +306,7 @@ class StepRecord:
     @property
     def step_name(self) -> str: ...
     @property
-    def status(self) -> str: ...
+    def status(self) -> WorkflowStatus: ...
     @property
     def input(self) -> Optional[Any]: ...
     @property
@@ -366,7 +390,7 @@ class Run:
 
 class StepResult:
     @property
-    def status(self) -> str: ...
+    def status(self) -> StepResultStatus: ...
     @property
     def value(self) -> Any: ...
     @property

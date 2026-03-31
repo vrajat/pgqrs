@@ -1,5 +1,7 @@
 use crate::workers::{PyConsumer, PyProducer};
-use crate::{json_to_py, py_to_json, to_py_err, PgqrsError, PyStore, WorkflowRecord};
+use crate::{
+    json_to_py, py_to_json, to_py_err, PgqrsError, PyStore, PyWorkflowStatus, WorkflowRecord,
+};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use pyo3::pyasync::IterANextOutput;
@@ -264,7 +266,7 @@ pub struct PyRunRecord {
     #[pyo3(get)]
     pub workflow_id: i64,
     #[pyo3(get)]
-    pub status: String,
+    pub status: PyWorkflowStatus,
     #[pyo3(get)]
     pub input: Option<PyObject>,
     #[pyo3(get)]
@@ -282,7 +284,7 @@ impl From<rust_pgqrs::types::RunRecord> for PyRunRecord {
         Python::with_gil(|py| PyRunRecord {
             id: r.id,
             workflow_id: r.workflow_id,
-            status: r.status.to_string(),
+            status: PyWorkflowStatus::from(r.status),
             input: r
                 .input
                 .map(|value| json_to_py(py, &value).unwrap_or(py.None())),
@@ -308,7 +310,7 @@ pub struct PyStepRecord {
     #[pyo3(get)]
     pub step_name: String,
     #[pyo3(get)]
-    pub status: String,
+    pub status: PyWorkflowStatus,
     #[pyo3(get)]
     pub input: Option<PyObject>,
     #[pyo3(get)]
@@ -329,7 +331,7 @@ impl From<rust_pgqrs::types::StepRecord> for PyStepRecord {
             id: r.id,
             run_id: r.run_id,
             step_name: r.step_name,
-            status: r.status.to_string(),
+            status: PyWorkflowStatus::from(r.status),
             input: r
                 .input
                 .map(|value| json_to_py(py, &value).unwrap_or(py.None())),

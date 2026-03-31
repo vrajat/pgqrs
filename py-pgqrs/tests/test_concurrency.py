@@ -23,7 +23,7 @@ async def dequeue_one(consumer):
 
 async def execute_step(run: Run, name: str, current_time, action):
     step_result = await run.acquire_step(name, current_time=current_time)
-    if step_result.status == "SKIPPED":
+    if step_result.status == pgqrs.StepResultStatus.Skipped:
         return step_result.value
     return await action(step_result.guard)
 
@@ -193,11 +193,11 @@ async def test_workflow_scenario_success(test_dsn, schema):
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "SUCCESS"
+    assert run_entry.status == pgqrs.WorkflowStatus.Success
 
     steps = await (await store.get_workflow_steps()).list()
     step_entry = next(entry for entry in steps if entry.run_id == run_entry.id)
-    assert step_entry.status == "SUCCESS"
+    assert step_entry.status == pgqrs.WorkflowStatus.Success
 
 
 @pytest.mark.asyncio
@@ -237,12 +237,12 @@ async def test_workflow_scenario_permanent_error(test_dsn, schema):
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "ERROR"
+    assert run_entry.status == pgqrs.WorkflowStatus.Error
     assert "File not found" in str(run_entry.error)
 
     steps = await (await store.get_workflow_steps()).list()
     step_entry = next(entry for entry in steps if entry.run_id == run_entry.id)
-    assert step_entry.status == "ERROR"
+    assert step_entry.status == pgqrs.WorkflowStatus.Error
     assert "File not found" in str(step_entry.error)
 
 
@@ -277,13 +277,13 @@ async def test_workflow_scenario_crash_recovery(test_dsn, schema):
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "RUNNING"
+    assert run_entry.status == pgqrs.WorkflowStatus.Running
 
     steps = await (await store.get_workflow_steps()).list()
     step_entries = [entry for entry in steps if entry.run_id == run_entry.id]
     assert len(step_entries) == 1
     assert step_entries[0].step_name == "step1"
-    assert step_entries[0].status == "SUCCESS"
+    assert step_entries[0].status == pgqrs.WorkflowStatus.Success
 
     await admin.release_worker_messages(consumer.worker_id)
 
@@ -302,7 +302,7 @@ async def test_workflow_scenario_crash_recovery(test_dsn, schema):
 
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "SUCCESS"
+    assert run_entry.status == pgqrs.WorkflowStatus.Success
 
     steps = await (await store.get_workflow_steps()).list()
     step_count = len([entry for entry in steps if entry.run_id == run_entry.id])
@@ -343,11 +343,11 @@ async def test_workflow_scenario_transient_error(test_dsn, schema):
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "RUNNING"
+    assert run_entry.status == pgqrs.WorkflowStatus.Running
 
     steps = await (await store.get_workflow_steps()).list()
     step_entry = next(entry for entry in steps if entry.run_id == run_entry.id)
-    assert step_entry.status == "ERROR"
+    assert step_entry.status == pgqrs.WorkflowStatus.Error
     assert step_entry.error.get("is_transient") is True
     assert step_entry.error.get("code") == "TIMEOUT"
     assert step_entry.retry_at is not None
@@ -388,12 +388,12 @@ async def test_workflow_scenario_pause(test_dsn, schema):
     workflow = await (await store.get_workflows()).get_by_name(wf_name)
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "PAUSED"
+    assert run_entry.status == pgqrs.WorkflowStatus.Paused
     assert "Waiting for approval" in str(run_entry.error)
 
     steps = await (await store.get_workflow_steps()).list()
     step_entry = next(entry for entry in steps if entry.run_id == run_entry.id)
-    assert step_entry.status == "ERROR"
+    assert step_entry.status == pgqrs.WorkflowStatus.Error
     assert step_entry.error.get("code") == "PAUSED"
     assert step_entry.error.get("is_transient") is True
     assert step_entry.retry_at is not None
@@ -421,8 +421,8 @@ async def test_workflow_scenario_pause(test_dsn, schema):
 
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.workflow_id == workflow.id)
-    assert run_entry.status == "SUCCESS"
+    assert run_entry.status == pgqrs.WorkflowStatus.Success
 
     steps = await (await store.get_workflow_steps()).list()
     step_entry = next(entry for entry in steps if entry.run_id == run_entry.id)
-    assert step_entry.status == "SUCCESS"
+    assert step_entry.status == pgqrs.WorkflowStatus.Success

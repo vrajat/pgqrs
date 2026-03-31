@@ -232,7 +232,7 @@ async def test_worker_list_status(test_dsn, schema):
     worker_list = await workers_handle.list()
     assert len(worker_list) >= 2
     # Check status of first worker (should be ready or similar)
-    assert worker_list[0].status == "ready"
+    assert worker_list[0].status == pgqrs.WorkerStatus.Ready
 
 
 @pytest.mark.asyncio
@@ -677,7 +677,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
 
     # Verify that any ephemeral worker found is in 'stopped' status
     for w in ephemeral_workers:
-        assert w.status == "stopped", (
+        assert w.status == pgqrs.WorkerStatus.Stopped, (
             f"Ephemeral worker {w.id} should be stopped, but is {w.status}"
         )
 
