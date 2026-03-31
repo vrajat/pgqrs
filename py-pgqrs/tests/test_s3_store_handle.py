@@ -14,14 +14,18 @@ def local_s3_config(dsn: str) -> pgqrs.Config:
     return config
 
 
+@requires_backend(TestBackend.S3)
 def test_config_s3_mode_uses_durability_mode_enum():
     config = pgqrs.Config("s3://pgqrs-test-bucket/config-mode", schema="s3_python")
 
     assert config.s3_mode == pgqrs.DurabilityMode.DURABLE
+    assert type(config.s3_mode).__name__ == "DurabilityMode"
+    assert config.s3_mode.value == "durable"
 
     config.s3_mode = pgqrs.DurabilityMode.LOCAL
 
     assert config.s3_mode == pgqrs.DurabilityMode.LOCAL
+    assert config.s3_mode.value == "local"
 
 
 def parse_s3_dsn(dsn: str) -> tuple[str, str]:

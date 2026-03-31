@@ -1,5 +1,4 @@
-from enum import Enum
-from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator
+from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator, ClassVar
 from .decorators import WorkflowDef, workflow as workflow, step as step
 
 class PgqrsError(Exception): ...
@@ -20,9 +19,11 @@ class RetriesExhaustedError(PgqrsError): ...
 class StepNotReadyError(PgqrsError): ...
 class PausedError(PgqrsError): ...
 
-class DurabilityMode(str, Enum):
-    DURABLE = "durable"
-    LOCAL = "local"
+class DurabilityMode:
+    DURABLE: ClassVar["DurabilityMode"]
+    LOCAL: ClassVar["DurabilityMode"]
+    @property
+    def value(self) -> str: ...
 
 class BackoffStrategy:
     """Backoff strategy for step retries."""

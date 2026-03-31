@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any
 
 from . import _pgqrs
@@ -10,12 +9,6 @@ from .decorators import WorkflowDef
 __doc__ = _pgqrs.__doc__
 __all__ = list(getattr(_pgqrs, "__all__", []))
 __all__.append("WorkflowDef")
-__all__.append("DurabilityMode")
-
-
-class DurabilityMode(str, Enum):
-    DURABLE = "durable"
-    LOCAL = "local"
 
 
 class DequeueBuilder:
