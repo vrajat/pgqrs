@@ -7,6 +7,10 @@ import pandas as pd
 import streamlit as st
 
 
+def _row_value(row: pd.Series, key: str):
+    return row.get(key)
+
+
 def _default_run_file(frame: pd.DataFrame) -> str:
     baselines = frame.loc[frame["source"] == "baselines"].copy()
     if not baselines.empty:
@@ -333,6 +337,29 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
         f"Showing `{selected_file}` | source={row['source']} | "
         f"prefill={row['prefill_jobs']} | profile={row['profile']}"
     )
+    if backend == "s3":
+        s3_parts = []
+        durability_mode = _row_value(row, "durability_mode")
+        latency_profile = _row_value(row, "s3_latency_profile")
+        transport = _row_value(row, "s3_transport")
+        latency_ms = _row_value(row, "s3_latency_ms")
+        jitter_ms = _row_value(row, "s3_jitter_ms")
+        endpoint_url = _row_value(row, "s3_endpoint_url")
+
+        if pd.notna(durability_mode):
+            s3_parts.append(f"durability={durability_mode}")
+        if pd.notna(latency_profile):
+            s3_parts.append(f"latency_profile={latency_profile}")
+        if pd.notna(transport):
+            s3_parts.append(f"transport={transport}")
+        if pd.notna(latency_ms):
+            s3_parts.append(f"toxiproxy_latency_ms={int(latency_ms)}")
+        if pd.notna(jitter_ms):
+            s3_parts.append(f"toxiproxy_jitter_ms={int(jitter_ms)}")
+        if pd.notna(endpoint_url):
+            s3_parts.append(f"endpoint={endpoint_url}")
+        if s3_parts:
+            st.caption(" | ".join(s3_parts))
 
     _render_throughput_section(selected, key_prefix=key_prefix)
     _render_latency_section(selected, key_prefix=key_prefix)

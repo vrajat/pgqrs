@@ -364,6 +364,10 @@ async def _run_rust_queue(
                     )
 
                 payload = json.loads(completed.stdout)
+                payload_metadata = payload.setdefault("metadata", {})
+                payload_fixed = dict(payload_metadata.get("fixed_parameters", {}))
+                payload_fixed.update(fixed_parameters)
+                payload_metadata["fixed_parameters"] = payload_fixed
                 result = RunPointResult(
                     metadata=payload["metadata"],
                     summary=payload["summary"],

@@ -188,6 +188,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     prefill_queue(&producer, args.prefill_jobs, &args.payload_profile).await?;
 
     let state = Arc::new(DrainState::new(args.prefill_jobs));
+    // Keep all consumers parked until the benchmark clock is armed; otherwise
+    // fast points can do real work before `start` and inflate throughput.
     let start_barrier = Arc::new(Barrier::new(args.consumers + 1));
     let mut handles = Vec::with_capacity(args.consumers);
     for index in 0..args.consumers {
