@@ -1,5 +1,4 @@
 use clap::Parser;
-use pgqrs::store::s3::DurabilityMode;
 use pgqrs::{self, Config, Store};
 use serde_json::{json, Value};
 use std::sync::{
@@ -87,6 +86,21 @@ fn percentile_ms(values: &[f64], percentile: f64) -> Option<f64> {
         .map(|secs| (secs * 1000.0 * 1000.0).round() / 1000.0)
 }
 
+#[cfg(feature = "s3")]
+fn maybe_apply_s3_mode(config: &mut Config, backend: &str, durability_mode: &str) {
+    if backend == "s3" {
+        config.s3.mode = match durability_mode {
+            "local" => pgqrs::store::s3::DurabilityMode::Local,
+            _ => pgqrs::store::s3::DurabilityMode::Durable,
+        };
+    }
+}
+
+#[cfg(not(feature = "s3"))]
+fn maybe_apply_s3_mode(config: &mut Config, backend: &str, durability_mode: &str) {
+    let _ = (config, backend, durability_mode);
+}
+
 async fn prefill_queue(
     producer: &pgqrs::workers::Producer,
     prefill_jobs: usize,
@@ -156,12 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut config = Config::from_dsn(&args.dsn);
     config.validation_config.max_enqueue_per_second = None;
     config.validation_config.max_enqueue_burst = None;
-    if args.backend == "s3" {
-        config.s3.mode = match args.durability_mode.as_str() {
-            "local" => DurabilityMode::Local,
-            _ => DurabilityMode::Durable,
-        };
-    }
+    maybe_apply_s3_mode(&mut config, &args.backend, &args.durability_mode);
 
     let store = pgqrs::connect_with_config(&config).await?;
     pgqrs::admin(&store).install().await?;

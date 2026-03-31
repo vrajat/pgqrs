@@ -67,6 +67,38 @@ def _scale_summary(
     return (f"{ratio:.2f}x", f"{delta_pct:+.1f}%")
 
 
+def _latency_summary(
+    frame: pd.DataFrame,
+    *,
+    metric: str,
+    start_consumers: int,
+    start_batch: int,
+    end_consumers: int,
+    end_batch: int,
+) -> tuple[str, str]:
+    start = _lookup_metric(
+        frame,
+        metric=metric,
+        consumers=start_consumers,
+        batch_size=start_batch,
+    )
+    end = _lookup_metric(
+        frame,
+        metric=metric,
+        consumers=end_consumers,
+        batch_size=end_batch,
+    )
+    if start is None or end is None:
+        return ("n/a", "missing point")
+
+    delta_ms = end - start
+    if start == 0:
+        return (f"{end:.3f} ms", f"{delta_ms:+.3f} ms")
+
+    ratio = end / start
+    return (f"{end:.3f} ms", f"{delta_ms:+.3f} ms ({ratio:.2f}x)")
+
+
 def _file_label(frame: pd.DataFrame, file_name: str) -> str:
     row = frame.loc[frame["file_name"] == file_name].iloc[0]
     source = row["source"]
@@ -177,7 +209,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     st.markdown("#### Latency Scaling")
 
     cards = st.columns(4)
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_dequeue_latency_ms",
         start_consumers=1,
@@ -185,9 +217,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=1,
     )
-    cards[0].metric("P95 dequeue 1→4 @ batch 1", value, delta)
+    cards[0].metric("P95 dequeue @ 4 consumers, batch 1", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_dequeue_latency_ms",
         start_consumers=1,
@@ -195,9 +227,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=50,
     )
-    cards[1].metric("P95 dequeue 1→4 @ batch 50", value, delta)
+    cards[1].metric("P95 dequeue @ 4 consumers, batch 50", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_archive_latency_ms",
         start_consumers=1,
@@ -205,9 +237,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=1,
     )
-    cards[2].metric("P95 archive 1→4 @ batch 1", value, delta)
+    cards[2].metric("P95 archive @ 4 consumers, batch 1", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_archive_latency_ms",
         start_consumers=1,
@@ -215,7 +247,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=50,
     )
-    cards[3].metric("P95 archive 1→4 @ batch 50", value, delta)
+    cards[3].metric("P95 archive @ 4 consumers, batch 50", value, delta)
 
     latency_cols = st.columns(2)
 
