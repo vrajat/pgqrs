@@ -10,8 +10,18 @@ from .conftest import TestBackend, requires_backend
 
 def local_s3_config(dsn: str) -> pgqrs.Config:
     config = pgqrs.Config(dsn, schema="s3_python")
-    config.s3_mode = "local"
+    config.s3_mode = pgqrs.DurabilityMode.LOCAL
     return config
+
+
+def test_config_s3_mode_uses_durability_mode_enum():
+    config = pgqrs.Config("s3://pgqrs-test-bucket/config-mode", schema="s3_python")
+
+    assert config.s3_mode == pgqrs.DurabilityMode.DURABLE
+
+    config.s3_mode = pgqrs.DurabilityMode.LOCAL
+
+    assert config.s3_mode == pgqrs.DurabilityMode.LOCAL
 
 
 def parse_s3_dsn(dsn: str) -> tuple[str, str]:
@@ -81,6 +91,21 @@ async def test_s3_handle_sync_and_snapshot_restore_remote_state(test_dsn):
 
 @requires_backend(TestBackend.S3)
 @pytest.mark.asyncio
+async def test_s3_handle_sync_publishes_missing_remote_state(test_dsn):
+    bucket, key = parse_s3_dsn(test_dsn)
+    client = s3_client()
+    store = await pgqrs.connect_with(local_s3_config(test_dsn))
+    admin = pgqrs.admin(store)
+    await admin.install()
+
+    await pgqrs.as_s3(store).sync()
+
+    head = client.head_object(Bucket=bucket, Key=key)
+    assert "ETag" in head
+
+
+@requires_backend(TestBackend.S3)
+@pytest.mark.asyncio
 async def test_as_s3_returns_handle_for_s3_store(test_dsn):
     store = await pgqrs.connect_with(local_s3_config(test_dsn))
     handle = pgqrs.as_s3(store)
@@ -125,3 +150,24 @@ async def test_s3_handle_sync_recreates_missing_remote_state(test_dsn):
 
     head = client.head_object(Bucket=bucket, Key=key)
     assert "ETag" in head
+
+
+@requires_backend(TestBackend.S3)
+@pytest.mark.asyncio
+async def test_s3_handle_sync_rejects_fresh_replacement_writer(test_dsn):
+    config = local_s3_config(test_dsn)
+
+    seed = await pgqrs.connect_with(config)
+    admin = pgqrs.admin(seed)
+    await admin.install()
+    await seed.queue("seeded")
+    await pgqrs.as_s3(seed).sync()
+
+    replacement = await pgqrs.connect_with(config)
+    replacement_admin = pgqrs.admin(replacement)
+    await replacement_admin.install()
+
+    with pytest.raises(pgqrs.PgqrsError) as exc_info:
+        await pgqrs.as_s3(replacement).sync()
+
+    assert "conflict" in str(exc_info.value).lower()

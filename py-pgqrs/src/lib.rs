@@ -151,6 +151,39 @@ pub(crate) fn py_to_json(py: Python, val: &PyAny) -> PyResult<serde_json::Value>
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[cfg(feature = "s3")]
+fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'static str {
+    match mode {
+        rust_pgqrs::store::s3::DurabilityMode::Durable => "durable",
+        rust_pgqrs::store::s3::DurabilityMode::Local => "local",
+    }
+}
+
+#[cfg(feature = "s3")]
+fn durability_mode_to_py(
+    py: Python<'_>,
+    mode: rust_pgqrs::store::s3::DurabilityMode,
+) -> PyResult<PyObject> {
+    let module = py.import("pgqrs")?;
+    let enum_cls = module.getattr("DurabilityMode")?;
+    Ok(enum_cls.call1((durability_mode_to_str(mode),))?.into_py(py))
+}
+
+#[cfg(feature = "s3")]
+fn py_to_durability_mode(mode: &PyAny) -> PyResult<rust_pgqrs::store::s3::DurabilityMode> {
+    let value = mode
+        .extract::<String>()
+        .or_else(|_| mode.getattr("value")?.extract::<String>())?;
+
+    match value.as_str() {
+        "durable" => Ok(rust_pgqrs::store::s3::DurabilityMode::Durable),
+        "local" => Ok(rust_pgqrs::store::s3::DurabilityMode::Local),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "s3_mode must be pgqrs.DurabilityMode.DURABLE or pgqrs.DurabilityMode.LOCAL",
+        )),
+    }
+}
+
 #[pyclass(name = "Config")]
 #[derive(Clone)]
 pub struct PyConfig {
@@ -327,25 +360,14 @@ impl PyConfig {
 
     #[cfg(feature = "s3")]
     #[getter]
-    fn get_s3_mode(&self) -> String {
-        match self.inner.s3.mode {
-            rust_pgqrs::store::s3::DurabilityMode::Durable => "durable".to_string(),
-            rust_pgqrs::store::s3::DurabilityMode::Local => "local".to_string(),
-        }
+    fn get_s3_mode(&self, py: Python<'_>) -> PyResult<PyObject> {
+        durability_mode_to_py(py, self.inner.s3.mode)
     }
 
     #[cfg(feature = "s3")]
     #[setter]
-    fn set_s3_mode(&mut self, mode: String) -> PyResult<()> {
-        self.inner.s3.mode = match mode.as_str() {
-            "durable" => rust_pgqrs::store::s3::DurabilityMode::Durable,
-            "local" => rust_pgqrs::store::s3::DurabilityMode::Local,
-            _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "s3_mode must be 'durable' or 'local'",
-                ))
-            }
-        };
+    fn set_s3_mode(&mut self, mode: &PyAny) -> PyResult<()> {
+        self.inner.s3.mode = py_to_durability_mode(mode)?;
         Ok(())
     }
 }
