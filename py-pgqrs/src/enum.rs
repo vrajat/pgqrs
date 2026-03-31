@@ -1,4 +1,6 @@
 use ::pgqrs as rust_pgqrs;
+#[cfg(feature = "s3")]
+use pyo3::class::basic::CompareOp;
 use pyo3::prelude::*;
 use rust_pgqrs::types::{WorkerStatus as RustWorkerStatus, WorkflowStatus as RustWorkflowStatus};
 
@@ -51,4 +53,78 @@ impl From<RustWorkflowStatus> for PyWorkflowStatus {
 pub enum PyStepResultStatus {
     Execute,
     Skipped,
+}
+
+#[cfg(feature = "s3")]
+fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'static str {
+    match mode {
+        rust_pgqrs::store::s3::DurabilityMode::Durable => "durable",
+        rust_pgqrs::store::s3::DurabilityMode::Local => "local",
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pyclass(name = "DurabilityMode", frozen)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PyDurabilityMode {
+    inner: rust_pgqrs::store::s3::DurabilityMode,
+}
+
+#[cfg(feature = "s3")]
+impl From<rust_pgqrs::store::s3::DurabilityMode> for PyDurabilityMode {
+    fn from(inner: rust_pgqrs::store::s3::DurabilityMode) -> Self {
+        Self { inner }
+    }
+}
+
+#[cfg(feature = "s3")]
+impl From<PyDurabilityMode> for rust_pgqrs::store::s3::DurabilityMode {
+    fn from(mode: PyDurabilityMode) -> Self {
+        mode.inner
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pymethods]
+impl PyDurabilityMode {
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn DURABLE() -> Self {
+        rust_pgqrs::store::s3::DurabilityMode::Durable.into()
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn LOCAL() -> Self {
+        rust_pgqrs::store::s3::DurabilityMode::Local.into()
+    }
+
+    #[getter]
+    fn value(&self) -> &'static str {
+        durability_mode_to_str(self.inner)
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner {
+            rust_pgqrs::store::s3::DurabilityMode::Durable => "DurabilityMode.DURABLE".to_string(),
+            rust_pgqrs::store::s3::DurabilityMode::Local => "DurabilityMode.LOCAL".to_string(),
+        }
+    }
+
+    fn __str__(&self) -> &'static str {
+        durability_mode_to_str(self.inner)
+    }
+
+    fn __richcmp__(
+        &self,
+        other: PyRef<'_, PyDurabilityMode>,
+        op: CompareOp,
+        py: Python<'_>,
+    ) -> PyObject {
+        match op {
+            CompareOp::Eq => (self.inner == other.inner).into_py(py),
+            CompareOp::Ne => (self.inner != other.inner).into_py(py),
+            _ => py.NotImplemented(),
+        }
+    }
 }
