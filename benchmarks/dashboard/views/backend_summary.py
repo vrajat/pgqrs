@@ -276,6 +276,14 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
         st.info(f"No `queue.drain_fixed_backlog` Rust results found for {backend}.")
         return
 
+    if backend == "s3":
+        st.warning(
+            "S3 results are directional for now and are not directly comparable to the "
+            "other backend baselines. Current S3 runs use the LocalStack+Toxiproxy "
+            "emulation path and smaller practical backlogs than the curated non-S3 "
+            "baseline runs."
+        )
+
     run_files = backend_frame["file_name"].drop_duplicates().tolist()
     default_file = _default_run_file(backend_frame)
     selected_file = st.selectbox(
