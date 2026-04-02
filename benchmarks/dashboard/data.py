@@ -10,6 +10,7 @@ from benchmarks.bench.baselines import attach_latest_baseline_delta
 from benchmarks.bench.flatten import flatten_result_files, iter_result_files
 
 OPTIONAL_COLUMNS = (
+    "process_mode",
     "durability_mode",
     "s3_latency_profile",
     "s3_transport",
