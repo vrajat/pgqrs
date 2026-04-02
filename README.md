@@ -295,19 +295,19 @@ pip install pgqrs
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.15.0"
+pgqrs = "0.15.1"
 
 # SQLite only
-pgqrs = { version = "0.15.0", default-features = false, features = ["sqlite"] }
+pgqrs = { version = "0.15.1", default-features = false, features = ["sqlite"] }
 
 # Turso only
-pgqrs = { version = "0.15.0", default-features = false, features = ["turso"] }
+pgqrs = { version = "0.15.1", default-features = false, features = ["turso"] }
 
 # All backends
-pgqrs = { version = "0.15.0", features = ["full"] }
+pgqrs = { version = "0.15.1", features = ["full"] }
 
 # Workflow macros (optional)
-pgqrs-macros = "0.15.0"
+pgqrs-macros = "0.15.1"
 ```
 
 ## Documentation
