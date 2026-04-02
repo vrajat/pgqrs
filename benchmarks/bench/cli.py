@@ -15,7 +15,7 @@ from benchmarks.bench.loader import expand_points, load_scenario
 from benchmarks.bench.reporting import TyperRunObserver, configure_logging
 from benchmarks.bench.registry import SCENARIOS, get_registration
 from benchmarks.bench.results import append_jsonl, default_output_path, init_jsonl
-from benchmarks.bench.runtime import resolve_backend_runtime
+from benchmarks.bench.runtime import resolve_backend_runtime, resolve_process_mode
 from benchmarks.bench.schema import RunPointResult, RunSpec
 from benchmarks.bench.toxiproxy import ToxiproxyClient, ToxiproxyConfig
 
@@ -141,6 +141,10 @@ def _validate_registration(
         raise SystemExit(
             f"Profile {profile!r} is not valid for scenario {registration.scenario_id!r}."
         )
+    try:
+        resolve_process_mode(backend, profile)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     return registration, load_scenario(registration.scenario_path)
 
 
@@ -178,9 +182,11 @@ async def _run_python_queue(
         )
 
     backend_runtime = resolve_backend_runtime(backend)
+    process_mode = resolve_process_mode(backend, profile)
     observer = TyperRunObserver(show_progress=progress)
     try:
         fixed_parameters = dict(scenario.action.fixed)
+        fixed_parameters["process_mode"] = process_mode
         s3_parameters = _prepare_s3_run(
             backend,
             backend_runtime,
@@ -269,9 +275,11 @@ async def _run_rust_queue(
         )
 
     backend_runtime = resolve_backend_runtime(backend)
+    process_mode = resolve_process_mode(backend, profile)
     observer = TyperRunObserver(show_progress=progress)
     try:
         fixed_parameters = dict(scenario.action.fixed)
+        fixed_parameters["process_mode"] = process_mode
         s3_parameters = _prepare_s3_run(
             backend,
             backend_runtime,
@@ -342,6 +350,8 @@ async def _run_rust_queue(
                     str(point["dequeue_batch_size"]),
                     "--payload-profile",
                     str(fixed_parameters["payload_profile"]),
+                    "--process-mode",
+                    process_mode,
                 ]
                 if backend == "s3":
                     args.extend(

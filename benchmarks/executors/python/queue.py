@@ -155,6 +155,7 @@ async def run_drain_fixed_backlog(
     batch_size = int(point["dequeue_batch_size"])
     consumers_n = int(point["consumers"])
     payload_profile = str(fixed["payload_profile"])
+    process_mode = str(fixed.get("process_mode", "single_process"))
     queue_name = f"bench_drain_{uuid.uuid4().hex[:12]}"
 
     LOGGER.info(
@@ -173,8 +174,23 @@ async def run_drain_fixed_backlog(
     )
 
     state = DrainState(remaining=prefill_jobs)
-    consumers = [await store.consumer(queue_name) for _ in range(consumers_n)]
+    consumer_stores: list[Any] = []
+    if process_mode == "single_process":
+        consumers = [await store.consumer(queue_name) for _ in range(consumers_n)]
+    elif process_mode == "multi_process":
+        consumers = []
+        for _ in range(consumers_n):
+            consumer_store = await _setup_store(
+                backend_runtime,
+                disable_enqueue_rate_limit=True,
+            )
+            consumer_stores.append(consumer_store)
+            consumers.append(await consumer_store.consumer(queue_name))
+    else:
+        raise RuntimeError(f"Unsupported process mode: {process_mode}")
     consumer_stats = [ConsumerStats() for _ in range(consumers_n)]
+    if consumer_stores:
+        LOGGER.debug("prepared %s isolated consumer stores", len(consumer_stores))
 
     observer.phase_started(name="drain", total=prefill_jobs)
     start = time.perf_counter()
