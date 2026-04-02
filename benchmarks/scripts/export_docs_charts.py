@@ -9,12 +9,35 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE_DIR = ROOT / "benchmarks" / "data" / "baselines" / "queue.drain_fixed_backlog"
+RAW_DIR = ROOT / "benchmarks" / "data" / "raw" / "queue.drain_fixed_backlog"
 OUTPUT_DIR = ROOT / "docs" / "assets" / "benchmarks" / "queue-drain-fixed-backlog"
 
 SERIES_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c"]
-DISPLAY_NAMES = {
-    "postgres": "PostgreSQL",
-    "sqlite": "SQLite",
+
+
+@dataclass(frozen=True)
+class BackendSource:
+    display_name: str
+    path: Path
+
+
+BACKEND_SOURCES = {
+    "postgres": BackendSource(
+        display_name="PostgreSQL",
+        path=BASELINE_DIR / "postgres-rust-compat-release-20260321.jsonl",
+    ),
+    "sqlite": BackendSource(
+        display_name="SQLite",
+        path=BASELINE_DIR / "sqlite-rust-compat-release-20260321.jsonl",
+    ),
+    "s3": BackendSource(
+        display_name="S3",
+        path=BASELINE_DIR / "20260402T161856Z-s3-rust-compat.jsonl",
+    ),
+    "turso": BackendSource(
+        display_name="Turso",
+        path=RAW_DIR / "20260331T154501Z-turso-rust-single_process.jsonl",
+    ),
 }
 
 
@@ -24,8 +47,7 @@ class Point:
     y: float
 
 
-def _load_backend(backend: str) -> list[dict]:
-    path = BASELINE_DIR / f"{backend}-rust-compat-release-20260321.jsonl"
+def _load_rows(path: Path) -> list[dict]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     flattened = []
     for row in rows:
@@ -174,8 +196,9 @@ def _write_chart(name: str, svg: str) -> None:
 
 
 def export_backend(backend: str) -> None:
-    rows = _load_backend(backend)
-    display_name = DISPLAY_NAMES[backend]
+    source = BACKEND_SOURCES[backend]
+    rows = _load_rows(source.path)
+    display_name = source.display_name
 
     _write_chart(
         f"{backend}-throughput-vs-consumers.svg",
@@ -240,8 +263,17 @@ def export_backend(backend: str) -> None:
 
 
 def main() -> None:
-    export_backend("postgres")
-    export_backend("sqlite")
+    missing = []
+    for backend, source in BACKEND_SOURCES.items():
+        if not source.path.exists():
+            missing.append(f"{backend} ({source.path.relative_to(ROOT)})")
+            continue
+        export_backend(backend)
+    if missing:
+        print(
+            "Skipped chart export for backends with missing source data: "
+            + ", ".join(missing)
+        )
     print(f"Wrote charts to {OUTPUT_DIR}")
 
 

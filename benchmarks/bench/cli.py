@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
@@ -15,7 +17,7 @@ from benchmarks.bench.loader import expand_points, load_scenario
 from benchmarks.bench.reporting import TyperRunObserver, configure_logging
 from benchmarks.bench.registry import SCENARIOS, get_registration
 from benchmarks.bench.results import append_jsonl, default_output_path, init_jsonl
-from benchmarks.bench.runtime import resolve_backend_runtime
+from benchmarks.bench.runtime import resolve_backend_runtime, resolve_process_mode
 from benchmarks.bench.schema import RunPointResult, RunSpec
 from benchmarks.bench.toxiproxy import ToxiproxyClient, ToxiproxyConfig
 
@@ -31,6 +33,198 @@ def _parse_int_env(name: str, default: int) -> int:
     if raw is None or raw.strip() == "":
         return default
     return int(raw)
+
+
+_SIZE_SUFFIXES = {
+    "B": 1,
+    "KB": 1_000,
+    "MB": 1_000_000,
+    "GB": 1_000_000_000,
+    "TB": 1_000_000_000_000,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+}
+_NET_IO_PATTERN = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)\s*$")
+_LOCALSTACK_CONTAINER = "pgqrs-test-localstack"
+_TOXIPROXY_CONTAINER = "pgqrs-bench-toxiproxy"
+_LOCALSTACK_OP_PATTERNS = {
+    "put": re.compile(r"AWS s3\.PutObject =>", re.IGNORECASE),
+    "get": re.compile(r"AWS s3\.GetObject =>", re.IGNORECASE),
+    "head": re.compile(r"AWS s3\.HeadObject =>", re.IGNORECASE),
+    "delete": re.compile(r"AWS s3\.DeleteObject =>", re.IGNORECASE),
+}
+
+
+def _parse_size_to_bytes(raw: str) -> int | None:
+    match = _NET_IO_PATTERN.match(raw)
+    if not match:
+        return None
+    value = float(match.group(1))
+    suffix = match.group(2).upper()
+    multiplier = _SIZE_SUFFIXES.get(suffix)
+    if multiplier is None:
+        return None
+    return int(value * multiplier)
+
+
+def _read_container_net_io(container_name: str) -> tuple[int, int] | None:
+    completed = subprocess.run(
+        [
+            "docker",
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.NetIO}}",
+            container_name,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    net_io = completed.stdout.strip()
+    if not net_io or " / " not in net_io:
+        return None
+    rx_raw, tx_raw = net_io.split(" / ", 1)
+    rx_bytes = _parse_size_to_bytes(rx_raw)
+    tx_bytes = _parse_size_to_bytes(tx_raw)
+    if rx_bytes is None or tx_bytes is None:
+        return None
+    return (rx_bytes, tx_bytes)
+
+
+def _capture_s3_io_snapshot() -> dict[str, tuple[int, int] | None]:
+    return {
+        "localstack": _read_container_net_io(_LOCALSTACK_CONTAINER),
+        "toxiproxy": _read_container_net_io(_TOXIPROXY_CONTAINER),
+    }
+
+
+def _append_s3_io_metrics(
+    payload: dict[str, object],
+    *,
+    before: dict[str, tuple[int, int] | None],
+    after: dict[str, tuple[int, int] | None],
+) -> None:
+    summary_obj = payload.get("summary")
+    if not isinstance(summary_obj, dict):
+        return
+
+    for name in ("localstack", "toxiproxy"):
+        before_io = before.get(name)
+        after_io = after.get(name)
+        if before_io is None or after_io is None:
+            continue
+        delta_rx = max(after_io[0] - before_io[0], 0)
+        delta_tx = max(after_io[1] - before_io[1], 0)
+        delta_total = delta_rx + delta_tx
+        summary_obj[f"s3_io_{name}_rx_bytes"] = delta_rx
+        summary_obj[f"s3_io_{name}_tx_bytes"] = delta_tx
+        summary_obj[f"s3_io_{name}_total_bytes"] = delta_total
+
+    processed_messages = summary_obj.get("processed_messages")
+    dequeue_calls = summary_obj.get("dequeue_calls")
+    archive_calls = summary_obj.get("archive_calls")
+    localstack_total = summary_obj.get("s3_io_localstack_total_bytes")
+    toxiproxy_total = summary_obj.get("s3_io_toxiproxy_total_bytes")
+
+    if isinstance(processed_messages, int) and processed_messages > 0:
+        if isinstance(localstack_total, int):
+            summary_obj["s3_io_localstack_bytes_per_message"] = round(
+                localstack_total / processed_messages, 3
+            )
+        if isinstance(toxiproxy_total, int):
+            summary_obj["s3_io_toxiproxy_bytes_per_message"] = round(
+                toxiproxy_total / processed_messages, 3
+            )
+
+    if isinstance(dequeue_calls, int) and dequeue_calls > 0:
+        if isinstance(localstack_total, int):
+            summary_obj["s3_io_localstack_bytes_per_dequeue_call"] = round(
+                localstack_total / dequeue_calls, 3
+            )
+        if isinstance(toxiproxy_total, int):
+            summary_obj["s3_io_toxiproxy_bytes_per_dequeue_call"] = round(
+                toxiproxy_total / dequeue_calls, 3
+            )
+
+    if isinstance(archive_calls, int) and archive_calls > 0:
+        if isinstance(localstack_total, int):
+            summary_obj["s3_io_localstack_bytes_per_archive_call"] = round(
+                localstack_total / archive_calls, 3
+            )
+        if isinstance(toxiproxy_total, int):
+            summary_obj["s3_io_toxiproxy_bytes_per_archive_call"] = round(
+                toxiproxy_total / archive_calls, 3
+            )
+
+
+def _to_rfc3339_utc(ts: datetime) -> str:
+    return (
+        ts.astimezone(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _capture_localstack_ops_between(
+    *,
+    start: datetime,
+    end: datetime,
+) -> dict[str, int] | None:
+    completed = subprocess.run(
+        [
+            "docker",
+            "logs",
+            "--since",
+            _to_rfc3339_utc(start),
+            "--until",
+            _to_rfc3339_utc(end),
+            _LOCALSTACK_CONTAINER,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    lines = completed.stdout.splitlines()
+    counts = {key: 0 for key in _LOCALSTACK_OP_PATTERNS}
+    for line in lines:
+        for key, pattern in _LOCALSTACK_OP_PATTERNS.items():
+            if pattern.search(line):
+                counts[key] += 1
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def _append_s3_operation_counts(
+    payload: dict[str, object],
+    *,
+    start: datetime,
+    end: datetime,
+) -> None:
+    summary_obj = payload.get("summary")
+    if not isinstance(summary_obj, dict):
+        return
+    counts = _capture_localstack_ops_between(start=start, end=end)
+    if counts is None:
+        return
+    summary_obj["s3_ops_put"] = counts["put"]
+    summary_obj["s3_ops_get"] = counts["get"]
+    summary_obj["s3_ops_head"] = counts["head"]
+    summary_obj["s3_ops_delete"] = counts["delete"]
+    summary_obj["s3_ops_total"] = counts["total"]
+
+    processed_messages = summary_obj.get("processed_messages")
+    if isinstance(processed_messages, int) and processed_messages > 0:
+        summary_obj["s3_ops_per_message"] = round(
+            counts["total"] / processed_messages, 6
+        )
 
 
 def _prepare_s3_run(
@@ -141,6 +335,10 @@ def _validate_registration(
         raise SystemExit(
             f"Profile {profile!r} is not valid for scenario {registration.scenario_id!r}."
         )
+    try:
+        resolve_process_mode(backend, profile)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     return registration, load_scenario(registration.scenario_path)
 
 
@@ -178,9 +376,11 @@ async def _run_python_queue(
         )
 
     backend_runtime = resolve_backend_runtime(backend)
+    process_mode = resolve_process_mode(backend, profile)
     observer = TyperRunObserver(show_progress=progress)
     try:
         fixed_parameters = dict(scenario.action.fixed)
+        fixed_parameters["process_mode"] = process_mode
         s3_parameters = _prepare_s3_run(
             backend,
             backend_runtime,
@@ -269,9 +469,11 @@ async def _run_rust_queue(
         )
 
     backend_runtime = resolve_backend_runtime(backend)
+    process_mode = resolve_process_mode(backend, profile)
     observer = TyperRunObserver(show_progress=progress)
     try:
         fixed_parameters = dict(scenario.action.fixed)
+        fixed_parameters["process_mode"] = process_mode
         s3_parameters = _prepare_s3_run(
             backend,
             backend_runtime,
@@ -342,6 +544,8 @@ async def _run_rust_queue(
                     str(point["dequeue_batch_size"]),
                     "--payload-profile",
                     str(fixed_parameters["payload_profile"]),
+                    "--process-mode",
+                    process_mode,
                 ]
                 if backend == "s3":
                     args.extend(
@@ -350,6 +554,12 @@ async def _run_rust_queue(
                             str(fixed_parameters["durability_mode"]),
                         ]
                     )
+
+                s3_io_before: dict[str, tuple[int, int] | None] | None = None
+                s3_point_start: datetime | None = None
+                if backend == "s3":
+                    s3_io_before = _capture_s3_io_snapshot()
+                    s3_point_start = datetime.now(timezone.utc)
                 completed = await asyncio.to_thread(
                     subprocess.run,
                     args,
@@ -368,6 +578,19 @@ async def _run_rust_queue(
                 payload_fixed = dict(payload_metadata.get("fixed_parameters", {}))
                 payload_fixed.update(fixed_parameters)
                 payload_metadata["fixed_parameters"] = payload_fixed
+                if backend == "s3" and s3_io_before is not None:
+                    s3_io_after = _capture_s3_io_snapshot()
+                    _append_s3_io_metrics(
+                        payload,
+                        before=s3_io_before,
+                        after=s3_io_after,
+                    )
+                    if s3_point_start is not None:
+                        _append_s3_operation_counts(
+                            payload,
+                            start=s3_point_start,
+                            end=datetime.now(timezone.utc),
+                        )
                 result = RunPointResult(
                     metadata=payload["metadata"],
                     summary=payload["summary"],
