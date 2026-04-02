@@ -300,6 +300,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 0.0
             },
             "processed_messages": total_processed,
+            "dequeue_calls": dequeue_latencies.len(),
+            "archive_calls": archive_latencies.len(),
             "empty_polls": empty_polls,
             "dequeue_conflicts": dequeue_conflicts,
         },
