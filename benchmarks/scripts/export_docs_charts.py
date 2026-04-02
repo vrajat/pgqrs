@@ -32,7 +32,7 @@ BACKEND_SOURCES = {
     ),
     "s3": BackendSource(
         display_name="S3",
-        path=BASELINE_DIR / "s3-rust-single_process-baseline-20260331.jsonl",
+        path=BASELINE_DIR / "20260402T161856Z-s3-rust-compat.jsonl",
     ),
     "turso": BackendSource(
         display_name="Turso",

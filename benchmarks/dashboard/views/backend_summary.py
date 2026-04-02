@@ -7,6 +7,14 @@ import pandas as pd
 import streamlit as st
 
 
+def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    out = frame.copy()
+    for column in columns:
+        if column not in out.columns:
+            out[column] = pd.NA
+    return out
+
+
 def _row_value(row: pd.Series, key: str):
     return row.get(key)
 
@@ -298,6 +306,163 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     )
 
 
+def _render_s3_cost_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
+    frame = _ensure_columns(
+        frame,
+        [
+            "s3_ops_put",
+            "s3_ops_get",
+            "s3_ops_head",
+            "s3_ops_total",
+            "s3_ops_per_message",
+            "s3_est_payload_transfer_mb",
+            "s3_est_request_cost_usd",
+            "s3_est_request_cost_per_message_usd",
+            "s3_cost_per_msg_vs_batch1_x",
+            "s3_payload_vs_batch1_x",
+            "s3_cost_per_msg_reduction_vs_batch1_pct",
+            "s3_payload_reduction_vs_batch1_pct",
+        ],
+    )
+    st.markdown("#### S3 API, Transfer, And Cost")
+
+    cards = st.columns(4)
+    ops_series = pd.to_numeric(frame["s3_ops_total"], errors="coerce")
+    transfer_series = pd.to_numeric(
+        frame["s3_est_payload_transfer_mb"], errors="coerce"
+    )
+    req_cost_series = pd.to_numeric(frame["s3_est_request_cost_usd"], errors="coerce")
+    req_cost_per_msg_series = pd.to_numeric(
+        frame["s3_est_request_cost_per_message_usd"], errors="coerce"
+    )
+    ops_total = ops_series.sum()
+    transfer_total_mb = transfer_series.sum()
+    req_cost_total = req_cost_series.sum()
+    cards[0].metric(
+        "S3 API calls (run)",
+        f"{int(ops_total):,}" if ops_series.notna().any() else "n/a",
+    )
+    cards[1].metric(
+        "Payload transfer (run)",
+        f"{transfer_total_mb:.2f} MB" if transfer_series.notna().any() else "n/a",
+    )
+    cards[2].metric(
+        "Estimated request cost (run)",
+        f"${req_cost_total:.4f}" if req_cost_series.notna().any() else "n/a",
+    )
+    cards[3].metric(
+        "Avg request cost/message",
+        (
+            f"${req_cost_per_msg_series.dropna().mean():.8f}"
+            if req_cost_per_msg_series.notna().any()
+            else "n/a"
+        ),
+    )
+
+    rel_cards = st.columns(4)
+    for idx, consumers in enumerate((1, 2, 4, None)):
+        if consumers is None:
+            cost_reduction = pd.to_numeric(
+                frame["s3_cost_per_msg_reduction_vs_batch1_pct"], errors="coerce"
+            ).dropna()
+            payload_reduction = pd.to_numeric(
+                frame["s3_payload_reduction_vs_batch1_pct"], errors="coerce"
+            ).dropna()
+            label = "All consumers"
+        else:
+            subset = frame.loc[frame["consumers"] == consumers]
+            cost_reduction = pd.to_numeric(
+                subset["s3_cost_per_msg_reduction_vs_batch1_pct"], errors="coerce"
+            ).dropna()
+            payload_reduction = pd.to_numeric(
+                subset["s3_payload_reduction_vs_batch1_pct"], errors="coerce"
+            ).dropna()
+            label = f"Consumers={consumers}"
+        rel_cards[idx].metric(
+            f"{label} cost↓ vs b1",
+            f"{cost_reduction.max():.1f}%" if not cost_reduction.empty else "n/a",
+            (
+                f"payload↓ {payload_reduction.max():.1f}%"
+                if not payload_reduction.empty
+                else None
+            ),
+        )
+
+    chart_cols = st.columns(3)
+
+    ops_chart = (
+        alt.Chart(frame)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("dequeue_batch_size:O", title="Batch Size"),
+            y=alt.Y("s3_ops_total:Q", title="S3 API Calls"),
+            color=alt.Color("consumers:N", title="Consumers"),
+            tooltip=[
+                "consumers",
+                "dequeue_batch_size",
+                "s3_ops_put",
+                "s3_ops_get",
+                "s3_ops_head",
+                "s3_ops_total",
+            ],
+        )
+        .properties(height=320)
+    )
+    chart_cols[0].altair_chart(
+        ops_chart,
+        width="stretch",
+        key=f"{key_prefix}_s3_ops",
+    )
+
+    cost_chart = (
+        alt.Chart(frame)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("dequeue_batch_size:O", title="Batch Size"),
+            y=alt.Y("s3_est_request_cost_usd:Q", title="Estimated Request Cost (USD)"),
+            color=alt.Color("consumers:N", title="Consumers"),
+            tooltip=[
+                "consumers",
+                "dequeue_batch_size",
+                "s3_est_payload_transfer_mb",
+                "s3_est_request_cost_usd",
+                "s3_est_request_cost_per_message_usd",
+            ],
+        )
+        .properties(height=320)
+    )
+    chart_cols[1].altair_chart(
+        cost_chart,
+        width="stretch",
+        key=f"{key_prefix}_s3_cost",
+    )
+
+    relative_chart = (
+        alt.Chart(frame)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("dequeue_batch_size:O", title="Batch Size"),
+            y=alt.Y(
+                "s3_cost_per_msg_vs_batch1_x:Q", title="Cost/Message vs Batch1 (x)"
+            ),
+            color=alt.Color("consumers:N", title="Consumers"),
+            tooltip=[
+                "consumers",
+                "dequeue_batch_size",
+                "s3_cost_per_msg_vs_batch1_x",
+                "s3_payload_vs_batch1_x",
+                "s3_cost_per_msg_reduction_vs_batch1_pct",
+            ],
+        )
+        .properties(height=320)
+    )
+    chart_cols[2].altair_chart(
+        relative_chart,
+        width="stretch",
+        key=f"{key_prefix}_s3_relative",
+    )
+
+
 def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) -> None:
     """Render a backend-specific landing view."""
 
@@ -363,19 +528,42 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
 
     _render_throughput_section(selected, key_prefix=key_prefix)
     _render_latency_section(selected, key_prefix=key_prefix)
+    if backend == "s3":
+        _render_s3_cost_section(selected, key_prefix=key_prefix)
 
     with st.expander("Raw Points", expanded=False):
-        st.dataframe(
-            selected[
-                [
-                    "consumers",
-                    "dequeue_batch_size",
-                    "drain_messages_per_second",
-                    "total_drain_time_ms",
-                    "p95_dequeue_latency_ms",
-                    "p95_archive_latency_ms",
-                ]
+        selected = _ensure_columns(
+            selected,
+            [
+                "s3_ops_put",
+                "s3_ops_get",
+                "s3_ops_head",
+                "s3_ops_total",
+                "s3_est_payload_transfer_mb",
+                "s3_est_request_cost_usd",
+                "s3_est_request_cost_per_message_usd",
+                "s3_cost_per_msg_vs_batch1_x",
+                "s3_payload_vs_batch1_x",
             ],
-            width="stretch",
-            hide_index=True,
         )
+        columns = [
+            "consumers",
+            "dequeue_batch_size",
+            "drain_messages_per_second",
+            "total_drain_time_ms",
+            "p95_dequeue_latency_ms",
+            "p95_archive_latency_ms",
+        ]
+        if backend == "s3":
+            columns.extend(
+                [
+                    "s3_ops_put",
+                    "s3_ops_get",
+                    "s3_ops_head",
+                    "s3_ops_total",
+                    "s3_est_payload_transfer_mb",
+                    "s3_est_request_cost_usd",
+                    "s3_est_request_cost_per_message_usd",
+                ]
+            )
+        st.dataframe(selected[columns], width="stretch", hide_index=True)

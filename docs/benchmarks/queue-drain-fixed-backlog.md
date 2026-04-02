@@ -177,7 +177,7 @@ Curated baselines used for this page:
 
 - [`postgres-rust-compat-release-20260321.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/postgres-rust-compat-release-20260321.jsonl)
 - [`sqlite-rust-compat-release-20260321.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/sqlite-rust-compat-release-20260321.jsonl)
-- [`s3-rust-single_process-baseline-20260331.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/s3-rust-single_process-baseline-20260331.jsonl)
+- [`20260402T161856Z-s3-rust-compat.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/20260402T161856Z-s3-rust-compat.jsonl)
 
 Directional run referenced for Turso:
 
