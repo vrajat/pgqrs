@@ -359,8 +359,12 @@ release: docs-requirements  ## Execute the release process (LEVEL=patch|minor|ma
 bump-version: ## Update version in documentation files (Usage: make bump-version VERSION=x.y.z)
 	@if [ -z "$(VERSION)" ]; then echo "Error: VERSION not set"; exit 1; fi
 	@echo "Bumping documentation versions to $(VERSION)..."
-	@$(UV) run python3 -c "import re; \
-		files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md', 'py-pgqrs/pyproject.toml']; \
-		pattern = r'(pgqrs(?:-macros)?\s*=\s*|version\s*=\s*)\"[^\"]+\"'; \
-		repl = r'\1\"$(VERSION)\"'; \
-		[(lambda c: open(f, 'w').write(re.sub(pattern, repl, c)))(open(f, 'r').read()) for f in files]"
+	@$(UV) run python3 -c "from functools import reduce; from pathlib import Path; import re; \
+		version = '$(VERSION)'; \
+		dep_files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md']; \
+		dep_patterns = [(r'((?:pgqrs|pgqrs-macros)\s*=\s*)\"[^\"]+\"', rf'\1\"{version}\"'), (r'((?:pgqrs|pgqrs-macros)\s*=\s*\{{\s*version\s*=\s*)\"[^\"]+\"', rf'\1\"{version}\"')]; \
+		[path.write_text(reduce(lambda content, pattern: re.sub(pattern[0], pattern[1], content), dep_patterns, path.read_text())) for path in map(Path, dep_files)]; \
+		pyproject = Path('py-pgqrs/pyproject.toml'); \
+		content = pyproject.read_text(); \
+		content = re.sub(r'(?m)^version\s*=\s*\"[^\"]+\"', f'version = \"{version}\"', content, count=1); \
+		pyproject.write_text(content)"
