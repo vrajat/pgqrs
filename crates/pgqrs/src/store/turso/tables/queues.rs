@@ -1,47 +1,11 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::parse_turso_timestamp;
 use crate::types::QueueRecord;
 use async_trait::async_trait;
 use std::sync::Arc;
 use turso::Database;
-
-const INSERT_QUEUE: &str = r#"
-    INSERT INTO pgqrs_queues (queue_name)
-    VALUES ($1)
-    RETURNING id, queue_name, created_at;
-"#;
-
-const GET_QUEUE_BY_ID: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    WHERE id = $1;
-"#;
-
-const GET_QUEUE_BY_NAME: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    WHERE queue_name = $1;
-"#;
-
-const LIST_ALL_QUEUES: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    ORDER BY created_at DESC;
-"#;
-
-const DELETE_QUEUE_BY_ID: &str = r#"
-    DELETE FROM pgqrs_queues
-    WHERE id = $1;
-"#;
-
-const DELETE_QUEUE_BY_NAME: &str = r#"
-    DELETE FROM pgqrs_queues
-    WHERE queue_name = $1;
-"#;
-
-const CHECK_QUEUE_EXISTS: &str = r#"
-    SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1);
-"#;
 
 #[derive(Debug, Clone)]
 pub struct TursoQueueTable {
@@ -70,7 +34,7 @@ impl TursoQueueTable {
 #[async_trait]
 impl crate::store::QueueTable for TursoQueueTable {
     async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
-        let row_res = crate::store::turso::query(INSERT_QUEUE)
+        let row_res = crate::store::turso::query(TursoDialect::QUEUE.insert)
             .bind(data.queue_name.as_str())
             .fetch_one_once(&self.db)
             .await;
@@ -95,7 +59,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn get(&self, id: i64) -> Result<QueueRecord> {
-        let row = crate::store::turso::query(GET_QUEUE_BY_ID)
+        let row = crate::store::turso::query(TursoDialect::QUEUE.get)
             .bind(id)
             .fetch_one(&self.db)
             .await?;
@@ -103,7 +67,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn list(&self) -> Result<Vec<QueueRecord>> {
-        let rows = crate::store::turso::query(LIST_ALL_QUEUES)
+        let rows = crate::store::turso::query(TursoDialect::QUEUE.list)
             .fetch_all(&self.db)
             .await?;
 
@@ -123,7 +87,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count = crate::store::turso::query(DELETE_QUEUE_BY_ID)
+        let count = crate::store::turso::query(TursoDialect::QUEUE.delete)
             .bind(id)
             .execute_once(&self.db)
             .await?;
@@ -131,7 +95,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
-        let row = crate::store::turso::query(GET_QUEUE_BY_NAME)
+        let row = crate::store::turso::query(TursoDialect::QUEUE.get_by_name)
             .bind(name)
             .fetch_optional(&self.db)
             .await?;
@@ -145,7 +109,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn exists(&self, name: &str) -> Result<bool> {
-        let exists: bool = crate::store::turso::query_scalar(CHECK_QUEUE_EXISTS)
+        let exists: bool = crate::store::turso::query_scalar(TursoDialect::QUEUE.exists)
             .bind(name)
             .fetch_one(&self.db)
             .await?;
@@ -153,7 +117,7 @@ impl crate::store::QueueTable for TursoQueueTable {
     }
 
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
-        let count = crate::store::turso::query(DELETE_QUEUE_BY_NAME)
+        let count = crate::store::turso::query(TursoDialect::QUEUE.delete_by_name)
             .bind(name)
             .execute_once(&self.db)
             .await?;
