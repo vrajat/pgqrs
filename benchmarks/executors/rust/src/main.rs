@@ -42,6 +42,7 @@ struct ConsumerStats {
     archives: Vec<f64>,
     processed: usize,
     empty_polls: usize,
+    dequeue_conflicts: usize,
     errors: usize,
 }
 
@@ -151,7 +152,14 @@ async fn consumer_loop(
         }
 
         let dequeue_start = Instant::now();
-        let messages = consumer.dequeue_many(batch_size).await?;
+        let messages = match consumer.dequeue_many(batch_size).await {
+            Ok(messages) => messages,
+            Err(pgqrs::error::Error::Conflict { .. }) => {
+                stats.dequeue_conflicts += 1;
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        };
         stats.dequeues.push(dequeue_start.elapsed().as_secs_f64());
 
         if messages.is_empty() {
@@ -247,12 +255,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut total_processed = 0usize;
     let mut total_errors = 0usize;
     let mut empty_polls = 0usize;
+    let mut dequeue_conflicts = 0usize;
     for stats in all_stats {
         dequeue_latencies.extend(stats.dequeues);
         archive_latencies.extend(stats.archives);
         total_processed += stats.processed;
         total_errors += stats.errors;
         empty_polls += stats.empty_polls;
+        dequeue_conflicts += stats.dequeue_conflicts;
     }
 
     let result = json!({
@@ -291,6 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
             "processed_messages": total_processed,
             "empty_polls": empty_polls,
+            "dequeue_conflicts": dequeue_conflicts,
         },
         "samples": [],
     });
