@@ -23,15 +23,16 @@ They are less useful for simplistic questions like:
 
 - Which backend is "best" overall?
 
-That framing is intentionally avoided. PostgreSQL, SQLite, and Turso serve different operational roles.
+That framing is intentionally avoided. PostgreSQL, SQLite, Turso, and S3 serve different operational roles.
 
 ## Current Status
 
 | Backend | Status | What the current data says |
 |---------|--------|----------------------------|
-| PostgreSQL | Usable baseline | Scales with both consumers and batch size in the queue drain scenario |
-| SQLite | Usable baseline | Benefits strongly from batch size, but does not scale with more consumers |
-| Turso | WIP | Benchmarks are still being stabilized and should not be treated as baseline guidance yet |
+| PostgreSQL | Usable baseline | Best scaling backend in the current drain benchmark; throughput rises close to linearly with more consumers |
+| SQLite | Usable baseline | Similar single-consumer shape, but does not scale with more consumers |
+| Turso | Directional guidance | Current local-path run behaves much like SQLite |
+| S3 | Directional baseline | Much lower throughput because end-to-end per-message latency is much higher |
 
 ## Current Scenario Coverage
 
@@ -51,6 +52,7 @@ That makes it a good first benchmark for understanding queue drain behavior befo
 - The canonical stored benchmark format is JSONL.
 - Static charts in the docs are generated from those checked-in baselines.
 - The Streamlit dashboard remains the exploratory tool; these docs present the curated interpretation.
+- Turso and S3 notes may cite directional runs when a like-for-like `prefill_jobs = 50000` baseline is not yet practical; those sections call out the exact workload and caveats explicitly.
 
 ## Related References
 

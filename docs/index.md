@@ -47,9 +47,10 @@ The S3 backend stores queue state as a SQLite database file in object storage.
 
 Current queue benchmark baselines show:
 
-- **PostgreSQL scales with consumers and batch size** in the fixed-backlog drain scenario
-- **SQLite benefits from larger batch sizes** but does **not** scale with more consumers in that same scenario
-- **Turso benchmark guidance is still WIP**
+- **PostgreSQL is the gold standard**: strong throughput with one consumer, and close to linear scaling as more consumers are added
+- **SQLite has similar single-consumer behavior** for this queue-drain scenario, but it does not scale with more consumers
+- **Turso currently behaves like SQLite** in this repo's local-path mode
+- **S3 is much slower on the durable object-store path** because per-message latency is much higher
 
 [:octicons-arrow-right-24: See benchmark methodology and scenario writeups](benchmarks/index.md)
 
