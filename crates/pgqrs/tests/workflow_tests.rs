@@ -1,4 +1,5 @@
 use pgqrs::store::AnyStore;
+use pgqrs::store::Store;
 use pgqrs::Run;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -55,6 +56,16 @@ async fn create_store() -> AnyStore {
     common::create_store("workflow_tests").await
 }
 
+async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+    Ok(store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|step| step.run_id == run_id)
+        .collect())
+}
+
 #[tokio::test]
 async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
     let store = create_store().await;
@@ -82,11 +93,34 @@ async fn test_workflow_success_lifecycle() -> anyhow::Result<()> {
 
     // Step 1: Run
     let step1_name = "step1";
-    let _step_rec = pgqrs::step()
+    let step_rec = pgqrs::step()
         .run(&workflow)
         .name(step1_name)
         .execute()
         .await?;
+
+    let fetched_step = store.workflow_steps().get(step_rec.id()).await?;
+    assert_eq!(fetched_step.id, step_rec.id());
+    assert_eq!(fetched_step.run_id, workflow.id());
+    assert_eq!(fetched_step.step_name, step1_name);
+    assert_eq!(fetched_step.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(fetched_step.retry_count, 0);
+    assert!(fetched_step.output.is_none());
+    assert!(fetched_step.error.is_none());
+    assert!(fetched_step.retry_at.is_none());
+
+    let steps = steps_for_run(&store, workflow.id()).await?;
+    assert_eq!(steps.len(), 1);
+
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step1_name)
+        .expect("step1 should be persisted");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step.retry_count, 0);
+    assert!(step.output.is_none());
+    assert!(step.error.is_none());
+    assert!(step.retry_at.is_none());
 
     // Finish Workflow
     workflow = workflow

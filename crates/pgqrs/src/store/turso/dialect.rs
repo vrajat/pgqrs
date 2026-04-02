@@ -6,6 +6,22 @@ pub(crate) struct TursoDialect;
 
 impl SqlDialect for TursoDialect {
     const STEP: StepSql = StepSql {
+        get: r#"
+    SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+    FROM pgqrs_workflow_steps
+    WHERE id = ?
+"#,
+        list: r#"
+    SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+    FROM pgqrs_workflow_steps
+    ORDER BY created_at DESC
+"#,
+        count: r#"
+    SELECT COUNT(*) FROM pgqrs_workflow_steps
+"#,
+        delete: r#"
+    DELETE FROM pgqrs_workflow_steps WHERE id = ?
+"#,
         acquire: r#"
     INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
     VALUES (?, ?, 'RUNNING', datetime('now'), 0)

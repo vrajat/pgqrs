@@ -1,8 +1,8 @@
 //! Repository traits for low-level storage operations.
 
 use crate::types::{
-    NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkflowRecord, QueueMessage, QueueRecord,
-    RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
+    NewQueueRecord, NewRunRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord,
+    StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats};
 
@@ -239,7 +239,6 @@ pub trait RunRecordTable: Send + Sync {
 /// Workflow step persistence operations.
 #[async_trait]
 pub trait StepRecordTable: Send + Sync {
-    async fn insert(&self, data: NewStepRecord) -> crate::error::Result<StepRecord>;
     async fn get(&self, id: i64) -> crate::error::Result<StepRecord>;
     async fn list(&self) -> crate::error::Result<Vec<StepRecord>>;
     async fn count(&self) -> crate::error::Result<i64>;

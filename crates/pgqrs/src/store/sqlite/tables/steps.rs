@@ -3,9 +3,8 @@ use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::store::tables::DialectStepTable;
-use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
+use crate::types::{StepRecord, WorkflowStatus};
 use async_trait::async_trait;
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
@@ -76,99 +75,20 @@ impl SqliteStepRecordTable {
 
 #[async_trait]
 impl crate::store::StepRecordTable for SqliteStepRecordTable {
-    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
-        let now = Utc::now();
-        let now_str = format_sqlite_timestamp(&now);
-        let input_str = data.input.map(|v| v.to_string());
-
-        let row = sqlx::query(
-            r#"
-            INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input, created_at, updated_at)
-            VALUES ($1, $2, 'PENDING', $3, $4, $4)
-            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            "#,
-        )
-        .bind(data.run_id)
-        .bind(&data.step_name)
-        .bind(input_str)
-        .bind(now_str)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "INSERT_WORKFLOW_STEP".into(),
-            source: Box::new(e),
-            context: format!("Failed to insert workflow step '{}' for run {}", data.step_name, data.run_id),
-        })?;
-
-        Self::map_row(row)
-    }
-
     async fn get(&self, id: i64) -> Result<StepRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            FROM pgqrs_workflow_steps
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("GET_WORKFLOW_STEP ({})", id),
-            source: Box::new(e),
-            context: format!("Failed to get workflow step {}", id),
-        })?;
-
-        Self::map_row(row)
+        <Self as DialectStepTable>::dialect_get_step(self, id).await
     }
 
     async fn list(&self) -> Result<Vec<StepRecord>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            FROM pgqrs_workflow_steps
-            ORDER BY created_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "LIST_WORKFLOW_STEPS".into(),
-            source: Box::new(e),
-            context: "Failed to list workflow steps".into(),
-        })?;
-
-        let mut steps = Vec::with_capacity(rows.len());
-        for row in rows {
-            steps.push(Self::map_row(row)?);
-        }
-        Ok(steps)
+        <Self as DialectStepTable>::dialect_list_steps(self).await
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflow_steps")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "COUNT_WORKFLOW_STEPS".into(),
-                source: Box::new(e),
-                context: "Failed to count workflow steps".into(),
-            })?;
-        Ok(count)
+        <Self as DialectStepTable>::dialect_count_steps(self).await
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflow_steps WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("DELETE_WORKFLOW_STEP ({})", id),
-                source: Box::new(e),
-                context: format!("Failed to delete workflow step {}", id),
-            })?;
-        Ok(result.rows_affected())
+        <Self as DialectStepTable>::dialect_delete_step(self, id).await
     }
 
     async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
@@ -220,6 +140,88 @@ impl crate::store::StepRecordTable for SqliteStepRecordTable {
     }
 }
 
+#[async_trait]
 impl DialectStepTable for SqliteStepRecordTable {
     type Dialect = SqliteDialect;
+
+    async fn fetch_all_steps(&self, query: QueryBuilder) -> Result<Vec<StepRecord>> {
+        let mut builder = sqlx::query(query.sql());
+        for param in query.params() {
+            builder = match param {
+                QueryParam::I64(value) => builder.bind(*value),
+                QueryParam::I32(value) => builder.bind(*value),
+                QueryParam::String(value) => builder.bind(value),
+                QueryParam::Json(value) => builder.bind(value.to_string()),
+                QueryParam::DateTime(value) => {
+                    builder.bind(value.map(|dt| format_sqlite_timestamp(&dt)))
+                }
+            };
+        }
+
+        let rows =
+            builder
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "SQLITE_FETCH_ALL_STEP".into(),
+                    source: Box::new(e),
+                    context: "Failed to fetch sqlite workflow step rows".into(),
+                })?;
+
+        let mut steps = Vec::with_capacity(rows.len());
+        for row in rows {
+            steps.push(Self::map_row(row)?);
+        }
+        Ok(steps)
+    }
+
+    async fn query_step_count(&self, query: QueryBuilder) -> Result<i64> {
+        let mut builder = sqlx::query_scalar(query.sql());
+        for param in query.params() {
+            builder = match param {
+                QueryParam::I64(value) => builder.bind(*value),
+                QueryParam::I32(value) => builder.bind(*value),
+                QueryParam::String(value) => builder.bind(value),
+                QueryParam::Json(value) => builder.bind(value.to_string()),
+                QueryParam::DateTime(value) => {
+                    builder.bind(value.map(|dt| format_sqlite_timestamp(&dt)))
+                }
+            };
+        }
+
+        builder
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "SQLITE_COUNT_STEP".into(),
+                source: Box::new(e),
+                context: "Failed to count sqlite workflow steps".into(),
+            })
+    }
+
+    async fn execute_step_delete(&self, query: QueryBuilder) -> Result<u64> {
+        let mut builder = sqlx::query(query.sql());
+        for param in query.params() {
+            builder = match param {
+                QueryParam::I64(value) => builder.bind(*value),
+                QueryParam::I32(value) => builder.bind(*value),
+                QueryParam::String(value) => builder.bind(value),
+                QueryParam::Json(value) => builder.bind(value.to_string()),
+                QueryParam::DateTime(value) => {
+                    builder.bind(value.map(|dt| format_sqlite_timestamp(&dt)))
+                }
+            };
+        }
+
+        let result =
+            builder
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "SQLITE_DELETE_STEP".into(),
+                    source: Box::new(e),
+                    context: "Failed to delete sqlite workflow step".into(),
+                })?;
+        Ok(result.rows_affected())
+    }
 }

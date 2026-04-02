@@ -3,7 +3,7 @@ use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::tables::DialectStepTable;
 use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
-use crate::types::{NewStepRecord, StepRecord, WorkflowStatus};
+use crate::types::{StepRecord, WorkflowStatus};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::str::FromStr;
@@ -75,73 +75,20 @@ impl TursoStepRecordTable {
 
 #[async_trait]
 impl crate::store::StepRecordTable for TursoStepRecordTable {
-    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
-        let input_str = data.input.map(|v| v.to_string());
-
-        let row = crate::store::turso::query(
-            r#"
-            INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, input)
-            VALUES (?, ?, 'PENDING', ?)
-            RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            "#,
-        )
-        .bind(data.run_id)
-        .bind(data.step_name.as_str())
-        .bind(input_str)
-        .fetch_one_once(&self.db)
-        .await?;
-
-        Self::map_row(&row)
-    }
-
     async fn get(&self, id: i64) -> Result<StepRecord> {
-        let row = crate::store::turso::query(
-            r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            FROM pgqrs_workflow_steps
-            WHERE id = ?
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.db)
-        .await?;
-
-        Self::map_row(&row)
+        <Self as DialectStepTable>::dialect_get_step(self, id).await
     }
 
     async fn list(&self) -> Result<Vec<StepRecord>> {
-        let rows = crate::store::turso::query(
-            r#"
-            SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
-            FROM pgqrs_workflow_steps
-            ORDER BY created_at DESC
-            "#,
-        )
-        .fetch_all(&self.db)
-        .await?;
-
-        let mut steps = Vec::with_capacity(rows.len());
-        for row in rows {
-            steps.push(Self::map_row(&row)?);
-        }
-
-        Ok(steps)
+        <Self as DialectStepTable>::dialect_list_steps(self).await
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 =
-            crate::store::turso::query_scalar("SELECT COUNT(*) FROM pgqrs_workflow_steps")
-                .fetch_one(&self.db)
-                .await?;
-        Ok(count)
+        <Self as DialectStepTable>::dialect_count_steps(self).await
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let count = crate::store::turso::query("DELETE FROM pgqrs_workflow_steps WHERE id = ?")
-            .bind(id)
-            .execute_once(&self.db)
-            .await?;
-        Ok(count)
+        <Self as DialectStepTable>::dialect_delete_step(self, id).await
     }
 
     async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
@@ -187,6 +134,67 @@ impl crate::store::StepRecordTable for TursoStepRecordTable {
     }
 }
 
+#[async_trait]
 impl DialectStepTable for TursoStepRecordTable {
     type Dialect = TursoDialect;
+
+    async fn fetch_all_steps(&self, query: QueryBuilder) -> Result<Vec<StepRecord>> {
+        let mut builder = crate::store::turso::query(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
+        }
+
+        let rows = builder.fetch_all(&self.db).await?;
+        let mut steps = Vec::with_capacity(rows.len());
+        for row in rows {
+            steps.push(Self::map_row(&row)?);
+        }
+        Ok(steps)
+    }
+
+    async fn query_step_count(&self, query: QueryBuilder) -> Result<i64> {
+        let mut builder = crate::store::turso::query_scalar(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
+        }
+        builder.fetch_one(&self.db).await
+    }
+
+    async fn execute_step_delete(&self, query: QueryBuilder) -> Result<u64> {
+        let mut builder = crate::store::turso::query(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
+        }
+        builder.execute_once(&self.db).await
+    }
 }

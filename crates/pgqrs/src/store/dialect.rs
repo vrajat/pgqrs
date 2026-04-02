@@ -1,5 +1,9 @@
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StepSql {
+    pub get: &'static str,
+    pub list: &'static str,
+    pub count: &'static str,
+    pub delete: &'static str,
     pub acquire: &'static str,
     pub clear_retry: &'static str,
     pub complete: &'static str,
