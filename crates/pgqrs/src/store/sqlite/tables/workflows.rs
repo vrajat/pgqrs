@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::types::{NewWorkflowRecord, WorkflowRecord};
 use async_trait::async_trait;
@@ -33,21 +35,15 @@ impl SqliteWorkflowTable {
 #[async_trait]
 impl crate::store::WorkflowTable for SqliteWorkflowTable {
     async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, name, queue_id, created_at
-            FROM pgqrs_workflows
-            WHERE name = $1
-            "#,
-        )
-        .bind(name)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "GET_WORKFLOW_BY_NAME".into(),
-            source: Box::new(e),
-            context: format!("Failed to get workflow '{}' by name", name),
-        })?;
+        let row = sqlx::query(SqliteDialect::WORKFLOW.get_by_name)
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "GET_WORKFLOW_BY_NAME".into(),
+                source: Box::new(e),
+                context: format!("Failed to get workflow '{}' by name", name),
+            })?;
 
         Self::map_row(row)
     }
@@ -56,62 +52,44 @@ impl crate::store::WorkflowTable for SqliteWorkflowTable {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
 
-        let row = sqlx::query(
-            r#"
-            INSERT INTO pgqrs_workflows (name, queue_id, created_at)
-            VALUES ($1, $2, $3)
-            RETURNING id, name, queue_id, created_at
-            "#,
-        )
-        .bind(&data.name)
-        .bind(data.queue_id)
-        .bind(now_str)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "INSERT_WORKFLOW".into(),
-            source: Box::new(e),
-            context: format!("Failed to insert workflow '{}'", data.name),
-        })?;
+        let row = sqlx::query(SqliteDialect::WORKFLOW.insert)
+            .bind(&data.name)
+            .bind(data.queue_id)
+            .bind(now_str)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_WORKFLOW".into(),
+                source: Box::new(e),
+                context: format!("Failed to insert workflow '{}'", data.name),
+            })?;
 
         Self::map_row(row)
     }
 
     async fn get(&self, id: i64) -> Result<WorkflowRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, name, queue_id, created_at
-            FROM pgqrs_workflows
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("GET_WORKFLOW ({})", id),
-            source: Box::new(e),
-            context: format!("Failed to get workflow {}", id),
-        })?;
+        let row = sqlx::query(SqliteDialect::WORKFLOW.get)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("GET_WORKFLOW ({})", id),
+                source: Box::new(e),
+                context: format!("Failed to get workflow {}", id),
+            })?;
 
         Self::map_row(row)
     }
 
     async fn list(&self) -> Result<Vec<WorkflowRecord>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, name, queue_id, created_at
-            FROM pgqrs_workflows
-            ORDER BY created_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "LIST_WORKFLOWS".into(),
-            source: Box::new(e),
-            context: "Failed to list workflows".into(),
-        })?;
+        let rows = sqlx::query(SqliteDialect::WORKFLOW.list)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_WORKFLOWS".into(),
+                source: Box::new(e),
+                context: "Failed to list workflows".into(),
+            })?;
 
         let mut workflows = Vec::with_capacity(rows.len());
         for row in rows {
@@ -121,7 +99,7 @@ impl crate::store::WorkflowTable for SqliteWorkflowTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
+        let count: i64 = sqlx::query_scalar(SqliteDialect::WORKFLOW.count)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -133,7 +111,7 @@ impl crate::store::WorkflowTable for SqliteWorkflowTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflows WHERE id = $1")
+        let result = sqlx::query(SqliteDialect::WORKFLOW.delete)
             .bind(id)
             .execute(&self.pool)
             .await

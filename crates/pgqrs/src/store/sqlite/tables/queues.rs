@@ -1,46 +1,10 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::parse_sqlite_timestamp;
 use crate::types::QueueRecord;
 use async_trait::async_trait;
 use sqlx::{Row, SqlitePool};
-
-const INSERT_QUEUE: &str = r#"
-    INSERT INTO pgqrs_queues (queue_name)
-    VALUES ($1)
-    RETURNING id, queue_name, created_at;
-"#;
-
-const GET_QUEUE_BY_ID: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    WHERE id = $1;
-"#;
-
-const GET_QUEUE_BY_NAME: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    WHERE queue_name = $1;
-"#;
-
-const LIST_ALL_QUEUES: &str = r#"
-    SELECT id, queue_name, created_at
-    FROM pgqrs_queues
-    ORDER BY created_at DESC;
-"#;
-
-const DELETE_QUEUE_BY_ID: &str = r#"
-    DELETE FROM pgqrs_queues
-    WHERE id = $1;
-"#;
-
-const DELETE_QUEUE_BY_NAME: &str = r#"
-    DELETE FROM pgqrs_queues
-    WHERE queue_name = $1;
-"#;
-
-const CHECK_QUEUE_EXISTS: &str = r#"
-    SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1);
-"#;
 
 #[derive(Debug, Clone)]
 pub struct SqliteQueueTable {
@@ -69,7 +33,7 @@ impl SqliteQueueTable {
 #[async_trait]
 impl crate::store::QueueTable for SqliteQueueTable {
     async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
-        let row = sqlx::query(INSERT_QUEUE)
+        let row = sqlx::query(SqliteDialect::QUEUE.insert)
             .bind(&data.queue_name)
             .fetch_one(&self.pool)
             .await
@@ -97,7 +61,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn get(&self, id: i64) -> Result<QueueRecord> {
-        let row = sqlx::query(GET_QUEUE_BY_ID)
+        let row = sqlx::query(SqliteDialect::QUEUE.get)
             .bind(id)
             .fetch_one(&self.pool)
             .await
@@ -111,7 +75,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn list(&self) -> Result<Vec<QueueRecord>> {
-        let rows = sqlx::query(LIST_ALL_QUEUES)
+        let rows = sqlx::query(SqliteDialect::QUEUE.list)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -141,7 +105,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query(DELETE_QUEUE_BY_ID)
+        let result = sqlx::query(SqliteDialect::QUEUE.delete)
             .bind(id)
             .execute(&self.pool)
             .await
@@ -155,7 +119,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
-        let row = sqlx::query(GET_QUEUE_BY_NAME)
+        let row = sqlx::query(SqliteDialect::QUEUE.get_by_name)
             .bind(name)
             .fetch_one(&self.pool)
             .await
@@ -174,7 +138,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn exists(&self, name: &str) -> Result<bool> {
-        let exists: bool = sqlx::query_scalar(CHECK_QUEUE_EXISTS)
+        let exists: bool = sqlx::query_scalar(SqliteDialect::QUEUE.exists)
             .bind(name)
             .fetch_one(&self.pool)
             .await
@@ -188,7 +152,7 @@ impl crate::store::QueueTable for SqliteQueueTable {
     }
 
     async fn delete_by_name(&self, name: &str) -> Result<u64> {
-        let result = sqlx::query(DELETE_QUEUE_BY_NAME)
+        let result = sqlx::query(SqliteDialect::QUEUE.delete_by_name)
             .bind(name)
             .execute(&self.pool)
             .await

@@ -8,6 +8,30 @@ use async_trait::async_trait;
 pub(crate) trait DialectStepTable: crate::store::StepRecordTable + Sync {
     type Dialect: SqlDialect;
 
+    async fn fetch_all_steps(&self, query: QueryBuilder) -> Result<Vec<StepRecord>>;
+    async fn query_step_count(&self, query: QueryBuilder) -> Result<i64>;
+    async fn execute_step_delete(&self, query: QueryBuilder) -> Result<u64>;
+
+    async fn dialect_get_step(&self, id: i64) -> Result<StepRecord> {
+        self.execute(QueryBuilder::new(Self::Dialect::STEP.get).bind_i64(id))
+            .await
+    }
+
+    async fn dialect_list_steps(&self) -> Result<Vec<StepRecord>> {
+        self.fetch_all_steps(QueryBuilder::new(Self::Dialect::STEP.list))
+            .await
+    }
+
+    async fn dialect_count_steps(&self) -> Result<i64> {
+        self.query_step_count(QueryBuilder::new(Self::Dialect::STEP.count))
+            .await
+    }
+
+    async fn dialect_delete_step(&self, id: i64) -> Result<u64> {
+        self.execute_step_delete(QueryBuilder::new(Self::Dialect::STEP.delete).bind_i64(id))
+            .await
+    }
+
     async fn dialect_acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
         self.execute(
             QueryBuilder::new(Self::Dialect::STEP.acquire)

@@ -1,9 +1,27 @@
-use crate::store::dialect::{DbStateSql, MessageSql, SqlDialect, StepSql, WorkerSql};
+use crate::store::dialect::{
+    DbStateSql, MessageSql, QueueSql, RunSql, SqlDialect, StepSql, WorkerSql, WorkflowSql,
+};
 
 pub(crate) struct TursoDialect;
 
 impl SqlDialect for TursoDialect {
     const STEP: StepSql = StepSql {
+        get: r#"
+    SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+    FROM pgqrs_workflow_steps
+    WHERE id = ?
+"#,
+        list: r#"
+    SELECT id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+    FROM pgqrs_workflow_steps
+    ORDER BY created_at DESC
+"#,
+        count: r#"
+    SELECT COUNT(*) FROM pgqrs_workflow_steps
+"#,
+        delete: r#"
+    DELETE FROM pgqrs_workflow_steps WHERE id = ?
+"#,
         acquire: r#"
     INSERT INTO pgqrs_workflow_steps (run_id, step_name, status, started_at, retry_count)
     VALUES (?, ?, 'RUNNING', datetime('now'), 0)
@@ -37,6 +55,95 @@ impl SqlDialect for TursoDialect {
         retry_at = ?3, retry_count = ?4
     WHERE id = ?1
     RETURNING id, run_id, step_name, status, input, output, error, created_at, updated_at, retry_at, retry_count
+"#,
+    };
+
+    const QUEUE: QueueSql = QueueSql {
+        insert: r#"
+INSERT INTO pgqrs_queues (queue_name)
+VALUES (?)
+RETURNING id, queue_name, created_at
+"#,
+        get: r#"
+SELECT id, queue_name, created_at
+FROM pgqrs_queues
+WHERE id = ?
+"#,
+        get_by_name: r#"
+SELECT id, queue_name, created_at
+FROM pgqrs_queues
+WHERE queue_name = ?
+"#,
+        list: r#"
+SELECT id, queue_name, created_at
+FROM pgqrs_queues
+ORDER BY created_at DESC
+"#,
+        delete: r#"
+DELETE FROM pgqrs_queues
+WHERE id = ?
+"#,
+        delete_by_name: r#"
+DELETE FROM pgqrs_queues
+WHERE queue_name = ?
+"#,
+        exists: r#"
+SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = ?)
+"#,
+    };
+
+    const RUN: RunSql = RunSql {
+        insert: r#"
+INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input)
+VALUES (?, ?, 'QUEUED', ?)
+RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+"#,
+        get: r#"
+SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+FROM pgqrs_workflow_runs
+WHERE id = ?
+"#,
+        list: r#"
+SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+FROM pgqrs_workflow_runs
+ORDER BY created_at DESC
+"#,
+        count: r#"
+SELECT COUNT(*) FROM pgqrs_workflow_runs
+"#,
+        delete: r#"
+DELETE FROM pgqrs_workflow_runs WHERE id = ?
+"#,
+        start: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'RUNNING',
+    updated_at = datetime('now'),
+    started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
+WHERE id = ? AND status IN ('QUEUED', 'PAUSED')
+RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+"#,
+        get_status: r#"
+SELECT status FROM pgqrs_workflow_runs WHERE id = ?
+"#,
+        complete: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'SUCCESS', output = ?2, updated_at = datetime('now'), completed_at = datetime('now')
+WHERE id = ?1
+"#,
+        pause: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'PAUSED', error = ?2, paused_at = datetime('now'), updated_at = datetime('now')
+WHERE id = ?1
+"#,
+        fail: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'ERROR', error = ?2, updated_at = datetime('now'), completed_at = datetime('now')
+WHERE id = ?1
+"#,
+        get_by_message_id: r#"
+SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+FROM pgqrs_workflow_runs
+WHERE message_id = ?
 "#,
     };
 
@@ -76,6 +183,35 @@ UPDATE pgqrs_workers
 SET status = 'stopped',
     shutdown_at = datetime('now')
 WHERE id = ?
+"#,
+    };
+
+    const WORKFLOW: WorkflowSql = WorkflowSql {
+        get_by_name: r#"
+SELECT id, name, queue_id, created_at
+FROM pgqrs_workflows
+WHERE name = ?
+"#,
+        insert: r#"
+INSERT INTO pgqrs_workflows (name, queue_id, created_at)
+VALUES (?, ?, ?)
+RETURNING id, name, queue_id, created_at
+"#,
+        get: r#"
+SELECT id, name, queue_id, created_at
+FROM pgqrs_workflows
+WHERE id = ?
+"#,
+        list: r#"
+SELECT id, name, queue_id, created_at
+FROM pgqrs_workflows
+ORDER BY created_at DESC
+"#,
+        count: r#"
+SELECT COUNT(*) FROM pgqrs_workflows
+"#,
+        delete: r#"
+DELETE FROM pgqrs_workflows WHERE id = ?
 "#,
     };
 

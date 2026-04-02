@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS pgqrs_workflow_steps (
     input JSONB,
     output JSONB,
     error JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
 

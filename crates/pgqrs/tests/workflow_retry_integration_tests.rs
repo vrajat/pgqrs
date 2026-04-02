@@ -2,6 +2,7 @@ use chrono::Utc;
 use pgqrs::error::Error;
 use pgqrs::pgqrs_workflow;
 use pgqrs::store::AnyStore;
+use pgqrs::store::Store;
 use pgqrs::Run;
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +49,16 @@ async fn create_store() -> AnyStore {
     common::create_store("workflow_retry_integration_tests").await
 }
 
+async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+    Ok(store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|step| step.run_id == run_id)
+        .collect())
+}
+
 /// Test that a step with transient error returns StepNotReady
 #[tokio::test]
 async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> {
@@ -81,6 +92,17 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
 
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
+    let steps = steps_for_run(&store, run.id()).await?;
+    assert_eq!(steps.len(), 1);
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("transient step should be persisted");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step.retry_count, 0);
+    assert!(step.error.is_none());
+    assert!(step.retry_at.is_none());
+
     // Fail with transient error
     let error = serde_json::json!({
         "is_transient": true,
@@ -88,6 +110,16 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
         "message": "Connection timeout",
     });
     run.fail_step(step_name, error, Utc::now()).await?;
+
+    let steps = steps_for_run(&store, run.id()).await?;
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("transient step should still be persisted");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+    assert_eq!(step.retry_count, 1);
+    assert!(step.error.is_some());
+    assert!(step.retry_at.is_some());
 
     // Try to acquire again - should return StepNotReady immediately
     let step_res = pgqrs::step().run(&run).name(step_name).execute().await;
@@ -136,6 +168,16 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
 
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Running);
 
+    let steps = steps_for_run(&store, run.id()).await?;
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("transient step should be runnable again");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Running);
+    assert_eq!(step.retry_count, 1);
+    assert!(step.error.is_none());
+    assert!(step.retry_at.is_none());
+
     // This time succeed
     let output = TestData {
         msg: "success_after_retry".to_string(),
@@ -149,6 +191,16 @@ async fn test_step_returns_not_ready_on_transient_error() -> anyhow::Result<()> 
     assert_eq!(step_rec.status(), pgqrs::WorkflowStatus::Success);
     let data: TestData = serde_json::from_value(step_rec.output().unwrap().clone())?;
     assert_eq!(data.msg, "success_after_retry");
+
+    let steps = steps_for_run(&store, run.id()).await?;
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("transient step should be completed");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Success);
+    assert_eq!(step.retry_count, 1);
+    assert!(step.retry_at.is_none());
+    assert_eq!(step.output, Some(serde_json::to_value(&output)?));
 
     Ok(())
 }
@@ -278,6 +330,16 @@ async fn test_step_exhausts_retries() -> anyhow::Result<()> {
         _ => panic!("Expected RetriesExhausted"),
     }
 
+    let steps = steps_for_run(&store, workflow.id()).await?;
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("exhausting step should be persisted");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+    assert_eq!(step.retry_count, 3);
+    assert!(step.retry_at.is_none());
+    assert!(step.error.is_some());
+
     Ok(())
 }
 
@@ -331,6 +393,16 @@ async fn test_non_transient_error_no_retry() -> anyhow::Result<()> {
         }
         _ => panic!("Expected RetriesExhausted"),
     }
+
+    let steps = steps_for_run(&store, workflow.id()).await?;
+    let step = steps
+        .iter()
+        .find(|step| step.step_name == step_name)
+        .expect("non transient step should be persisted");
+    assert_eq!(step.status, pgqrs::WorkflowStatus::Error);
+    assert_eq!(step.retry_count, 0);
+    assert!(step.retry_at.is_none());
+    assert!(step.error.is_some());
 
     Ok(())
 }
@@ -412,13 +484,32 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .complete_step(step_name, serde_json::json!({"msg": format!("done_{}", i)}))
                 .await
                 .unwrap();
+
+            workflow.id()
         });
 
         handles.push(handle);
     }
 
+    let mut run_ids = Vec::new();
     for handle in handles {
-        handle.await?;
+        run_ids.push(handle.await?);
+    }
+
+    let steps: Vec<_> = store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|step| run_ids.contains(&step.run_id))
+        .collect();
+    assert_eq!(steps.len(), 3);
+    for step in steps {
+        assert_eq!(step.step_name, "concurrent_step");
+        assert_eq!(step.status, pgqrs::WorkflowStatus::Success);
+        assert_eq!(step.retry_count, 1);
+        assert!(step.retry_at.is_none());
+        assert!(step.output.is_some());
     }
 
     Ok(())

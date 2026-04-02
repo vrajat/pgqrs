@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
 use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
@@ -6,15 +8,6 @@ use chrono::Utc;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
-
-const SQL_START_RUN: &str = r#"
-UPDATE pgqrs_workflow_runs
-SET status = 'RUNNING',
-    started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END,
-    updated_at = datetime('now')
-WHERE id = $1 AND status IN ('QUEUED', 'PAUSED')
-RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-"#;
 
 #[derive(Debug, Clone)]
 pub struct SqliteRunRecordTable {
@@ -78,23 +71,17 @@ impl SqliteRunRecordTable {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
 
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_runs
-            SET status = 'SUCCESS', output = $2, updated_at = $3
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .bind(output_str)
-        .bind(now_str)
-        .execute(executor)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "COMPLETE_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to complete run {}", id),
-        })?;
+        sqlx::query(SqliteDialect::RUN.complete)
+            .bind(id)
+            .bind(output_str)
+            .bind(now_str)
+            .execute(executor)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMPLETE_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete run {}", id),
+            })?;
         Ok(())
     }
 
@@ -107,23 +94,17 @@ impl SqliteRunRecordTable {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
 
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_runs
-            SET status = 'ERROR', error = $2, updated_at = $3
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .bind(error_str)
-        .bind(now_str)
-        .execute(executor)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "FAIL_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to fail run {}", id),
-        })?;
+        sqlx::query(SqliteDialect::RUN.fail)
+            .bind(id)
+            .bind(error_str)
+            .bind(now_str)
+            .execute(executor)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "FAIL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to fail run {}", id),
+            })?;
         Ok(())
     }
 
@@ -136,23 +117,17 @@ impl SqliteRunRecordTable {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
 
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_runs
-            SET status = 'PAUSED', error = $2, paused_at = $3, updated_at = $3
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .bind(error_str)
-        .bind(now_str)
-        .execute(executor)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "PAUSE_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to pause run {}", id),
-        })?;
+        sqlx::query(SqliteDialect::RUN.pause)
+            .bind(id)
+            .bind(error_str)
+            .bind(now_str)
+            .execute(executor)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "PAUSE_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to pause run {}", id),
+            })?;
         Ok(())
     }
 }
@@ -164,63 +139,45 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
         let now_str = format_sqlite_timestamp(&now);
         let input_str = data.input.map(|v| v.to_string());
 
-        let row = sqlx::query(
-            r#"
-            INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input, created_at, updated_at)
-            VALUES ($1, $2, 'QUEUED', $3, $4, $4)
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            "#,
-        )
-        .bind(data.workflow_id)
-        .bind(data.message_id)
-        .bind(input_str)
-        .bind(now_str)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "INSERT_WORKFLOW_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to insert workflow run for '{}'", data.workflow_id),
-        })?;
+        let row = sqlx::query(SqliteDialect::RUN.insert)
+            .bind(data.workflow_id)
+            .bind(data.message_id)
+            .bind(input_str)
+            .bind(now_str)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "INSERT_WORKFLOW_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to insert workflow run for '{}'", data.workflow_id),
+            })?;
 
         Self::map_row(row)
     }
 
     async fn get(&self, id: i64) -> Result<RunRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            FROM pgqrs_workflow_runs
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: format!("GET_WORKFLOW_RUN ({})", id),
-            source: Box::new(e),
-            context: format!("Failed to get workflow run {}", id),
-        })?;
+        let row = sqlx::query(SqliteDialect::RUN.get)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: format!("GET_WORKFLOW_RUN ({})", id),
+                source: Box::new(e),
+                context: format!("Failed to get workflow run {}", id),
+            })?;
 
         Self::map_row(row)
     }
 
     async fn list(&self) -> Result<Vec<RunRecord>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            FROM pgqrs_workflow_runs
-            ORDER BY created_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "LIST_WORKFLOW_RUNS".into(),
-            source: Box::new(e),
-            context: "Failed to list workflow runs".into(),
-        })?;
+        let rows = sqlx::query(SqliteDialect::RUN.list)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "LIST_WORKFLOW_RUNS".into(),
+                source: Box::new(e),
+                context: "Failed to list workflow runs".into(),
+            })?;
 
         let mut runs = Vec::with_capacity(rows.len());
         for row in rows {
@@ -230,7 +187,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     }
 
     async fn count(&self) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflow_runs")
+        let count: i64 = sqlx::query_scalar(SqliteDialect::RUN.count)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
@@ -242,7 +199,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     }
 
     async fn delete(&self, id: i64) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE id = $1")
+        let result = sqlx::query(SqliteDialect::RUN.delete)
             .bind(id)
             .execute(&self.pool)
             .await
@@ -255,7 +212,7 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     }
 
     async fn start_run(&self, id: i64) -> Result<RunRecord> {
-        let row = sqlx::query(SQL_START_RUN)
+        let row = sqlx::query(SqliteDialect::RUN.start)
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -269,16 +226,15 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
             return Self::map_row(row);
         }
 
-        let status_str: Option<String> =
-            sqlx::query_scalar("SELECT status FROM pgqrs_workflow_runs WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| crate::error::Error::QueryFailed {
-                    query: "CHECK_RUN_STATUS".into(),
-                    source: Box::new(e),
-                    context: format!("Failed to check status for run {}", id),
-                })?;
+        let status_str: Option<String> = sqlx::query_scalar(SqliteDialect::RUN.get_status)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CHECK_RUN_STATUS".into(),
+                source: Box::new(e),
+                context: format!("Failed to check status for run {}", id),
+            })?;
 
         if let Some(s) = status_str {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
@@ -336,27 +292,21 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
     }
 
     async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            FROM pgqrs_workflow_runs
-            WHERE message_id = $1
-            "#,
-        )
-        .bind(message_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => crate::error::Error::NotFound {
-                entity: "RunRecord".to_string(),
-                id: format!("message_id:{}", message_id),
-            },
-            _ => crate::error::Error::QueryFailed {
-                query: format!("GET_WORKFLOW_RUN_BY_MESSAGE_ID ({})", message_id),
-                source: Box::new(e),
-                context: format!("Failed to get workflow run for message {}", message_id),
-            },
-        })?;
+        let row = sqlx::query(SqliteDialect::RUN.get_by_message_id)
+            .bind(message_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => crate::error::Error::NotFound {
+                    entity: "RunRecord".to_string(),
+                    id: format!("message_id:{}", message_id),
+                },
+                _ => crate::error::Error::QueryFailed {
+                    query: format!("GET_WORKFLOW_RUN_BY_MESSAGE_ID ({})", message_id),
+                    source: Box::new(e),
+                    context: format!("Failed to get workflow run for message {}", message_id),
+                },
+            })?;
 
         Self::map_row(row)
     }

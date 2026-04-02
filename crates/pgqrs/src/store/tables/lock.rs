@@ -5,9 +5,9 @@ use crate::store::{
     WorkflowTable,
 };
 use crate::types::{
-    BatchInsertParams, NewQueueMessage, NewQueueRecord, NewRunRecord, NewStepRecord,
-    NewWorkerRecord, NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord, StepRecord,
-    WorkerRecord, WorkerStatus, WorkflowRecord,
+    BatchInsertParams, NewQueueMessage, NewQueueRecord, NewRunRecord, NewWorkerRecord,
+    NewWorkflowRecord, QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord,
+    WorkerStatus, WorkflowRecord,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -773,12 +773,6 @@ impl<DB> StepRecordTable for Tables<DB>
 where
     DB: DbLock,
 {
-    async fn insert(&self, data: NewStepRecord) -> Result<StepRecord> {
-        self.db
-            .with_write(|store| Box::pin(async move { store.workflow_steps().insert(data).await }))
-            .await
-    }
-
     async fn get(&self, id: i64) -> Result<StepRecord> {
         self.db
             .with_read(|store| Box::pin(async move { store.workflow_steps().get(id).await }))

@@ -1,9 +1,39 @@
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StepSql {
+    pub get: &'static str,
+    pub list: &'static str,
+    pub count: &'static str,
+    pub delete: &'static str,
     pub acquire: &'static str,
     pub clear_retry: &'static str,
     pub complete: &'static str,
     pub fail: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct QueueSql {
+    pub insert: &'static str,
+    pub get: &'static str,
+    pub get_by_name: &'static str,
+    pub list: &'static str,
+    pub delete: &'static str,
+    pub delete_by_name: &'static str,
+    pub exists: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunSql {
+    pub insert: &'static str,
+    pub get: &'static str,
+    pub list: &'static str,
+    pub count: &'static str,
+    pub delete: &'static str,
+    pub start: &'static str,
+    pub get_status: &'static str,
+    pub complete: &'static str,
+    pub pause: &'static str,
+    pub fail: &'static str,
+    pub get_by_message_id: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +48,16 @@ pub(crate) struct MessageSql {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WorkerSql {
     pub mark_stopped: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkflowSql {
+    pub get_by_name: &'static str,
+    pub insert: &'static str,
+    pub get: &'static str,
+    pub list: &'static str,
+    pub count: &'static str,
+    pub delete: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +77,10 @@ pub(crate) struct DbStateSql {
 
 pub(crate) trait SqlDialect {
     const STEP: StepSql;
+    const QUEUE: QueueSql;
+    const RUN: RunSql;
     const MESSAGE: MessageSql;
     const WORKER: WorkerSql;
+    const WORKFLOW: WorkflowSql;
     const DB_STATE: DbStateSql;
 }
