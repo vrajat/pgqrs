@@ -484,16 +484,25 @@ async fn test_concurrent_step_retries() -> anyhow::Result<()> {
                 .complete_step(step_name, serde_json::json!({"msg": format!("done_{}", i)}))
                 .await
                 .unwrap();
+
+            workflow.id()
         });
 
         handles.push(handle);
     }
 
+    let mut run_ids = Vec::new();
     for handle in handles {
-        handle.await?;
+        run_ids.push(handle.await?);
     }
 
-    let steps = store.workflow_steps().list().await?;
+    let steps: Vec<_> = store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|step| run_ids.contains(&step.run_id))
+        .collect();
     assert_eq!(steps.len(), 3);
     for step in steps {
         assert_eq!(step.step_name, "concurrent_step");
