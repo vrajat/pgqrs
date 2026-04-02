@@ -15,80 +15,18 @@ use std::sync::{Arc, LazyLock};
 use tokio::runtime::Runtime;
 
 mod builder;
+mod r#enum;
+mod errors;
 mod tables;
 mod workers;
 mod workflow;
 
 use builder::*;
+use errors::*;
+use r#enum::*;
 use tables::*;
 use workers::*;
 use workflow::*;
-
-// Exceptions
-pyo3::create_exception!(pgqrs, PgqrsError, pyo3::exceptions::PyException);
-pyo3::create_exception!(pgqrs, PgqrsConnectionError, PgqrsError);
-pyo3::create_exception!(pgqrs, QueueNotFoundError, PgqrsError);
-pyo3::create_exception!(pgqrs, WorkerNotFoundError, PgqrsError);
-pyo3::create_exception!(pgqrs, QueueAlreadyExistsError, PgqrsError);
-pyo3::create_exception!(pgqrs, MessageNotFoundError, PgqrsError);
-pyo3::create_exception!(pgqrs, SerializationError, PgqrsError);
-pyo3::create_exception!(pgqrs, ConfigError, PgqrsError);
-pyo3::create_exception!(pgqrs, RateLimitedError, PgqrsError);
-pyo3::create_exception!(pgqrs, ValidationError, PgqrsError);
-pyo3::create_exception!(pgqrs, TimeoutError, PgqrsError);
-pyo3::create_exception!(pgqrs, InternalError, PgqrsError);
-pyo3::create_exception!(pgqrs, StateTransitionError, PgqrsError);
-pyo3::create_exception!(pgqrs, TransientStepError, PgqrsError);
-pyo3::create_exception!(pgqrs, RetriesExhaustedError, PgqrsError);
-pyo3::create_exception!(pgqrs, StepNotReadyError, PgqrsError);
-pyo3::create_exception!(pgqrs, PausedError, PgqrsError);
-
-pub(crate) fn to_py_err(err: rust_pgqrs::Error) -> PyErr {
-    match err {
-        rust_pgqrs::Error::QueueNotFound { .. } => QueueNotFoundError::new_err(err.to_string()),
-        rust_pgqrs::Error::WorkerNotFound { .. }
-        | rust_pgqrs::Error::WorkerNotRegistered { .. } => {
-            WorkerNotFoundError::new_err(err.to_string())
-        }
-        rust_pgqrs::Error::QueueAlreadyExists { .. } => {
-            QueueAlreadyExistsError::new_err(err.to_string())
-        }
-        rust_pgqrs::Error::MessageNotFound { .. } => MessageNotFoundError::new_err(err.to_string()),
-        rust_pgqrs::Error::Serialization(_) => SerializationError::new_err(err.to_string()),
-        rust_pgqrs::Error::MissingConfig { .. } | rust_pgqrs::Error::InvalidConfig { .. } => {
-            ConfigError::new_err(err.to_string())
-        }
-        rust_pgqrs::Error::RateLimited { .. } => RateLimitedError::new_err(err.to_string()),
-        rust_pgqrs::Error::ValidationFailed { .. }
-        | rust_pgqrs::Error::PayloadTooLarge { .. }
-        | rust_pgqrs::Error::SchemaValidation { .. } => ValidationError::new_err(err.to_string()),
-        rust_pgqrs::Error::Timeout { .. } => TimeoutError::new_err(err.to_string()),
-        rust_pgqrs::Error::ConnectionFailed { .. }
-        | rust_pgqrs::Error::PoolExhausted { .. }
-        | rust_pgqrs::Error::QueryFailed { .. }
-        | rust_pgqrs::Error::TransactionFailed { .. } => {
-            PgqrsConnectionError::new_err(err.to_string())
-        }
-        #[cfg(any(feature = "postgres", feature = "sqlite"))]
-        rust_pgqrs::Error::Database(_) => PgqrsConnectionError::new_err(err.to_string()),
-        #[cfg(feature = "turso")]
-        rust_pgqrs::Error::Turso(_) => PgqrsConnectionError::new_err(err.to_string()),
-        rust_pgqrs::Error::InvalidStateTransition { .. }
-        | rust_pgqrs::Error::WorkerHasPendingMessages { .. } => {
-            StateTransitionError::new_err(err.to_string())
-        }
-        #[cfg(any(feature = "postgres", feature = "sqlite"))]
-        rust_pgqrs::Error::MigrationFailed(_) => InternalError::new_err(err.to_string()),
-        rust_pgqrs::Error::Internal { .. } => InternalError::new_err(err.to_string()),
-        rust_pgqrs::Error::Transient { .. } => TransientStepError::new_err(err.to_string()),
-        rust_pgqrs::Error::RetriesExhausted { .. } => {
-            RetriesExhaustedError::new_err(err.to_string())
-        }
-        rust_pgqrs::Error::StepNotReady { .. } => StepNotReadyError::new_err(err.to_string()),
-        rust_pgqrs::Error::Paused { .. } => PausedError::new_err(err.to_string()),
-        _ => PgqrsError::new_err(err.to_string()),
-    }
-}
 
 pub(crate) struct RuntimeManager {
     pub(crate) rt: Runtime,
@@ -151,80 +89,6 @@ pub(crate) fn py_to_json(py: Python, val: &PyAny) -> PyResult<serde_json::Value>
         .extract::<String>()?;
     serde_json::from_str(&json_str)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-}
-
-#[cfg(feature = "s3")]
-fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'static str {
-    match mode {
-        rust_pgqrs::store::s3::DurabilityMode::Durable => "durable",
-        rust_pgqrs::store::s3::DurabilityMode::Local => "local",
-    }
-}
-
-#[cfg(feature = "s3")]
-#[pyclass(name = "DurabilityMode", frozen)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PyDurabilityMode {
-    inner: rust_pgqrs::store::s3::DurabilityMode,
-}
-
-#[cfg(feature = "s3")]
-impl From<rust_pgqrs::store::s3::DurabilityMode> for PyDurabilityMode {
-    fn from(inner: rust_pgqrs::store::s3::DurabilityMode) -> Self {
-        Self { inner }
-    }
-}
-
-#[cfg(feature = "s3")]
-impl From<PyDurabilityMode> for rust_pgqrs::store::s3::DurabilityMode {
-    fn from(mode: PyDurabilityMode) -> Self {
-        mode.inner
-    }
-}
-
-#[cfg(feature = "s3")]
-#[pymethods]
-impl PyDurabilityMode {
-    #[classattr]
-    #[allow(non_snake_case)]
-    fn DURABLE() -> Self {
-        rust_pgqrs::store::s3::DurabilityMode::Durable.into()
-    }
-
-    #[classattr]
-    #[allow(non_snake_case)]
-    fn LOCAL() -> Self {
-        rust_pgqrs::store::s3::DurabilityMode::Local.into()
-    }
-
-    #[getter]
-    fn value(&self) -> &'static str {
-        durability_mode_to_str(self.inner)
-    }
-
-    fn __repr__(&self) -> String {
-        match self.inner {
-            rust_pgqrs::store::s3::DurabilityMode::Durable => "DurabilityMode.DURABLE".to_string(),
-            rust_pgqrs::store::s3::DurabilityMode::Local => "DurabilityMode.LOCAL".to_string(),
-        }
-    }
-
-    fn __str__(&self) -> &'static str {
-        durability_mode_to_str(self.inner)
-    }
-
-    fn __richcmp__(
-        &self,
-        other: PyRef<'_, PyDurabilityMode>,
-        op: CompareOp,
-        py: Python<'_>,
-    ) -> PyObject {
-        match op {
-            CompareOp::Eq => (self.inner == other.inner).into_py(py),
-            CompareOp::Ne => (self.inner != other.inner).into_py(py),
-            _ => py.NotImplemented(),
-        }
-    }
 }
 
 #[pyclass(name = "Config")]
@@ -778,6 +642,9 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyRunRecord>()?;
     m.add_class::<PyStepRecord>()?;
     m.add_class::<PyConfig>()?;
+    m.add_class::<PyWorkerStatus>()?;
+    m.add_class::<PyWorkflowStatus>()?;
+    m.add_class::<PyStepResultStatus>()?;
     m.add_class::<PyStore>()?;
     #[cfg(feature = "s3")]
     m.add_class::<PyS3StoreHandle>()?;
@@ -796,39 +663,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyStepBuilder>()?;
     m.add_class::<PyDequeueBuilder>()?;
 
-    // Exceptions
-    m.add("PgqrsError", py.get_type::<PgqrsError>())?;
-    m.add(
-        "PgqrsConnectionError",
-        py.get_type::<PgqrsConnectionError>(),
-    )?;
-    m.add("QueueNotFoundError", py.get_type::<QueueNotFoundError>())?;
-    m.add("WorkerNotFoundError", py.get_type::<WorkerNotFoundError>())?;
-    m.add(
-        "QueueAlreadyExistsError",
-        py.get_type::<QueueAlreadyExistsError>(),
-    )?;
-    m.add(
-        "MessageNotFoundError",
-        py.get_type::<MessageNotFoundError>(),
-    )?;
-    m.add("SerializationError", py.get_type::<SerializationError>())?;
-    m.add("ConfigError", py.get_type::<ConfigError>())?;
-    m.add("RateLimitedError", py.get_type::<RateLimitedError>())?;
-    m.add("ValidationError", py.get_type::<ValidationError>())?;
-    m.add("TimeoutError", py.get_type::<TimeoutError>())?;
-    m.add("InternalError", py.get_type::<InternalError>())?;
-    m.add(
-        "StateTransitionError",
-        py.get_type::<StateTransitionError>(),
-    )?;
-    m.add("TransientStepError", py.get_type::<TransientStepError>())?;
-    m.add(
-        "RetriesExhaustedError",
-        py.get_type::<RetriesExhaustedError>(),
-    )?;
-    m.add("StepNotReadyError", py.get_type::<StepNotReadyError>())?;
-    m.add("PausedError", py.get_type::<PausedError>())?;
+    add_exceptions(py, m)?;
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;

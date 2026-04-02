@@ -7,7 +7,7 @@ import pgqrs
 from pgqrs.decorators import WorkflowDef, workflow, step
 
 
-async def wait_for_worker(store, worker_id: int, expected_status: str):
+async def wait_for_worker(store, worker_id: int, expected_status: pgqrs.WorkerStatus):
     workers = await store.get_workers()
     for _ in range(80):
         worker = await workers.get(worker_id)
@@ -57,7 +57,7 @@ async def test_builder_api(test_dsn, schema):
     # 4. Test StepBuilder
     step_name = "step_1"
     step_res = await pgqrs.step().run(run).name(step_name).execute()
-    assert step_res.status == "EXECUTE"
+    assert step_res.status == pgqrs.StepResultStatus.Execute
     assert step_res.guard is not None
 
     # Complete step via guard
@@ -65,18 +65,18 @@ async def test_builder_api(test_dsn, schema):
 
     # Verify idempotency (should be SKIPPED now)
     step_res_retry = await pgqrs.step().run(run).name(step_name).execute()
-    assert step_res_retry.status == "SKIPPED"
+    assert step_res_retry.status == pgqrs.StepResultStatus.Skipped
     assert step_res_retry.value == {"result": "ok"}
 
     # 5. Test manual step completion on Run
     step_2_name = "step_2"
     step_res_2 = await pgqrs.step().run(run).name(step_2_name).execute()
-    assert step_res_2.status == "EXECUTE"
+    assert step_res_2.status == pgqrs.StepResultStatus.Execute
 
     await run.complete_step(step_2_name, {"manual": "ok"})
 
     step_res_2_retry = await pgqrs.step().run(run).name(step_2_name).execute()
-    assert step_res_2_retry.status == "SKIPPED"
+    assert step_res_2_retry.status == pgqrs.StepResultStatus.Skipped
     assert step_res_2_retry.value == {"manual": "ok"}
 
 
@@ -162,7 +162,9 @@ async def test_dequeue_builder_poll_updates_heartbeat_while_idle(test_dsn, schem
         .poll(store)
     )
 
-    worker_before = await wait_for_worker(store, consumer.worker_id, "polling")
+    worker_before = await wait_for_worker(
+        store, consumer.worker_id, pgqrs.WorkerStatus.Polling
+    )
     worker_after = await wait_for_heartbeat_advance(
         store, consumer.worker_id, worker_before.heartbeat_at
     )

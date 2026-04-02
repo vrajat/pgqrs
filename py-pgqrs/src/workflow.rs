@@ -1,5 +1,5 @@
 use crate::tables::PyQueueMessage;
-use crate::{json_to_py, py_to_json, to_py_err, PgqrsError, PyStore};
+use crate::{json_to_py, py_to_json, to_py_err, PgqrsError, PyStepResultStatus, PyStore};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use rust_pgqrs::store::{AnyStore, Store};
@@ -236,7 +236,7 @@ impl PyRun {
                 if record.status == rust_pgqrs::WorkflowStatus::Success {
                     let output = record.output.unwrap_or(serde_json::Value::Null);
                     Ok(PyStepResult {
-                        status: "SKIPPED".to_string(),
+                        status: PyStepResultStatus::Skipped,
                         value: json_to_py(py, &output)?,
                         guard: None,
                     }
@@ -244,7 +244,7 @@ impl PyRun {
                 } else {
                     let py_guard = PyStepGuard::new(step, time);
                     Ok(PyStepResult {
-                        status: "EXECUTE".to_string(),
+                        status: PyStepResultStatus::Execute,
                         value: py.None(),
                         guard: Some(py_guard),
                     }
@@ -258,7 +258,7 @@ impl PyRun {
 #[pyclass(name = "StepResult")]
 pub struct PyStepResult {
     #[pyo3(get)]
-    pub status: String,
+    pub status: PyStepResultStatus,
     #[pyo3(get)]
     pub value: PyObject,
     #[pyo3(get)]
@@ -603,7 +603,7 @@ impl PyStepBuilder {
                 if record.status == rust_pgqrs::WorkflowStatus::Success {
                     let output = record.output.unwrap_or(serde_json::Value::Null);
                     Ok(PyStepResult {
-                        status: "SKIPPED".to_string(),
+                        status: PyStepResultStatus::Skipped,
                         value: json_to_py(py, &output)?,
                         guard: None,
                     }
@@ -611,7 +611,7 @@ impl PyStepBuilder {
                 } else {
                     let py_guard = PyStepGuard::new(step, time);
                     Ok(PyStepResult {
-                        status: "EXECUTE".to_string(),
+                        status: PyStepResultStatus::Execute,
                         value: py.None(),
                         guard: Some(py_guard),
                     }

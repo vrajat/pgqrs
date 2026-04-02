@@ -40,7 +40,7 @@ async def test_workflow_success_lifecycle(test_dsn, schema):
     # Step 1
     step_name = "step1"
     step_res = await pgqrs.step().run(run).name(step_name).execute()
-    assert step_res.status == "EXECUTE"
+    assert step_res.status == pgqrs.StepResultStatus.Execute
     await step_res.guard.success({"msg": "done"})
 
     # Finish Workflow

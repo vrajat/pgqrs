@@ -126,7 +126,7 @@ async def test_basic_queue_single_consumer_handler_poll(test_dsn, schema):
     with pytest.raises(Exception):
         await asyncio.wait_for(consumer_task, timeout=5)
 
-    assert await consumer.status() == "SUSPENDED"
+    assert await consumer.status() == pgqrs.WorkerStatus.Suspended
 
 
 # --8<-- [end:basic_queue_single_consumer_poll]
@@ -260,8 +260,8 @@ async def test_basic_queue_two_consumers_continuous_handler_poll_interrupt(
     with pytest.raises(Exception):
         await asyncio.wait_for(task_b, timeout=5)
 
-    assert await consumer_a.status() == "SUSPENDED"
-    assert await consumer_b.status() == "SUSPENDED"
+    assert await consumer_a.status() == pgqrs.WorkerStatus.Suspended
+    assert await consumer_b.status() == pgqrs.WorkerStatus.Suspended
     # --8<-- [end:basic_queue_py_continuous_interrupt_two_consumers]
 
 from pgqrs import run as pgqrs_run, step as pgqrs_step, workflow as pgqrs_workflow
@@ -392,7 +392,15 @@ async def test_durable_workflow_crash_recovery(test_dsn, schema):
     async def wait_for_step1_success():
         while True:
             steps = await (await store.get_workflow_steps()).list()
-            step = next((s for s in steps if s.step_name == "step1" and s.status == "SUCCESS"), None)
+            step = next(
+                (
+                    s
+                    for s in steps
+                    if s.step_name == "step1"
+                    and s.status == pgqrs.WorkflowStatus.Success
+                ),
+                None,
+            )
             if step:
                 return step
             await asyncio.sleep(POLL_INTERVAL)
@@ -468,7 +476,15 @@ async def test_durable_workflow_transient_error(test_dsn, schema):
     async def wait_for_api_call_error():
         while True:
             steps = await (await store.get_workflow_steps()).list()
-            step = next((s for s in steps if s.step_name == "api_call" and s.status == "ERROR"), None)
+            step = next(
+                (
+                    s
+                    for s in steps
+                    if s.step_name == "api_call"
+                    and s.status == pgqrs.WorkflowStatus.Error
+                ),
+                None,
+            )
             if step:
                 return step
             await asyncio.sleep(POLL_INTERVAL)
@@ -488,12 +504,12 @@ async def test_durable_workflow_transient_error(test_dsn, schema):
     runs = await (await store.get_workflow_runs()).list()
     run_rec = next((r for r in runs if r.workflow_id == workflow.id), None)
 
-    assert run_rec.status == "RUNNING"
+    assert run_rec.status == pgqrs.WorkflowStatus.Running
 
     steps = await (await store.get_workflow_steps()).list()
     step_rec = next((s for s in steps if s.run_id == run_rec.id), None)
 
-    assert step_rec.status == "ERROR"
+    assert step_rec.status == pgqrs.WorkflowStatus.Error
     assert step_rec.retry_at is not None
     # --8<-- [end:durable_workflow_transient_inspect]
 
@@ -536,7 +552,7 @@ async def test_durable_workflow_pause(test_dsn, schema):
         while True:
             runs = await (await store.get_workflow_runs()).list()
             run_rec = next((r for r in runs if r.id == msg.id), None)
-            if run_rec and run_rec.status == "PAUSED":
+            if run_rec and run_rec.status == pgqrs.WorkflowStatus.Paused:
                 return run_rec
             await asyncio.sleep(POLL_INTERVAL)
 
@@ -555,5 +571,5 @@ async def test_durable_workflow_pause(test_dsn, schema):
     runs = await (await store.get_workflow_runs()).list()
     run_rec = next((r for r in runs if r.workflow_id == workflow.id), None)
 
-    assert run_rec.status == "PAUSED"
+    assert run_rec.status == pgqrs.WorkflowStatus.Paused
     # --8<-- [end:durable_workflow_pause_inspect]

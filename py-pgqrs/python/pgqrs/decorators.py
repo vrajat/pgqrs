@@ -92,10 +92,10 @@ def step(func):
         current_time = getattr(ctx, "current_time", None)
         step_result = await ctx.acquire_step(step_name, current_time=current_time)
 
-        if step_result.status == "SKIPPED":
+        if step_result.status == pgqrs.StepResultStatus.Skipped:
             return step_result.value
 
-        elif step_result.status == "EXECUTE":
+        elif step_result.status == pgqrs.StepResultStatus.Execute:
             guard = step_result.guard
             try:
                 result = await func(ctx, *args, **kwargs)

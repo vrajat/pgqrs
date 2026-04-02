@@ -1,5 +1,5 @@
 use crate::tables::PyQueueMessage;
-use crate::{get_runtime, to_py_err, PyAdmin};
+use crate::{get_runtime, to_py_err, PyAdmin, PyWorkerStatus};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use rust_pgqrs::store::AnyStore;
@@ -123,7 +123,7 @@ impl PyConsumer {
         let inner = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
             let status = inner.status().await.map_err(to_py_err)?;
-            Ok(status.to_string().to_uppercase())
+            Ok(PyWorkerStatus::from(status))
         })
     }
 
@@ -306,7 +306,7 @@ pub struct PyWorkerInfo {
     #[pyo3(get)]
     pub hostname: String,
     #[pyo3(get)]
-    pub status: String,
+    pub status: PyWorkerStatus,
     #[pyo3(get)]
     pub queue_id: Option<i64>,
     #[pyo3(get)]
@@ -318,7 +318,7 @@ impl From<RustWorkerInfo> for PyWorkerInfo {
         PyWorkerInfo {
             id: r.id,
             hostname: r.hostname,
-            status: r.status.to_string(),
+            status: PyWorkerStatus::from(r.status),
             queue_id: r.queue_id,
             heartbeat_at: r.heartbeat_at.to_rfc3339(),
         }
