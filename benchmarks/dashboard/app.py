@@ -83,7 +83,7 @@ st.caption(
 frame = _load_frame()
 filtered = _apply_filters(frame)
 
-tabs = st.tabs(["Postgres", "SQLite", "Raw Data", "Baselines"])
+tabs = st.tabs(["Postgres", "SQLite", "Turso", "S3", "Raw Data", "Baselines"])
 with tabs[0]:
     backend_summary.render(
         filtered,
@@ -99,13 +99,27 @@ with tabs[1]:
         key_prefix="sqlite",
     )
 with tabs[2]:
+    backend_summary.render(
+        filtered,
+        backend="turso",
+        title="Turso",
+        key_prefix="turso",
+    )
+with tabs[3]:
+    backend_summary.render(
+        filtered,
+        backend="s3",
+        title="S3",
+        key_prefix="s3",
+    )
+with tabs[4]:
     runs.render(
         filtered,
         title="Raw Data",
         source="raw",
         key_prefix="raw_browse",
     )
-with tabs[3]:
+with tabs[5]:
     runs.render(
         filtered,
         title="Baselines",

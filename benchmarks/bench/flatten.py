@@ -45,6 +45,7 @@ def flatten_result_files(result_files: list[tuple[str, Path]]) -> pd.DataFrame:
             summary = payload.get("summary", {})
             fixed = metadata.get("fixed_parameters", {})
             point = metadata.get("point_parameters", {})
+            s3_toxics = fixed.get("s3_toxics", {}) or {}
             rows.append(
                 {
                     "source": source,
@@ -62,6 +63,13 @@ def flatten_result_files(result_files: list[tuple[str, Path]]) -> pd.DataFrame:
                     "payload_profile": fixed.get("payload_profile"),
                     "prefill_jobs": fixed.get("prefill_jobs"),
                     "queue_mode": fixed.get("queue_mode"),
+                    "durability_mode": fixed.get("durability_mode"),
+                    "s3_latency_profile": fixed.get("s3_latency_profile"),
+                    "s3_transport": fixed.get("s3_transport"),
+                    "s3_endpoint_url": fixed.get("s3_endpoint_url"),
+                    "s3_latency_ms": s3_toxics.get("latency_ms"),
+                    "s3_jitter_ms": s3_toxics.get("jitter_ms"),
+                    "s3_proxy_name": s3_toxics.get("proxy_name"),
                     "consumers": point.get("consumers"),
                     "dequeue_batch_size": point.get("dequeue_batch_size"),
                     "drain_messages_per_second": summary.get(
@@ -94,6 +102,13 @@ def flatten_result_files(result_files: list[tuple[str, Path]]) -> pd.DataFrame:
                 "payload_profile",
                 "prefill_jobs",
                 "queue_mode",
+                "durability_mode",
+                "s3_latency_profile",
+                "s3_transport",
+                "s3_endpoint_url",
+                "s3_latency_ms",
+                "s3_jitter_ms",
+                "s3_proxy_name",
                 "consumers",
                 "dequeue_batch_size",
                 "drain_messages_per_second",

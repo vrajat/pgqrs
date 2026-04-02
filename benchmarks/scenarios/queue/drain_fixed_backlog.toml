@@ -2,7 +2,7 @@ id = "queue.drain_fixed_backlog"
 kind = "queue"
 question = "For a fixed pre-populated backlog, how do throughput and completion time vary with consumer count and dequeue batch size?"
 
-backends = ["postgres", "sqlite", "turso"]
+backends = ["postgres", "sqlite", "turso", "s3"]
 bindings = ["rust", "python"]
 profiles = ["compat", "single_process"]
 

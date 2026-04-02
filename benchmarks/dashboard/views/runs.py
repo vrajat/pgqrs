@@ -12,6 +12,11 @@ RUN_COLUMNS = [
     "binding",
     "profile",
     "prefill_jobs",
+    "durability_mode",
+    "s3_latency_profile",
+    "s3_transport",
+    "s3_latency_ms",
+    "s3_jitter_ms",
     "consumers",
     "dequeue_batch_size",
     "drain_messages_per_second",
@@ -19,6 +24,14 @@ RUN_COLUMNS = [
     "p95_dequeue_latency_ms",
     "p95_archive_latency_ms",
     "throughput_delta_pct",
+]
+
+OPTIONAL_RUN_COLUMNS = [
+    "durability_mode",
+    "s3_latency_profile",
+    "s3_transport",
+    "s3_latency_ms",
+    "s3_jitter_ms",
 ]
 
 
@@ -68,14 +81,40 @@ def render(
     st.caption(
         f"source={row['source']} | profile={row['profile']} | prefill={row['prefill_jobs']}"
     )
+    if row["backend"] == "s3":
+        s3_parts = []
+        if pd.notna(row.get("durability_mode")):
+            s3_parts.append(f"durability={row.get('durability_mode')}")
+        if pd.notna(row.get("s3_latency_profile")):
+            s3_parts.append(f"latency_profile={row.get('s3_latency_profile')}")
+        if pd.notna(row.get("s3_transport")):
+            s3_parts.append(f"transport={row.get('s3_transport')}")
+        if pd.notna(row.get("s3_latency_ms")):
+            s3_parts.append(f"toxiproxy_latency_ms={int(row['s3_latency_ms'])}")
+        if pd.notna(row.get("s3_jitter_ms")):
+            s3_parts.append(f"toxiproxy_jitter_ms={int(row['s3_jitter_ms'])}")
+        if pd.notna(row.get("s3_endpoint_url")):
+            s3_parts.append(f"endpoint={row['s3_endpoint_url']}")
+        if s3_parts:
+            st.caption(" | ".join(s3_parts))
+
+    display_columns = list(RUN_COLUMNS)
+    for column in OPTIONAL_RUN_COLUMNS:
+        if column not in selected.columns:
+            selected[column] = None
 
     display = (
-        selected[RUN_COLUMNS]
+        selected[display_columns]
         .copy()
         .rename(
             columns={
                 "scenario_id": "scenario",
                 "prefill_jobs": "prefill",
+                "durability_mode": "durability",
+                "s3_latency_profile": "s3_profile",
+                "s3_transport": "s3_transport",
+                "s3_latency_ms": "s3_latency_ms",
+                "s3_jitter_ms": "s3_jitter_ms",
                 "dequeue_batch_size": "batch",
                 "drain_messages_per_second": "throughput",
                 "total_drain_time_ms": "drain_ms",

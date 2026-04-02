@@ -5,7 +5,7 @@
 
 **pgqrs is a postgres-native, library-only durable execution engine.**
 
-Written in Rust with Python bindings. Built for Postgres. Also supports SQLite and Turso.
+Written in Rust with Python bindings. Built for Postgres. Also supports SQLite, Turso, and S3.
 
 ## What is Durable Execution?
 
@@ -16,7 +16,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 - **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded), S3 (portable object-store-backed state)
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 
@@ -28,6 +28,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 | CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
 | Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
 | Embedded applications | **SQLite / Turso** | Single-file database, no server |
+| Portable remote queue state | **S3** | Durable queue state in object storage without running PostgreSQL |
 | High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
 
 > ⚠️ **SQLite/Turso Concurrency Limit**: SQLite and Turso use database-level locks. With many concurrent writers, you may hit lock contention. See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/). pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
@@ -36,14 +37,16 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 Current queue benchmark baselines show:
 
-- **PostgreSQL scales with consumers and batch size** in the fixed-backlog drain scenario
-- **SQLite benefits from larger batch sizes** but does **not** scale with more consumers in that same scenario
-- **Turso benchmark guidance is still WIP**
+- **PostgreSQL is the gold standard**: strong throughput with one consumer, and close to linear scaling as more consumers are added
+- **SQLite has similar single-consumer behavior** for this queue-drain scenario, but it does not scale with more consumers
+- **Turso currently behaves like SQLite** in this repo's local-path mode
+- **S3 is much slower on the durable object-store path** because per-message latency is much higher
 
 See:
 
 - [Benchmark overview](docs/benchmarks/index.md)
 - [Queue Drain Fixed Backlog](docs/benchmarks/queue-drain-fixed-backlog.md)
+- [Backend Selection Guide](docs/user-guide/concepts/backends.md)
 
 ## Quick Start
 

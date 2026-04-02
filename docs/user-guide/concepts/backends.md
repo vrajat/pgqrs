@@ -45,8 +45,8 @@ PostgreSQL is the production-ready choice for most deployments.
 
 In the current `queue.drain_fixed_backlog` benchmark:
 
-- PostgreSQL scales with consumer count
-- PostgreSQL also benefits strongly from larger dequeue batch sizes
+- PostgreSQL is the best-performing backend in the current drain benchmark
+- PostgreSQL starts around `150 msg/s` with `1` consumer and scales close to linearly as more consumers are added
 - latency remains comparatively flat as concurrency rises
 
 See the curated benchmark writeup for the exact scenario and charts:
@@ -105,9 +105,9 @@ pgqrs automatically configures SQLite for the best possible concurrency:
 
 In the current `queue.drain_fixed_backlog` benchmark:
 
+- SQLite has solid single-consumer throughput in this workload
 - SQLite benefits strongly from larger dequeue batch sizes
-- SQLite does not scale with more consumers in this workload
-- latency rises sharply as concurrency increases
+- SQLite does not scale with more consumers, and latency rises as concurrency increases
 
 That is consistent with SQLite's single-writer concurrency model.
 
@@ -166,9 +166,26 @@ pgqrs automatically configures Turso for the best possible concurrency:
 
 ### Benchmark-backed Behavior
 
-Turso benchmarks are still being stabilized for the current queue scenarios.
+The current Turso guidance is directional, but already useful.
 
-Treat Turso benchmark guidance as a work in progress until dedicated scenario writeups are published.
+In the current local-path `queue.drain_fixed_backlog` run:
+
+- `1 consumer, batch_size = 1` reaches `173.0 msg/s`
+- `1 consumer, batch_size = 50` reaches `6452.5 msg/s`
+- `4 consumers, batch_size = 50` reaches `6804.3 msg/s`
+- `p95 dequeue latency` rises from `4.02 ms` to `14.97 ms` between those low- and high-contention points
+
+The important takeaway is not the exact number, but the shape:
+
+- Turso currently behaves much more like SQLite than PostgreSQL
+- larger dequeue batches help a lot
+- more consumers add some latency, but do not unlock PostgreSQL-style scaling
+
+In this repo, `turso:///...` uses local-path storage rather than a remote Turso edge deployment, so this guidance applies to the current local backend semantics.
+
+See the benchmark writeup for the exact scenario and caveats:
+
+- [Queue Drain Fixed Backlog](../../benchmarks/queue-drain-fixed-backlog.md)
 
 ### DSN Examples
 
@@ -209,6 +226,38 @@ pgqrs exposes two S3 durability modes:
     The S3 backend is still built on a SQLite local cache. It is designed around explicit object synchronization, not PostgreSQL-style concurrent writers.
 
     Prefer PostgreSQL when you need high write throughput or many workers writing concurrently.
+
+### Benchmark-backed Behavior
+
+The current S3 guidance is directional, but it is already useful for backend selection.
+
+In the current durable `queue.drain_fixed_backlog` baseline:
+
+- `1 consumer, batch_size = 1` reaches `6.6 msg/s`
+- `1 consumer, batch_size = 50` reaches `325.8 msg/s`
+- `4 consumers, batch_size = 50` reaches `265.4 msg/s`
+- `p95 dequeue latency` rises from `79.68 ms` to `304.12 ms` between those low- and high-contention points
+- `p95 archive latency` rises from `80.01 ms` to `310.38 ms`
+
+The important takeaway is the shape:
+
+- object-store latency dominates this backend
+- larger dequeue batches still help a lot
+- more consumers do not improve throughput and can make it worse
+- the large throughput drop versus PostgreSQL is broadly in line with the much higher per-message latency on the durable path
+
+This baseline uses the current local benchmark harness rather than live AWS S3:
+
+- `LocalStack + Toxiproxy`
+- `durability_mode = durable`
+- injected latency `60 ms`, jitter `0 ms`
+- `prefill_jobs = 500`
+
+Treat the numbers as "how S3Store behaves under an object-storage latency envelope" rather than as a cloud-provider guarantee.
+
+See the benchmark writeup for the exact scenario and caveats:
+
+- [Queue Drain Fixed Backlog](../../benchmarks/queue-drain-fixed-backlog.md)
 
 ### Operational Model
 

@@ -7,6 +7,10 @@ import pandas as pd
 import streamlit as st
 
 
+def _row_value(row: pd.Series, key: str):
+    return row.get(key)
+
+
 def _default_run_file(frame: pd.DataFrame) -> str:
     baselines = frame.loc[frame["source"] == "baselines"].copy()
     if not baselines.empty:
@@ -65,6 +69,38 @@ def _scale_summary(
     ratio = end / start
     delta_pct = ((end - start) / start) * 100.0
     return (f"{ratio:.2f}x", f"{delta_pct:+.1f}%")
+
+
+def _latency_summary(
+    frame: pd.DataFrame,
+    *,
+    metric: str,
+    start_consumers: int,
+    start_batch: int,
+    end_consumers: int,
+    end_batch: int,
+) -> tuple[str, str]:
+    start = _lookup_metric(
+        frame,
+        metric=metric,
+        consumers=start_consumers,
+        batch_size=start_batch,
+    )
+    end = _lookup_metric(
+        frame,
+        metric=metric,
+        consumers=end_consumers,
+        batch_size=end_batch,
+    )
+    if start is None or end is None:
+        return ("n/a", "missing point")
+
+    delta_ms = end - start
+    if start == 0:
+        return (f"{end:.3f} ms", f"{delta_ms:+.3f} ms")
+
+    ratio = end / start
+    return (f"{end:.3f} ms", f"{delta_ms:+.3f} ms ({ratio:.2f}x)")
 
 
 def _file_label(frame: pd.DataFrame, file_name: str) -> str:
@@ -177,7 +213,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
     st.markdown("#### Latency Scaling")
 
     cards = st.columns(4)
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_dequeue_latency_ms",
         start_consumers=1,
@@ -185,9 +221,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=1,
     )
-    cards[0].metric("P95 dequeue 1→4 @ batch 1", value, delta)
+    cards[0].metric("P95 dequeue @ 4 consumers, batch 1", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_dequeue_latency_ms",
         start_consumers=1,
@@ -195,9 +231,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=50,
     )
-    cards[1].metric("P95 dequeue 1→4 @ batch 50", value, delta)
+    cards[1].metric("P95 dequeue @ 4 consumers, batch 50", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_archive_latency_ms",
         start_consumers=1,
@@ -205,9 +241,9 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=1,
     )
-    cards[2].metric("P95 archive 1→4 @ batch 1", value, delta)
+    cards[2].metric("P95 archive @ 4 consumers, batch 1", value, delta)
 
-    value, delta = _scale_summary(
+    value, delta = _latency_summary(
         frame,
         metric="p95_archive_latency_ms",
         start_consumers=1,
@@ -215,7 +251,7 @@ def _render_latency_section(frame: pd.DataFrame, *, key_prefix: str) -> None:
         end_consumers=4,
         end_batch=50,
     )
-    cards[3].metric("P95 archive 1→4 @ batch 50", value, delta)
+    cards[3].metric("P95 archive @ 4 consumers, batch 50", value, delta)
 
     latency_cols = st.columns(2)
 
@@ -276,6 +312,14 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
         st.info(f"No `queue.drain_fixed_backlog` Rust results found for {backend}.")
         return
 
+    if backend == "s3":
+        st.warning(
+            "S3 results are directional for now and are not directly comparable to the "
+            "other backend baselines. Current S3 runs use the LocalStack+Toxiproxy "
+            "emulation path and smaller practical backlogs than the curated non-S3 "
+            "baseline runs."
+        )
+
     run_files = backend_frame["file_name"].drop_duplicates().tolist()
     default_file = _default_run_file(backend_frame)
     selected_file = st.selectbox(
@@ -293,6 +337,29 @@ def render(frame: pd.DataFrame, *, backend: str, title: str, key_prefix: str) ->
         f"Showing `{selected_file}` | source={row['source']} | "
         f"prefill={row['prefill_jobs']} | profile={row['profile']}"
     )
+    if backend == "s3":
+        s3_parts = []
+        durability_mode = _row_value(row, "durability_mode")
+        latency_profile = _row_value(row, "s3_latency_profile")
+        transport = _row_value(row, "s3_transport")
+        latency_ms = _row_value(row, "s3_latency_ms")
+        jitter_ms = _row_value(row, "s3_jitter_ms")
+        endpoint_url = _row_value(row, "s3_endpoint_url")
+
+        if pd.notna(durability_mode):
+            s3_parts.append(f"durability={durability_mode}")
+        if pd.notna(latency_profile):
+            s3_parts.append(f"latency_profile={latency_profile}")
+        if pd.notna(transport):
+            s3_parts.append(f"transport={transport}")
+        if pd.notna(latency_ms):
+            s3_parts.append(f"toxiproxy_latency_ms={int(latency_ms)}")
+        if pd.notna(jitter_ms):
+            s3_parts.append(f"toxiproxy_jitter_ms={int(jitter_ms)}")
+        if pd.notna(endpoint_url):
+            s3_parts.append(f"endpoint={endpoint_url}")
+        if s3_parts:
+            st.caption(" | ".join(s3_parts))
 
     _render_throughput_section(selected, key_prefix=key_prefix)
     _render_latency_section(selected, key_prefix=key_prefix)

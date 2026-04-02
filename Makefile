@@ -22,6 +22,11 @@ LOCALSTACK_CONTAINER ?= pgqrs-test-localstack
 LOCALSTACK_PORT ?= 4566
 LOCALSTACK_REGION ?= us-east-1
 PGQRS_S3_TEST_BUCKET ?= pgqrs-test-bucket
+TOXIPROXY_IMAGE ?= ghcr.io/shopify/toxiproxy:2.12.0
+TOXIPROXY_CONTAINER ?= pgqrs-bench-toxiproxy
+TOXIPROXY_API_PORT ?= 8474
+TOXIPROXY_LISTEN_PORT ?= 4567
+TOXIPROXY_UPSTREAM ?= host.docker.internal:$(LOCALSTACK_PORT)
 
 # Test-only features to always enable for test runs
 TEST_FEATURES ?= --features test-utils
@@ -73,6 +78,9 @@ benchmark-list:  ## List available benchmark scenarios
 
 benchmark-run:  ## Run a benchmark (SCENARIO=... BACKEND=... BINDING=... [PROFILE=compat] [PREFILL_JOBS=...])
 	$(MAKE) -C benchmarks run UV="$(UV)" SCENARIO="$(SCENARIO)" BACKEND="$(BACKEND)" BINDING="$(BINDING)" PROFILE="$(PROFILE)" PREFILL_JOBS="$(PREFILL_JOBS)"
+
+benchmark-s3-smoke:  ## Run the S3 benchmark smoke check through Toxiproxy
+	$(MAKE) -C benchmarks s3-smoke UV="$(UV)" LATENCY_MS="$(LATENCY_MS)" JITTER_MS="$(JITTER_MS)" TOXIPROXY_API_URL="$(TOXIPROXY_API_URL)" TOXIPROXY_UPSTREAM="$(TOXIPROXY_UPSTREAM)"
 
 benchmark-dashboard:  ## Run the Streamlit benchmark dashboard
 	$(MAKE) -C benchmarks dashboard UV="$(UV)"
@@ -219,6 +227,22 @@ else
 	@until curl -fsS "http://localhost:$(LOCALSTACK_PORT)/_localstack/health" | grep -Eq '"s3"[[:space:]]*:[[:space:]]*"(running|available)"'; do sleep 1; done
 	@docker exec $(LOCALSTACK_CONTAINER) awslocal s3api create-bucket --bucket $(PGQRS_S3_TEST_BUCKET) >/dev/null 2>&1 || true
 endif
+
+start-toxiproxy: ## Start Toxiproxy container for S3 benchmark latency injection
+	docker rm -f $(TOXIPROXY_CONTAINER) || true
+	docker run -d --name $(TOXIPROXY_CONTAINER) \
+		-p $(TOXIPROXY_API_PORT):8474 \
+		-p $(TOXIPROXY_LISTEN_PORT):$(TOXIPROXY_LISTEN_PORT) \
+		$(TOXIPROXY_IMAGE)
+	@echo "Waiting for Toxiproxy API to be ready..."
+	@until curl -fsS "http://localhost:$(TOXIPROXY_API_PORT)/proxies" >/dev/null; do sleep 1; done
+
+stop-toxiproxy: ## Stop Toxiproxy container
+	docker rm -f $(TOXIPROXY_CONTAINER) || true
+
+start-s3-bench-stack: start-localstack start-toxiproxy ## Start LocalStack and Toxiproxy for S3 benchmark work
+
+stop-s3-bench-stack: stop-toxiproxy stop-localstack ## Stop LocalStack and Toxiproxy for S3 benchmark work
 
 stop-localstack: ## Stop LocalStack S3 container (skipped if CI_LOCALSTACK_RUNNING=true)
 ifdef CI_LOCALSTACK_RUNNING

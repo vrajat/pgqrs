@@ -6,6 +6,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Barrier;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -29,6 +30,8 @@ struct Args {
     dequeue_batch_size: usize,
     #[arg(long, default_value = "small")]
     payload_profile: String,
+    #[arg(long, default_value = "durable")]
+    durability_mode: String,
 }
 
 #[derive(Default)]
@@ -83,6 +86,21 @@ fn percentile_ms(values: &[f64], percentile: f64) -> Option<f64> {
         .map(|secs| (secs * 1000.0 * 1000.0).round() / 1000.0)
 }
 
+#[cfg(feature = "s3")]
+fn maybe_apply_s3_mode(config: &mut Config, backend: &str, durability_mode: &str) {
+    if backend == "s3" {
+        config.s3.mode = match durability_mode {
+            "local" => pgqrs::store::s3::DurabilityMode::Local,
+            _ => pgqrs::store::s3::DurabilityMode::Durable,
+        };
+    }
+}
+
+#[cfg(not(feature = "s3"))]
+fn maybe_apply_s3_mode(config: &mut Config, backend: &str, durability_mode: &str) {
+    let _ = (config, backend, durability_mode);
+}
+
 async fn prefill_queue(
     producer: &pgqrs::workers::Producer,
     prefill_jobs: usize,
@@ -108,8 +126,10 @@ async fn consumer_loop(
     consumer: pgqrs::workers::Consumer,
     batch_size: usize,
     state: Arc<DrainState>,
+    start_barrier: Arc<Barrier>,
 ) -> Result<ConsumerStats, Box<dyn std::error::Error + Send + Sync>> {
     let mut stats = ConsumerStats::default();
+    start_barrier.wait().await;
 
     loop {
         if state.done() {
@@ -150,6 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut config = Config::from_dsn(&args.dsn);
     config.validation_config.max_enqueue_per_second = None;
     config.validation_config.max_enqueue_burst = None;
+    maybe_apply_s3_mode(&mut config, &args.backend, &args.durability_mode);
 
     let store = pgqrs::connect_with_config(&config).await?;
     pgqrs::admin(&store).install().await?;
@@ -167,6 +188,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     prefill_queue(&producer, args.prefill_jobs, &args.payload_profile).await?;
 
     let state = Arc::new(DrainState::new(args.prefill_jobs));
+    // Keep all consumers parked until the benchmark clock is armed; otherwise
+    // fast points can do real work before `start` and inflate throughput.
+    let start_barrier = Arc::new(Barrier::new(args.consumers + 1));
     let mut handles = Vec::with_capacity(args.consumers);
     for index in 0..args.consumers {
         let consumer = pgqrs::consumer(
@@ -180,10 +204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             consumer,
             args.dequeue_batch_size,
             Arc::clone(&state),
+            Arc::clone(&start_barrier),
         )));
     }
 
     let start = Instant::now();
+    start_barrier.wait().await;
     let mut all_stats = Vec::with_capacity(args.consumers);
     for handle in handles {
         all_stats.push(handle.await??);
@@ -215,6 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "payload_profile": args.payload_profile,
                 "prefill_jobs": args.prefill_jobs,
                 "queue_mode": "drain",
+                "durability_mode": args.durability_mode,
             },
             "point_parameters": {
                 "consumers": args.consumers,
