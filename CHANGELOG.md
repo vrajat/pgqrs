@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-04-02
+
+### Added
+- **Python S3 store handles** via `as_s3(store)` with backend-specific `sync()` and `snapshot()` support for durable S3 queues
+- **S3 benchmark harness support** with LocalStack/Toxiproxy bring-up, an S3 smoke path, and dashboard/docs coverage for backend-level results
+
+### Changed
+- **Python binding enums** now expose workflow and status values as typed Python enums instead of raw strings
+- **SQLite/Turso SQL dialect handling** now routes queue, workflow, and run queries through the shared dialect layer for more consistent backend behavior
+
+### Fixed
+- **Python S3 casting** now fails fast for non-S3 stores instead of exposing unsupported durability operations
+- **Shared benchmark executor builds** remain compatible with non-S3 backends while S3 benchmark support is enabled
+
 ## [0.15.0] - 2026-03-23
 
 ### Added

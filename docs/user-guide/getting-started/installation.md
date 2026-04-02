@@ -39,10 +39,6 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
 
     # All backends
     pgqrs = { version = "0.15.1", features = ["full"] }
-
-    # Required dependencies
-    tokio = { version = "0.15.1", features = ["full"] }
-    serde_json = "1"
     ```
 
     pgqrs is async-first and works with [Tokio](https://tokio.rs/).
