@@ -1269,8 +1269,8 @@ mod process_isolated_sync_tests {
 
     #[tokio::test]
     async fn stale_writer_conflicts_across_processes_with_distinct_cache_prefixes() {
-        let bucket = std::env::var("PGQRS_S3_BUCKET")
-            .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
+        let bucket =
+            std::env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
         let dsn = format!(
             "s3://{bucket}/proc-iso-cas-{}-{}.sqlite",
             Utc::now().timestamp_millis(),
