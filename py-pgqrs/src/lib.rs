@@ -274,6 +274,20 @@ impl PyConfig {
     fn set_s3_mode(&mut self, mode: PyDurabilityMode) {
         self.inner.s3.mode = mode.into();
     }
+
+    #[cfg(feature = "s3")]
+    #[getter]
+    fn get_s3_cache_prefix(&self) -> Option<String> {
+        self.inner.s3.cache_prefix.clone()
+    }
+
+    #[cfg(feature = "s3")]
+    #[setter]
+    fn set_s3_cache_prefix(&mut self, prefix: Option<String>) {
+        self.inner.s3.cache_prefix = prefix
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+    }
 }
 
 /// Backoff strategy for step retries

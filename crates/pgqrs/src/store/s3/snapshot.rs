@@ -1,7 +1,10 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::dblock::DbLock;
-use crate::store::s3::{parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn, SyncDb, SyncState};
+use crate::store::s3::{
+    cache_prefix_for_config, parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix,
+    SyncDb, SyncState,
+};
 use crate::store::sqlite::SqliteTables;
 use crate::store::{DbOpFuture, DbTables};
 use async_trait::async_trait;
@@ -74,6 +77,7 @@ pub struct SnapshotDb {
     inner: Arc<RwLock<SnapshotState>>,
     write_gate: Arc<Mutex<()>>,
     config: Config,
+    cache_dir: PathBuf,
 }
 
 struct SnapshotState {
@@ -96,8 +100,10 @@ impl SnapshotDb {
         let object_store = build_object_store_from_env(&bucket)?;
         let mut config = config.clone();
         config.sqlite.use_wal = false;
+        let cache_prefix = cache_prefix_for_config(&config);
+        let cache_dir = s3_local_cache_dir_for_dsn_with_prefix(&config.dsn, &cache_prefix)?;
 
-        let sqlite_dsn = sqlite_dsn_for_revision(&config.dsn, None)?;
+        let sqlite_dsn = sqlite_dsn_for_revision(&cache_dir, None)?;
         let sqlite_tables = SqliteTables::new(&sqlite_dsn, &config).await?;
 
         Ok(Self {
@@ -111,6 +117,7 @@ impl SnapshotDb {
             })),
             write_gate: Arc::new(Mutex::new(())),
             config,
+            cache_dir,
         })
     }
 
@@ -129,7 +136,7 @@ impl SnapshotDb {
             )
         };
 
-        let sqlite_path = sqlite_path_for_revision(&self.config.dsn, local_etag.as_deref())?;
+        let sqlite_path = sqlite_path_for_revision(&self.cache_dir, local_etag.as_deref())?;
         if !sqlite_path.exists() {
             return Ok(SyncState::LocalMissing);
         }
@@ -277,7 +284,7 @@ impl SyncDb for SnapshotDb {
             message: format!("snapshot get bytes failed for key '{}': {}", object_key, e),
         })?;
 
-        let sqlite_path = sqlite_path_for_revision(&self.config.dsn, remote_etag.as_deref())?;
+        let sqlite_path = sqlite_path_for_revision(&self.cache_dir, remote_etag.as_deref())?;
         std::fs::write(&sqlite_path, remote_bytes.as_ref()).map_err(|e| Error::Internal {
             message: format!(
                 "Failed writing snapshot db {}: {}",
@@ -286,7 +293,7 @@ impl SyncDb for SnapshotDb {
             ),
         })?;
 
-        let sqlite_dsn = sqlite_dsn_for_revision(&self.config.dsn, remote_etag.as_deref())?;
+        let sqlite_dsn = sqlite_dsn_for_revision(&self.cache_dir, remote_etag.as_deref())?;
         let new_tables = SqliteTables::new(&sqlite_dsn, &self.config)
             .await
             .map_err(|e| Error::Internal {
@@ -325,7 +332,7 @@ impl SyncDb for SnapshotDb {
             return Ok(());
         }
 
-        let sqlite_path = sqlite_path_for_revision(&self.config.dsn, start_etag.as_deref())?;
+        let sqlite_path = sqlite_path_for_revision(&self.cache_dir, start_etag.as_deref())?;
         let payload = std::fs::read(&sqlite_path).map_err(|e| Error::Internal {
             message: format!(
                 "Failed reading snapshot db {}: {}",
@@ -385,8 +392,8 @@ impl SyncDb for SnapshotDb {
                 .map_err(|e| map_object_store_error("put", &object_key, &e))?,
         };
         let next_etag = put_result.e_tag;
-        let next_path = sqlite_path_for_revision(&self.config.dsn, next_etag.as_deref())?;
-        let previous_path = sqlite_path_for_revision(&self.config.dsn, start_etag.as_deref())?;
+        let next_path = sqlite_path_for_revision(&self.cache_dir, next_etag.as_deref())?;
+        let previous_path = sqlite_path_for_revision(&self.cache_dir, start_etag.as_deref())?;
         if previous_path != next_path {
             std::fs::write(&next_path, &payload_for_next_revision).map_err(|e| {
                 Error::Internal {
@@ -399,7 +406,7 @@ impl SyncDb for SnapshotDb {
                 }
             })?;
         }
-        let sqlite_dsn = sqlite_dsn_for_revision(&self.config.dsn, next_etag.as_deref())?;
+        let sqlite_dsn = sqlite_dsn_for_revision(&self.cache_dir, next_etag.as_deref())?;
         let new_tables = SqliteTables::new(&sqlite_dsn, &self.config)
             .await
             .map_err(|e| Error::Internal {
@@ -478,20 +485,19 @@ fn map_object_store_error(operation: &str, key: &str, err: &object_store::Error)
     }
 }
 
-fn sqlite_dsn_for_revision(dsn: &str, etag: Option<&str>) -> Result<String> {
-    let path = sqlite_path_for_revision(dsn, etag)?;
+fn sqlite_dsn_for_revision(cache_dir: &std::path::Path, etag: Option<&str>) -> Result<String> {
+    let path = sqlite_path_for_revision(cache_dir, etag)?;
     Ok(format!("sqlite://{}?mode=rwc", path.display()))
 }
 
-fn sqlite_path_for_revision(dsn: &str, etag: Option<&str>) -> Result<PathBuf> {
-    let dir = s3_local_cache_dir_for_dsn(dsn)?;
+fn sqlite_path_for_revision(cache_dir: &std::path::Path, etag: Option<&str>) -> Result<PathBuf> {
     let filename = match etag {
         Some(etag) if !etag.trim().is_empty() => {
             format!("{}.sqlite", sanitize_filename_component(etag))
         }
         _ => "bootstrap.sqlite".to_string(),
     };
-    Ok(dir.join(filename))
+    Ok(cache_dir.join(filename))
 }
 
 fn sanitize_filename_component(input: &str) -> String {
@@ -512,9 +518,13 @@ fn sanitize_filename_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_s3_bucket_and_key, sanitize_filename_component, sqlite_dsn_for_revision,
-        sqlite_path_for_revision,
+        parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix, sanitize_filename_component,
+        sqlite_dsn_for_revision, sqlite_path_for_revision,
     };
+
+    fn cache_dir_for_test_dsn(dsn: &str) -> std::path::PathBuf {
+        s3_local_cache_dir_for_dsn_with_prefix(dsn, "snapshot-tests").unwrap()
+    }
 
     #[test]
     fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
@@ -543,20 +553,21 @@ mod tests {
 
     #[test]
     fn sqlite_revision_paths_use_bootstrap_before_first_sync() {
-        let path = sqlite_path_for_revision("s3://bucket/queue.db", None).unwrap();
+        let cache_dir = cache_dir_for_test_dsn("s3://bucket/queue.db");
+        let path = sqlite_path_for_revision(&cache_dir, None).unwrap();
         assert_eq!(
             path.file_name().unwrap().to_string_lossy(),
             "bootstrap.sqlite"
         );
 
-        let dsn = sqlite_dsn_for_revision("s3://bucket/queue.db", None).unwrap();
+        let dsn = sqlite_dsn_for_revision(&cache_dir, None).unwrap();
         assert!(dsn.ends_with("bootstrap.sqlite?mode=rwc"));
     }
 
     #[test]
     fn sqlite_revision_paths_use_sanitized_etag_filename() {
-        let path =
-            sqlite_path_for_revision("s3://bucket/nested/queue.db", Some("\"etag:1/2\"")).unwrap();
+        let cache_dir = cache_dir_for_test_dsn("s3://bucket/nested/queue.db");
+        let path = sqlite_path_for_revision(&cache_dir, Some("\"etag:1/2\"")).unwrap();
         assert_eq!(
             path.file_name().unwrap().to_string_lossy(),
             "_etag_1_2_.sqlite"

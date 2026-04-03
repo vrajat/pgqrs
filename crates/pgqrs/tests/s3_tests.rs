@@ -1243,6 +1243,113 @@ mod sync_state_tests {
     }
 }
 
+mod process_isolated_sync_tests {
+    use super::*;
+
+    async fn run_helper(
+        dsn: &str,
+        queue: &str,
+        cache_prefix: &str,
+        sleep_before_sync_ms: u64,
+    ) -> std::process::Output {
+        let bin = assert_cmd::cargo::cargo_bin!("s3_process_helper");
+        tokio::process::Command::new(bin)
+            .arg("--dsn")
+            .arg(dsn)
+            .arg("--queue")
+            .arg(queue)
+            .arg("--cache-prefix")
+            .arg(cache_prefix)
+            .arg("--sleep-before-sync-ms")
+            .arg(sleep_before_sync_ms.to_string())
+            .output()
+            .await
+            .expect("helper process should run")
+    }
+
+    #[tokio::test]
+    async fn stale_writer_conflicts_across_processes_with_distinct_cache_prefixes() {
+        let bucket = std::env::var("PGQRS_S3_BUCKET")
+            .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
+        let dsn = format!(
+            "s3://{bucket}/proc-iso-cas-{}-{}.sqlite",
+            Utc::now().timestamp_millis(),
+            std::process::id()
+        );
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&dsn).unwrap();
+        delete_key(&bucket, &key).await;
+
+        let mut seed_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
+            .expect("seed config should parse");
+        seed_cfg.s3.mode = DurabilityMode::Durable;
+        seed_cfg.s3.cache_prefix = Some("proc-seed-main".to_string());
+        let seed_store = pgqrs::connect_with_config(&seed_cfg)
+            .await
+            .expect("seed store should open");
+        seed_store
+            .bootstrap()
+            .await
+            .expect("seed bootstrap should succeed");
+        pgqrs::admin(&seed_store)
+            .create_queue("seed")
+            .await
+            .expect("seed queue should be created");
+
+        let stale_dsn = dsn.clone();
+        let stale_task =
+            tokio::spawn(async move { run_helper(&stale_dsn, "stale", "proc-stale", 500).await });
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let advanced = run_helper(&dsn, "advanced", "proc-advanced", 0).await;
+        assert!(
+            advanced.status.success(),
+            "advanced process should succeed, stderr={}",
+            String::from_utf8_lossy(&advanced.stderr)
+        );
+
+        let stale = stale_task.await.expect("stale task should join");
+        assert!(
+            !stale.status.success(),
+            "stale process should fail with conflict, stderr={}",
+            String::from_utf8_lossy(&stale.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&stale.stderr)
+                .to_ascii_lowercase()
+                .contains("conflict"),
+            "stale process stderr should mention conflict, stderr={}",
+            String::from_utf8_lossy(&stale.stderr)
+        );
+
+        let mut follower_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
+            .expect("follower config should parse");
+        follower_cfg.s3.mode = DurabilityMode::Local;
+        follower_cfg.s3.cache_prefix = Some("proc-follower".to_string());
+        let mut follower = pgqrs::connect_with_config(&follower_cfg)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("advanced")
+                .await
+                .expect("advanced queue should be visible"),
+            "advanced queue should be present in remote state"
+        );
+        assert!(
+            !pgqrs::tables(&follower)
+                .queues()
+                .exists("stale")
+                .await
+                .expect("stale queue visibility check should succeed"),
+            "stale queue should not be committed by stale process"
+        );
+    }
+}
+
 mod consistent_db_tests {
     use super::*;
 

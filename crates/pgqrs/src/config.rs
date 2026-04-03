@@ -71,6 +71,8 @@ const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
 const ENV_SQLITE_USE_WAL: &str = "PGQRS_SQLITE_USE_WAL";
 #[cfg(feature = "s3")]
 const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
+#[cfg(feature = "s3")]
+const ENV_S3_CACHE_PREFIX: &str = "PGQRS_S3_CACHE_PREFIX";
 
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
@@ -156,6 +158,11 @@ pub struct S3Config {
     /// S3-backed durability mode (only used for s3:// DSNs)
     #[serde(default = "default_s3_mode")]
     pub mode: crate::store::s3::DurabilityMode,
+    /// Optional local cache prefix for S3-backed SQLite cache layout.
+    ///
+    /// When set, this scopes local cache files per store instance/config.
+    #[serde(default)]
+    pub cache_prefix: Option<String>,
 }
 
 #[cfg(feature = "s3")]
@@ -163,6 +170,7 @@ impl Default for S3Config {
     fn default() -> Self {
         Self {
             mode: default_s3_mode(),
+            cache_prefix: None,
         }
     }
 }
@@ -377,7 +385,16 @@ impl Config {
             .unwrap_or_else(default_s3_mode);
 
         #[cfg(feature = "s3")]
-        let s3 = S3Config { mode: s3_mode };
+        let s3_cache_prefix = env::var(ENV_S3_CACHE_PREFIX)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        #[cfg(feature = "s3")]
+        let s3 = S3Config {
+            mode: s3_mode,
+            cache_prefix: s3_cache_prefix,
+        };
 
         Ok(Self {
             dsn,
@@ -539,6 +556,7 @@ mod tests {
         #[cfg(feature = "s3")]
         {
             env::remove_var(ENV_S3_MODE);
+            env::remove_var(ENV_S3_CACHE_PREFIX);
         }
     }
 
@@ -987,9 +1005,11 @@ schema: "invalid-schema-name"
 
         env::set_var(ENV_DSN, "s3://bucket/queue.sqlite");
         env::set_var(ENV_S3_MODE, "durable");
+        env::set_var(ENV_S3_CACHE_PREFIX, "test-cache-prefix");
 
         let config = Config::from_env().expect("Should load s3 settings from env");
         assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
+        assert_eq!(config.s3.cache_prefix.as_deref(), Some("test-cache-prefix"));
 
         clear_test_env_vars();
     }
