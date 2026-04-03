@@ -60,6 +60,13 @@ async fn s3_snapshot_store(store: &mut AnyStore) -> pgqrs::error::Result<()> {
     }
 }
 
+async fn s3_state_store(store: &AnyStore) -> SyncState {
+    match store {
+        AnyStore::S3(store) => store.state().await.expect("state should be queryable"),
+        _ => panic!("Expected AnyStore::S3 for s3 tests"),
+    }
+}
+
 fn object_store_for_bucket(bucket: &str) -> std::sync::Arc<dyn object_store::ObjectStore> {
     prepare_localstack_tls_env();
     pgqrs::store::s3::S3Store::object_store_from_env(bucket).expect("object store should build")
@@ -86,7 +93,10 @@ async fn wait_for_remote_visible(store: &AnyStore) -> bool {
             AnyStore::S3(s3_store) => {
                 if matches!(
                     s3_store.state().await.expect("state should be queryable"),
-                    SyncState::InSync | SyncState::Diverged { .. }
+                    SyncState::InSync
+                        | SyncState::LocalChanges
+                        | SyncState::RemoteChanges
+                        | SyncState::ConcurrentChanges
                 ) {
                     return true;
                 }
@@ -556,6 +566,73 @@ mod snapshot_db_tests {
     }
 
     #[tokio::test]
+    async fn given_stale_local_writer_when_sync_then_returns_cas_conflict() {
+        let mut writer_a =
+            create_s3_store_for_test("snapshot_db_stale_writer_conflict", DurabilityMode::Local)
+                .await;
+
+        pgqrs::admin(&writer_a)
+            .create_queue("seed")
+            .await
+            .expect("seed queue creation should succeed");
+        s3_sync_store(&mut writer_a)
+            .await
+            .expect("initial sync should publish seed state");
+
+        let writer_b_config = writer_a.config().clone();
+        let mut writer_b = pgqrs::connect_with_config(&writer_b_config)
+            .await
+            .expect("second writer should open");
+        s3_snapshot_store(&mut writer_b)
+            .await
+            .expect("second writer should snapshot current remote state");
+
+        pgqrs::admin(&writer_a)
+            .create_queue("writer-a-change")
+            .await
+            .expect("writer A mutation should succeed");
+        s3_sync_store(&mut writer_a)
+            .await
+            .expect("writer A sync should advance remote etag");
+
+        pgqrs::admin(&writer_b)
+            .create_queue("writer-b-stale-change")
+            .await
+            .expect("writer B local mutation should succeed");
+
+        let sync_err = s3_sync_store(&mut writer_b)
+            .await
+            .expect_err("writer B sync should fail due to stale etag");
+        assert!(
+            matches!(sync_err, pgqrs::error::Error::Conflict { .. }),
+            "stale writer sync should surface conflict, got: {sync_err}"
+        );
+
+        let mut follower = pgqrs::connect_with_config(&writer_b_config)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed");
+        assert!(
+            pgqrs::tables(&follower)
+                .queues()
+                .exists("writer-a-change")
+                .await
+                .expect("follower should read writer A remote queue"),
+            "writer A mutation should be present in remote state"
+        );
+        assert!(
+            !pgqrs::tables(&follower)
+                .queues()
+                .exists("writer-b-stale-change")
+                .await
+                .expect("follower should read remote state after stale conflict"),
+            "stale writer mutation should not be committed to remote state"
+        );
+    }
+
+    #[tokio::test]
     async fn given_clean_local_state_when_sync_then_returns_without_remote_change() {
         let mut store =
             create_s3_store_for_test("snapshot_db_clean_sync_is_noop", DurabilityMode::Local).await;
@@ -786,8 +863,8 @@ mod snapshot_db_tests {
             _ => panic!("Expected AnyStore::S3 for s3 tests"),
         };
         assert!(
-            matches!(state, SyncState::Diverged { local_dirty: true }),
-            "dirty local state before sync should report Diverged {{ local_dirty: true }}, got: {state:?}"
+            matches!(state, SyncState::LocalChanges),
+            "dirty local state before sync should report LocalChanges, got: {state:?}"
         );
 
         s3_sync_store(&mut store)
@@ -933,8 +1010,8 @@ mod snapshot_db_tests {
             _ => panic!("Expected AnyStore::S3 for s3 tests"),
         };
         assert!(
-            matches!(state, SyncState::Diverged { local_dirty: false }),
-            "clean local follower with newer remote should report Diverged {{ local_dirty: false }}, got: {state:?}"
+            matches!(state, SyncState::RemoteChanges),
+            "clean local follower with newer remote should report RemoteChanges, got: {state:?}"
         );
 
         s3_snapshot_store(&mut follower)
@@ -974,6 +1051,194 @@ mod snapshot_db_tests {
         assert!(
             matches!(err, pgqrs::error::Error::NotFound { .. }),
             "expected NotFound when remote object is missing, got: {err}"
+        );
+    }
+}
+
+mod sync_state_tests {
+    use super::*;
+
+    fn cache_dir_for_dsn(dsn: &str) -> std::path::PathBuf {
+        let bootstrap_dsn = pgqrs::store::s3::S3Store::sqlite_cache_dsn_from_s3_dsn(dsn)
+            .expect("cache dsn should be derivable");
+        let path_str = bootstrap_dsn
+            .strip_prefix("sqlite://")
+            .and_then(|s| s.strip_suffix("?mode=rwc"))
+            .expect("cache dsn should be sqlite://...?... format");
+        std::path::Path::new(path_str)
+            .parent()
+            .expect("bootstrap sqlite path should have parent")
+            .to_path_buf()
+    }
+
+    #[tokio::test]
+    async fn state_reports_local_missing_when_local_cache_file_is_deleted() {
+        let store = create_s3_store_for_test("sync_state_local_missing", DurabilityMode::Local).await;
+        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
+        let bootstrap_path = cache_dir.join("bootstrap.sqlite");
+        std::fs::remove_file(&bootstrap_path).expect("bootstrap sqlite should be removable");
+
+        let state = s3_state_store(&store).await;
+        assert!(
+            matches!(state, SyncState::LocalMissing),
+            "expected LocalMissing, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_remote_missing_clean_when_remote_is_deleted_without_local_mutation() {
+        let mut store =
+            create_s3_store_for_test("sync_state_remote_missing_clean", DurabilityMode::Local)
+                .await;
+        pgqrs::admin(&store)
+            .create_queue("seed")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let (bucket, key) = pgqrs::store::s3::parse_s3_bucket_and_key(&store.config().dsn).unwrap();
+        delete_key(&bucket, &key).await;
+
+        let state = s3_state_store(&store).await;
+        assert!(
+            matches!(state, SyncState::RemoteMissing { local_dirty: false }),
+            "expected RemoteMissing {{ local_dirty: false }}, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_remote_missing_dirty_when_remote_missing_and_local_dirty() {
+        let store =
+            create_s3_store_for_test("sync_state_remote_missing_dirty", DurabilityMode::Local)
+                .await;
+        pgqrs::admin(&store)
+            .create_queue("dirty")
+            .await
+            .expect("queue creation should succeed");
+
+        let state = s3_state_store(&store).await;
+        assert!(
+            matches!(state, SyncState::RemoteMissing { local_dirty: true }),
+            "expected RemoteMissing {{ local_dirty: true }}, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_in_sync_after_successful_sync() {
+        let mut store =
+            create_s3_store_for_test("sync_state_in_sync", DurabilityMode::Local).await;
+        pgqrs::admin(&store)
+            .create_queue("seed")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish remote state");
+
+        let state = s3_state_store(&store).await;
+        assert!(
+            matches!(state, SyncState::InSync),
+            "expected InSync, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_local_changes_when_local_is_dirty_and_remote_matches_baseline() {
+        let mut store =
+            create_s3_store_for_test("sync_state_local_changes", DurabilityMode::Local).await;
+        pgqrs::admin(&store)
+            .create_queue("seed")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("sync should publish remote state");
+        pgqrs::admin(&store)
+            .create_queue("dirty-local")
+            .await
+            .expect("local mutation should succeed");
+
+        let state = s3_state_store(&store).await;
+        assert!(
+            matches!(state, SyncState::LocalChanges),
+            "expected LocalChanges, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_remote_changes_when_local_is_clean_and_remote_advances() {
+        let mut writer =
+            create_s3_store_for_test("sync_state_remote_changes", DurabilityMode::Local).await;
+        pgqrs::admin(&writer)
+            .create_queue("seed")
+            .await
+            .expect("seed queue creation should succeed");
+        s3_sync_store(&mut writer)
+            .await
+            .expect("seed sync should publish remote state");
+
+        let follower_cfg = writer.config().clone();
+        let mut follower = pgqrs::connect_with_config(&follower_cfg)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed");
+
+        pgqrs::admin(&writer)
+            .create_queue("remote-advance")
+            .await
+            .expect("writer mutation should succeed");
+        s3_sync_store(&mut writer)
+            .await
+            .expect("writer sync should advance remote state");
+
+        let state = s3_state_store(&follower).await;
+        assert!(
+            matches!(state, SyncState::RemoteChanges),
+            "expected RemoteChanges, got: {state:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_reports_concurrent_changes_when_local_dirty_and_remote_advances() {
+        let mut writer =
+            create_s3_store_for_test("sync_state_concurrent_changes", DurabilityMode::Local).await;
+        pgqrs::admin(&writer)
+            .create_queue("seed")
+            .await
+            .expect("seed queue creation should succeed");
+        s3_sync_store(&mut writer)
+            .await
+            .expect("seed sync should publish remote state");
+
+        let follower_cfg = writer.config().clone();
+        let mut follower = pgqrs::connect_with_config(&follower_cfg)
+            .await
+            .expect("follower should open");
+        s3_snapshot_store(&mut follower)
+            .await
+            .expect("follower snapshot should succeed");
+
+        pgqrs::admin(&writer)
+            .create_queue("remote-advance")
+            .await
+            .expect("writer mutation should succeed");
+        s3_sync_store(&mut writer)
+            .await
+            .expect("writer sync should advance remote state");
+
+        pgqrs::admin(&follower)
+            .create_queue("local-dirty")
+            .await
+            .expect("follower local mutation should succeed");
+
+        let state = s3_state_store(&follower).await;
+        assert!(
+            matches!(state, SyncState::ConcurrentChanges),
+            "expected ConcurrentChanges, got: {state:?}"
         );
     }
 }

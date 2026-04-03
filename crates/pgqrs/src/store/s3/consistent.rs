@@ -55,11 +55,12 @@ impl DbLock for ConsistentDb {
         let mut inner = self.inner.clone();
         match state {
             SyncState::InSync | SyncState::RemoteMissing { local_dirty: false } => {}
-            SyncState::LocalMissing | SyncState::Diverged { local_dirty: false } => {
+            SyncState::LocalMissing | SyncState::RemoteChanges => {
                 SyncDb::snapshot(&mut inner).await?
             }
             SyncState::RemoteMissing { local_dirty: true }
-            | SyncState::Diverged { local_dirty: true } => {
+            | SyncState::LocalChanges
+            | SyncState::ConcurrentChanges => {
                 SyncDb::sync(&mut inner).await.map_err(|err| match err {
                     Error::Conflict { .. } => Error::Conflict {
                         message: "Durable S3 read refused: local state is dirty and cannot be synchronized".to_string(),

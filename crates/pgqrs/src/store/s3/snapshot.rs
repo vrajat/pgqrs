@@ -139,12 +139,11 @@ impl SnapshotDb {
         match remote_head {
             Ok(head) => {
                 let remote_etag = head.e_tag;
-                if remote_etag == local_etag && !is_dirty {
-                    Ok(SyncState::InSync)
-                } else {
-                    Ok(SyncState::Diverged {
-                        local_dirty: is_dirty,
-                    })
+                match (remote_etag == local_etag, is_dirty) {
+                    (true, false) => Ok(SyncState::InSync),
+                    (true, true) => Ok(SyncState::LocalChanges),
+                    (false, false) => Ok(SyncState::RemoteChanges),
+                    (false, true) => Ok(SyncState::ConcurrentChanges),
                 }
             }
             Err(object_store::Error::NotFound { .. }) => Ok(SyncState::RemoteMissing {
@@ -337,6 +336,27 @@ impl SyncDb for SnapshotDb {
         let payload_for_next_revision = payload.clone();
 
         let object_path = ObjectPath::from(object_key.as_str());
+        let sync_state = self.state().await?;
+        match sync_state {
+            SyncState::LocalMissing => {
+                return Err(Error::Conflict {
+                    message: format!(
+                        "Sync CAS failed for key '{}': local cache file is missing",
+                        object_key
+                    ),
+                });
+            }
+            SyncState::ConcurrentChanges => {
+                return Err(Error::Conflict {
+                    message: format!(
+                        "Sync CAS failed for key '{}': local and remote changed concurrently from baseline {:?}",
+                        object_key, start_etag
+                    ),
+                });
+            }
+            _ => {}
+        }
+
         let put_result = match &start_etag {
             Some(last_etag) => {
                 let version = UpdateVersion {
