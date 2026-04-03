@@ -518,8 +518,8 @@ fn sanitize_filename_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix, sanitize_filename_component,
-        sqlite_dsn_for_revision, sqlite_path_for_revision,
+        parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix,
+        sanitize_filename_component, sqlite_dsn_for_revision, sqlite_path_for_revision,
     };
 
     fn cache_dir_for_test_dsn(dsn: &str) -> std::path::PathBuf {
