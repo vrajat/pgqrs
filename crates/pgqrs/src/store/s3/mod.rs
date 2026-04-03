@@ -107,16 +107,23 @@ pub enum DurabilityMode {
 ///   - remote etag matches the local etag baseline
 ///   - local state is not dirty
 ///
-/// - `Diverged { local_dirty }`
-///   - local and remote are both present, but they are not currently aligned
-///   - this may mean remote advanced, local has unsynced writes, or both
-///   - the enum deliberately does not try to declare a winner/head revision
+/// - `LocalChanges`
+///   - local and remote etags match, but local is dirty (unsynced local writes)
+///
+/// - `RemoteChanges`
+///   - local is clean, but remote etag has advanced beyond local baseline
+///
+/// - `ConcurrentChanges`
+///   - local is dirty and remote etag has also advanced
+///   - indicates concurrent updates across writers/processes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
     LocalMissing,
     RemoteMissing { local_dirty: bool },
     InSync,
-    Diverged { local_dirty: bool },
+    LocalChanges,
+    RemoteChanges,
+    ConcurrentChanges,
 }
 
 #[derive(Clone)]

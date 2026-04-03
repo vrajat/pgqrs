@@ -64,6 +64,23 @@ fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'stat
 }
 
 #[cfg(feature = "s3")]
+fn sync_state_to_str(state: rust_pgqrs::store::s3::SyncState) -> &'static str {
+    match state {
+        rust_pgqrs::store::s3::SyncState::LocalMissing => "local_missing",
+        rust_pgqrs::store::s3::SyncState::RemoteMissing { local_dirty: false } => {
+            "remote_missing_clean"
+        }
+        rust_pgqrs::store::s3::SyncState::RemoteMissing { local_dirty: true } => {
+            "remote_missing_dirty"
+        }
+        rust_pgqrs::store::s3::SyncState::InSync => "in_sync",
+        rust_pgqrs::store::s3::SyncState::LocalChanges => "local_changes",
+        rust_pgqrs::store::s3::SyncState::RemoteChanges => "remote_changes",
+        rust_pgqrs::store::s3::SyncState::ConcurrentChanges => "concurrent_changes",
+    }
+}
+
+#[cfg(feature = "s3")]
 #[pyclass(name = "DurabilityMode", frozen)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PyDurabilityMode {
@@ -81,6 +98,20 @@ impl From<rust_pgqrs::store::s3::DurabilityMode> for PyDurabilityMode {
 impl From<PyDurabilityMode> for rust_pgqrs::store::s3::DurabilityMode {
     fn from(mode: PyDurabilityMode) -> Self {
         mode.inner
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pyclass(name = "SyncState", frozen)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySyncState {
+    inner: rust_pgqrs::store::s3::SyncState,
+}
+
+#[cfg(feature = "s3")]
+impl From<rust_pgqrs::store::s3::SyncState> for PySyncState {
+    fn from(inner: rust_pgqrs::store::s3::SyncState) -> Self {
+        Self { inner }
     }
 }
 
@@ -121,6 +152,31 @@ impl PyDurabilityMode {
         op: CompareOp,
         py: Python<'_>,
     ) -> PyObject {
+        match op {
+            CompareOp::Eq => (self.inner == other.inner).into_py(py),
+            CompareOp::Ne => (self.inner != other.inner).into_py(py),
+            _ => py.NotImplemented(),
+        }
+    }
+}
+
+#[cfg(feature = "s3")]
+#[pymethods]
+impl PySyncState {
+    #[getter]
+    fn value(&self) -> &'static str {
+        sync_state_to_str(self.inner.clone())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("SyncState.{}", self.value().to_ascii_uppercase())
+    }
+
+    fn __str__(&self) -> &'static str {
+        self.value()
+    }
+
+    fn __richcmp__(&self, other: PyRef<'_, PySyncState>, op: CompareOp, py: Python<'_>) -> PyObject {
         match op {
             CompareOp::Eq => (self.inner == other.inner).into_py(py),
             CompareOp::Ne => (self.inner != other.inner).into_py(py),
