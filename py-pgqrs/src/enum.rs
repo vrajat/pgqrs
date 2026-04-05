@@ -176,7 +176,12 @@ impl PySyncState {
         self.value()
     }
 
-    fn __richcmp__(&self, other: PyRef<'_, PySyncState>, op: CompareOp, py: Python<'_>) -> PyObject {
+    fn __richcmp__(
+        &self,
+        other: PyRef<'_, PySyncState>,
+        op: CompareOp,
+        py: Python<'_>,
+    ) -> PyObject {
         match op {
             CompareOp::Eq => (self.inner == other.inner).into_py(py),
             CompareOp::Ne => (self.inner != other.inner).into_py(py),

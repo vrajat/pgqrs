@@ -1073,7 +1073,8 @@ mod sync_state_tests {
 
     #[tokio::test]
     async fn state_reports_local_missing_when_local_cache_file_is_deleted() {
-        let store = create_s3_store_for_test("sync_state_local_missing", DurabilityMode::Local).await;
+        let store =
+            create_s3_store_for_test("sync_state_local_missing", DurabilityMode::Local).await;
         let cache_dir = cache_dir_for_dsn(&store.config().dsn);
         let bootstrap_path = cache_dir.join("bootstrap.sqlite");
         std::fs::remove_file(&bootstrap_path).expect("bootstrap sqlite should be removable");
@@ -1127,8 +1128,7 @@ mod sync_state_tests {
 
     #[tokio::test]
     async fn state_reports_in_sync_after_successful_sync() {
-        let mut store =
-            create_s3_store_for_test("sync_state_in_sync", DurabilityMode::Local).await;
+        let mut store = create_s3_store_for_test("sync_state_in_sync", DurabilityMode::Local).await;
         pgqrs::admin(&store)
             .create_queue("seed")
             .await
