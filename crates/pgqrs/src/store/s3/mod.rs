@@ -248,11 +248,6 @@ impl S3Store {
         }
     }
 
-    /// Parse `sqlite://` cache dsn from an `s3://` DSN.
-    pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
-        parse_and_cache_s3_dsn(dsn)
-    }
-
     pub fn object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore>> {
         snapshot::build_object_store_from_env(bucket)
     }
@@ -560,16 +555,6 @@ pub fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     Ok((bucket.to_owned(), key.to_owned()))
 }
 
-fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
-    let _ = parse_s3_bucket_and_key(dsn)?;
-    let config = Config::from_dsn(dsn);
-    let dir = ensure_s3_local_cache_dir(&config.s3.cache_id)?;
-    Ok(format!(
-        "sqlite://{}?mode=rwc",
-        dir.join("cache.sqlite").display()
-    ))
-}
-
 pub(crate) fn sanitize_cache_component(input: &str) -> String {
     let out: String = input
         .chars()
@@ -605,14 +590,9 @@ pub(crate) fn ensure_s3_local_cache_dir(cache_id: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Map an `s3://...` DSN to a deterministic local cache DSN.
-pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
-    parse_and_cache_s3_dsn(dsn)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sqlite_cache_dsn_from_s3_dsn};
+    use super::{ensure_s3_local_cache_dir, parse_s3_bucket_and_key};
 
     #[test]
     fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
@@ -636,20 +616,6 @@ mod tests {
     #[test]
     fn parse_s3_bucket_and_key_rejects_wrong_scheme() {
         let err = parse_s3_bucket_and_key("sqlite://bucket/queue.db").unwrap_err();
-        assert!(err.to_string().contains("Invalid S3 DSN"));
-    }
-
-    #[test]
-    fn sqlite_cache_mapping_is_deterministic() {
-        let a = sqlite_cache_dsn_from_s3_dsn("s3://bucket/queue.db").unwrap();
-        let b = sqlite_cache_dsn_from_s3_dsn("s3://bucket/queue.db").unwrap();
-        assert_eq!(a, b);
-        assert!(a.starts_with("sqlite://"));
-    }
-
-    #[test]
-    fn sqlite_cache_mapping_rejects_invalid_input() {
-        let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
         assert!(err.to_string().contains("Invalid S3 DSN"));
     }
 

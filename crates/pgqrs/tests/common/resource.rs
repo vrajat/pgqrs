@@ -205,32 +205,9 @@ impl S3FileResource {
         dsns.push(dsn);
     }
 
-    fn cleanup_local_cache_for_dsn(dsn: &str) {
-        let Ok(cache_dsn) = pgqrs::store::s3::sqlite_cache_dsn_from_s3_dsn(dsn) else {
-            return;
-        };
-        let Some(raw) = cache_dsn.strip_prefix("sqlite://") else {
-            return;
-        };
-        let db_path = PathBuf::from(raw.split('?').next().unwrap_or_default());
-        if db_path.as_os_str().is_empty() {
-            return;
-        }
-
-        if db_path.exists() {
-            let _ = std::fs::remove_file(&db_path);
-        }
-        let _ = std::fs::remove_file(PathBuf::from(format!("{}-wal", db_path.to_string_lossy())));
-        let _ = std::fs::remove_file(PathBuf::from(format!("{}-shm", db_path.to_string_lossy())));
-
-        let state_dir = db_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(""))
-            .join(db_path.file_stem().unwrap_or_default())
-            .with_extension("s3state");
-        if state_dir.exists() {
-            let _ = std::fs::remove_dir_all(state_dir);
-        }
+    fn cleanup_local_cache_for_dsn(_dsn: &str) {
+        // Local cache paths are keyed by cache_id and cannot be inferred from DSN alone.
+        // Keep remote-object cleanup deterministic and skip best-effort local removal here.
     }
 
     async fn delete_remote_objects(dsns: &[String]) -> Result<(), Box<dyn std::error::Error>> {
