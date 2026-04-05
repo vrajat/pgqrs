@@ -7,6 +7,8 @@ It measures how fast a pre-populated queue can be drained under a sweep of:
 - consumer count
 - dequeue batch size
 
+For S3-backed queue state, this scenario should be read as a deliberate stress test and anti-fit benchmark, not as the benchmark that defines where S3 is useful.
+
 ## Question
 
 For a fixed pre-populated backlog, how do throughput, completion time, and latency vary with consumer count and dequeue batch size?
@@ -100,6 +102,10 @@ This is the useful queue-drain takeaway for S3Store today:
 - durable object-store latency dominates the drain path
 - batching is still the main lever
 - extra consumers do not help and can reduce throughput once they add contention on the shared remote-backed state
+
+This does not mean S3 is categorically useless.
+It means this particular benchmark shape is close to the worst case for S3: tiny units of work, immediate dequeue pressure, and little useful computation to hide queue overhead.
+Use [Coarse Job Viability](coarse-job-viability.md) to answer the more relevant "when is S3 acceptable?" question.
 
 ## Latency Behavior
 
