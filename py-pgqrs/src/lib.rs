@@ -283,16 +283,15 @@ impl PyConfig {
 
     #[cfg(feature = "s3")]
     #[setter]
-    fn set_s3_cache_prefix(&mut self, prefix: String) {
+    fn set_s3_cache_prefix(&mut self, prefix: String) -> PyResult<()> {
         let trimmed = prefix.trim();
-        self.inner.s3.cache_prefix = if trimmed.is_empty() {
-            let host = std::env::var("HOSTNAME")
-                .or_else(|_| std::env::var("COMPUTERNAME"))
-                .unwrap_or_else(|_| "host".to_string());
-            format!("{}_{}", host, std::process::id())
-        } else {
-            trimmed.to_string()
-        };
+        if trimmed.is_empty() {
+            return Err(ConfigError::new_err(
+                "Invalid config for field 's3.cache_prefix': cache prefix cannot be empty",
+            ));
+        }
+        self.inner.s3.cache_prefix = trimmed.to_string();
+        Ok(())
     }
 }
 

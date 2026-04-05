@@ -26,6 +26,14 @@ def test_config_s3_mode_uses_durability_mode_enum():
     assert config.s3_mode == pgqrs.DurabilityMode.Local
 
 
+@requires_backend(TestBackend.S3)
+def test_config_s3_cache_prefix_rejects_empty_value():
+    config = pgqrs.Config("s3://pgqrs-test-bucket/config-prefix", schema="s3_python")
+
+    with pytest.raises(pgqrs.ConfigError, match="cache prefix cannot be empty"):
+        config.s3_cache_prefix = "   "
+
+
 def parse_s3_dsn(dsn: str) -> tuple[str, str]:
     assert dsn.startswith("s3://")
     bucket, key = dsn[len("s3://") :].split("/", 1)
