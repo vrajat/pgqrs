@@ -1282,7 +1282,7 @@ mod process_isolated_sync_tests {
         let mut seed_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("seed config should parse");
         seed_cfg.s3.mode = DurabilityMode::Durable;
-        seed_cfg.s3.cache_prefix = Some("proc-seed-main".to_string());
+        seed_cfg.s3.cache_prefix = "proc-seed-main".to_string();
         let seed_store = pgqrs::connect_with_config(&seed_cfg)
             .await
             .expect("seed store should open");
@@ -1324,7 +1324,7 @@ mod process_isolated_sync_tests {
         let mut follower_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("follower config should parse");
         follower_cfg.s3.mode = DurabilityMode::Local;
-        follower_cfg.s3.cache_prefix = Some("proc-follower".to_string());
+        follower_cfg.s3.cache_prefix = "proc-follower".to_string();
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");

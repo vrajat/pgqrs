@@ -560,31 +560,8 @@ pub fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     Ok((bucket.to_owned(), key.to_owned()))
 }
 
-fn cache_prefix_from_env() -> Option<String> {
-    if let Ok(prefix) = std::env::var("PGQRS_S3_CACHE_PREFIX") {
-        let trimmed = prefix.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    None
-}
-
-fn default_cache_prefix() -> String {
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "host".to_string());
-    format!("{}_{}", host, std::process::id())
-}
-
 pub(crate) fn cache_prefix_for_config(config: &Config) -> String {
-    config
-        .s3
-        .cache_prefix
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(cache_prefix_from_env)
-        .unwrap_or_else(default_cache_prefix)
+    config.s3.cache_prefix.clone()
 }
 
 fn sanitize_cache_component(input: &str) -> String {
@@ -603,7 +580,8 @@ fn sanitize_cache_component(input: &str) -> String {
 }
 
 fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
-    let dir = s3_local_cache_dir_for_dsn_with_prefix(dsn, &default_cache_prefix())?;
+    let config = Config::from_dsn(dsn);
+    let dir = s3_local_cache_dir_for_dsn_with_prefix(dsn, &cache_prefix_for_config(&config))?;
     Ok(format!(
         "sqlite://{}?mode=rwc",
         dir.join("bootstrap.sqlite").to_string_lossy()

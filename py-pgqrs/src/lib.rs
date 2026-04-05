@@ -277,16 +277,22 @@ impl PyConfig {
 
     #[cfg(feature = "s3")]
     #[getter]
-    fn get_s3_cache_prefix(&self) -> Option<String> {
+    fn get_s3_cache_prefix(&self) -> String {
         self.inner.s3.cache_prefix.clone()
     }
 
     #[cfg(feature = "s3")]
     #[setter]
-    fn set_s3_cache_prefix(&mut self, prefix: Option<String>) {
-        self.inner.s3.cache_prefix = prefix
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+    fn set_s3_cache_prefix(&mut self, prefix: String) {
+        let trimmed = prefix.trim();
+        self.inner.s3.cache_prefix = if trimmed.is_empty() {
+            let host = std::env::var("HOSTNAME")
+                .or_else(|_| std::env::var("COMPUTERNAME"))
+                .unwrap_or_else(|_| "host".to_string());
+            format!("{}_{}", host, std::process::id())
+        } else {
+            trimmed.to_string()
+        };
     }
 }
 

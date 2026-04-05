@@ -72,8 +72,6 @@ const ENV_SQLITE_USE_WAL: &str = "PGQRS_SQLITE_USE_WAL";
 #[cfg(feature = "s3")]
 const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
 #[cfg(feature = "s3")]
-const ENV_S3_CACHE_PREFIX: &str = "PGQRS_S3_CACHE_PREFIX";
-
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
@@ -131,6 +129,24 @@ fn default_s3_mode() -> crate::store::s3::DurabilityMode {
 }
 
 #[cfg(feature = "s3")]
+fn default_s3_cache_prefix() -> String {
+    let host = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_else(|_| "host".to_string());
+    format!("{}_{}", host, std::process::id())
+}
+
+#[cfg(feature = "s3")]
+fn normalize_s3_cache_prefix(prefix: String) -> String {
+    let trimmed = prefix.trim();
+    if trimmed.is_empty() {
+        default_s3_cache_prefix()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(feature = "s3")]
 fn default_s3_config() -> S3Config {
     S3Config::default()
 }
@@ -158,11 +174,11 @@ pub struct S3Config {
     /// S3-backed durability mode (only used for s3:// DSNs)
     #[serde(default = "default_s3_mode")]
     pub mode: crate::store::s3::DurabilityMode,
-    /// Optional local cache prefix for S3-backed SQLite cache layout.
+    /// Local cache prefix for S3-backed SQLite cache layout.
     ///
-    /// When set, this scopes local cache files per store instance/config.
-    #[serde(default)]
-    pub cache_prefix: Option<String>,
+    /// This scopes local cache files per store instance/config.
+    #[serde(default = "default_s3_cache_prefix")]
+    pub cache_prefix: String,
 }
 
 #[cfg(feature = "s3")]
@@ -170,7 +186,7 @@ impl Default for S3Config {
     fn default() -> Self {
         Self {
             mode: default_s3_mode(),
-            cache_prefix: None,
+            cache_prefix: default_s3_cache_prefix(),
         }
     }
 }
@@ -385,15 +401,9 @@ impl Config {
             .unwrap_or_else(default_s3_mode);
 
         #[cfg(feature = "s3")]
-        let s3_cache_prefix = env::var(ENV_S3_CACHE_PREFIX)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        #[cfg(feature = "s3")]
         let s3 = S3Config {
             mode: s3_mode,
-            cache_prefix: s3_cache_prefix,
+            cache_prefix: default_s3_cache_prefix(),
         };
 
         Ok(Self {
@@ -430,6 +440,14 @@ impl Config {
                 field: "yaml".to_string(),
                 message: format!("Failed to parse YAML config: {}", e),
             })?;
+
+        #[cfg(feature = "s3")]
+        let mut config = config;
+
+        #[cfg(feature = "s3")]
+        {
+            config.s3.cache_prefix = normalize_s3_cache_prefix(config.s3.cache_prefix);
+        }
 
         // Validate schema name
         validate_identifier(&config.schema)?;
@@ -556,7 +574,6 @@ mod tests {
         #[cfg(feature = "s3")]
         {
             env::remove_var(ENV_S3_MODE);
-            env::remove_var(ENV_S3_CACHE_PREFIX);
         }
     }
 
@@ -1005,11 +1022,10 @@ schema: "invalid-schema-name"
 
         env::set_var(ENV_DSN, "s3://bucket/queue.sqlite");
         env::set_var(ENV_S3_MODE, "durable");
-        env::set_var(ENV_S3_CACHE_PREFIX, "test-cache-prefix");
 
         let config = Config::from_env().expect("Should load s3 settings from env");
         assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
-        assert_eq!(config.s3.cache_prefix.as_deref(), Some("test-cache-prefix"));
+        assert!(!config.s3.cache_prefix.trim().is_empty());
 
         clear_test_env_vars();
     }
