@@ -9,6 +9,7 @@ use pgqrs::store::AnyStore;
 use pgqrs::types::NewQueueMessage;
 use pgqrs::Store;
 use std::env;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 fn s3_endpoint() -> String {
@@ -25,9 +26,21 @@ fn prepare_localstack_tls_env() {
     }
 }
 
+fn next_test_cache_id(schema: &str) -> String {
+    static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+    let suffix = NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    format!("test-{schema}-{pid}-{ts}-{suffix}")
+}
+
 async fn create_s3_store_for_test(schema: &str, mode: DurabilityMode) -> AnyStore {
     let base_store = common::create_store_with_config(schema, |cfg| {
         cfg.s3.mode = mode;
+        cfg.s3.cache_id = next_test_cache_id(schema);
     })
     .await;
     assert_eq!(
@@ -455,28 +468,21 @@ mod snapshot_db_tests {
         );
     }
 
-    fn cache_dir_for_dsn(dsn: &str) -> std::path::PathBuf {
-        let bootstrap_dsn = pgqrs::store::s3::S3Store::sqlite_cache_dsn_from_s3_dsn(dsn)
-            .expect("cache dsn should be derivable");
-        let path_str = bootstrap_dsn
-            .strip_prefix("sqlite://")
-            .and_then(|s| s.strip_suffix("?mode=rwc"))
-            .expect("cache dsn should be sqlite://...?... format");
-        std::path::Path::new(path_str)
-            .parent()
-            .expect("bootstrap sqlite path should have parent")
-            .to_path_buf()
+    fn cache_dir_for_store(store: &AnyStore) -> std::path::PathBuf {
+        let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from))
+            .unwrap_or_else(|_| std::env::temp_dir().join("pgqrs_s3_cache"));
+        base_dir.join(store.config().s3.cache_id.clone())
     }
 
-    fn non_bootstrap_sqlite_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn revision_sqlite_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut files = std::fs::read_dir(dir)
             .expect("cache dir should exist")
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .filter(|path| {
                 path.extension().is_some_and(|ext| ext == "sqlite")
-                    && path
-                        .file_name()
-                        .is_some_and(|name| name != "bootstrap.sqlite")
+                    && path.file_name().is_some_and(|name| name != "cache.sqlite")
             })
             .collect::<Vec<_>>();
         files.sort();
@@ -499,8 +505,8 @@ mod snapshot_db_tests {
             .await
             .expect("sync should publish initial remote state");
 
-        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
-        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        let cache_dir = cache_dir_for_store(&store);
+        let revision_files = revision_sqlite_files(&cache_dir);
         assert_eq!(
             revision_files.len(),
             1,
@@ -518,7 +524,7 @@ mod snapshot_db_tests {
             .await
             .expect("snapshot with matching etag should succeed");
 
-        let after_files = non_bootstrap_sqlite_files(&cache_dir);
+        let after_files = revision_sqlite_files(&cache_dir);
         assert_eq!(
             after_files.len(),
             1,
@@ -653,8 +659,8 @@ mod snapshot_db_tests {
         )
         .await;
 
-        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
-        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        let cache_dir = cache_dir_for_store(&store);
+        let revision_files = revision_sqlite_files(&cache_dir);
         assert_eq!(
             revision_files.len(),
             1,
@@ -931,8 +937,8 @@ mod snapshot_db_tests {
             .await
             .expect("sync should publish remote state");
 
-        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
-        let revision_files = non_bootstrap_sqlite_files(&cache_dir);
+        let cache_dir = cache_dir_for_store(&store);
+        let revision_files = revision_sqlite_files(&cache_dir);
         assert_eq!(
             revision_files.len(),
             1,
@@ -950,7 +956,7 @@ mod snapshot_db_tests {
             .await
             .expect("snapshot after successful sync should be a no-op");
 
-        let after_files = non_bootstrap_sqlite_files(&cache_dir);
+        let after_files = revision_sqlite_files(&cache_dir);
         assert_eq!(
             after_files.len(),
             1,
@@ -1058,26 +1064,21 @@ mod snapshot_db_tests {
 mod sync_state_tests {
     use super::*;
 
-    fn cache_dir_for_dsn(dsn: &str) -> std::path::PathBuf {
-        let bootstrap_dsn = pgqrs::store::s3::S3Store::sqlite_cache_dsn_from_s3_dsn(dsn)
-            .expect("cache dsn should be derivable");
-        let path_str = bootstrap_dsn
-            .strip_prefix("sqlite://")
-            .and_then(|s| s.strip_suffix("?mode=rwc"))
-            .expect("cache dsn should be sqlite://...?... format");
-        std::path::Path::new(path_str)
-            .parent()
-            .expect("bootstrap sqlite path should have parent")
-            .to_path_buf()
+    fn cache_dir_for_store(store: &AnyStore) -> std::path::PathBuf {
+        let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from))
+            .unwrap_or_else(|_| std::env::temp_dir().join("pgqrs_s3_cache"));
+        base_dir.join(store.config().s3.cache_id.clone())
     }
 
     #[tokio::test]
     async fn state_reports_local_missing_when_local_cache_file_is_deleted() {
         let store =
             create_s3_store_for_test("sync_state_local_missing", DurabilityMode::Local).await;
-        let cache_dir = cache_dir_for_dsn(&store.config().dsn);
-        let bootstrap_path = cache_dir.join("bootstrap.sqlite");
-        std::fs::remove_file(&bootstrap_path).expect("bootstrap sqlite should be removable");
+        let cache_dir = cache_dir_for_store(&store);
+        let bootstrap_path = cache_dir.join("cache.sqlite");
+        std::fs::remove_file(&bootstrap_path).expect("cache sqlite should be removable");
 
         let state = s3_state_store(&store).await;
         assert!(
@@ -1249,7 +1250,7 @@ mod process_isolated_sync_tests {
     async fn run_helper(
         dsn: &str,
         queue: &str,
-        cache_prefix: &str,
+        cache_id: &str,
         sleep_before_sync_ms: u64,
     ) -> std::process::Output {
         let bin = assert_cmd::cargo::cargo_bin!("s3_process_helper");
@@ -1258,8 +1259,8 @@ mod process_isolated_sync_tests {
             .arg(dsn)
             .arg("--queue")
             .arg(queue)
-            .arg("--cache-prefix")
-            .arg(cache_prefix)
+            .arg("--cache-id")
+            .arg(cache_id)
             .arg("--sleep-before-sync-ms")
             .arg(sleep_before_sync_ms.to_string())
             .output()
@@ -1268,7 +1269,7 @@ mod process_isolated_sync_tests {
     }
 
     #[tokio::test]
-    async fn stale_writer_conflicts_across_processes_with_distinct_cache_prefixes() {
+    async fn stale_writer_conflicts_across_processes_with_distinct_cache_ids() {
         let bucket =
             std::env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
         let dsn = format!(
@@ -1282,7 +1283,7 @@ mod process_isolated_sync_tests {
         let mut seed_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("seed config should parse");
         seed_cfg.s3.mode = DurabilityMode::Durable;
-        seed_cfg.s3.cache_prefix = "proc-seed-main".to_string();
+        seed_cfg.s3.cache_id = "proc-seed-main".to_string();
         let seed_store = pgqrs::connect_with_config(&seed_cfg)
             .await
             .expect("seed store should open");
@@ -1324,7 +1325,7 @@ mod process_isolated_sync_tests {
         let mut follower_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("follower config should parse");
         follower_cfg.s3.mode = DurabilityMode::Local;
-        follower_cfg.s3.cache_prefix = "proc-follower".to_string();
+        follower_cfg.s3.cache_id = "proc-follower".to_string();
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");

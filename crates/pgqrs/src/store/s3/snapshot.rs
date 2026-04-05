@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::dblock::DbLock;
 use crate::store::s3::{
-    cache_prefix_for_config, parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix,
-    SyncDb, SyncState,
+    ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sanitize_cache_component, SyncDb,
+    SyncState,
 };
 use crate::store::sqlite::SqliteTables;
 use crate::store::{DbOpFuture, DbTables};
@@ -100,8 +100,7 @@ impl SnapshotDb {
         let object_store = build_object_store_from_env(&bucket)?;
         let mut config = config.clone();
         config.sqlite.use_wal = false;
-        let cache_prefix = cache_prefix_for_config(&config);
-        let cache_dir = s3_local_cache_dir_for_dsn_with_prefix(&config.dsn, &cache_prefix)?;
+        let cache_dir = ensure_s3_local_cache_dir(&config.s3.cache_id)?;
 
         let sqlite_dsn = sqlite_dsn_for_revision(&cache_dir, None)?;
         let sqlite_tables = SqliteTables::new(&sqlite_dsn, &config).await?;
@@ -493,37 +492,22 @@ fn sqlite_dsn_for_revision(cache_dir: &std::path::Path, etag: Option<&str>) -> R
 fn sqlite_path_for_revision(cache_dir: &std::path::Path, etag: Option<&str>) -> Result<PathBuf> {
     let filename = match etag {
         Some(etag) if !etag.trim().is_empty() => {
-            format!("{}.sqlite", sanitize_filename_component(etag))
+            format!("cache_{}.sqlite", sanitize_cache_component(etag))
         }
-        _ => "bootstrap.sqlite".to_string(),
+        _ => "cache.sqlite".to_string(),
     };
     Ok(cache_dir.join(filename))
-}
-
-fn sanitize_filename_component(input: &str) -> String {
-    let out: String = input
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
-            _ => '_',
-        })
-        .collect();
-    if out.is_empty() {
-        "_".to_string()
-    } else {
-        out
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_s3_bucket_and_key, s3_local_cache_dir_for_dsn_with_prefix,
-        sanitize_filename_component, sqlite_dsn_for_revision, sqlite_path_for_revision,
+        ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sqlite_dsn_for_revision,
+        sqlite_path_for_revision,
     };
 
-    fn cache_dir_for_test_dsn(dsn: &str) -> std::path::PathBuf {
-        s3_local_cache_dir_for_dsn_with_prefix(dsn, "snapshot-tests").unwrap()
+    fn cache_dir_for_test() -> std::path::PathBuf {
+        ensure_s3_local_cache_dir("snapshot-tests").unwrap()
     }
 
     #[test]
@@ -553,30 +537,21 @@ mod tests {
 
     #[test]
     fn sqlite_revision_paths_use_bootstrap_before_first_sync() {
-        let cache_dir = cache_dir_for_test_dsn("s3://bucket/queue.db");
+        let cache_dir = cache_dir_for_test();
         let path = sqlite_path_for_revision(&cache_dir, None).unwrap();
-        assert_eq!(
-            path.file_name().unwrap().to_string_lossy(),
-            "bootstrap.sqlite"
-        );
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), "cache.sqlite");
 
         let dsn = sqlite_dsn_for_revision(&cache_dir, None).unwrap();
-        assert!(dsn.ends_with("bootstrap.sqlite?mode=rwc"));
+        assert!(dsn.ends_with("cache.sqlite?mode=rwc"));
     }
 
     #[test]
     fn sqlite_revision_paths_use_sanitized_etag_filename() {
-        let cache_dir = cache_dir_for_test_dsn("s3://bucket/nested/queue.db");
+        let cache_dir = cache_dir_for_test();
         let path = sqlite_path_for_revision(&cache_dir, Some("\"etag:1/2\"")).unwrap();
         assert_eq!(
             path.file_name().unwrap().to_string_lossy(),
-            "_etag_1_2_.sqlite"
+            "cache__etag_1_2_.sqlite"
         );
-    }
-
-    #[test]
-    fn sanitize_filename_component_replaces_non_filename_chars() {
-        assert_eq!(sanitize_filename_component("a/b:c"), "a_b_c");
-        assert_eq!(sanitize_filename_component(""), "_");
     }
 }

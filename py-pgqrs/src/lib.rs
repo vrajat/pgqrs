@@ -277,20 +277,20 @@ impl PyConfig {
 
     #[cfg(feature = "s3")]
     #[getter]
-    fn get_s3_cache_prefix(&self) -> String {
-        self.inner.s3.cache_prefix.clone()
+    fn get_s3_cache_id(&self) -> String {
+        self.inner.s3.cache_id.clone()
     }
 
     #[cfg(feature = "s3")]
     #[setter]
-    fn set_s3_cache_prefix(&mut self, prefix: String) -> PyResult<()> {
-        let trimmed = prefix.trim();
+    fn set_s3_cache_id(&mut self, cache_id: String) -> PyResult<()> {
+        let trimmed = cache_id.trim();
         if trimmed.is_empty() {
             return Err(ConfigError::new_err(
-                "Invalid config for field 's3.cache_prefix': cache prefix cannot be empty",
+                "Invalid config for field 's3.cache_id': cache id cannot be empty",
             ));
         }
-        self.inner.s3.cache_prefix = trimmed.to_string();
+        self.inner.s3.cache_id = trimmed.to_string();
         Ok(())
     }
 }

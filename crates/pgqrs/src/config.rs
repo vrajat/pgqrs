@@ -129,7 +129,7 @@ fn default_s3_mode() -> crate::store::s3::DurabilityMode {
 }
 
 #[cfg(feature = "s3")]
-fn default_s3_cache_prefix() -> String {
+fn default_s3_cache_id() -> String {
     let host = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .unwrap_or_else(|_| "host".to_string());
@@ -137,10 +137,10 @@ fn default_s3_cache_prefix() -> String {
 }
 
 #[cfg(feature = "s3")]
-fn normalize_s3_cache_prefix(prefix: String) -> String {
-    let trimmed = prefix.trim();
+fn normalize_s3_cache_id(cache_id: String) -> String {
+    let trimmed = cache_id.trim();
     if trimmed.is_empty() {
-        default_s3_cache_prefix()
+        default_s3_cache_id()
     } else {
         trimmed.to_string()
     }
@@ -174,11 +174,11 @@ pub struct S3Config {
     /// S3-backed durability mode (only used for s3:// DSNs)
     #[serde(default = "default_s3_mode")]
     pub mode: crate::store::s3::DurabilityMode,
-    /// Local cache prefix for S3-backed SQLite cache layout.
+    /// Local cache namespace id for S3-backed SQLite cache layout.
     ///
     /// This scopes local cache files per store instance/config.
-    #[serde(default = "default_s3_cache_prefix")]
-    pub cache_prefix: String,
+    #[serde(default = "default_s3_cache_id")]
+    pub cache_id: String,
 }
 
 #[cfg(feature = "s3")]
@@ -186,7 +186,7 @@ impl Default for S3Config {
     fn default() -> Self {
         Self {
             mode: default_s3_mode(),
-            cache_prefix: default_s3_cache_prefix(),
+            cache_id: default_s3_cache_id(),
         }
     }
 }
@@ -403,7 +403,7 @@ impl Config {
         #[cfg(feature = "s3")]
         let s3 = S3Config {
             mode: s3_mode,
-            cache_prefix: default_s3_cache_prefix(),
+            cache_id: default_s3_cache_id(),
         };
 
         Ok(Self {
@@ -446,7 +446,7 @@ impl Config {
 
         #[cfg(feature = "s3")]
         {
-            config.s3.cache_prefix = normalize_s3_cache_prefix(config.s3.cache_prefix);
+            config.s3.cache_id = normalize_s3_cache_id(config.s3.cache_id);
         }
 
         // Validate schema name
@@ -1025,7 +1025,7 @@ schema: "invalid-schema-name"
 
         let config = Config::from_env().expect("Should load s3 settings from env");
         assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
-        assert!(!config.s3.cache_prefix.trim().is_empty());
+        assert!(!config.s3.cache_id.trim().is_empty());
 
         clear_test_env_vars();
     }

@@ -560,11 +560,14 @@ pub fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     Ok((bucket.to_owned(), key.to_owned()))
 }
 
-pub(crate) fn cache_prefix_for_config(config: &Config) -> String {
-    config.s3.cache_prefix.clone()
+fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
+    let _ = parse_s3_bucket_and_key(dsn)?;
+    let config = Config::from_dsn(dsn);
+    let dir = ensure_s3_local_cache_dir(&config.s3.cache_id)?;
+    Ok(format!("sqlite://{}?mode=rwc", dir.join("cache.sqlite").display()))
 }
 
-fn sanitize_cache_component(input: &str) -> String {
+pub(crate) fn sanitize_cache_component(input: &str) -> String {
     let out: String = input
         .chars()
         .map(|c| match c {
@@ -579,18 +582,7 @@ fn sanitize_cache_component(input: &str) -> String {
     }
 }
 
-fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
-    let config = Config::from_dsn(dsn);
-    let dir = s3_local_cache_dir_for_dsn_with_prefix(dsn, &cache_prefix_for_config(&config))?;
-    Ok(format!(
-        "sqlite://{}?mode=rwc",
-        dir.join("bootstrap.sqlite").to_string_lossy()
-    ))
-}
-
-pub(crate) fn s3_local_cache_dir_for_dsn_with_prefix(dsn: &str, prefix: &str) -> Result<PathBuf> {
-    let (bucket, key) = parse_s3_bucket_and_key(dsn)?;
-
+pub(crate) fn ensure_s3_local_cache_dir(cache_id: &str) -> Result<PathBuf> {
     let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(PathBuf::from))
@@ -600,12 +592,7 @@ pub(crate) fn s3_local_cache_dir_for_dsn_with_prefix(dsn: &str, prefix: &str) ->
         message: format!("Failed to create S3 cache directory: {}", e),
     })?;
 
-    let mut path = base_dir
-        .join(sanitize_cache_component(prefix))
-        .join(sanitize_cache_component(&bucket));
-    for segment in key.split('/') {
-        path = path.join(sanitize_cache_component(segment));
-    }
+    let path = base_dir.join(sanitize_cache_component(cache_id));
 
     std::fs::create_dir_all(&path).map_err(|e| Error::InvalidConfig {
         field: "PGQRS_S3_LOCAL_CACHE_DIR".to_string(),
@@ -622,7 +609,7 @@ pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_s3_bucket_and_key, sqlite_cache_dsn_from_s3_dsn};
+    use super::{ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sqlite_cache_dsn_from_s3_dsn};
 
     #[test]
     fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
@@ -661,5 +648,11 @@ mod tests {
     fn sqlite_cache_mapping_rejects_invalid_input() {
         let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
         assert!(err.to_string().contains("Invalid S3 DSN"));
+    }
+
+    #[test]
+    fn local_cache_dir_uses_only_cache_id() {
+        let dir = ensure_s3_local_cache_dir("cache-a").unwrap();
+        assert_eq!(dir.file_name().unwrap().to_string_lossy(), "cache-a");
     }
 }
