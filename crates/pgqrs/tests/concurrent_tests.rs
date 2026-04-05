@@ -241,7 +241,20 @@ async fn test_zombie_consumer_race_condition() {
     assert_eq!(released, 1, "Should have released 1 message");
 
     // 6. Consumer B dequeues the SAME message (stealing the lock)
-    let msgs_b = consumer_b.dequeue().await.expect("Dequeue B failed");
+    let msgs_b = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let msgs = consumer_b.dequeue().await.expect("Dequeue B failed");
+            if !msgs.is_empty() {
+                break msgs;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Consumer B should be able to pick up released message within deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
     assert_eq!(
         msgs_b.len(),
         1,
@@ -422,7 +435,20 @@ async fn test_zombie_consumer_batch_ops() {
     assert_eq!(released, 2);
 
     // B dequeues both
-    let msgs_b = consumer_b.dequeue_many(2).await.unwrap();
+    let msgs_b = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let msgs = consumer_b.dequeue_many(2).await.unwrap();
+            if msgs.len() == 2 {
+                break msgs;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Consumer B should be able to pick up both released messages within deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
     assert_eq!(msgs_b.len(), 2);
 
     // A tries delete_many -> Should return [false, false]

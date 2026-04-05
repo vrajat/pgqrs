@@ -1,6 +1,6 @@
-use crate::store::dialect::{
-    DbStateSql, MessageSql, QueueSql, RunSql, SqlDialect, StepSql, WorkerSql, WorkflowSql,
-};
+use crate::store::dialect::{DbStateSql, MessageSql, SqlDialect, StepSql, WorkerSql};
+#[cfg(any(feature = "sqlite", feature = "turso"))]
+use crate::store::dialect::{QueueSql, RunSql, WorkflowSql};
 
 pub(crate) struct PostgresDialect;
 
@@ -124,6 +124,7 @@ RETURNING
 "#,
     };
 
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const QUEUE: QueueSql = QueueSql {
         insert: r#"
 INSERT INTO pgqrs_queues (queue_name)
@@ -158,6 +159,7 @@ SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1)
 "#,
     };
 
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const RUN: RunSql = RunSql {
         insert: r#"
 INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input, created_at, updated_at)
@@ -252,6 +254,7 @@ WHERE id = $1
 "#,
     };
 
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const WORKFLOW: WorkflowSql = WorkflowSql {
         get_by_name: r#"
 SELECT id, name, queue_id, created_at

@@ -11,6 +11,7 @@ pub(crate) struct StepSql {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub(crate) struct QueueSql {
     pub insert: &'static str,
     pub get: &'static str,
@@ -22,6 +23,7 @@ pub(crate) struct QueueSql {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub(crate) struct RunSql {
     pub insert: &'static str,
     pub get: &'static str,
@@ -51,6 +53,7 @@ pub(crate) struct WorkerSql {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub(crate) struct WorkflowSql {
     pub get_by_name: &'static str,
     pub insert: &'static str,
@@ -77,10 +80,13 @@ pub(crate) struct DbStateSql {
 
 pub(crate) trait SqlDialect {
     const STEP: StepSql;
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const QUEUE: QueueSql;
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const RUN: RunSql;
     const MESSAGE: MessageSql;
     const WORKER: WorkerSql;
+    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const WORKFLOW: WorkflowSql;
     const DB_STATE: DbStateSql;
 }
