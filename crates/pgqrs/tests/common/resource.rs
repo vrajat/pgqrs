@@ -182,7 +182,7 @@ fn sanitize_component(s: &str) -> String {
     }
 }
 
-// --- S3 File Resource (S3 DSN + local cache cleanup) ---
+// --- S3 File Resource ---
 #[cfg(feature = "s3")]
 pub struct S3FileResource {
     bucket: String,
@@ -203,11 +203,6 @@ impl S3FileResource {
     fn track_dsn(&self, dsn: String) {
         let mut dsns = self.issued_dsns.lock().unwrap();
         dsns.push(dsn);
-    }
-
-    fn cleanup_local_cache_for_dsn(_dsn: &str) {
-        // Local cache paths are keyed by cache_id and cannot be inferred from DSN alone.
-        // Keep remote-object cleanup deterministic and skip best-effort local removal here.
     }
 
     async fn delete_remote_objects(dsns: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -253,11 +248,8 @@ impl S3FileResource {
             snapshot
         };
 
-        for dsn in &snapshot {
-            Self::cleanup_local_cache_for_dsn(dsn);
-        }
         if delete_remote {
-            // Best effort remote cleanup; keep local cleanup deterministic even if S3 deletion fails.
+            // Best effort remote cleanup.
             let _ = Self::delete_remote_objects(&snapshot).await;
         }
         Ok(())
