@@ -564,7 +564,10 @@ fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
     let _ = parse_s3_bucket_and_key(dsn)?;
     let config = Config::from_dsn(dsn);
     let dir = ensure_s3_local_cache_dir(&config.s3.cache_id)?;
-    Ok(format!("sqlite://{}?mode=rwc", dir.join("cache.sqlite").display()))
+    Ok(format!(
+        "sqlite://{}?mode=rwc",
+        dir.join("cache.sqlite").display()
+    ))
 }
 
 pub(crate) fn sanitize_cache_component(input: &str) -> String {

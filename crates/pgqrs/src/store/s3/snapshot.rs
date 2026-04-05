@@ -2,8 +2,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::dblock::DbLock;
 use crate::store::s3::{
-    ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sanitize_cache_component, SyncDb,
-    SyncState,
+    ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sanitize_cache_component, SyncDb, SyncState,
 };
 use crate::store::sqlite::SqliteTables;
 use crate::store::{DbOpFuture, DbTables};
