@@ -10,7 +10,7 @@ from .conftest import TestBackend, requires_backend
 
 def local_s3_config(dsn: str) -> pgqrs.Config:
     config = pgqrs.Config(dsn, schema="s3_python")
-    config.s3_mode = pgqrs.DurabilityMode.LOCAL
+    config.s3_mode = pgqrs.DurabilityMode.Local
     return config
 
 
@@ -18,14 +18,12 @@ def local_s3_config(dsn: str) -> pgqrs.Config:
 def test_config_s3_mode_uses_durability_mode_enum():
     config = pgqrs.Config("s3://pgqrs-test-bucket/config-mode", schema="s3_python")
 
-    assert config.s3_mode == pgqrs.DurabilityMode.DURABLE
+    assert config.s3_mode == pgqrs.DurabilityMode.Durable
     assert type(config.s3_mode).__name__ == "DurabilityMode"
-    assert config.s3_mode.value == "durable"
 
-    config.s3_mode = pgqrs.DurabilityMode.LOCAL
+    config.s3_mode = pgqrs.DurabilityMode.Local
 
-    assert config.s3_mode == pgqrs.DurabilityMode.LOCAL
-    assert config.s3_mode.value == "local"
+    assert config.s3_mode == pgqrs.DurabilityMode.Local
 
 
 def parse_s3_dsn(dsn: str) -> tuple[str, str]:
@@ -128,7 +126,7 @@ async def test_s3_handle_state_reports_in_sync_after_sync(test_dsn):
 
     state = await pgqrs.as_s3(store).state()
     assert type(state).__name__ == "SyncState"
-    assert state.value == "in_sync"
+    assert state == pgqrs.SyncState.InSync
 
 
 @requires_backend(TestBackend.S3)
