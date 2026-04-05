@@ -524,6 +524,7 @@ async def _run_rust_queue(
                     "--bin",
                     "pgqrs-bench-rust",
                     "--",
+                    "run",
                     "--run-id",
                     run_id,
                     "--scenario-id",
