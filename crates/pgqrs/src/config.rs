@@ -137,12 +137,15 @@ fn default_s3_cache_id() -> String {
 }
 
 #[cfg(feature = "s3")]
-fn normalize_s3_cache_id(cache_id: String) -> String {
+fn validate_s3_cache_id(cache_id: String) -> Result<String> {
     let trimmed = cache_id.trim();
     if trimmed.is_empty() {
-        default_s3_cache_id()
+        Err(crate::error::Error::InvalidConfig {
+            field: "s3.cache_id".to_string(),
+            message: "cache_id cannot be empty".to_string(),
+        })
     } else {
-        trimmed.to_string()
+        Ok(trimmed.to_string())
     }
 }
 
@@ -446,7 +449,7 @@ impl Config {
 
         #[cfg(feature = "s3")]
         {
-            config.s3.cache_id = normalize_s3_cache_id(config.s3.cache_id);
+            config.s3.cache_id = validate_s3_cache_id(config.s3.cache_id)?;
         }
 
         // Validate schema name
@@ -1028,6 +1031,29 @@ schema: "invalid-schema-name"
         assert!(!config.s3.cache_id.trim().is_empty());
 
         clear_test_env_vars();
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_from_file_with_empty_s3_cache_id_is_invalid() {
+        let config_content = r#"
+dsn: "s3://bucket/queue.sqlite"
+s3:
+  mode: "durable"
+  cache_id: "   "
+"#;
+        let config_path = create_test_config_file(config_content, "empty_s3_cache_id");
+
+        let result = Config::from_file(&config_path);
+        assert!(result.is_err());
+
+        if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
+            assert_eq!(field, "s3.cache_id");
+        } else {
+            panic!("Expected InvalidConfig error for s3.cache_id");
+        }
+
+        cleanup_test_file(&config_path);
     }
 
     #[test]
