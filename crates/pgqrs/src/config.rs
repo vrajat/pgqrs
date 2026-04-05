@@ -71,7 +71,7 @@ const ENV_POLL_INTERVAL_MS: &str = "PGQRS_POLL_INTERVAL_MS";
 const ENV_SQLITE_USE_WAL: &str = "PGQRS_SQLITE_USE_WAL";
 #[cfg(feature = "s3")]
 const ENV_S3_MODE: &str = "PGQRS_S3_MODE";
-#[cfg(feature = "s3")]
+
 // Default configuration values
 const DEFAULT_MAX_CONNECTIONS: u32 = 16;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 30;
