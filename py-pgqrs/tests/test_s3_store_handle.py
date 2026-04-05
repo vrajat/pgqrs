@@ -120,6 +120,19 @@ async def test_as_s3_returns_handle_for_s3_store(test_dsn):
 
 @requires_backend(TestBackend.S3)
 @pytest.mark.asyncio
+async def test_s3_handle_state_reports_in_sync_after_sync(test_dsn):
+    store = await pgqrs.connect_with(local_s3_config(test_dsn))
+    admin = pgqrs.admin(store)
+    await admin.install()
+    await pgqrs.as_s3(store).sync()
+
+    state = await pgqrs.as_s3(store).state()
+    assert type(state).__name__ == "SyncState"
+    assert state.value == "in_sync"
+
+
+@requires_backend(TestBackend.S3)
+@pytest.mark.asyncio
 async def test_s3_handle_sync_is_idempotent(test_dsn):
     bucket, key = parse_s3_dsn(test_dsn)
     client = s3_client()
