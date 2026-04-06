@@ -1,8 +1,6 @@
 #![allow(non_local_definitions)]
 use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
-#[cfg(feature = "s3")]
-use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 #[cfg(feature = "s3")]
@@ -276,6 +274,25 @@ impl PyConfig {
     fn set_s3_mode(&mut self, mode: PyDurabilityMode) {
         self.inner.s3.mode = mode.into();
     }
+
+    #[cfg(feature = "s3")]
+    #[getter]
+    fn get_s3_cache_id(&self) -> String {
+        self.inner.s3.cache_id.clone()
+    }
+
+    #[cfg(feature = "s3")]
+    #[setter]
+    fn set_s3_cache_id(&mut self, cache_id: String) -> PyResult<()> {
+        let trimmed = cache_id.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::new_err(
+                "Invalid config for field 's3.cache_id': cache id cannot be empty",
+            ));
+        }
+        self.inner.s3.cache_id = trimmed.to_string();
+        Ok(())
+    }
 }
 
 /// Backoff strategy for step retries
@@ -486,6 +503,14 @@ impl PyS3StoreHandle {
             async move { store.sync().await.map_err(to_py_err) },
         )
     }
+
+    fn state<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let store = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let state = store.state().await.map_err(to_py_err)?;
+            Ok(PySyncState::from(state))
+        })
+    }
 }
 
 #[pyfunction]
@@ -630,6 +655,8 @@ fn admin(store: PyStore) -> PyAdmin {
 fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     #[cfg(feature = "s3")]
     m.add_class::<PyDurabilityMode>()?;
+    #[cfg(feature = "s3")]
+    m.add_class::<PySyncState>()?;
     m.add_class::<PyAdmin>()?;
     m.add_class::<PyProducer>()?;
     m.add_class::<PyConsumer>()?;

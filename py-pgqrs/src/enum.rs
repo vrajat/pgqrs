@@ -1,6 +1,4 @@
 use ::pgqrs as rust_pgqrs;
-#[cfg(feature = "s3")]
-use pyo3::class::basic::CompareOp;
 use pyo3::prelude::*;
 use rust_pgqrs::types::{WorkerStatus as RustWorkerStatus, WorkflowStatus as RustWorkflowStatus};
 
@@ -56,75 +54,61 @@ pub enum PyStepResultStatus {
 }
 
 #[cfg(feature = "s3")]
-fn durability_mode_to_str(mode: rust_pgqrs::store::s3::DurabilityMode) -> &'static str {
-    match mode {
-        rust_pgqrs::store::s3::DurabilityMode::Durable => "durable",
-        rust_pgqrs::store::s3::DurabilityMode::Local => "local",
-    }
-}
-
-#[cfg(feature = "s3")]
-#[pyclass(name = "DurabilityMode", frozen)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct PyDurabilityMode {
-    inner: rust_pgqrs::store::s3::DurabilityMode,
+#[pyclass(name = "DurabilityMode")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PyDurabilityMode {
+    Durable,
+    Local,
 }
 
 #[cfg(feature = "s3")]
 impl From<rust_pgqrs::store::s3::DurabilityMode> for PyDurabilityMode {
     fn from(inner: rust_pgqrs::store::s3::DurabilityMode) -> Self {
-        Self { inner }
+        match inner {
+            rust_pgqrs::store::s3::DurabilityMode::Durable => Self::Durable,
+            rust_pgqrs::store::s3::DurabilityMode::Local => Self::Local,
+        }
     }
 }
 
 #[cfg(feature = "s3")]
 impl From<PyDurabilityMode> for rust_pgqrs::store::s3::DurabilityMode {
     fn from(mode: PyDurabilityMode) -> Self {
-        mode.inner
+        match mode {
+            PyDurabilityMode::Durable => Self::Durable,
+            PyDurabilityMode::Local => Self::Local,
+        }
     }
 }
 
 #[cfg(feature = "s3")]
-#[pymethods]
-impl PyDurabilityMode {
-    #[classattr]
-    #[allow(non_snake_case)]
-    fn DURABLE() -> Self {
-        rust_pgqrs::store::s3::DurabilityMode::Durable.into()
-    }
+#[pyclass(name = "SyncState")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PySyncState {
+    LocalMissing,
+    RemoteMissingClean,
+    RemoteMissingDirty,
+    InSync,
+    LocalChanges,
+    RemoteChanges,
+    ConcurrentChanges,
+}
 
-    #[classattr]
-    #[allow(non_snake_case)]
-    fn LOCAL() -> Self {
-        rust_pgqrs::store::s3::DurabilityMode::Local.into()
-    }
-
-    #[getter]
-    fn value(&self) -> &'static str {
-        durability_mode_to_str(self.inner)
-    }
-
-    fn __repr__(&self) -> String {
-        match self.inner {
-            rust_pgqrs::store::s3::DurabilityMode::Durable => "DurabilityMode.DURABLE".to_string(),
-            rust_pgqrs::store::s3::DurabilityMode::Local => "DurabilityMode.LOCAL".to_string(),
-        }
-    }
-
-    fn __str__(&self) -> &'static str {
-        durability_mode_to_str(self.inner)
-    }
-
-    fn __richcmp__(
-        &self,
-        other: PyRef<'_, PyDurabilityMode>,
-        op: CompareOp,
-        py: Python<'_>,
-    ) -> PyObject {
-        match op {
-            CompareOp::Eq => (self.inner == other.inner).into_py(py),
-            CompareOp::Ne => (self.inner != other.inner).into_py(py),
-            _ => py.NotImplemented(),
+#[cfg(feature = "s3")]
+impl From<rust_pgqrs::store::s3::SyncState> for PySyncState {
+    fn from(inner: rust_pgqrs::store::s3::SyncState) -> Self {
+        match inner {
+            rust_pgqrs::store::s3::SyncState::LocalMissing => Self::LocalMissing,
+            rust_pgqrs::store::s3::SyncState::RemoteMissing { local_dirty: false } => {
+                Self::RemoteMissingClean
+            }
+            rust_pgqrs::store::s3::SyncState::RemoteMissing { local_dirty: true } => {
+                Self::RemoteMissingDirty
+            }
+            rust_pgqrs::store::s3::SyncState::InSync => Self::InSync,
+            rust_pgqrs::store::s3::SyncState::LocalChanges => Self::LocalChanges,
+            rust_pgqrs::store::s3::SyncState::RemoteChanges => Self::RemoteChanges,
+            rust_pgqrs::store::s3::SyncState::ConcurrentChanges => Self::ConcurrentChanges,
         }
     }
 }

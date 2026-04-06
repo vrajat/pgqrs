@@ -107,16 +107,23 @@ pub enum DurabilityMode {
 ///   - remote etag matches the local etag baseline
 ///   - local state is not dirty
 ///
-/// - `Diverged { local_dirty }`
-///   - local and remote are both present, but they are not currently aligned
-///   - this may mean remote advanced, local has unsynced writes, or both
-///   - the enum deliberately does not try to declare a winner/head revision
+/// - `LocalChanges`
+///   - local and remote etags match, but local is dirty (unsynced local writes)
+///
+/// - `RemoteChanges`
+///   - local is clean, but remote etag has advanced beyond local baseline
+///
+/// - `ConcurrentChanges`
+///   - local is dirty and remote etag has also advanced
+///   - indicates concurrent updates across writers/processes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
     LocalMissing,
     RemoteMissing { local_dirty: bool },
     InSync,
-    Diverged { local_dirty: bool },
+    LocalChanges,
+    RemoteChanges,
+    ConcurrentChanges,
 }
 
 #[derive(Clone)]
@@ -239,11 +246,6 @@ impl S3Store {
             DurabilityStore::Local(db) => db.state().await,
             DurabilityStore::Durable(db) => db.state().await,
         }
-    }
-
-    /// Parse `sqlite://` cache dsn from an `s3://` DSN.
-    pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
-        parse_and_cache_s3_dsn(dsn)
     }
 
     pub fn object_store_from_env(bucket: &str) -> Result<Arc<dyn ObjectStore>> {
@@ -553,21 +555,7 @@ pub fn parse_s3_bucket_and_key(dsn: &str) -> Result<(String, String)> {
     Ok((bucket.to_owned(), key.to_owned()))
 }
 
-fn cache_prefix() -> String {
-    if let Ok(prefix) = std::env::var("PGQRS_S3_CACHE_PREFIX") {
-        let trimmed = prefix.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "host".to_string());
-    format!("{}_{}", host, std::process::id())
-}
-
-fn sanitize_cache_component(input: &str) -> String {
+pub(crate) fn sanitize_cache_component(input: &str) -> String {
     let out: String = input
         .chars()
         .map(|c| match c {
@@ -582,17 +570,7 @@ fn sanitize_cache_component(input: &str) -> String {
     }
 }
 
-fn parse_and_cache_s3_dsn(dsn: &str) -> Result<String> {
-    let dir = s3_local_cache_dir_for_dsn(dsn)?;
-    Ok(format!(
-        "sqlite://{}?mode=rwc",
-        dir.join("bootstrap.sqlite").to_string_lossy()
-    ))
-}
-
-pub(crate) fn s3_local_cache_dir_for_dsn(dsn: &str) -> Result<PathBuf> {
-    let (bucket, key) = parse_s3_bucket_and_key(dsn)?;
-
+pub(crate) fn ensure_s3_local_cache_dir(cache_id: &str) -> Result<PathBuf> {
     let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(PathBuf::from))
@@ -602,13 +580,7 @@ pub(crate) fn s3_local_cache_dir_for_dsn(dsn: &str) -> Result<PathBuf> {
         message: format!("Failed to create S3 cache directory: {}", e),
     })?;
 
-    let prefix = cache_prefix();
-    let mut path = base_dir
-        .join(sanitize_cache_component(&prefix))
-        .join(sanitize_cache_component(&bucket));
-    for segment in key.split('/') {
-        path = path.join(sanitize_cache_component(segment));
-    }
+    let path = base_dir.join(sanitize_cache_component(cache_id));
 
     std::fs::create_dir_all(&path).map_err(|e| Error::InvalidConfig {
         field: "PGQRS_S3_LOCAL_CACHE_DIR".to_string(),
@@ -618,14 +590,9 @@ pub(crate) fn s3_local_cache_dir_for_dsn(dsn: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Map an `s3://...` DSN to a deterministic local cache DSN.
-pub fn sqlite_cache_dsn_from_s3_dsn(dsn: &str) -> Result<String> {
-    parse_and_cache_s3_dsn(dsn)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_s3_bucket_and_key, sqlite_cache_dsn_from_s3_dsn};
+    use super::{ensure_s3_local_cache_dir, parse_s3_bucket_and_key};
 
     #[test]
     fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
@@ -653,16 +620,8 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_cache_mapping_is_deterministic() {
-        let a = sqlite_cache_dsn_from_s3_dsn("s3://bucket/queue.db").unwrap();
-        let b = sqlite_cache_dsn_from_s3_dsn("s3://bucket/queue.db").unwrap();
-        assert_eq!(a, b);
-        assert!(a.starts_with("sqlite://"));
-    }
-
-    #[test]
-    fn sqlite_cache_mapping_rejects_invalid_input() {
-        let err = sqlite_cache_dsn_from_s3_dsn("sqlite://foo").unwrap_err();
-        assert!(err.to_string().contains("Invalid S3 DSN"));
+    fn local_cache_dir_uses_only_cache_id() {
+        let dir = ensure_s3_local_cache_dir("cache-a").unwrap();
+        assert_eq!(dir.file_name().unwrap().to_string_lossy(), "cache-a");
     }
 }

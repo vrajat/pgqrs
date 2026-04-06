@@ -1,8 +1,8 @@
-import pytest
+import asyncio
 from datetime import datetime, timedelta, timezone
 
-import pytest
 import pgqrs
+import pytest
 from pgqrs import Run
 
 
@@ -16,9 +16,13 @@ async def setup_test(dsn, schema):
 
 
 async def dequeue_one(consumer):
-    msgs = await consumer.dequeue(batch_size=1)
-    assert len(msgs) == 1
-    return msgs[0]
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=2)
+    while datetime.now(timezone.utc) < deadline:
+        msgs = await consumer.dequeue(batch_size=1)
+        if len(msgs) == 1:
+            return msgs[0]
+        await asyncio.sleep(0.01)
+    assert False, "expected one message, got none before deadline"
 
 
 async def execute_step(run: Run, name: str, current_time, action):

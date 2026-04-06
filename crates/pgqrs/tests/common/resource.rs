@@ -182,7 +182,7 @@ fn sanitize_component(s: &str) -> String {
     }
 }
 
-// --- S3 File Resource (S3 DSN + local cache cleanup) ---
+// --- S3 File Resource ---
 #[cfg(feature = "s3")]
 pub struct S3FileResource {
     bucket: String,
@@ -203,34 +203,6 @@ impl S3FileResource {
     fn track_dsn(&self, dsn: String) {
         let mut dsns = self.issued_dsns.lock().unwrap();
         dsns.push(dsn);
-    }
-
-    fn cleanup_local_cache_for_dsn(dsn: &str) {
-        let Ok(cache_dsn) = pgqrs::store::s3::sqlite_cache_dsn_from_s3_dsn(dsn) else {
-            return;
-        };
-        let Some(raw) = cache_dsn.strip_prefix("sqlite://") else {
-            return;
-        };
-        let db_path = PathBuf::from(raw.split('?').next().unwrap_or_default());
-        if db_path.as_os_str().is_empty() {
-            return;
-        }
-
-        if db_path.exists() {
-            let _ = std::fs::remove_file(&db_path);
-        }
-        let _ = std::fs::remove_file(PathBuf::from(format!("{}-wal", db_path.to_string_lossy())));
-        let _ = std::fs::remove_file(PathBuf::from(format!("{}-shm", db_path.to_string_lossy())));
-
-        let state_dir = db_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(""))
-            .join(db_path.file_stem().unwrap_or_default())
-            .with_extension("s3state");
-        if state_dir.exists() {
-            let _ = std::fs::remove_dir_all(state_dir);
-        }
     }
 
     async fn delete_remote_objects(dsns: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -276,11 +248,8 @@ impl S3FileResource {
             snapshot
         };
 
-        for dsn in &snapshot {
-            Self::cleanup_local_cache_for_dsn(dsn);
-        }
         if delete_remote {
-            // Best effort remote cleanup; keep local cleanup deterministic even if S3 deletion fails.
+            // Best effort remote cleanup.
             let _ = Self::delete_remote_objects(&snapshot).await;
         }
         Ok(())

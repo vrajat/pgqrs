@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator, ClassVar
+from typing import List, Optional, Any, Callable, Awaitable, Union, AsyncIterator
 from .decorators import WorkflowDef, workflow as workflow, step as step
 
 class PgqrsError(Exception): ...
@@ -20,11 +20,18 @@ class RetriesExhaustedError(PgqrsError): ...
 class StepNotReadyError(PgqrsError): ...
 class PausedError(PgqrsError): ...
 
-class DurabilityMode:
-    DURABLE: ClassVar["DurabilityMode"]
-    LOCAL: ClassVar["DurabilityMode"]
-    @property
-    def value(self) -> str: ...
+class DurabilityMode(Enum):
+    Durable: "DurabilityMode"
+    Local: "DurabilityMode"
+
+class SyncState(Enum):
+    LocalMissing: "SyncState"
+    RemoteMissingClean: "SyncState"
+    RemoteMissingDirty: "SyncState"
+    InSync: "SyncState"
+    LocalChanges: "SyncState"
+    RemoteChanges: "SyncState"
+    ConcurrentChanges: "SyncState"
 
 class WorkerStatus(Enum):
     Ready: "WorkerStatus"
@@ -169,6 +176,10 @@ class Config:
     def s3_mode(self) -> DurabilityMode: ...
     @s3_mode.setter
     def s3_mode(self, value: DurabilityMode) -> None: ...
+    @property
+    def s3_cache_id(self) -> str: ...
+    @s3_cache_id.setter
+    def s3_cache_id(self, value: str) -> None: ...
 
 class Store:
     async def producer(self, queue: str) -> "Producer": ...
@@ -188,6 +199,7 @@ class Store:
 class S3StoreHandle:
     async def snapshot(self) -> None: ...
     async def sync(self) -> None: ...
+    async def state(self) -> SyncState: ...
 
 class Producer:
     @property
