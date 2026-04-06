@@ -193,17 +193,17 @@ async fn test_zombie_consumer_race_condition() {
         .expect("Failed to create queue");
 
     // 2. Setup Producer and Consumer A & B
-    let producer = pgqrs::producer("producer_host", 1000, queue_name)
+    let producer = pgqrs::producer("producer_host-1000", queue_name)
         .create(&store)
         .await
         .expect("Failed to register producer");
 
-    let consumer_a = pgqrs::consumer("consumer_a", 2000, queue_name)
+    let consumer_a = pgqrs::consumer("consumer_a-2000", queue_name)
         .create(&store)
         .await
         .expect("Failed to register consumer A");
 
-    let consumer_b = pgqrs::consumer("consumer_b", 2001, queue_name)
+    let consumer_b = pgqrs::consumer("consumer_b-2001", queue_name)
         .create(&store)
         .await
         .expect("Failed to register consumer B");
@@ -315,11 +315,11 @@ async fn test_single_process_producer_consumer_contention() {
         .expect("Failed to create queue");
 
     let producer = store
-        .producer(&queue_name, "serialized-prod", 3101, &config)
+        .producer(&queue_name, "serialized-prod-3101", &config)
         .await
         .expect("Failed to create producer");
     let consumer = store
-        .consumer(&queue_name, "serialized-cons", 3102, &config)
+        .consumer(&queue_name, "serialized-cons-3102", &config)
         .await
         .expect("Failed to create consumer");
 
@@ -391,15 +391,15 @@ async fn test_zombie_consumer_batch_ops() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("prod", 1, queue_name)
+    let producer = pgqrs::producer("prod-1", queue_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer_a = pgqrs::consumer("con_a", 2, queue_name)
+    let consumer_a = pgqrs::consumer("con_a-2", queue_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer_b = pgqrs::consumer("con_b", 3, queue_name)
+    let consumer_b = pgqrs::consumer("con_b-3", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -493,17 +493,17 @@ async fn test_concurrent_visibility_extension() {
     let queue_name = "concurrent_vis_queue";
     let _queue_info = store.queue(queue_name).await.unwrap();
 
-    let consumer_a = pgqrs::consumer("consumer_a", 1001, queue_name)
+    let consumer_a = pgqrs::consumer("consumer_a-1001", queue_name)
         .create(&store)
         .await
         .unwrap();
 
-    let consumer_b = pgqrs::consumer("consumer_b", 1002, queue_name)
+    let consumer_b = pgqrs::consumer("consumer_b-1002", queue_name)
         .create(&store)
         .await
         .unwrap();
 
-    let producer = pgqrs::producer("producer", 2001, queue_name)
+    let producer = pgqrs::producer("producer-2001", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -548,7 +548,7 @@ async fn test_workflow_scenario_success() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_success_cons", 3200, workflow_name)
+    let consumer = pgqrs::consumer("scenario_success_cons-3200", workflow_name)
         .create(&store)
         .await?;
 
@@ -615,7 +615,7 @@ async fn test_workflow_scenario_permanent_error() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_perm_err_cons", 3210, workflow_name)
+    let consumer = pgqrs::consumer("scenario_perm_err_cons-3210", workflow_name)
         .create(&store)
         .await?;
 
@@ -698,7 +698,7 @@ async fn test_workflow_scenario_crash_recovery() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_crash_cons", 3220, workflow_name)
+    let consumer = pgqrs::consumer("scenario_crash_cons-3220", workflow_name)
         .create(&store)
         .await?;
 
@@ -823,7 +823,7 @@ async fn test_workflow_step_crash_recovery() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_step_crash_cons", 3250, workflow_name)
+    let consumer = pgqrs::consumer("scenario_step_crash_cons-3250", workflow_name)
         .create(&store)
         .await?;
 
@@ -932,7 +932,7 @@ async fn test_workflow_scenario_transient_error() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_transient_cons", 3230, workflow_name)
+    let consumer = pgqrs::consumer("scenario_transient_cons-3230", workflow_name)
         .create(&store)
         .await?;
 
@@ -1006,7 +1006,7 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_pause_cons", 3240, workflow_name)
+    let consumer = pgqrs::consumer("scenario_pause_cons-3240", workflow_name)
         .create(&store)
         .await?;
 

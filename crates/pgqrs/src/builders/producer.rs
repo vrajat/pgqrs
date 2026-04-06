@@ -9,33 +9,26 @@ use crate::store::Store;
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-/// let producer = pgqrs::producer("localhost", 3000, "orders").create(&store).await?;
+/// let producer = pgqrs::producer("orders-worker", "orders").create(&store).await?;
 /// # Ok(()) }
 /// ```
-pub fn producer<'a>(hostname: &'a str, port: i32, queue: &'a str) -> ProducerBuilder<'a> {
-    ProducerBuilder::new(hostname, port, queue)
+pub fn producer<'a>(name: &'a str, queue: &'a str) -> ProducerBuilder<'a> {
+    ProducerBuilder::new(name, queue)
 }
 
 /// Builder for creating a managed producer worker.
 pub struct ProducerBuilder<'a> {
-    hostname: &'a str,
-    port: i32,
+    name: &'a str,
     queue: &'a str,
 }
 
 impl<'a> ProducerBuilder<'a> {
-    pub fn new(hostname: &'a str, port: i32, queue: &'a str) -> Self {
-        Self {
-            hostname,
-            port,
-            queue,
-        }
+    pub fn new(name: &'a str, queue: &'a str) -> Self {
+        Self { name, queue }
     }
 
     /// Create the producer worker
     pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Producer> {
-        store
-            .producer(self.queue, self.hostname, self.port, store.config())
-            .await
+        store.producer(self.queue, self.name, store.config()).await
     }
 }

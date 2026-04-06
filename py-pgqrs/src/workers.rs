@@ -24,13 +24,13 @@ impl PyProducer {
 
     #[staticmethod]
     #[pyo3(name = "new_producer")]
-    fn init(admin: &PyAdmin, queue: String, hostname: String, port: i32) -> PyResult<Self> {
+    fn init(admin: &PyAdmin, queue: String, name: String) -> PyResult<Self> {
         let store = admin.store.clone();
         let rt = get_runtime();
 
         let producer = rt.block_on(async {
             // Use Store trait method directly - returns Producer struct
-            rust_pgqrs::Store::producer(&store, &queue, &hostname, port, store.config())
+            rust_pgqrs::Store::producer(&store, &queue, &name, store.config())
                 .await
                 .map_err(to_py_err)
         })?;
@@ -98,13 +98,13 @@ impl PyConsumer {
 
     #[staticmethod]
     #[pyo3(name = "new_consumer")]
-    fn init(admin: &PyAdmin, queue: String, hostname: String, port: i32) -> PyResult<Self> {
+    fn init(admin: &PyAdmin, queue: String, name: String) -> PyResult<Self> {
         let store = admin.store.clone();
         let rt = get_runtime();
 
         let consumer = rt.block_on(async {
             // Use Store trait method directly - returns Consumer struct
-            rust_pgqrs::Store::consumer(&store, &queue, &hostname, port, store.config())
+            rust_pgqrs::Store::consumer(&store, &queue, &name, store.config())
                 .await
                 .map_err(to_py_err)
         })?;
@@ -304,7 +304,7 @@ pub struct PyWorkerInfo {
     #[pyo3(get)]
     pub id: i64,
     #[pyo3(get)]
-    pub hostname: String,
+    pub name: String,
     #[pyo3(get)]
     pub status: PyWorkerStatus,
     #[pyo3(get)]
@@ -317,7 +317,7 @@ impl From<RustWorkerInfo> for PyWorkerInfo {
     fn from(r: RustWorkerInfo) -> Self {
         PyWorkerInfo {
             id: r.id,
-            hostname: r.hostname,
+            name: r.name,
             status: PyWorkerStatus::from(r.status),
             queue_id: r.queue_id,
             heartbeat_at: r.heartbeat_at.to_rfc3339(),

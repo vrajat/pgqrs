@@ -446,16 +446,11 @@ where
             .await
     }
 
-    async fn register(
-        &self,
-        queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerRecord> {
-        let hostname = hostname.to_string();
+    async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
+        let name = name.to_string();
         self.db
             .with_write(|store| {
-                Box::pin(async move { store.workers().register(queue_id, &hostname, port).await })
+                Box::pin(async move { store.workers().register(queue_id, &name).await })
             })
             .await
     }

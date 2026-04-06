@@ -49,12 +49,12 @@ async fn test_pgbouncer_happy_path() {
     let queue_info = queue_result.unwrap();
 
     // Create producer/consumer using the builder API
-    let producer = pgqrs::producer("pgbouncer_test_producer", 3000, &queue_info.queue_name)
+    let producer = pgqrs::producer("pgbouncer_test_producer-3000", &queue_info.queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer through PgBouncer");
 
-    let consumer = pgqrs::consumer("pgbouncer_test_consumer", 3001, &queue_info.queue_name)
+    let consumer = pgqrs::consumer("pgbouncer_test_consumer-3001", &queue_info.queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer through PgBouncer");

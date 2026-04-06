@@ -42,10 +42,10 @@ async fn test_sqlite_connect() {
     // 3. Worker Operations
     let worker = store
         .workers()
-        .register(Some(queue.id), "test-host", 1234)
+        .register(Some(queue.id), "test-host-1234")
         .await
         .expect("Failed to register worker");
-    assert_eq!(worker.hostname, "test-host");
+    assert_eq!(worker.name, "test-host-1234");
 
     // 4. Message Operations
     let payload = serde_json::json!({"foo": "bar"});

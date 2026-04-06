@@ -22,7 +22,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         let queue = store.queue(queue_name).await?;
 
         // 3. Create Producer & Enqueue
-        let producer = pgqrs::producer("producer-host", 1001, queue_name)
+        let producer = pgqrs::producer("producer-host-1001", queue_name)
             .create(&store)
             .await?;
 
@@ -39,7 +39,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         assert_eq!(stored_msg.payload, payload);
 
         // 4. Create Consumer & Dequeue
-        let consumer = pgqrs::consumer("consumer-host", 2001, queue_name)
+        let consumer = pgqrs::consumer("consumer-host-2001", queue_name)
             .create(&store)
             .await?;
 
@@ -112,7 +112,7 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
 
         // Reset: Make message owned by a new zombie
         // Use a new consumer for the next test phase
-        let consumer_2 = pgqrs::consumer("consumer-2", 2002, queue_name)
+        let consumer_2 = pgqrs::consumer("consumer-2-2002", queue_name)
             .create(&store)
             .await?;
 

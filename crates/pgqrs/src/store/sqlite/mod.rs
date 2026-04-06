@@ -283,14 +283,9 @@ impl Store for SqliteStore {
             .await
     }
 
-    async fn admin(
-        &self,
-        hostname: &str,
-        port: i32,
-        config: &Config,
-    ) -> Result<crate::workers::Admin> {
+    async fn admin(&self, name: &str, config: &Config) -> Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new(self.any_store(), hostname, port).await
+        crate::workers::Admin::new(self.any_store(), name).await
     }
 
     async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
@@ -301,13 +296,11 @@ impl Store for SqliteStore {
     async fn producer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> Result<crate::workers::Producer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
-        let worker_record =
-            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
+        let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Producer::new(
             self.any_store(),
@@ -320,14 +313,12 @@ impl Store for SqliteStore {
     async fn consumer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> Result<crate::workers::Consumer> {
         let _ = config;
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
-        let worker_record =
-            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
+        let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Consumer::new(
             self.any_store(),

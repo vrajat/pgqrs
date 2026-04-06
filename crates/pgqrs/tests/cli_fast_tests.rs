@@ -238,7 +238,7 @@ fn test_queue_purge() {
         if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
             s3_store.snapshot().await.unwrap();
         }
-        let producer = pgqrs::producer("test_host", 8080, "test_purge")
+        let producer = pgqrs::producer("test_host-8080", "test_purge")
             .create(&store)
             .await
             .unwrap();

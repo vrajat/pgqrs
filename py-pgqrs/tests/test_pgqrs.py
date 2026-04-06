@@ -672,7 +672,7 @@ async def test_consume_stream_iterator(test_dsn, schema):
     ephemeral_workers = [
         w
         for w in workers
-        if w.hostname.startswith("__ephemeral__") and w.queue_id is not None
+        if w.name.startswith("__ephemeral__") and w.queue_id is not None
     ]
 
     # Verify that any ephemeral worker found is in 'stopped' status

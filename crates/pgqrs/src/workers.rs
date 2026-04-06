@@ -46,8 +46,8 @@ pub struct WorkerHandle {
 }
 
 impl Admin {
-    pub(crate) async fn new(store: AnyStore, hostname: &str, port: i32) -> Result<Self> {
-        let worker_record = store.workers().register(None, hostname, port).await?;
+    pub(crate) async fn new(store: AnyStore, name: &str) -> Result<Self> {
+        let worker_record = store.workers().register(None, name).await?;
         Ok(Self {
             store,
             worker_record,

@@ -13,25 +13,25 @@ use sqlx::PgPool;
 
 // SQL constants for worker table operations
 const INSERT_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO pgqrs_workers (name, queue_id, started_at, heartbeat_at, status)
+    VALUES ($1, $2, $3, $4, $5)
     RETURNING id
 "#;
 
 const GET_WORKER_BY_ID: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE id = $1
 "#;
 
 const LIST_ALL_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     ORDER BY started_at DESC
 "#;
 
 const LIST_WORKERS_BY_QUEUE: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = $1
     ORDER BY started_at DESC
@@ -51,14 +51,14 @@ const COUNT_WORKERS_BY_QUEUE_TX: &str = r#"
 "#;
 
 const LIST_WORKERS_BY_QUEUE_AND_STATE: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = $1 AND status = $2
     ORDER BY started_at DESC
 "#;
 
 const LIST_ZOMBIE_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = $1
     AND status IN ('ready', 'polling', 'suspended', 'interrupted')
@@ -66,11 +66,11 @@ const LIST_ZOMBIE_WORKERS: &str = r#"
     ORDER BY heartbeat_at ASC
 "#;
 
-/// SQL to find existing worker by hostname and port
-const FIND_WORKER_BY_HOST_PORT: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+/// SQL to find existing worker by name
+const FIND_WORKER_BY_NAME: &str = r#"
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
-    WHERE hostname = $1 AND port = $2
+    WHERE name = $1
 "#;
 
 /// SQL to reset a stopped worker back to ready state
@@ -78,14 +78,14 @@ const RESET_WORKER_TO_READY: &str = r#"
     UPDATE pgqrs_workers
     SET status = 'ready', queue_id = $2, started_at = NOW(), heartbeat_at = NOW(), shutdown_at = NULL
     WHERE id = $1 AND status = 'stopped'
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
 "#;
 
-/// SQL to insert a new ephemeral worker (unique hostname with UUID, port -1)
+/// SQL to insert a new ephemeral worker
 const INSERT_EPHEMERAL_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
-    VALUES ($1, -1, $2, 'ready')
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    INSERT INTO pgqrs_workers (name, queue_id, status)
+    VALUES ($1, $2, 'ready')
+    RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
 "#;
 
 /// Workers table CRUD operations for pgqrs.
@@ -376,8 +376,7 @@ impl crate::store::WorkerTable for Workers {
         let now = Utc::now();
 
         let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
-            .bind(&data.hostname)
-            .bind(data.port)
+            .bind(&data.name)
             .bind(data.queue_id)
             .bind(now)
             .bind(now)
@@ -387,13 +386,12 @@ impl crate::store::WorkerTable for Workers {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_WORKER".into(),
                 source: Box::new(e),
-                context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
+                context: format!("Failed to insert worker {}", data.name),
             })?;
 
         Ok(WorkerRecord {
             id: worker_id,
-            hostname: data.hostname,
-            port: data.port,
+            name: data.name,
             queue_id: data.queue_id,
             started_at: now,
             heartbeat_at: now,
@@ -596,22 +594,15 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn register(
-        &self,
-        queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerRecord> {
-        // Try to find existing worker by hostname+port
-        let existing_worker: Option<WorkerRecord> = sqlx::query_as(FIND_WORKER_BY_HOST_PORT)
-            .bind(hostname)
-            .bind(port)
+    async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
+        let existing_worker: Option<WorkerRecord> = sqlx::query_as(FIND_WORKER_BY_NAME)
+            .bind(name)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("FIND_WORKER_BY_HOST_PORT ({}:{})", hostname, port),
+                query: format!("FIND_WORKER_BY_NAME ({})", name),
                 source: Box::new(e),
-                context: format!("Failed to find worker {}:{}", hostname, port),
+                context: format!("Failed to find worker {}", name),
             })?;
 
         let worker_info = match existing_worker {
@@ -627,30 +618,30 @@ impl crate::store::WorkerTable for Workers {
                             .map_err(|e| crate::error::Error::QueryFailed {
                                 query: format!("RESET_WORKER_TO_READY ({})", worker.id),
                                 source: Box::new(e),
-                                context: format!("Failed to reset worker {}:{}", hostname, port),
+                                context: format!("Failed to reset worker {}", name),
                             })?
                     }
                     WorkerStatus::Ready => {
                         return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
-                                "Worker {}:{} is already active. Cannot register duplicate.",
-                                hostname, port
+                                "Worker {} is already active. Cannot register duplicate.",
+                                name
                             ),
                         });
                     }
                     WorkerStatus::Suspended => {
                         return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
-                                "Worker {}:{} is suspended. Use resume() to reactivate.",
-                                hostname, port
+                                "Worker {} is suspended. Use resume() to reactivate.",
+                                name
                             ),
                         });
                     }
                     WorkerStatus::Polling | WorkerStatus::Interrupted => {
                         return Err(crate::error::Error::ValidationFailed {
                             reason: format!(
-                                "Worker {}:{} is already active. Cannot register duplicate.",
-                                hostname, port
+                                "Worker {} is already active. Cannot register duplicate.",
+                                name
                             ),
                         });
                     }
@@ -659,10 +650,8 @@ impl crate::store::WorkerTable for Workers {
             None => {
                 // Create new worker
                 let now = Utc::now();
-                // We use INSERT_WORKER constant defined at top of file, but adapt it to handle Option<queue_id>
                 let inserted_id: i64 = sqlx::query_scalar(INSERT_WORKER)
-                    .bind(hostname)
-                    .bind(port)
+                    .bind(name)
                     .bind(queue_id)
                     .bind(now)
                     .bind(now)
@@ -672,13 +661,12 @@ impl crate::store::WorkerTable for Workers {
                     .map_err(|e| crate::error::Error::QueryFailed {
                         query: "INSERT_WORKER".into(),
                         source: Box::new(e),
-                        context: format!("Failed to insert new worker {}:{}", hostname, port),
+                        context: format!("Failed to insert new worker {}", name),
                     })?;
 
                 WorkerRecord {
                     id: inserted_id,
-                    hostname: hostname.to_string(),
-                    port,
+                    name: name.to_string(),
                     queue_id,
                     started_at: now,
                     heartbeat_at: now,
@@ -691,12 +679,10 @@ impl crate::store::WorkerTable for Workers {
     }
 
     async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
-        // Generate a unique hostname using UUID
-        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+        let name = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
-        // Create new ephemeral worker (always creates new, never reuses)
         let worker_info = sqlx::query_as::<_, WorkerRecord>(INSERT_EPHEMERAL_WORKER)
-            .bind(&hostname)
+            .bind(&name)
             .bind(queue_id)
             .fetch_one(&self.pool)
             .await

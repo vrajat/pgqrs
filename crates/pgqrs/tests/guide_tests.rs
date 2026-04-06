@@ -97,12 +97,12 @@ async fn test_basic_queue_single_consumer_handler_poll() {
     let queue = "guide_basic_queue_single";
     pgqrs::admin(&store).create_queue(queue).await.unwrap();
 
-    let producer = pgqrs::producer("guide-producer", 9001, queue)
+    let producer = pgqrs::producer("guide-producer-9001", queue)
         .create(&store)
         .await
         .unwrap();
 
-    let consumer = pgqrs::consumer("guide-consumer", 9101, queue)
+    let consumer = pgqrs::consumer("guide-consumer-9101", queue)
         .create(&store)
         .await
         .unwrap();
@@ -165,17 +165,17 @@ async fn test_basic_queue_two_consumers_poll_batch_handoff() {
     let queue = "guide_basic_queue_handoff";
     pgqrs::admin(&store).create_queue(queue).await.unwrap();
 
-    let producer = pgqrs::producer("guide-producer", 9002, queue)
+    let producer = pgqrs::producer("guide-producer-9002", queue)
         .create(&store)
         .await
         .unwrap();
 
-    let consumer_a = pgqrs::consumer("guide-consumer-a", 9102, queue)
+    let consumer_a = pgqrs::consumer("guide-consumer-a-9102", queue)
         .create(&store)
         .await
         .unwrap();
 
-    let consumer_b = pgqrs::consumer("guide-consumer-b", 9103, queue)
+    let consumer_b = pgqrs::consumer("guide-consumer-b-9103", queue)
         .create(&store)
         .await
         .unwrap();
@@ -275,16 +275,16 @@ async fn test_basic_queue_two_consumers_continuous_handler_poll_interrupt() {
 
     let queue_id = store.queues().get_by_name(queue).await.unwrap().id;
 
-    let producer = pgqrs::producer("guide-producer", 9003, queue)
+    let producer = pgqrs::producer("guide-producer-9003", queue)
         .create(&store)
         .await
         .unwrap();
 
-    let consumer_a = pgqrs::consumer("guide-consumer-a", 9104, queue)
+    let consumer_a = pgqrs::consumer("guide-consumer-a-9104", queue)
         .create(&store)
         .await
         .unwrap();
-    let consumer_b = pgqrs::consumer("guide-consumer-b", 9105, queue)
+    let consumer_b = pgqrs::consumer("guide-consumer-b-9105", queue)
         .create(&store)
         .await
         .unwrap();
@@ -424,7 +424,7 @@ async fn test_basic_workflow_ephemeral_trigger() {
 
     // --8<-- [start:basic_workflow_consumer_start]
     // Create a consumer to process the workflow
-    let consumer = pgqrs::consumer("workflow-worker", 9501, "process_task")
+    let consumer = pgqrs::consumer("workflow-worker-9501", "process_task")
         .create(&store)
         .await
         .unwrap();
@@ -504,7 +504,7 @@ async fn test_durable_workflow_crash_recovery() {
         .unwrap();
 
     // Create consumer
-    let consumer = pgqrs::consumer("crash-worker", 9601, "crash_recovery_wf")
+    let consumer = pgqrs::consumer("crash-worker-9601", "crash_recovery_wf")
         .create(&store)
         .await
         .unwrap();
@@ -588,7 +588,7 @@ async fn test_durable_workflow_crash_recovery() {
 
     // --8<-- [start:durable_workflow_crash_recovery]
     // Create new consumer to resume and complete the workflow
-    let consumer2 = pgqrs::consumer("crash-worker-2", 9602, "crash_recovery_wf")
+    let consumer2 = pgqrs::consumer("crash-worker-2-9602", "crash_recovery_wf")
         .create(&store)
         .await
         .unwrap();
@@ -665,7 +665,7 @@ async fn test_durable_workflow_transient_error() {
         .unwrap();
 
     // Create consumer
-    let consumer = pgqrs::consumer("transient-worker", 9603, "transient_error_wf")
+    let consumer = pgqrs::consumer("transient-worker-9603", "transient_error_wf")
         .create(&store)
         .await
         .unwrap();
@@ -781,7 +781,7 @@ async fn test_durable_workflow_pause() {
         .unwrap();
 
     // Create consumer
-    let consumer = pgqrs::consumer("pause-worker", 9604, "pause_wf")
+    let consumer = pgqrs::consumer("pause-worker-9604", "pause_wf")
         .create(&store)
         .await
         .unwrap();

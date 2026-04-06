@@ -42,7 +42,7 @@
 //!     .create(&store)
 //!     .await?;
 //!
-//! let consumer = pgqrs::consumer("worker-1", 8080, archive_files.name())
+//! let consumer = pgqrs::consumer("worker-1", archive_files.name())
 //!     .create(&store)
 //!     .await?;
 //!
@@ -139,15 +139,11 @@ pub fn admin<S: Store>(store: &S) -> builders::admin::AdminBuilder<'_, S> {
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-/// let producer = pgqrs::producer("localhost", 3000, "orders").create(&store).await?;
+/// let producer = pgqrs::producer("orders-worker", "orders").create(&store).await?;
 /// # Ok(()) }
 /// ```
-pub fn producer<'a>(
-    hostname: &'a str,
-    port: i32,
-    queue: &'a str,
-) -> builders::producer::ProducerBuilder<'a> {
-    builders::producer::ProducerBuilder::new(hostname, port, queue)
+pub fn producer<'a>(name: &'a str, queue: &'a str) -> builders::producer::ProducerBuilder<'a> {
+    builders::producer::ProducerBuilder::new(name, queue)
 }
 
 /// Create a managed consumer worker.
@@ -156,15 +152,11 @@ pub fn producer<'a>(
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-/// let consumer = pgqrs::consumer("localhost", 3000, "orders").create(&store).await?;
+/// let consumer = pgqrs::consumer("orders-worker", "orders").create(&store).await?;
 /// # Ok(()) }
 /// ```
-pub fn consumer<'a>(
-    hostname: &'a str,
-    port: i32,
-    queue: &'a str,
-) -> builders::consumer::ConsumerBuilder<'a> {
-    builders::consumer::ConsumerBuilder::new(hostname, port, queue)
+pub fn consumer<'a>(name: &'a str, queue: &'a str) -> builders::consumer::ConsumerBuilder<'a> {
+    builders::consumer::ConsumerBuilder::new(name, queue)
 }
 
 /// Start an enqueue operation.

@@ -105,8 +105,7 @@ pub trait Store: Send + Sync + 'static {
     /// Get an admin worker interface.
     async fn admin(
         &self,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<crate::workers::Admin>;
 
@@ -118,8 +117,7 @@ pub trait Store: Send + Sync + 'static {
     async fn producer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<Producer>;
 
@@ -127,8 +125,7 @@ pub trait Store: Send + Sync + 'static {
     async fn consumer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<Consumer>;
 
@@ -153,14 +150,14 @@ pub trait Store: Send + Sync + 'static {
     /// Returns the backend name (e.g., "postgres", "sqlite", "turso")
     fn backend_name(&self) -> &'static str;
 
-    /// Create an ephemeral producer (NULL hostname/port, auto-cleanup).
+    /// Create an ephemeral producer (auto-cleanup).
     async fn producer_ephemeral(
         &self,
         queue: &str,
         config: &Config,
     ) -> crate::error::Result<Producer>;
 
-    /// Create an ephemeral consumer (NULL hostname/port, auto-cleanup).
+    /// Create an ephemeral consumer (auto-cleanup).
     async fn consumer_ephemeral(
         &self,
         queue: &str,

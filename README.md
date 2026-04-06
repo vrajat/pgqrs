@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // For a quickstart, spawning the worker in the same process keeps the example
     // self-contained. In production, run this polling loop in a dedicated worker
     // service instead.
-    let consumer = pgqrs::consumer("workflow-worker", 8080, archive_files.name())
+    let consumer = pgqrs::consumer("workflow-worker-8080", archive_files.name())
         .create(&store)
         .await?;
     let store_for_worker = store.clone();

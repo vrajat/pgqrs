@@ -9,25 +9,25 @@ use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
 const INSERT_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO pgqrs_workers (name, queue_id, started_at, heartbeat_at, status)
+    VALUES ($1, $2, $3, $4, $5)
     RETURNING id;
 "#;
 
 const GET_WORKER_BY_ID: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE id = $1;
 "#;
 
 const LIST_ALL_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     ORDER BY started_at DESC;
 "#;
 
 const LIST_WORKERS_BY_QUEUE: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = $1
     ORDER BY started_at DESC;
@@ -39,9 +39,9 @@ const DELETE_WORKER_BY_ID: &str = r#"
 "#;
 
 const INSERT_EPHEMERAL_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status)
-    VALUES ($1, -1, $2, 'ready')
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status;
+    INSERT INTO pgqrs_workers (name, queue_id, status)
+    VALUES ($1, $2, 'ready')
+    RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status;
 "#;
 
 #[derive(Debug, Clone)]
@@ -56,8 +56,7 @@ impl SqliteWorkerTable {
 
     fn map_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkerRecord> {
         let id: i64 = row.try_get("id")?;
-        let hostname: String = row.try_get("hostname")?;
-        let port: i32 = row.try_get("port")?;
+        let name: String = row.try_get("name")?;
         let queue_id: Option<i64> = row.try_get("queue_id")?;
 
         let started_at_str: String = row.try_get("started_at")?;
@@ -78,8 +77,7 @@ impl SqliteWorkerTable {
 
         Ok(WorkerRecord {
             id,
-            hostname,
-            port,
+            name,
             queue_id,
             started_at,
             heartbeat_at,
@@ -276,8 +274,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         let status_str = WorkerStatus::Ready.to_string();
 
         let id: i64 = sqlx::query_scalar(INSERT_WORKER)
-            .bind(&data.hostname)
-            .bind(data.port)
+            .bind(&data.name)
             .bind(data.queue_id)
             .bind(&now_str)
             .bind(&now_str)
@@ -287,13 +284,12 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
             .map_err(|e| crate::error::Error::QueryFailed {
                 query: "INSERT_WORKER".into(),
                 source: Box::new(e),
-                context: format!("Failed to insert worker {}:{}", data.hostname, data.port),
+                context: format!("Failed to insert worker {}", data.name),
             })?;
 
         Ok(WorkerRecord {
             id,
-            hostname: data.hostname,
-            port: data.port,
+            name: data.name,
             queue_id: data.queue_id,
             started_at: now,
             heartbeat_at: now,
@@ -451,7 +447,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         state: crate::types::WorkerStatus,
     ) -> Result<Vec<WorkerRecord>> {
         let state_str = state.to_string();
-        let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status = $2 ORDER BY started_at DESC")
+        let rows = sqlx::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status = $2 ORDER BY started_at DESC")
             .bind(queue_id)
             .bind(state_str)
             .fetch_all(&self.pool)
@@ -477,7 +473,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_sqlite_timestamp(&threshold);
 
-        let rows = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < $2 ORDER BY heartbeat_at ASC")
+        let rows = sqlx::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = $1 AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < $2 ORDER BY heartbeat_at ASC")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_all(&self.pool)
@@ -495,21 +491,15 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         Ok(workers)
     }
 
-    async fn register(
-        &self,
-        queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerRecord> {
-        let existing = sqlx::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = $1 AND port = $2")
-            .bind(hostname)
-            .bind(port)
+    async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
+        let existing = sqlx::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE name = $1")
+            .bind(name)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| crate::error::Error::QueryFailed {
-                query: format!("FIND_WORKER_BY_HOST_PORT ({}:{})", hostname, port),
+                query: format!("FIND_WORKER_BY_NAME ({})", name),
                 source: Box::new(e),
-                context: format!("Failed to find worker {}:{}", hostname, port),
+                context: format!("Failed to find worker {}", name),
             })?;
 
         if let Some(row) = existing {
@@ -519,7 +509,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                     // Reset
                     let now = Utc::now();
                     let now_str = format_sqlite_timestamp(&now);
-                    let row = sqlx::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
+                    let row = sqlx::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = $2, started_at = $3, heartbeat_at = $3, shutdown_at = NULL WHERE id = $1 RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status")
                         .bind(worker.id)
                         .bind(queue_id)
                         .bind(now_str)
@@ -528,28 +518,25 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
                         .map_err(|e| crate::error::Error::QueryFailed {
                             query: format!("RESET_WORKER_TO_READY ({})", worker.id),
                             source: Box::new(e),
-                            context: format!("Failed to reset worker {}:{}", hostname, port),
+                            context: format!("Failed to reset worker {}", name),
                         })?;
 
                     Self::map_row(row)
                 }
                 WorkerStatus::Ready => Err(crate::error::Error::ValidationFailed {
                     reason: format!(
-                        "Worker {}:{} is already active. Cannot register duplicate.",
-                        hostname, port
+                        "Worker {} is already active. Cannot register duplicate.",
+                        name
                     ),
                 }),
                 WorkerStatus::Suspended => Err(crate::error::Error::ValidationFailed {
-                    reason: format!(
-                        "Worker {}:{} is suspended. Use resume() to reactivate.",
-                        hostname, port
-                    ),
+                    reason: format!("Worker {} is suspended. Use resume() to reactivate.", name),
                 }),
                 WorkerStatus::Polling | WorkerStatus::Interrupted => {
                     Err(crate::error::Error::ValidationFailed {
                         reason: format!(
-                            "Worker {}:{} is already active. Cannot register duplicate.",
-                            hostname, port
+                            "Worker {} is already active. Cannot register duplicate.",
+                            name
                         ),
                     })
                 }
@@ -557,8 +544,7 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
         } else {
             // Create new
             self.insert(crate::types::NewWorkerRecord {
-                hostname: hostname.to_string(),
-                port,
+                name: name.to_string(),
                 queue_id,
             })
             .await
@@ -566,10 +552,10 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
     }
 
     async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
-        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+        let name = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
         let row = sqlx::query(INSERT_EPHEMERAL_WORKER)
-            .bind(&hostname)
+            .bind(&name)
             .bind(queue_id)
             .fetch_one(&self.pool)
             .await

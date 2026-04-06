@@ -99,12 +99,12 @@ async fn test_simple_message_lifecycle() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_simple_message_lifecycle", 3001, TEST_QUEUE_ARCHIVE)
+    let producer = pgqrs::producer("test_simple_message_lifecycle-3001", TEST_QUEUE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_simple_message_lifecycle", 3101, TEST_QUEUE_ARCHIVE)
+    let consumer = pgqrs::consumer("test_simple_message_lifecycle-3101", TEST_QUEUE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -233,23 +233,15 @@ async fn test_archive_batch_messages() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer(
-        "test_archive_batch_messages",
-        3002,
-        TEST_QUEUE_BATCH_ARCHIVE,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create producer");
+    let producer = pgqrs::producer("test_archive_batch_messages-3002", TEST_QUEUE_BATCH_ARCHIVE)
+        .create(&store)
+        .await
+        .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer(
-        "test_archive_batch_messages",
-        3102,
-        TEST_QUEUE_BATCH_ARCHIVE,
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create consumer");
+    let consumer = pgqrs::consumer("test_archive_batch_messages-3102", TEST_QUEUE_BATCH_ARCHIVE)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
 
     // Send multiple test messages
     let mut msg_ids = Vec::new();
@@ -375,8 +367,7 @@ async fn test_archive_nonexistent_message() {
         .expect("Failed to create queue");
 
     let consumer = pgqrs::consumer(
-        "test_archive_nonexistent_message",
-        3103,
+        "test_archive_nonexistent_message-3103",
         TEST_QUEUE_NONEXISTENT,
     )
     .create(&store)
@@ -435,12 +426,12 @@ async fn test_purge_queue() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_purge_archive", 3003, TEST_QUEUE_PURGE_ARCHIVE)
+    let producer = pgqrs::producer("test_purge_archive-3003", TEST_QUEUE_PURGE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_purge_archive", 3104, TEST_QUEUE_PURGE_ARCHIVE)
+    let consumer = pgqrs::consumer("test_purge_archive-3104", TEST_QUEUE_PURGE_ARCHIVE)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -516,12 +507,12 @@ async fn test_interval_parameter_syntax() {
     // Create queue
     let queue_info = store.queue(queue_name).await.unwrap();
 
-    let producer = pgqrs::producer("test_interval_parameter_syntax", 3005, queue_name)
+    let producer = pgqrs::producer("test_interval_parameter_syntax-3005", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_interval_parameter_syntax", 3106, queue_name)
+    let consumer = pgqrs::consumer("test_interval_parameter_syntax-3106", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -691,12 +682,12 @@ async fn test_queue_deletion_with_references() {
     // Create queue and add a message
     let queue_info = store.queue(queue_name).await.unwrap();
 
-    let producer = pgqrs::producer("test_queue_deletion_with_references", 3006, queue_name)
+    let producer = pgqrs::producer("test_queue_deletion_with_references-3006", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test_queue_deletion_with_references", 3107, queue_name)
+    let consumer = pgqrs::consumer("test_queue_deletion_with_references-3107", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -804,8 +795,7 @@ async fn test_validation_payload_size_limit() {
         .unwrap();
 
     let producer = pgqrs::producer(
-        "test_validation_payload_size_limit",
-        3007,
+        "test_validation_payload_size_limit-3007",
         "test_validation_size",
     )
     .create(&store)
@@ -870,8 +860,7 @@ async fn test_validation_forbidden_keys() {
         .await
         .unwrap();
     let producer = pgqrs::producer(
-        "test_validation_forbidden_keys",
-        3008,
+        "test_validation_forbidden_keys-3008",
         "test_validation_forbidden",
     )
     .create(&store)
@@ -933,8 +922,7 @@ async fn test_validation_required_keys() {
         .await
         .unwrap();
     let producer = pgqrs::producer(
-        "test_validation_required_keys",
-        3009,
+        "test_validation_required_keys-3009",
         "test_validation_required",
     )
     .create(&store)
@@ -995,14 +983,10 @@ async fn test_validation_object_depth() {
         .create_queue("test_validation_depth")
         .await
         .unwrap();
-    let producer = pgqrs::producer(
-        "test_validation_object_depth",
-        3010,
-        "test_validation_depth",
-    )
-    .create(&store)
-    .await
-    .expect("Failed to create producer");
+    let producer = pgqrs::producer("test_validation_object_depth-3010", "test_validation_depth")
+        .create(&store)
+        .await
+        .expect("Failed to create producer");
 
     // Shallow object should work
     let shallow_payload = json!({"level1": {"level2": "value"}});
@@ -1060,8 +1044,7 @@ async fn test_batch_validation_atomic_failure() {
         .await
         .unwrap();
     let producer = pgqrs::producer(
-        "test_batch_validation_atomic_failure",
-        3011,
+        "test_batch_validation_atomic_failure-3011",
         "test_validation_batch",
     )
     .create(&store)
@@ -1127,8 +1110,7 @@ async fn test_validation_string_length() {
         .await
         .unwrap();
     let producer = pgqrs::producer(
-        "test_validation_string_length",
-        3012,
+        "test_validation_string_length-3012",
         "test_validation_strings",
     )
     .create(&store)
@@ -1193,8 +1175,7 @@ async fn test_validation_accessor_methods() {
         .await
         .unwrap();
     let producer = pgqrs::producer(
-        "test_validation_accessor_methods",
-        3013,
+        "test_validation_accessor_methods-3013",
         "test_validation_accessors",
     )
     .create(&store)
@@ -1229,7 +1210,7 @@ async fn test_dlq() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test_dlq", 3014, TEST_QUEUE_DLQ)
+    let producer = pgqrs::producer("test_dlq-3014", TEST_QUEUE_DLQ)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -1298,11 +1279,11 @@ async fn test_archive_count_for_queue() {
     let q1 = store.queue(q1_name).await.unwrap();
     let q2 = store.queue(q2_name).await.unwrap();
 
-    let consumer1 = pgqrs::consumer("host", 4000, q1_name)
+    let consumer1 = pgqrs::consumer("host-4000", q1_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer2 = pgqrs::consumer("host", 4001, q2_name)
+    let consumer2 = pgqrs::consumer("host-4001", q2_name)
         .create(&store)
         .await
         .unwrap();
@@ -1377,7 +1358,7 @@ async fn test_consumer_extend_visibility_behavior() {
         .await
         .unwrap();
 
-    let consumer = pgqrs::consumer("host", 4002, queue_name)
+    let consumer = pgqrs::consumer("host-4002", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -1427,11 +1408,11 @@ async fn test_archive_replay_and_recovery() {
     let queue_name = "test_replay";
     let queue_info = store.queue(queue_name).await.unwrap();
 
-    let producer = pgqrs::producer("host", 7000, queue_name)
+    let producer = pgqrs::producer("host-7000", queue_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer = pgqrs::consumer("host", 7001, queue_name)
+    let consumer = pgqrs::consumer("host-7001", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -1509,7 +1490,7 @@ async fn test_batch_management_ops() {
         .await
         .unwrap();
 
-    let consumer = pgqrs::consumer("host", 8000, queue_name)
+    let consumer = pgqrs::consumer("host-8000", queue_name)
         .create(&store)
         .await
         .unwrap();

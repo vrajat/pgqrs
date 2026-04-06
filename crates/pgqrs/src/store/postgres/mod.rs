@@ -140,17 +140,11 @@ impl Store for PostgresStore {
 
     async fn admin(
         &self,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<crate::workers::Admin> {
         let _ = config;
-        crate::workers::Admin::new(
-            crate::store::AnyStore::Postgres(self.clone()),
-            hostname,
-            port,
-        )
-        .await
+        crate::workers::Admin::new(crate::store::AnyStore::Postgres(self.clone()), name).await
     }
 
     async fn admin_ephemeral(
@@ -164,15 +158,11 @@ impl Store for PostgresStore {
     async fn producer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         _config: &Config,
     ) -> crate::error::Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let worker_record = self.workers.register(Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Producer::new(
             crate::store::AnyStore::Postgres(self.clone()),
@@ -185,15 +175,11 @@ impl Store for PostgresStore {
     async fn consumer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         _config: &Config,
     ) -> crate::error::Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue).await?;
-        let worker_record = self
-            .workers
-            .register(Some(queue_info.id), hostname, port)
-            .await?;
+        let worker_record = self.workers.register(Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Consumer::new(
             crate::store::AnyStore::Postgres(self.clone()),

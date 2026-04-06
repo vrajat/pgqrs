@@ -22,29 +22,18 @@ pub fn admin<S: Store>(store: &S) -> AdminBuilder<'_, S> {
 /// Provides a fluent API for administrative tasks.
 pub struct AdminBuilder<'a, S: Store> {
     store: &'a S,
-    hostname: Option<String>,
-    port: Option<i32>,
+    name: Option<String>,
 }
 
 impl<'a, S: Store> AdminBuilder<'a, S> {
     /// Create a new AdminBuilder with the given store
     pub fn new(store: &'a S) -> Self {
-        Self {
-            store,
-            hostname: None,
-            port: None,
-        }
+        Self { store, name: None }
     }
 
-    /// Set the hostname for the admin worker
-    pub fn hostname(mut self, hostname: &str) -> Self {
-        self.hostname = Some(hostname.to_string());
-        self
-    }
-
-    /// Set the port for the admin worker
-    pub fn port(mut self, port: i32) -> Self {
-        self.port = Some(port);
+    /// Set the name for the admin worker
+    pub fn name(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
         self
     }
 
@@ -54,8 +43,8 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     async fn get_admin(&self) -> Result<crate::Admin> {
-        if let (Some(hostname), Some(port)) = (&self.hostname, self.port) {
-            self.store.admin(hostname, port, self.store.config()).await
+        if let Some(name) = &self.name {
+            self.store.admin(name, self.store.config()).await
         } else {
             self.store.admin_ephemeral(self.store.config()).await
         }

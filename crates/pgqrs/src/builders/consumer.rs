@@ -9,33 +9,26 @@ use crate::store::Store;
 /// # use pgqrs;
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-/// let consumer = pgqrs::consumer("localhost", 3000, "orders").create(&store).await?;
+/// let consumer = pgqrs::consumer("orders-worker", "orders").create(&store).await?;
 /// # Ok(()) }
 /// ```
-pub fn consumer<'a>(hostname: &'a str, port: i32, queue: &'a str) -> ConsumerBuilder<'a> {
-    ConsumerBuilder::new(hostname, port, queue)
+pub fn consumer<'a>(name: &'a str, queue: &'a str) -> ConsumerBuilder<'a> {
+    ConsumerBuilder::new(name, queue)
 }
 
 /// Builder for creating a managed consumer worker.
 pub struct ConsumerBuilder<'a> {
-    hostname: &'a str,
-    port: i32,
+    name: &'a str,
     queue: &'a str,
 }
 
 impl<'a> ConsumerBuilder<'a> {
-    pub fn new(hostname: &'a str, port: i32, queue: &'a str) -> Self {
-        Self {
-            hostname,
-            port,
-            queue,
-        }
+    pub fn new(name: &'a str, queue: &'a str) -> Self {
+        Self { name, queue }
     }
 
     /// Create the consumer worker
     pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Consumer> {
-        store
-            .consumer(self.queue, self.hostname, self.port, store.config())
-            .await
+        store.consumer(self.queue, self.name, store.config()).await
     }
 }
