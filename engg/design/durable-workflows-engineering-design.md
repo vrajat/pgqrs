@@ -1,7 +1,7 @@
 # Engineering Design: pgqrs Durable Workflows
 
 **Status:** Draft
-**Initial PRD:** [pgqrs-durable-workflows-prd.md](./pgqrs-durable-workflows-prd.md)
+**Initial PRD:** [durable-workflows-product-requirements.md](./durable-workflows-product-requirements.md)
 
 ## 1. Overview
 

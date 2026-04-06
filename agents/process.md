@@ -1,58 +1,27 @@
-# Project Processes and Conventions
+# Project Process
 
-This file defines the development processes, conventions, and architecture for the **pgqrs** project.
-
----
-
-## Initialization
-
-**IMPORTANT: First thing when starting a new session:**
-
-Before beginning any work, test all sub-agents to ensure they are operational:
-
-```bash
-# Run sub-agent health check
-Test all sub-agents by asking each to create a file at:
-.tmp/subagent-tests/{subagent-name}.txt
-
-Each file should contain:
-- Sub-agent name
-- Current timestamp
-- Status: Operational
-- Test result message
-
-Sub-agents to test:
-- ContextScout (read-only - will refuse, this is correct)
-- ExternalScout
-- TaskManager
-- DocWriter
-- CodeReviewer (read-only - will refuse, this is correct)
-- CoderAgent
-- BuildAgent
-- TestEngineer
-- OpenDevopsSpecialist
-- OpenFrontendSpecialist
-- ContextOrganizer
-
-Check .tmp/subagent-tests/TEST_RESULTS.md for test summary.
-```
-
-**Note:** ContextScout and CodeReviewer are read-only agents and will correctly refuse to create files. This is expected behavior.
+Shared development process and conventions for `pgqrs`.
 
 ---
 
-## Agent Configuration Structure
+## Usage
 
-**For role-based development guidance**, see:
-- `agents/personas/planner.md` - Planning and design phase
-- `agents/personas/builder.md` - Implementation phase
-- `agents/personas/tester.md` - Testing phase
-- `agents/personas/reviewer.md` - Review phase
+- Read `README.md`, `Makefile`, and the files you plan to change before editing.
+- For non-trivial work, produce a short plan covering affected components, API impact, backend impact, and tests.
+- For small, well-bounded fixes, implement directly after enough code reading.
+- Keep changes focused. Do not mix unrelated cleanup into feature or bug-fix work.
+- If repo docs drift from the code, update them or call out the discrepancy.
 
-**For model-specific entry points**, see:
-- `CLAUDE.md` (root) - Claude configuration
-- `GEMINI.md` (root) - Gemini configuration (when applicable)
-- `OPENCODE.md` (root) - OpenCode configuration (when applicable)
+## Related Files
+
+- `agents/README.md` - shared agent-doc overview
+- `agents/context/technical-domain.md` - current project and backend context
+- `agents/context/living-notes.md` - active API gaps and follow-ups
+- `agents/testing.md` - targeted test-selection guide
+- `agents/personas/planner.md` - planning guidance
+- `agents/personas/builder.md` - implementation guidance
+- `agents/personas/tester.md` - testing guidance
+- `agents/personas/reviewer.md` - review guidance
 
 ---
 
@@ -512,11 +481,14 @@ benchmark/
 
 ### Additional Files
 ```
+├── AGENTS.md          # Thin Codex/GPT wrapper
 ├── Cargo.toml         # Rust package configuration with feature flags
 ├── README.md          # User-facing documentation with updated architecture
-├── CLAUDE.md          # Claude model configuration
-└── agents/            # Agent configuration directory
-    ├── agents.md      # This file - project processes
+├── CLAUDE.md          # Thin Claude wrapper
+└── agents/            # Shared agent instructions
+    ├── README.md      # Load order and directory overview
+    ├── process.md     # This file - project processes
+    ├── context/       # Current project context
     └── personas/      # Role-specific development guidelines
         ├── planner.md
         ├── builder.md
