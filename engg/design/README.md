@@ -14,6 +14,8 @@ Comprehensive technical design documentation for major features and components.
 ## Current Documents
 
 - [Database Abstraction Design](database_abstraction_design.md)
+- [Durable Workflows Engineering Design](durable-workflows-engineering-design.md)
+- [Durable Workflows Product Requirements](durable-workflows-product-requirements.md)
 - [Store Access and Serialized DB Design](store_access_and_serialized_db.md)
 - [SQLite Store Implementation](sqlite_store.md)
 - [Turso Store Implementation](turso_store.md)

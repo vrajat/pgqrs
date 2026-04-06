@@ -135,9 +135,7 @@ fn process() -> Result<()> {
 ### 5. Backend Compatibility Review
 
 **Multi-Backend Validation:**
-- [ ] Tested on Postgres
-- [ ] Tested on SQLite
-- [ ] Tested on Turso
+- [ ] Tested on the relevant backends
 - [ ] Backend differences documented
 
 **Migration Review:**
@@ -178,7 +176,7 @@ step.with_time(|| Utc::now())
 - [ ] Edge cases tested (zero, max, overflow)
 - [ ] Tests are deterministic (no flakes)
 - [ ] Tests use public API (not internals)
-- [ ] All backends covered
+- [ ] Relevant backends covered
 
 **Test Gap Detection:**
 ```rust
@@ -363,9 +361,7 @@ Use this for every review:
 - [ ] Well-documented
 
 ## Backend Compatibility
-- [ ] Tested on Postgres
-- [ ] Tested on SQLite
-- [ ] Tested on Turso
+- [ ] Tested on the relevant backends
 
 ## Tests
 - [ ] Happy path covered

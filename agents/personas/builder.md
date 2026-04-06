@@ -110,6 +110,10 @@ sqlx::query("UPDATE table SET col = ? WHERE id = ?")
     .bind(id)
 ```
 
+For S3-backed paths:
+- Validate object-store assumptions explicitly.
+- Exercise behavior with `make test-localstack` when persistence semantics change.
+
 **Migration Strategy:**
 ```
 migrations/

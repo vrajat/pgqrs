@@ -37,10 +37,10 @@ Tests define what "working" means. They should:
 - **Run:** `cargo test`
 
 **Backend Tests** (multi-backend validation)
-- **Purpose:** Ensure feature parity across Postgres, SQLite, Turso
+- **Purpose:** Ensure feature parity across supported backends
 - **Scope:** All database-touching code
-- **Speed:** Slower (3x backends)
-- **Run:** `make test && make test-sqlite && make test-turso`
+- **Speed:** Slower (backend matrix)
+- **Run:** `make test-postgres && make test-sqlite && make test-turso && make test-localstack`
 
 ### 2. Test Design Patterns
 
@@ -169,13 +169,14 @@ test_zero_delay_allows_immediate_retry()
 
 ### Multi-Backend Validation
 
-**Every DB-touching feature MUST pass on ALL backends:**
+**Every DB-touching feature should be validated on the relevant backends:**
 
 ```bash
 # Test matrix
-make test         # Postgres (default)
-make test-sqlite  # SQLite
-make test-turso   # Turso
+make test-postgres   # Postgres
+make test-sqlite     # SQLite
+make test-turso      # Turso
+make test-localstack # S3 via LocalStack
 ```
 
 **Backend-Specific Test Focus:**
@@ -185,6 +186,7 @@ make test-turso   # Turso
 | Postgres | Transactions, performance | None |
 | SQLite | Concurrency, locking | File-based limitations |
 | Turso | Migration compatibility | No ALTER TABLE, no partial indices |
+| S3 | Durability path, latency envelope, LocalStack behavior | Much higher per-message latency |
 
 **Document Backend Differences:**
 ```rust

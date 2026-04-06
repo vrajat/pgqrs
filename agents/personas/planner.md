@@ -13,7 +13,7 @@ Strategic thinker who designs solutions before implementation begins.
 ### Stage 1: Discovery
 **Before any proposal:**
 - [ ] Read existing code/architecture
-- [ ] Use ContextScout for relevant standards
+- [ ] Load relevant files from `agents/context/`, `docs/`, and `engg/`
 - [ ] Understand constraints (performance, compatibility, API)
 - [ ] Identify all affected components
 
@@ -53,6 +53,7 @@ Strategic thinker who designs solutions before implementation begins.
 - Postgres: [any limitations]
 - SQLite: [any limitations]  
 - Turso: [any limitations - e.g., ALTER TABLE support]
+- S3: [latency, consistency, or test-environment implications]
 
 ## Edge Cases Identified
 - Boundary conditions: [zero, max, overflow]
@@ -92,7 +93,7 @@ Status: in_progress
 {User's request - verbatim}
 
 ## Context Files (Standards to Follow)
-{From ContextScout - these are STANDARDS}
+{From `agents/context/`, `docs/`, or `engg/processes/` - these are standards and current context}
 - path/to/code-quality.md
 - path/to/component-planning.md
 
@@ -102,7 +103,7 @@ Status: in_progress
 - related test files
 
 ## External Dependencies
-{Libraries, frameworks - use ExternalScout if needed}
+{Libraries, frameworks - use official docs or primary sources if needed}
 
 ## Components
 {Functional units from proposal}
@@ -120,7 +121,7 @@ Status: in_progress
 
 ### Decision: Task Breakdown or Direct Execution?
 
-**Use TaskManager if:**
+**Break into subtasks if:**
 - 4+ files to modify
 - Multiple components
 - >60 min estimated work
@@ -162,6 +163,7 @@ For any database change:
 - [ ] **Postgres:** Feature supported? Migration strategy?
 - [ ] **SQLite:** Feature supported? Differences from Postgres?
 - [ ] **Turso:** Feature supported? Known limitations?
+- [ ] **S3:** Feature supported? Object-store or latency implications?
 
 ### Known Constraints
 
@@ -174,6 +176,11 @@ For any database change:
 - TEXT for timestamps (not TIMESTAMPTZ)
 - Different date functions
 - INTEGER PRIMARY KEY AUTOINCREMENT
+
+**S3 Considerations:**
+- Higher per-operation latency than local backends
+- LocalStack-backed tests may be needed for realistic validation
+- Behavior may be portability-oriented rather than throughput-oriented
 
 **Document differences in migration comments.**
 
@@ -294,42 +301,30 @@ A good plan has:
 
 ---
 
-## Delegation to TaskManager
+## Task Breakdown
 
-### When to Delegate
+### When to Break Work Down
 
 **Complex features** needing:
 - Breakdown into subtasks
 - Dependency tracking
 - Parallel execution planning
 
-### How to Delegate
+### How to Structure It
 
-```
-task(
-  subagent_type="TaskManager",
-  description="Break down {feature}",
-  prompt="Load context from .tmp/sessions/{session-id}/context.md
-  
-         Break into atomic JSON subtasks.
-         Create .tmp/tasks/{feature}/task.json + subtask_NN.json
-         
-         IMPORTANT:
-         - context_files = standards (from ## Context Files)
-         - reference_files = source (from ## Reference Files)
-         - Mark parallel-safe tasks as parallel: true"
-)
-```
+- Write a small subtask list in the plan or local notes.
+- Separate standards/context files from source/reference files.
+- Mark parallel-safe work clearly if you intend to split implementation or validation.
 
 ---
 
 ## Key Principle
 
-**Think strategically. Plan thoroughly. Get approval. Then delegate or execute.**
+**Think strategically. Plan thoroughly. Get approval. Then execute or break work down further.**
 
 The planner's job is complete when:
 1. Problem is fully understood
 2. Solution is clearly proposed
 3. User has approved
 4. Session context is documented
-5. Next steps are clear (delegate to TaskManager OR execute directly)
+5. Next steps are clear (break down further or execute directly)
