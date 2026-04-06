@@ -17,6 +17,7 @@ Shared development process and conventions for `pgqrs`.
 - `agents/README.md` - shared agent-doc overview
 - `agents/context/technical-domain.md` - current project and backend context
 - `agents/context/living-notes.md` - active API gaps and follow-ups
+- `agents/testing.md` - targeted test-selection guide
 - `agents/personas/planner.md` - planning guidance
 - `agents/personas/builder.md` - implementation guidance
 - `agents/personas/tester.md` - testing guidance
