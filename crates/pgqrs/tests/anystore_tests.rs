@@ -221,7 +221,7 @@ async fn test_anystore_worker_creation() {
 
     // Test producer creation
     let producer = store
-        .producer(queue_name, "test-host", 8000, &store.config().clone())
+        .producer(queue_name, "test-host-8000", &store.config().clone())
         .await
         .expect("Failed to create producer");
 
@@ -229,7 +229,7 @@ async fn test_anystore_worker_creation() {
 
     // Test consumer creation
     let consumer = store
-        .consumer(queue_name, "test-host", 8001, &store.config().clone())
+        .consumer(queue_name, "test-host-8001", &store.config().clone())
         .await
         .expect("Failed to create consumer");
 

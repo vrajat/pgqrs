@@ -344,14 +344,9 @@ impl Store for S3Store {
             .await
     }
 
-    async fn admin(
-        &self,
-        hostname: &str,
-        port: i32,
-        config: &Config,
-    ) -> crate::error::Result<crate::Admin> {
+    async fn admin(&self, name: &str, config: &Config) -> crate::error::Result<crate::Admin> {
         let _ = config;
-        crate::workers::Admin::new(crate::store::AnyStore::S3(self.clone()), hostname, port).await
+        crate::workers::Admin::new(crate::store::AnyStore::S3(self.clone()), name).await
     }
 
     async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<crate::Admin> {
@@ -362,14 +357,12 @@ impl Store for S3Store {
     async fn producer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<crate::Producer> {
         let validation_config = config.validation_config.clone();
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
-        let worker_record =
-            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
+        let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Producer::new(
             AnyStore::S3(self.clone()),
@@ -382,13 +375,11 @@ impl Store for S3Store {
     async fn consumer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         _config: &Config,
     ) -> crate::error::Result<crate::Consumer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
-        let worker_record =
-            WorkerTable::register(&self.tables, Some(queue_info.id), hostname, port).await?;
+        let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Consumer::new(
             AnyStore::S3(self.clone()),

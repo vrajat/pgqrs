@@ -356,19 +356,18 @@ impl Store for AnyStore {
 
     async fn admin(
         &self,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<crate::workers::Admin> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.admin(hostname, port, config).await,
+            AnyStore::Postgres(s) => s.admin(name, config).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.admin(hostname, port, config).await,
+            AnyStore::Sqlite(s) => s.admin(name, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.admin(hostname, port, config).await,
+            AnyStore::S3(s) => s.admin(name, config).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.admin(hostname, port, config).await,
+            AnyStore::Turso(s) => s.admin(name, config).await,
         }
     }
 
@@ -464,38 +463,36 @@ impl Store for AnyStore {
     async fn producer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<Producer> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.producer(queue, hostname, port, config).await,
+            AnyStore::Postgres(s) => s.producer(queue, name, config).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.producer(queue, hostname, port, config).await,
+            AnyStore::Sqlite(s) => s.producer(queue, name, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.producer(queue, hostname, port, config).await,
+            AnyStore::S3(s) => s.producer(queue, name, config).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.producer(queue, hostname, port, config).await,
+            AnyStore::Turso(s) => s.producer(queue, name, config).await,
         }
     }
 
     async fn consumer(
         &self,
         queue: &str,
-        hostname: &str,
-        port: i32,
+        name: &str,
         config: &Config,
     ) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.consumer(queue, hostname, port, config).await,
+            AnyStore::Postgres(s) => s.consumer(queue, name, config).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.consumer(queue, hostname, port, config).await,
+            AnyStore::Sqlite(s) => s.consumer(queue, name, config).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.consumer(queue, hostname, port, config).await,
+            AnyStore::S3(s) => s.consumer(queue, name, config).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.consumer(queue, hostname, port, config).await,
+            AnyStore::Turso(s) => s.consumer(queue, name, config).await,
         }
     }
 

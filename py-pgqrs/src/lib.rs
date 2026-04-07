@@ -391,14 +391,13 @@ impl PyStore {
     fn producer<'a>(&self, py: Python<'a>, queue: String) -> PyResult<&'a PyAny> {
         let store = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let hostname = format!(
+            let name = format!(
                 "{}-{}",
                 gethostname().to_string_lossy(),
                 uuid::Uuid::new_v4()
             );
-            // Use Store trait method directly - returns Box<dyn Producer + 'static>
             let producer = store
-                .producer(&queue, &hostname, 0, store.config())
+                .producer(&queue, &name, store.config())
                 .await
                 .map_err(to_py_err)?;
 
@@ -411,14 +410,13 @@ impl PyStore {
     fn consumer<'a>(&self, py: Python<'a>, queue: String) -> PyResult<&'a PyAny> {
         let store = self.inner.clone();
         pyo3_asyncio::tokio::future_into_py(py, async move {
-            let hostname = format!(
+            let name = format!(
                 "{}-{}",
                 gethostname().to_string_lossy(),
                 uuid::Uuid::new_v4()
             );
-            // Use Store trait method directly - returns Box<dyn Consumer + 'static>
             let consumer = store
-                .consumer(&queue, &hostname, 0, store.config())
+                .consumer(&queue, &name, store.config())
                 .await
                 .map_err(to_py_err)?;
 

@@ -10,25 +10,25 @@ use std::sync::Arc;
 use turso::Database;
 
 const INSERT_WORKER: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, started_at, heartbeat_at, status)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO pgqrs_workers (name, queue_id, started_at, heartbeat_at, status)
+    VALUES (?, ?, ?, ?, ?)
     RETURNING id;
 "#;
 
 const GET_WORKER_BY_ID: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE id = ?;
 "#;
 
 const LIST_ALL_WORKERS: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     ORDER BY started_at DESC;
 "#;
 
 const LIST_WORKERS_BY_QUEUE: &str = r#"
-    SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status
+    SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status
     FROM pgqrs_workers
     WHERE queue_id = ?
     ORDER BY started_at DESC;
@@ -40,9 +40,9 @@ const DELETE_WORKER_BY_ID: &str = r#"
 "#;
 
 const INSERT_EPHEMERAL_WORKER_RETURNING: &str = r#"
-    INSERT INTO pgqrs_workers (hostname, port, queue_id, status, started_at, heartbeat_at)
-    VALUES (?, 0, ?, 'ready', ?, ?)
-    RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status;
+    INSERT INTO pgqrs_workers (name, queue_id, status, started_at, heartbeat_at)
+    VALUES (?, ?, 'ready', ?, ?)
+    RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status;
 "#;
 
 #[derive(Debug, Clone)]
@@ -57,33 +57,28 @@ impl TursoWorkerTable {
 
     fn map_row(row: &turso::Row) -> Result<WorkerRecord> {
         let id: i64 = row.get(0)?;
-        let hostname: String = row.get(1)?;
-        // Port might be returned as i64 in some contexts, cast if needed?
-        // But row.get handles conversion often.
-        // However, "port" is integer.
-        let port: i32 = row.get(2)?;
-        let queue_id: Option<i64> = row.get(3)?;
+        let name: String = row.get(1)?;
+        let queue_id: Option<i64> = row.get(2)?;
 
-        let started_at_str: String = row.get(4)?;
+        let started_at_str: String = row.get(3)?;
         let started_at = parse_turso_timestamp(&started_at_str)?;
 
-        let heartbeat_at_str: String = row.get(5)?;
+        let heartbeat_at_str: String = row.get(4)?;
         let heartbeat_at = parse_turso_timestamp(&heartbeat_at_str)?;
 
-        let shutdown_at_str: Option<String> = row.get(6)?;
+        let shutdown_at_str: Option<String> = row.get(5)?;
         let shutdown_at = match shutdown_at_str {
             Some(s) => Some(parse_turso_timestamp(&s)?),
             None => None,
         };
 
-        let status_str: String = row.get(7)?;
+        let status_str: String = row.get(6)?;
         let status = WorkerStatus::from_str(&status_str)
             .map_err(|e| crate::error::Error::Internal { message: e })?;
 
         Ok(WorkerRecord {
             id,
-            hostname,
-            port,
+            name,
             queue_id,
             started_at,
             heartbeat_at,
@@ -251,8 +246,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let status_str = WorkerStatus::Ready.to_string();
 
         let id: i64 = crate::store::turso::query_scalar(INSERT_WORKER)
-            .bind(data.hostname.as_str())
-            .bind(data.port as i64)
+            .bind(data.name.as_str())
             .bind(match data.queue_id {
                 Some(id) => turso::Value::Integer(id),
                 None => turso::Value::Null,
@@ -265,8 +259,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
 
         Ok(WorkerRecord {
             id,
-            hostname: data.hostname,
-            port: data.port,
+            name: data.name,
             queue_id: data.queue_id,
             started_at: now,
             heartbeat_at: now,
@@ -380,7 +373,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         state: crate::types::WorkerStatus,
     ) -> Result<Vec<WorkerRecord>> {
         let state_str = state.to_string();
-        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC")
+        let rows = crate::store::turso::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status = ? ORDER BY started_at DESC")
             .bind(queue_id)
             .bind(state_str)
             .fetch_all(&self.db)
@@ -401,7 +394,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         let threshold = Utc::now() - older_than;
         let threshold_str = format_turso_timestamp(&threshold);
 
-        let rows = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < ? ORDER BY heartbeat_at ASC")
+        let rows = crate::store::turso::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE queue_id = ? AND status IN ('ready', 'polling', 'suspended', 'interrupted') AND heartbeat_at < ? ORDER BY heartbeat_at ASC")
             .bind(queue_id)
             .bind(threshold_str)
             .fetch_all(&self.db)
@@ -414,15 +407,9 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         Ok(workers)
     }
 
-    async fn register(
-        &self,
-        queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
-    ) -> Result<WorkerRecord> {
-        let existing = crate::store::turso::query("SELECT id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE hostname = ? AND port = ?")
-            .bind(hostname)
-            .bind(port)
+    async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
+        let existing = crate::store::turso::query("SELECT id, name, queue_id, started_at, heartbeat_at, shutdown_at, status FROM pgqrs_workers WHERE name = ?")
+            .bind(name)
             .fetch_optional(&self.db)
             .await?;
 
@@ -433,7 +420,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
                     // Reset
                     let now = Utc::now();
                     let now_str = format_turso_timestamp(&now);
-                    let row = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = ?, started_at = ?, heartbeat_at = ?, shutdown_at = NULL WHERE id = ? RETURNING id, hostname, port, queue_id, started_at, heartbeat_at, shutdown_at, status")
+                    let row = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'ready', queue_id = ?, started_at = ?, heartbeat_at = ?, shutdown_at = NULL WHERE id = ? RETURNING id, name, queue_id, started_at, heartbeat_at, shutdown_at, status")
                         .bind(match queue_id {
                             Some(id) => turso::Value::Integer(id),
                             None => turso::Value::Null,
@@ -448,21 +435,18 @@ impl crate::store::WorkerTable for TursoWorkerTable {
                 }
                 WorkerStatus::Ready => Err(crate::error::Error::ValidationFailed {
                     reason: format!(
-                        "Worker {}:{} is already active. Cannot register duplicate.",
-                        hostname, port
+                        "Worker {} is already active. Cannot register duplicate.",
+                        name
                     ),
                 }),
                 WorkerStatus::Suspended => Err(crate::error::Error::ValidationFailed {
-                    reason: format!(
-                        "Worker {}:{} is suspended. Use resume() to reactivate.",
-                        hostname, port
-                    ),
+                    reason: format!("Worker {} is suspended. Use resume() to reactivate.", name),
                 }),
                 WorkerStatus::Polling | WorkerStatus::Interrupted => {
                     Err(crate::error::Error::ValidationFailed {
                         reason: format!(
-                            "Worker {}:{} is already active. Cannot register duplicate.",
-                            hostname, port
+                            "Worker {} is already active. Cannot register duplicate.",
+                            name
                         ),
                     })
                 }
@@ -470,8 +454,7 @@ impl crate::store::WorkerTable for TursoWorkerTable {
         } else {
             // Create new
             self.insert(crate::types::NewWorkerRecord {
-                hostname: hostname.to_string(),
-                port,
+                name: name.to_string(),
                 queue_id,
             })
             .await
@@ -479,12 +462,12 @@ impl crate::store::WorkerTable for TursoWorkerTable {
     }
 
     async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
-        let hostname = format!("__ephemeral__{}", uuid::Uuid::new_v4());
+        let name = format!("__ephemeral__{}", uuid::Uuid::new_v4());
         let now = Utc::now();
         let now_str = format_turso_timestamp(&now);
 
         let row = crate::store::turso::query(INSERT_EPHEMERAL_WORKER_RETURNING)
-            .bind(hostname.as_str())
+            .bind(name.as_str())
             .bind(match queue_id {
                 Some(id) => turso::Value::Integer(id),
                 None => turso::Value::Null,

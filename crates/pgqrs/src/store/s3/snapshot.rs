@@ -48,8 +48,8 @@ use tokio::sync::{Mutex, RwLock};
 ///
 ///     let queue_name = "jobs";
 ///     pgqrs::admin(&store).create_queue(queue_name).await?;
-///     let producer = pgqrs::producer("host", 9001, queue_name).create(&store).await?;
-///     let consumer = pgqrs::consumer("host", 9002, queue_name).create(&store).await?;
+///     let producer = pgqrs::producer("host-9001", queue_name).create(&store).await?;
+///     let consumer = pgqrs::consumer("host-9002", queue_name).create(&store).await?;
 ///
 ///     pgqrs::enqueue()
 ///         .message(&json!({ "job": "example" }))

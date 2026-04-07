@@ -53,7 +53,7 @@ async fn test_enqueue_all_options() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9000, queue_name)
+    let producer = pgqrs::producer("test-host-9000", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -102,7 +102,7 @@ async fn test_enqueue_edge_cases() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9001, queue_name)
+    let producer = pgqrs::producer("test-host-9001", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -165,7 +165,7 @@ async fn test_enqueue_with_delay_duration() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9100, queue_name)
+    let producer = pgqrs::producer("test-host-9100", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -218,12 +218,12 @@ async fn test_dequeue_with_vt_duration() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9101, queue_name)
+    let producer = pgqrs::producer("test-host-9101", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test-host", 9102, queue_name)
+    let consumer = pgqrs::consumer("test-host-9102", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -276,12 +276,12 @@ async fn test_dequeue_batch() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9103, queue_name)
+    let producer = pgqrs::producer("test-host-9103", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test-host", 9104, queue_name)
+    let consumer = pgqrs::consumer("test-host-9104", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -331,12 +331,12 @@ async fn test_builder_method_chaining() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9105, queue_name)
+    let producer = pgqrs::producer("test-host-9105", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
 
-    let consumer = pgqrs::consumer("test-host", 9106, queue_name)
+    let consumer = pgqrs::consumer("test-host-9106", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -401,7 +401,7 @@ async fn test_enqueue_batch_builder() {
         .await
         .expect("Failed to create queue");
 
-    let producer = pgqrs::producer("test-host", 9004, queue_name)
+    let producer = pgqrs::producer("test-host-9004", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -460,7 +460,7 @@ async fn test_producer_consumer_builders() {
         .expect("Failed to create queue");
 
     // Test producer builder
-    let producer = pgqrs::producer("builder-host", 9005, queue_name)
+    let producer = pgqrs::producer("builder-host-9005", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
@@ -468,7 +468,7 @@ async fn test_producer_consumer_builders() {
     assert!(producer.worker_id() > 0);
 
     // Test consumer builder
-    let consumer = pgqrs::consumer("builder-host", 9006, queue_name)
+    let consumer = pgqrs::consumer("builder-host-9006", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -628,7 +628,7 @@ async fn test_enqueue_empty_messages_error() {
     let store = create_store().await;
     let queue_name = "test_empty_messages";
     let queue_info = store.queue(queue_name).await.unwrap();
-    let producer = pgqrs::producer("host", 9999, queue_name)
+    let producer = pgqrs::producer("host-9999", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -762,7 +762,7 @@ async fn test_dequeue_single_handler_poll_exits_cleanly_when_consumer_suspended(
     let store = create_store().await;
     let queue_name = "test_dequeue_single_handler_poll_suspended";
     let queue_info = store.queue(queue_name).await.unwrap();
-    let consumer = pgqrs::consumer("host", 9999, queue_name)
+    let consumer = pgqrs::consumer("host-9999", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -793,7 +793,7 @@ async fn test_dequeue_fetch_all_exits_cleanly_when_consumer_suspended() {
     let store = create_store().await;
     let queue_name = "test_dequeue_fetch_all_suspended";
     let queue_info = store.queue(queue_name).await.unwrap();
-    let consumer = pgqrs::consumer("host", 9998, queue_name)
+    let consumer = pgqrs::consumer("host-9998", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -823,7 +823,7 @@ async fn test_dequeue_fetch_one_exits_cleanly_when_consumer_suspended() {
     let store = create_store().await;
     let queue_name = "test_dequeue_fetch_one_suspended";
     let queue_info = store.queue(queue_name).await.unwrap();
-    let consumer = pgqrs::consumer("host", 9997, queue_name)
+    let consumer = pgqrs::consumer("host-9997", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -853,7 +853,7 @@ async fn test_dequeue_batch_handler_poll_exits_cleanly_when_consumer_suspended()
     let store = create_store().await;
     let queue_name = "test_dequeue_batch_handler_poll_suspended";
     let queue_info = store.queue(queue_name).await.unwrap();
-    let consumer = pgqrs::consumer("host", 9996, queue_name)
+    let consumer = pgqrs::consumer("host-9996", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -940,7 +940,7 @@ async fn test_dequeue_poll_updates_worker_heartbeat_while_idle() {
         .await
         .expect("Failed to create queue");
 
-    let consumer = pgqrs::consumer("heartbeat-host", 9910, queue_name)
+    let consumer = pgqrs::consumer("heartbeat-host-9910", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");

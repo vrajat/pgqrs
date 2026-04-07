@@ -82,10 +82,8 @@ impl fmt::Display for QueueRecord {
 pub struct WorkerRecord {
     /// Unique worker ID
     pub id: i64,
-    /// Hostname where the worker is running ("__ephemeral__" for ephemeral workers)
-    pub hostname: String,
-    /// Port number for the worker (-1 for ephemeral workers)
-    pub port: i32,
+    /// Worker name ("__ephemeral__..." for ephemeral workers)
+    pub name: String,
     /// Queue ID this worker is processing (None for Admin workers)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[tabled(skip)]
@@ -106,13 +104,13 @@ impl fmt::Display for WorkerRecord {
         match self.queue_id {
             Some(queue_id) => write!(
                 f,
-                "WorkerRecord {{ id: {}, hostname: {}, port: {}, queue_id: {}, status: {:?} }}",
-                self.id, self.hostname, self.port, queue_id, self.status
+                "WorkerRecord {{ id: {}, name: {}, queue_id: {}, status: {:?} }}",
+                self.id, self.name, queue_id, self.status
             ),
             None => write!(
                 f,
-                "WorkerRecord {{ id: {}, hostname: {}, port: {}, queue_id: None, status: {:?} }}",
-                self.id, self.hostname, self.port, self.status
+                "WorkerRecord {{ id: {}, name: {}, queue_id: None, status: {:?} }}",
+                self.id, self.name, self.status
             ),
         }
     }
@@ -174,8 +172,7 @@ pub struct NewQueueRecord {
 /// Input for creating a new worker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorkerRecord {
-    pub hostname: String,
-    pub port: i32,
+    pub name: String,
     /// Queue ID (None for Admin workers)
     pub queue_id: Option<i64>,
 }

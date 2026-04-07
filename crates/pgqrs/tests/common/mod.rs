@@ -20,14 +20,37 @@ pub fn current_backend() -> BackendType {
         }
     }
 
-    // Default
-    #[cfg(feature = "postgres")]
+    // Default to the first local-capable backend available so test binaries
+    // remain runnable without extra environment setup.
+    #[cfg(feature = "sqlite")]
     {
-        BackendType::Postgres
+        return BackendType::Sqlite;
     }
-    #[cfg(not(feature = "postgres"))]
+    #[cfg(all(not(feature = "sqlite"), feature = "turso"))]
     {
-        panic!("No backend specified and postgres feature is disabled. Set PGQRS_TEST_BACKEND.");
+        return BackendType::Turso;
+    }
+    #[cfg(all(not(feature = "sqlite"), not(feature = "turso"), feature = "postgres"))]
+    {
+        return BackendType::Postgres;
+    }
+    #[cfg(all(
+        not(feature = "sqlite"),
+        not(feature = "turso"),
+        not(feature = "postgres"),
+        feature = "s3"
+    ))]
+    {
+        return BackendType::S3;
+    }
+    #[cfg(not(any(
+        feature = "sqlite",
+        feature = "turso",
+        feature = "postgres",
+        feature = "s3"
+    )))]
+    {
+        panic!("No supported backend feature enabled. Set PGQRS_TEST_BACKEND.");
     }
 }
 

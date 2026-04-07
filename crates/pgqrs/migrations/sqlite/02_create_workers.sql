@@ -1,8 +1,7 @@
 CREATE TABLE IF NOT EXISTS pgqrs_workers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     queue_id INTEGER REFERENCES pgqrs_queues(id),
-    hostname TEXT NOT NULL,
-    port INTEGER NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     started_at TEXT DEFAULT (datetime('now')) NOT NULL,
     heartbeat_at TEXT DEFAULT (datetime('now')) NOT NULL,
     shutdown_at TEXT,

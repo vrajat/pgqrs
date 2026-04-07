@@ -168,8 +168,7 @@ pub trait WorkerTable: Send + Sync {
     async fn register(
         &self,
         queue_id: Option<i64>,
-        hostname: &str,
-        port: i32,
+        name: &str,
     ) -> crate::error::Result<WorkerRecord>;
 
     async fn register_ephemeral(&self, queue_id: Option<i64>)

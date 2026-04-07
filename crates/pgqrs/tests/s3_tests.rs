@@ -142,12 +142,12 @@ mod tables_tests {
             .await
             .expect("queue insert should succeed");
 
-        let producer_worker = pgqrs::producer("test-host", 9301, queue_name)
+        let producer_worker = pgqrs::producer("test-host-9301", queue_name)
             .create(&consistent_store)
             .await
             .expect("producer worker create should succeed");
 
-        let consumer_worker = pgqrs::consumer("test-host", 9302, queue_name)
+        let consumer_worker = pgqrs::consumer("test-host-9302", queue_name)
             .create(&consistent_store)
             .await
             .expect("consumer worker create should succeed");
@@ -225,7 +225,7 @@ mod tables_tests {
             .create_queue("jobs")
             .await
             .expect("queue creation should succeed");
-        let producer = pgqrs::producer("test-host", 9303, "jobs")
+        let producer = pgqrs::producer("test-host-9303", "jobs")
             .create(&store)
             .await
             .expect("producer should be created");
@@ -317,7 +317,7 @@ mod snapshot_db_tests {
             .create_queue("seeded")
             .await
             .expect("seed queue should be created");
-        let producer = pgqrs::producer("seed-host", 9821, "seeded")
+        let producer = pgqrs::producer("seed-host-9821", "seeded")
             .create(&seed_store_writer)
             .await
             .expect("seed producer should be created");
@@ -1283,7 +1283,7 @@ mod process_isolated_sync_tests {
         let mut seed_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("seed config should parse");
         seed_cfg.s3.mode = DurabilityMode::Durable;
-        seed_cfg.s3.cache_id = "proc-seed-main".to_string();
+        seed_cfg.s3.cache_id = next_test_cache_id("proc-seed-main");
         let seed_store = pgqrs::connect_with_config(&seed_cfg)
             .await
             .expect("seed store should open");
@@ -1297,11 +1297,15 @@ mod process_isolated_sync_tests {
             .expect("seed queue should be created");
 
         let stale_dsn = dsn.clone();
+        let stale_cache_id = next_test_cache_id("proc-stale");
         let stale_task =
-            tokio::spawn(async move { run_helper(&stale_dsn, "stale", "proc-stale", 500).await });
+            tokio::spawn(
+                async move { run_helper(&stale_dsn, "stale", &stale_cache_id, 500).await },
+            );
         tokio::time::sleep(Duration::from_millis(120)).await;
 
-        let advanced = run_helper(&dsn, "advanced", "proc-advanced", 0).await;
+        let advanced_cache_id = next_test_cache_id("proc-advanced");
+        let advanced = run_helper(&dsn, "advanced", &advanced_cache_id, 0).await;
         assert!(
             advanced.status.success(),
             "advanced process should succeed, stderr={}",
@@ -1325,7 +1329,7 @@ mod process_isolated_sync_tests {
         let mut follower_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("follower config should parse");
         follower_cfg.s3.mode = DurabilityMode::Local;
-        follower_cfg.s3.cache_id = "proc-follower".to_string();
+        follower_cfg.s3.cache_id = next_test_cache_id("proc-follower");
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
@@ -1370,12 +1374,12 @@ mod consistent_db_tests {
             .await
             .expect("queue creation should succeed");
 
-        let producer = pgqrs::producer("host", 9801, "jobs-open")
+        let producer = pgqrs::producer("host-9801", "jobs-open")
             .create(&store)
             .await
             .expect("producer create should succeed");
 
-        let consumer = pgqrs::consumer("host", 9802, "jobs-open")
+        let consumer = pgqrs::consumer("host-9802", "jobs-open")
             .create(&store)
             .await
             .expect("consumer create should succeed");
@@ -1455,6 +1459,7 @@ mod consistent_db_tests {
         let dsn = common::get_test_dsn(schema).await;
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Durable;
+        config.s3.cache_id = next_test_cache_id(schema);
         config
     }
 
@@ -1501,7 +1506,7 @@ mod consistent_db_tests {
             .create_queue("seeded")
             .await
             .expect("seed queue should be created");
-        let producer = pgqrs::producer("seed-host", 9921, "seeded")
+        let producer = pgqrs::producer("seed-host-9921", "seeded")
             .create(&seed_store)
             .await
             .expect("seed producer should be created");

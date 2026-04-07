@@ -14,11 +14,11 @@ async fn test_queue_metrics() {
 
     // Create queue
     let queue_info = store.queue(queue_name).await.unwrap();
-    let producer = pgqrs::producer("test_metrics_producer", 3200, queue_name)
+    let producer = pgqrs::producer("test_metrics_producer-3200", queue_name)
         .create(&store)
         .await
         .expect("Failed to create producer");
-    let consumer = pgqrs::consumer("test_metrics_consumer", 3201, queue_name)
+    let consumer = pgqrs::consumer("test_metrics_consumer-3201", queue_name)
         .create(&store)
         .await
         .expect("Failed to create consumer");
@@ -127,11 +127,11 @@ async fn test_system_stats() {
 
     // Setup: Create queue, producer, consumer, and messages
     let queue_info = store.queue(queue_name).await.unwrap();
-    let producer = pgqrs::producer("test_system_stats_producer", 3202, queue_name)
+    let producer = pgqrs::producer("test_system_stats_producer-3202", queue_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer = pgqrs::consumer("test_system_stats_consumer", 3203, queue_name)
+    let consumer = pgqrs::consumer("test_system_stats_consumer-3203", queue_name)
         .create(&store)
         .await
         .unwrap();
@@ -189,13 +189,13 @@ async fn test_worker_health_stats() {
     // Insert a stale worker manually
     let sql = match common::current_backend() {
         #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', NOW() - INTERVAL '1 hour')",
+        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', NOW() - INTERVAL '1 hour')",
         #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
+        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
         #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
+        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
         #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_workers (queue_id, hostname, port, status, heartbeat_at) VALUES ($1, 'stale_worker', 9999, 'ready', datetime('now', '-1 hour'))",
+        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
     };
 
     store
@@ -232,20 +232,16 @@ async fn test_worker_health_stats() {
     let cleanup_sql = match common::current_backend() {
         #[cfg(feature = "postgres")]
         pgqrs::store::BackendType::Postgres => {
-            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE hostname = 'stale_worker'"
+            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE name = 'stale_worker'"
         }
         #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => {
-            "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'"
-        }
+        pgqrs::store::BackendType::S3 => "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'",
         #[cfg(feature = "sqlite")]
         pgqrs::store::BackendType::Sqlite => {
-            "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'"
+            "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'"
         }
         #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => {
-            "DELETE FROM pgqrs_workers WHERE hostname = 'stale_worker'"
-        }
+        pgqrs::store::BackendType::Turso => "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'",
     };
     store.execute_raw(cleanup_sql).await.unwrap();
     pgqrs::admin(&store)
@@ -263,11 +259,11 @@ async fn test_worker_stats() {
     let queue_info = store.queue(queue_name).await.unwrap();
 
     // Create 1 producer and 1 consumer
-    let producer = pgqrs::producer("test_worker_stats_producer", 3204, queue_name)
+    let producer = pgqrs::producer("test_worker_stats_producer-3204", queue_name)
         .create(&store)
         .await
         .unwrap();
-    let consumer = pgqrs::consumer("test_worker_stats_consumer", 3205, queue_name)
+    let consumer = pgqrs::consumer("test_worker_stats_consumer-3205", queue_name)
         .create(&store)
         .await
         .unwrap();
