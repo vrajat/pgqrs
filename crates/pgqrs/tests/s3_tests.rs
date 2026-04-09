@@ -9,6 +9,7 @@ use pgqrs::store::AnyStore;
 use pgqrs::types::NewQueueMessage;
 use pgqrs::Store;
 use std::env;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -26,7 +27,7 @@ fn prepare_localstack_tls_env() {
     }
 }
 
-fn next_test_cache_id(schema: &str) -> String {
+fn next_test_cache_dir(schema: &str) -> PathBuf {
     static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
     let suffix = NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed);
     let ts = std::time::SystemTime::now()
@@ -34,13 +35,16 @@ fn next_test_cache_id(schema: &str) -> String {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let pid = std::process::id();
-    format!("test-{schema}-{pid}-{ts}-{suffix}")
+    let cache_dir = std::env::temp_dir()
+        .join("pgqrs-s3-tests")
+        .join(format!("test-{schema}-{pid}-{ts}-{suffix}"));
+    std::fs::create_dir_all(&cache_dir).expect("failed to create s3 test cache dir");
+    cache_dir
 }
 
 async fn create_s3_store_for_test(schema: &str, mode: DurabilityMode) -> AnyStore {
-    let base_store = common::create_store_with_config(schema, |cfg| {
-        cfg.s3.mode = mode;
-        cfg.s3.cache_id = next_test_cache_id(schema);
+    let base_store = common::create_store_with_config(schema, |config| {
+        config.s3.mode = mode;
     })
     .await;
     assert_eq!(
@@ -50,6 +54,15 @@ async fn create_s3_store_for_test(schema: &str, mode: DurabilityMode) -> AnyStor
     );
 
     base_store
+}
+
+fn config_with_fresh_cache_dir(
+    config: &pgqrs::config::Config,
+    schema: &str,
+) -> pgqrs::config::Config {
+    let mut config = config.clone();
+    config.s3.cache_dir = Some(next_test_cache_dir(schema));
+    config
 }
 
 fn store_mode(store: &AnyStore) -> DurabilityMode {
@@ -188,7 +201,10 @@ mod tables_tests {
             "read-side count should be one after enqueue"
         );
 
-        let mut follower_cfg = base_store.config().clone();
+        let mut follower_cfg = config_with_fresh_cache_dir(
+            base_store.config(),
+            "consistentdb_normal_flow_without_explicit_sync_or_refresh_follower",
+        );
         follower_cfg.s3.mode = DurabilityMode::Local;
         let mut follower_store = pgqrs::connect_with_config(&follower_cfg)
             .await
@@ -280,6 +296,9 @@ mod snapshot_db_tests {
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
+        config.s3.cache_dir = Some(next_test_cache_dir(
+            "s3_bootstrap_creates_remote_state_when_key_is_missing",
+        ));
         let mut store = pgqrs::connect_with_config(&config)
             .await
             .expect("store should open");
@@ -334,7 +353,11 @@ mod snapshot_db_tests {
             .await
             .expect("seed sync should succeed");
 
-        let mut reopened = pgqrs::connect_with_config(&seed_config)
+        let reopened_config = config_with_fresh_cache_dir(
+            &seed_config,
+            "s3_bootstrap_restores_existing_remote_state_reopened",
+        );
+        let mut reopened = pgqrs::connect_with_config(&reopened_config)
             .await
             .expect("store should open for restore");
         s3_snapshot_store(&mut reopened)
@@ -357,7 +380,11 @@ mod snapshot_db_tests {
             "seeded messages should be restored after bootstrap"
         );
 
-        let mut replacement_writer = pgqrs::connect_with_config(&seed_config)
+        let replacement_config = config_with_fresh_cache_dir(
+            &seed_config,
+            "s3_bootstrap_restores_existing_remote_state_replacement",
+        );
+        let mut replacement_writer = pgqrs::connect_with_config(&replacement_config)
             .await
             .expect("replacement store should open against seeded config");
         replacement_writer
@@ -381,6 +408,7 @@ mod snapshot_db_tests {
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
+        config.s3.cache_dir = Some(next_test_cache_dir("s3_bootstrap_is_idempotent"));
         let mut store = pgqrs::connect_with_config(&config)
             .await
             .expect("store should open");
@@ -421,6 +449,9 @@ mod snapshot_db_tests {
 
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Local;
+        config.s3.cache_dir = Some(next_test_cache_dir(
+            "s3_bootstrap_recovers_when_remote_state_deleted",
+        ));
         let mut seed_store = pgqrs::connect_with_config(&config)
             .await
             .expect("seed store should open");
@@ -469,11 +500,12 @@ mod snapshot_db_tests {
     }
 
     fn cache_dir_for_store(store: &AnyStore) -> std::path::PathBuf {
-        let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from))
-            .unwrap_or_else(|_| std::env::temp_dir().join("pgqrs_s3_cache"));
-        base_dir.join(store.config().s3.cache_id.clone())
+        store
+            .config()
+            .s3
+            .cache_dir
+            .clone()
+            .expect("s3 tests require explicit cache_dir")
     }
 
     fn revision_sqlite_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -585,7 +617,8 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should publish seed state");
 
-        let writer_b_config = writer_a.config().clone();
+        let writer_b_config =
+            config_with_fresh_cache_dir(writer_a.config(), "snapshot_db_stale_writer_conflict_b");
         let mut writer_b = pgqrs::connect_with_config(&writer_b_config)
             .await
             .expect("second writer should open");
@@ -758,7 +791,10 @@ mod snapshot_db_tests {
             .await
             .expect("sync should publish initial remote state");
 
-        let follower_config = store.config().clone();
+        let follower_config = config_with_fresh_cache_dir(
+            store.config(),
+            "snapshot_db_dirty_sync_publishes_follower",
+        );
         let mut follower = pgqrs::connect_with_config(&follower_config)
             .await
             .expect("follower should open");
@@ -772,6 +808,59 @@ mod snapshot_db_tests {
                 .await
                 .expect("follower queue existence check should succeed"),
             "dirty sync should publish queue to remote state"
+        );
+    }
+
+    #[tokio::test]
+    async fn given_multiple_sync_revisions_when_syncing_then_only_current_local_revision_is_kept() {
+        let mut store = create_s3_store_for_test(
+            "snapshot_db_prunes_old_local_revisions_after_sync",
+            DurabilityMode::Local,
+        )
+        .await;
+
+        pgqrs::admin(&store)
+            .create_queue("seeded")
+            .await
+            .expect("queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("initial sync should publish remote state");
+
+        let cache_dir = cache_dir_for_store(&store);
+        let initial_revision_files = revision_sqlite_files(&cache_dir);
+        assert_eq!(
+            initial_revision_files.len(),
+            1,
+            "expected one revision file after initial sync"
+        );
+        let initial_revision = initial_revision_files[0].clone();
+
+        pgqrs::admin(&store)
+            .create_queue("second")
+            .await
+            .expect("second queue creation should succeed");
+        s3_sync_store(&mut store)
+            .await
+            .expect("second sync should publish remote state");
+
+        let after_files = revision_sqlite_files(&cache_dir);
+        assert_eq!(
+            after_files.len(),
+            1,
+            "only the active revision file should remain after a later sync"
+        );
+        assert_ne!(
+            initial_revision, after_files[0],
+            "second sync should replace the previous revision file"
+        );
+        assert!(
+            !initial_revision.exists(),
+            "obsolete revision file should be removed after sync"
+        );
+        assert!(
+            !cache_dir.join("cache.sqlite").exists(),
+            "bootstrap cache file should be removed once a revision-specific cache is active"
         );
     }
 
@@ -987,7 +1076,10 @@ mod snapshot_db_tests {
             .await
             .expect("initial sync should succeed");
 
-        let follower_config = seed_store.config().clone();
+        let follower_config = config_with_fresh_cache_dir(
+            seed_store.config(),
+            "snapshot_db_refreshes_changed_remote_state_follower",
+        );
         let mut follower = pgqrs::connect_with_config(&follower_config)
             .await
             .expect("follower should open");
@@ -1065,11 +1157,12 @@ mod sync_state_tests {
     use super::*;
 
     fn cache_dir_for_store(store: &AnyStore) -> std::path::PathBuf {
-        let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from))
-            .unwrap_or_else(|_| std::env::temp_dir().join("pgqrs_s3_cache"));
-        base_dir.join(store.config().s3.cache_id.clone())
+        store
+            .config()
+            .s3
+            .cache_dir
+            .clone()
+            .expect("s3 tests require explicit cache_dir")
     }
 
     #[tokio::test]
@@ -1180,7 +1273,8 @@ mod sync_state_tests {
             .await
             .expect("seed sync should publish remote state");
 
-        let follower_cfg = writer.config().clone();
+        let follower_cfg =
+            config_with_fresh_cache_dir(writer.config(), "sync_state_remote_changes_follower");
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
@@ -1215,7 +1309,8 @@ mod sync_state_tests {
             .await
             .expect("seed sync should publish remote state");
 
-        let follower_cfg = writer.config().clone();
+        let follower_cfg =
+            config_with_fresh_cache_dir(writer.config(), "sync_state_concurrent_changes_follower");
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
@@ -1250,7 +1345,7 @@ mod process_isolated_sync_tests {
     async fn run_helper(
         dsn: &str,
         queue: &str,
-        cache_id: &str,
+        cache_dir: &std::path::Path,
         sleep_before_sync_ms: u64,
     ) -> std::process::Output {
         let bin = assert_cmd::cargo::cargo_bin!("s3_process_helper");
@@ -1259,8 +1354,8 @@ mod process_isolated_sync_tests {
             .arg(dsn)
             .arg("--queue")
             .arg(queue)
-            .arg("--cache-id")
-            .arg(cache_id)
+            .arg("--cache-dir")
+            .arg(cache_dir)
             .arg("--sleep-before-sync-ms")
             .arg(sleep_before_sync_ms.to_string())
             .output()
@@ -1269,7 +1364,7 @@ mod process_isolated_sync_tests {
     }
 
     #[tokio::test]
-    async fn stale_writer_conflicts_across_processes_with_distinct_cache_ids() {
+    async fn stale_writer_conflicts_across_processes_with_distinct_cache_dirs() {
         let bucket =
             std::env::var("PGQRS_S3_BUCKET").unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
         let dsn = format!(
@@ -1283,7 +1378,7 @@ mod process_isolated_sync_tests {
         let mut seed_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("seed config should parse");
         seed_cfg.s3.mode = DurabilityMode::Durable;
-        seed_cfg.s3.cache_id = next_test_cache_id("proc-seed-main");
+        seed_cfg.s3.cache_dir = Some(next_test_cache_dir("proc-seed-main"));
         let seed_store = pgqrs::connect_with_config(&seed_cfg)
             .await
             .expect("seed store should open");
@@ -1297,15 +1392,15 @@ mod process_isolated_sync_tests {
             .expect("seed queue should be created");
 
         let stale_dsn = dsn.clone();
-        let stale_cache_id = next_test_cache_id("proc-stale");
+        let stale_cache_dir = next_test_cache_dir("proc-stale");
         let stale_task =
             tokio::spawn(
-                async move { run_helper(&stale_dsn, "stale", &stale_cache_id, 500).await },
+                async move { run_helper(&stale_dsn, "stale", &stale_cache_dir, 500).await },
             );
         tokio::time::sleep(Duration::from_millis(120)).await;
 
-        let advanced_cache_id = next_test_cache_id("proc-advanced");
-        let advanced = run_helper(&dsn, "advanced", &advanced_cache_id, 0).await;
+        let advanced_cache_dir = next_test_cache_dir("proc-advanced");
+        let advanced = run_helper(&dsn, "advanced", &advanced_cache_dir, 0).await;
         assert!(
             advanced.status.success(),
             "advanced process should succeed, stderr={}",
@@ -1329,7 +1424,7 @@ mod process_isolated_sync_tests {
         let mut follower_cfg = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap")
             .expect("follower config should parse");
         follower_cfg.s3.mode = DurabilityMode::Local;
-        follower_cfg.s3.cache_id = next_test_cache_id("proc-follower");
+        follower_cfg.s3.cache_dir = Some(next_test_cache_dir("proc-follower"));
         let mut follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
@@ -1418,7 +1513,10 @@ mod consistent_db_tests {
             .await
             .expect("queue create should succeed");
 
-        let follower_cfg = follower_base_store.config().clone();
+        let follower_cfg = config_with_fresh_cache_dir(
+            follower_base_store.config(),
+            "cboot_alias_conflict_follower",
+        );
         let follower = pgqrs::connect_with_config(&follower_cfg)
             .await
             .expect("follower should open");
@@ -1431,7 +1529,11 @@ mod consistent_db_tests {
             "follower bootstrap should surface conflict, got: {bootstrap_err}"
         );
 
-        let mut restore_follower = pgqrs::connect_with_config(&follower_cfg)
+        let restore_follower_cfg = config_with_fresh_cache_dir(
+            follower_base_store.config(),
+            "cboot_alias_conflict_restore",
+        );
+        let mut restore_follower = pgqrs::connect_with_config(&restore_follower_cfg)
             .await
             .expect("fresh follower should reopen cleanly after bootstrap conflict");
         s3_snapshot_store(&mut restore_follower)
@@ -1459,7 +1561,7 @@ mod consistent_db_tests {
         let dsn = common::get_test_dsn(schema).await;
         let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_bootstrap").unwrap();
         config.s3.mode = DurabilityMode::Durable;
-        config.s3.cache_id = next_test_cache_id(schema);
+        config.s3.cache_dir = Some(next_test_cache_dir(schema));
         config
     }
 
@@ -1500,7 +1602,10 @@ mod consistent_db_tests {
     async fn given_existing_remote_state_when_consistent_bootstrap_then_returns_conflict() {
         let seed_store =
             create_s3_store_for_test("cboot_conflict_existing_seed", DurabilityMode::Durable).await;
-        let seed_config = seed_store.config().clone();
+        let seed_config = config_with_fresh_cache_dir(
+            seed_store.config(),
+            "cboot_conflict_existing_seed_reopened",
+        );
 
         pgqrs::admin(&seed_store)
             .create_queue("seeded")

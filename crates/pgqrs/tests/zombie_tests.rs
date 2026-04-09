@@ -7,6 +7,13 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
+    #[cfg(feature = "s3")]
+    {
+        if common::current_backend() == pgqrs::store::BackendType::S3 {
+            eprintln!("Skipping test: not supported on S3 backend");
+            return Ok(());
+        }
+    }
     let queue_name = "zombie-queue";
     let schema = "pgqrs_zombie_tests";
     // 1-8. Phase 1: Library-based Zombie Reclamation

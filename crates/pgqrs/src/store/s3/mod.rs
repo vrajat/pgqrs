@@ -10,7 +10,6 @@ pub mod snapshot;
 use async_trait::async_trait;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use url::Url;
 
@@ -561,29 +560,9 @@ pub(crate) fn sanitize_cache_component(input: &str) -> String {
     }
 }
 
-pub(crate) fn ensure_s3_local_cache_dir(cache_id: &str) -> Result<PathBuf> {
-    let base_dir = std::env::var("PGQRS_S3_LOCAL_CACHE_DIR")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("CARGO_TARGET_TMPDIR").map(PathBuf::from))
-        .unwrap_or_else(|_| std::env::temp_dir().join("pgqrs_s3_cache"));
-    std::fs::create_dir_all(&base_dir).map_err(|e| Error::InvalidConfig {
-        field: "PGQRS_S3_LOCAL_CACHE_DIR".to_string(),
-        message: format!("Failed to create S3 cache directory: {}", e),
-    })?;
-
-    let path = base_dir.join(sanitize_cache_component(cache_id));
-
-    std::fs::create_dir_all(&path).map_err(|e| Error::InvalidConfig {
-        field: "PGQRS_S3_LOCAL_CACHE_DIR".to_string(),
-        message: format!("Failed to create S3 cache path {}: {}", path.display(), e),
-    })?;
-
-    Ok(path)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ensure_s3_local_cache_dir, parse_s3_bucket_and_key};
+    use super::parse_s3_bucket_and_key;
 
     #[test]
     fn parse_s3_bucket_and_key_accepts_valid_s3_url() {
@@ -608,11 +587,5 @@ mod tests {
     fn parse_s3_bucket_and_key_rejects_wrong_scheme() {
         let err = parse_s3_bucket_and_key("sqlite://bucket/queue.db").unwrap_err();
         assert!(err.to_string().contains("Invalid S3 DSN"));
-    }
-
-    #[test]
-    fn local_cache_dir_uses_only_cache_id() {
-        let dir = ensure_s3_local_cache_dir("cache-a").unwrap();
-        assert_eq!(dir.file_name().unwrap().to_string_lossy(), "cache-a");
     }
 }

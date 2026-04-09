@@ -1,9 +1,7 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::store::dblock::DbLock;
-use crate::store::s3::{
-    ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sanitize_cache_component, SyncDb, SyncState,
-};
+use crate::store::s3::{parse_s3_bucket_and_key, sanitize_cache_component, SyncDb, SyncState};
 use crate::store::sqlite::SqliteTables;
 use crate::store::{DbOpFuture, DbTables};
 use async_trait::async_trait;
@@ -99,7 +97,10 @@ impl SnapshotDb {
         let object_store = build_object_store_from_env(&bucket)?;
         let mut config = config.clone();
         config.sqlite.use_wal = false;
-        let cache_dir = ensure_s3_local_cache_dir(&config.s3.cache_id)?;
+        let cache_dir = config.s3.cache_dir.clone().ok_or(Error::InvalidConfig {
+            field: "s3.cache_dir".to_string(),
+            message: "cache_dir must be set for s3 stores".to_string(),
+        })?;
 
         let sqlite_dsn = sqlite_dsn_for_revision(&cache_dir, None)?;
         let sqlite_tables = SqliteTables::new(&sqlite_dsn, &config).await?;
@@ -156,6 +157,21 @@ impl SnapshotDb {
             }),
             Err(e) => Err(map_object_store_error("head", &object_key, &e)),
         }
+    }
+
+    fn delete_cache_file(&self, path: &std::path::Path) -> Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        std::fs::remove_file(path).map_err(|e| Error::Internal {
+            message: format!(
+                "Failed to remove stale S3 cache file {}: {}",
+                path.display(),
+                e
+            ),
+        })?;
+        Ok(())
     }
 }
 
@@ -282,6 +298,7 @@ impl SyncDb for SnapshotDb {
             message: format!("snapshot get bytes failed for key '{}': {}", object_key, e),
         })?;
 
+        let previous_path = sqlite_path_for_revision(&self.cache_dir, local_etag.as_deref())?;
         let sqlite_path = sqlite_path_for_revision(&self.cache_dir, remote_etag.as_deref())?;
         std::fs::write(&sqlite_path, remote_bytes.as_ref()).map_err(|e| Error::Internal {
             message: format!(
@@ -311,6 +328,10 @@ impl SyncDb for SnapshotDb {
         guard.last_etag = remote_etag;
         guard.is_dirty = false;
         guard.sqlite_tables = new_tables;
+        drop(guard);
+        if previous_path != sqlite_path {
+            self.delete_cache_file(&previous_path)?;
+        }
         Ok(())
     }
 
@@ -427,6 +448,10 @@ impl SyncDb for SnapshotDb {
         guard.last_etag = next_etag;
         guard.is_dirty = false;
         guard.sqlite_tables = new_tables;
+        drop(guard);
+        if previous_path != next_path {
+            self.delete_cache_file(&previous_path)?;
+        }
         Ok(())
     }
 }
@@ -500,13 +525,19 @@ fn sqlite_path_for_revision(cache_dir: &std::path::Path, etag: Option<&str>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ensure_s3_local_cache_dir, parse_s3_bucket_and_key, sqlite_dsn_for_revision,
-        sqlite_path_for_revision,
-    };
+    use super::{parse_s3_bucket_and_key, sqlite_dsn_for_revision, sqlite_path_for_revision};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_CACHE_DIR: AtomicU64 = AtomicU64::new(1);
 
     fn cache_dir_for_test() -> std::path::PathBuf {
-        ensure_s3_local_cache_dir("snapshot-tests").unwrap()
+        let dir = std::env::temp_dir().join(format!(
+            "pgqrs-snapshot-tests-{}-{}",
+            std::process::id(),
+            NEXT_CACHE_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]

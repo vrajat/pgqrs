@@ -32,6 +32,8 @@ async fn create_store() -> pgqrs::store::AnyStore {
 
 #[tokio::test]
 async fn verify() {
+    #[cfg(feature = "s3")]
+    skip_on_backend!(pgqrs::store::BackendType::S3);
     let store = create_store().await;
     // Verify should succeed (using default schema "public")
     assert!(pgqrs::admin(&store).verify().await.is_ok());
@@ -39,6 +41,8 @@ async fn verify() {
 
 #[tokio::test]
 async fn test_default_schema_backward_compatibility() {
+    #[cfg(feature = "s3")]
+    skip_on_backend!(pgqrs::store::BackendType::S3);
     // This test ensures that the default behavior works without any explicit schema configuration
     let database_url = match common::current_backend() {
         #[cfg(feature = "postgres")]

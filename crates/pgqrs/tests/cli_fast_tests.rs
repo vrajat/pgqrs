@@ -16,6 +16,18 @@ use pgqrs::store::Store;
 use serde_json::Value;
 use std::process::Command;
 
+fn skip_if_s3() -> bool {
+    #[cfg(feature = "s3")]
+    {
+        if common::current_backend() == pgqrs::store::BackendType::S3 {
+            eprintln!("Skipping CLI tests on S3 backend");
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Helper to get test database URL
 fn get_test_db_url(schema: &str) -> String {
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -52,6 +64,9 @@ fn run_cli_output(db_url: &str, schema: &str, format: &str, args: &[&str]) -> St
 
 #[test]
 fn test_cli_help() {
+    if skip_if_s3() {
+        return;
+    }
     let output = Command::new(common::pgqrs_cli_bin())
         .arg("--help")
         .output()
@@ -64,6 +79,9 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_version() {
+    if skip_if_s3() {
+        return;
+    }
     let output = Command::new(common::pgqrs_cli_bin())
         .arg("--version")
         .output()
@@ -80,6 +98,9 @@ fn test_cli_version() {
 
 #[test]
 fn test_queue_create_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -91,6 +112,9 @@ fn test_queue_create_json() {
 
 #[test]
 fn test_queue_list_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -106,6 +130,9 @@ fn test_queue_list_json() {
 
 #[test]
 fn test_queue_get_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -120,6 +147,9 @@ fn test_queue_get_json() {
 
 #[test]
 fn test_queue_metrics_single_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -135,6 +165,9 @@ fn test_queue_metrics_single_json() {
 
 #[test]
 fn test_queue_metrics_all_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -154,6 +187,9 @@ fn test_queue_metrics_all_json() {
 
 #[test]
 fn test_queue_list_table() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -169,6 +205,9 @@ fn test_queue_list_table() {
 
 #[test]
 fn test_queue_metrics_table() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -193,6 +232,9 @@ fn test_queue_metrics_table() {
 
 #[test]
 fn test_queue_delete() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -219,6 +261,9 @@ fn test_queue_delete() {
 
 #[test]
 fn test_queue_purge() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -298,6 +343,9 @@ fn test_queue_purge() {
 
 #[test]
 fn test_queue_get_nonexistent_fails() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -312,6 +360,9 @@ fn test_queue_get_nonexistent_fails() {
 
 #[test]
 fn test_invalid_format_flag() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 
@@ -330,6 +381,9 @@ fn test_invalid_format_flag() {
 
 #[test]
 fn test_admin_stats_json() {
+    if skip_if_s3() {
+        return;
+    }
     let db_url = get_test_db_url("pgqrs_cli_test");
     let schema = "pgqrs_cli_test";
 

@@ -5,6 +5,8 @@
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[cfg(feature = "s3")]
+use std::path::PathBuf;
 
 /// Validate a SQL identifier for schema names.
 ///
@@ -129,23 +131,17 @@ fn default_s3_mode() -> crate::store::s3::DurabilityMode {
 }
 
 #[cfg(feature = "s3")]
-fn default_s3_cache_id() -> String {
-    let host = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "host".to_string());
-    format!("{}_{}", host, std::process::id())
-}
-
-#[cfg(feature = "s3")]
-fn validate_s3_cache_id(cache_id: String) -> Result<String> {
-    let trimmed = cache_id.trim();
-    if trimmed.is_empty() {
+fn validate_s3_cache_dir(cache_dir: Option<PathBuf>) -> Result<Option<PathBuf>> {
+    if cache_dir
+        .as_ref()
+        .is_some_and(|cache_dir| cache_dir.as_os_str().is_empty())
+    {
         Err(crate::error::Error::InvalidConfig {
-            field: "s3.cache_id".to_string(),
-            message: "cache_id cannot be empty".to_string(),
+            field: "s3.cache_dir".to_string(),
+            message: "cache_dir cannot be empty".to_string(),
         })
     } else {
-        Ok(trimmed.to_string())
+        Ok(cache_dir)
     }
 }
 
@@ -177,11 +173,9 @@ pub struct S3Config {
     /// S3-backed durability mode (only used for s3:// DSNs)
     #[serde(default = "default_s3_mode")]
     pub mode: crate::store::s3::DurabilityMode,
-    /// Local cache namespace id for S3-backed SQLite cache layout.
-    ///
-    /// This scopes local cache files per store instance/config.
-    #[serde(default = "default_s3_cache_id")]
-    pub cache_id: String,
+    /// Local cache directory for the S3-backed SQLite cache layout.
+    #[serde(default)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[cfg(feature = "s3")]
@@ -189,7 +183,7 @@ impl Default for S3Config {
     fn default() -> Self {
         Self {
             mode: default_s3_mode(),
-            cache_id: default_s3_cache_id(),
+            cache_dir: None,
         }
     }
 }
@@ -406,7 +400,7 @@ impl Config {
         #[cfg(feature = "s3")]
         let s3 = S3Config {
             mode: s3_mode,
-            cache_id: default_s3_cache_id(),
+            cache_dir: None,
         };
 
         Ok(Self {
@@ -449,7 +443,7 @@ impl Config {
 
         #[cfg(feature = "s3")]
         {
-            config.s3.cache_id = validate_s3_cache_id(config.s3.cache_id)?;
+            config.s3.cache_dir = validate_s3_cache_dir(config.s3.cache_dir)?;
         }
 
         // Validate schema name
@@ -1028,29 +1022,29 @@ schema: "invalid-schema-name"
 
         let config = Config::from_env().expect("Should load s3 settings from env");
         assert_eq!(config.s3.mode, crate::store::s3::DurabilityMode::Durable);
-        assert!(!config.s3.cache_id.trim().is_empty());
+        assert!(config.s3.cache_dir.is_none());
 
         clear_test_env_vars();
     }
 
     #[cfg(feature = "s3")]
     #[test]
-    fn test_from_file_with_empty_s3_cache_id_is_invalid() {
+    fn test_from_file_with_empty_s3_cache_dir_is_invalid() {
         let config_content = r#"
 dsn: "s3://bucket/queue.sqlite"
 s3:
   mode: "durable"
-  cache_id: "   "
+  cache_dir: ""
 "#;
-        let config_path = create_test_config_file(config_content, "empty_s3_cache_id");
+        let config_path = create_test_config_file(config_content, "empty_s3_cache_dir");
 
         let result = Config::from_file(&config_path);
         assert!(result.is_err());
 
         if let Err(crate::error::Error::InvalidConfig { field, .. }) = result {
-            assert_eq!(field, "s3.cache_id");
+            assert_eq!(field, "s3.cache_dir");
         } else {
-            panic!("Expected InvalidConfig error for s3.cache_id");
+            panic!("Expected InvalidConfig error for s3.cache_dir");
         }
 
         cleanup_test_file(&config_path);

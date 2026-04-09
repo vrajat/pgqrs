@@ -8,14 +8,17 @@ import pgqrs
 from .conftest import TestBackend, requires_backend
 
 
-def cache_id_for_dsn(dsn: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in dsn)
+def cache_dir_for_dsn(dsn: str) -> str:
+    suffix = "".join(c if c.isalnum() or c in "-_." else "_" for c in dsn)
+    return str(Path(os.environ.get("TMPDIR", "/tmp")) / "pgqrs-python-s3-cache" / suffix)
 
 
 def local_s3_config(dsn: str) -> pgqrs.Config:
     config = pgqrs.Config(dsn, schema="s3_python")
     config.s3_mode = pgqrs.DurabilityMode.Local
-    config.s3_cache_id = cache_id_for_dsn(dsn)
+    cache_dir = Path(cache_dir_for_dsn(dsn))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    config.s3_cache_dir = str(cache_dir)
     return config
 
 
@@ -32,11 +35,11 @@ def test_config_s3_mode_uses_durability_mode_enum():
 
 
 @requires_backend(TestBackend.S3)
-def test_config_s3_cache_id_rejects_empty_value():
+def test_config_s3_cache_dir_rejects_empty_value():
     config = pgqrs.Config("s3://pgqrs-test-bucket/config-prefix", schema="s3_python")
 
-    with pytest.raises(pgqrs.ConfigError, match="cache id cannot be empty"):
-        config.s3_cache_id = "   "
+    with pytest.raises(pgqrs.ConfigError, match="cache dir cannot be empty"):
+        config.s3_cache_dir = "   "
 
 
 def parse_s3_dsn(dsn: str) -> tuple[str, str]:
