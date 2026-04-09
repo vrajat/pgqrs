@@ -165,12 +165,10 @@ impl TursoWorkerTable {
     }
 
     pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = ? AND status = 'polling'",
-        )
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
+        let count = crate::store::turso::query(TursoDialect::WORKER.complete_poll)
+            .bind(worker_id)
+            .execute_once(&self.db)
+            .await?;
 
         if count == 0 {
             let current_status = self.get_status(worker_id).await?;

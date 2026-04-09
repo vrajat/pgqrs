@@ -192,17 +192,15 @@ impl SqliteWorkerTable {
     }
 
     pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'polling'",
-        )
-        .bind(worker_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_POLLING_TO_READY".into(),
-            source: Box::new(e),
-            context: format!("Failed to complete poll for worker {}", worker_id),
-        })?;
+        let result = sqlx::query(SqliteDialect::WORKER.complete_poll)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "TRANSITION_POLLING_TO_READY".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete poll for worker {}", worker_id),
+            })?;
 
         if result.rows_affected() == 0 {
             let current_status = self.get_status(worker_id).await?;

@@ -277,13 +277,7 @@ impl Workers {
 
     /// Transition worker from Polling to Ready.
     pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
-        const TRANSITION_POLLING_TO_READY: &str = r#"
-            UPDATE pgqrs_workers
-            SET status = 'ready'
-            WHERE id = $1 AND status = 'polling'
-            RETURNING id
-        "#;
-        let result: Option<i64> = sqlx::query_scalar(TRANSITION_POLLING_TO_READY)
+        let result: Option<i64> = sqlx::query_scalar(PostgresDialect::WORKER.complete_poll)
             .bind(worker_id)
             .fetch_optional(&self.pool)
             .await
