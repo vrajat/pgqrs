@@ -17,12 +17,15 @@ use serde_json::Value;
 use std::process::Command;
 
 fn skip_if_s3() -> bool {
-    if common::current_backend() == pgqrs::store::BackendType::S3 {
-        eprintln!("Skipping CLI tests on S3 backend");
-        true
-    } else {
-        false
+    #[cfg(feature = "s3")]
+    {
+        if common::current_backend() == pgqrs::store::BackendType::S3 {
+            eprintln!("Skipping CLI tests on S3 backend");
+            return true;
+        }
     }
+
+    false
 }
 
 /// Helper to get test database URL
