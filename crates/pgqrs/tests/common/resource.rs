@@ -74,6 +74,26 @@ impl FileResource {
             .unwrap_or_else(|_| std::env::temp_dir())
     }
 
+    fn backend_name(&self) -> &str {
+        self.backend_prefix.trim_end_matches("://")
+    }
+
+    fn backend_temp_dir(&self) -> PathBuf {
+        Self::get_temp_dir().join(self.backend_name())
+    }
+
+    fn configure_backend_temp_dir(&self, dir: &PathBuf) {
+        if self.backend_prefix.starts_with("turso") {
+            // Turso/libsql creates spill files via std::env::temp_dir(), so force them into
+            // a backend-owned directory that the test resource cleanup manages.
+            unsafe {
+                std::env::set_var("TMPDIR", dir);
+                std::env::set_var("TMP", dir);
+                std::env::set_var("TEMP", dir);
+            }
+        }
+    }
+
     fn track_file(&self, path: PathBuf) {
         let mut files = self.created_files.lock().unwrap();
         files.push(path);
@@ -84,15 +104,17 @@ impl FileResource {
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 impl TestResource for FileResource {
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = Self::get_temp_dir();
+        let dir = self.backend_temp_dir();
         std::fs::create_dir_all(&dir)?;
+        self.configure_backend_temp_dir(&dir);
         Ok(())
     }
 
     async fn get_dsn(&self, schema: Option<&str>) -> String {
-        let dir = Self::get_temp_dir();
+        let dir = self.backend_temp_dir();
         // Ensure dir exists (init might have happened once, but good to be safe)
         let _ = std::fs::create_dir_all(&dir);
+        self.configure_backend_temp_dir(&dir);
         // Canonicalize to ensure absolute path for libs/drivers
         let dir = dir.canonicalize().unwrap_or(dir);
 
@@ -138,6 +160,7 @@ impl TestResource for FileResource {
     }
 
     async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = self.backend_temp_dir();
         let mut files = self.created_files.lock().unwrap();
         for path in files.iter() {
             if path.exists() {
@@ -157,6 +180,20 @@ impl TestResource for FileResource {
             }
         }
         files.clear();
+
+        if dir.exists() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with("tursodb-ephemeral-") {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
