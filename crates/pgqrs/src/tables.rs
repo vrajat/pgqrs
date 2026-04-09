@@ -177,6 +177,7 @@ pub trait WorkerTable: Send + Sync {
     async fn get_status(&self, id: i64) -> crate::error::Result<WorkerStatus>;
     async fn suspend(&self, id: i64) -> crate::error::Result<()>;
     async fn resume(&self, id: i64) -> crate::error::Result<()>;
+    async fn complete_poll(&self, id: i64) -> crate::error::Result<()>;
     async fn shutdown(&self, id: i64) -> crate::error::Result<()>;
     async fn poll(&self, id: i64) -> crate::error::Result<()>;
     async fn interrupt(&self, id: i64) -> crate::error::Result<()>;

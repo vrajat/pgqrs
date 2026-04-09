@@ -275,6 +275,30 @@ impl Workers {
         }
     }
 
+    /// Transition worker from Polling to Ready.
+    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
+        let result: Option<i64> = sqlx::query_scalar(PostgresDialect::WORKER.complete_poll)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "TRANSITION_POLLING_TO_READY".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete poll for worker {}", worker_id),
+            })?;
+
+        if result.is_some() {
+            return Ok(());
+        }
+
+        let current_status = self.get_status(worker_id).await?;
+        Err(crate::error::Error::InvalidStateTransition {
+            from: current_status.to_string(),
+            to: "ready".to_string(),
+            reason: "Worker must be in Polling state to complete polling".to_string(),
+        })
+    }
+
     /// Transition worker from Ready to Polling.
     pub async fn poll(&self, worker_id: i64) -> Result<()> {
         const TRANSITION_READY_OR_INTERRUPTED_TO_POLLING: &str = r#"
@@ -705,6 +729,10 @@ impl crate::store::WorkerTable for Workers {
 
     async fn resume(&self, id: i64) -> Result<()> {
         self.resume(id).await
+    }
+
+    async fn complete_poll(&self, id: i64) -> Result<()> {
+        self.complete_poll(id).await
     }
 
     async fn shutdown(&self, id: i64) -> Result<()> {

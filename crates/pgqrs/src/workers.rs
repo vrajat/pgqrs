@@ -635,6 +635,15 @@ impl Consumer {
         Ok(())
     }
 
+    /// Complete a one-shot poll and return the worker to ready.
+    pub async fn complete_poll(&self) -> crate::error::Result<()> {
+        self.store
+            .workers()
+            .complete_poll(self.worker_record.id)
+            .await?;
+        Ok(())
+    }
+
     /// Shut down this worker if no messages are pending.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
         let pending = self

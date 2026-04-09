@@ -6,6 +6,7 @@ use object_store::path::Path as ObjectPath;
 #[cfg(feature = "s3")]
 use object_store::ObjectStore;
 use once_cell::sync::Lazy;
+use pgqrs::store::BackendType;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
@@ -55,15 +56,19 @@ pub static RESOURCE_MANAGER: Lazy<RwLock<Option<ResourceManager>>> =
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 pub struct FileResource {
     created_files: Mutex<Vec<PathBuf>>,
-    backend_prefix: String,
+    backend_type: BackendType,
+    dsn_prefix: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 impl FileResource {
     pub fn new(backend_prefix: String) -> Self {
+        let backend_type = BackendType::detect(&backend_prefix)
+            .expect("FileResource requires a supported backend DSN prefix");
         Self {
             created_files: Mutex::new(Vec::new()),
-            backend_prefix,
+            backend_type,
+            dsn_prefix: backend_prefix,
         }
     }
 
@@ -72,6 +77,36 @@ impl FileResource {
             .map(PathBuf::from)
             .or_else(|_| std::env::current_dir().map(|cwd| cwd.join("target").join("tmp")))
             .unwrap_or_else(|_| std::env::temp_dir())
+    }
+
+    fn backend_name(&self) -> &str {
+        match self.backend_type {
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => "sqlite",
+            #[cfg(feature = "turso")]
+            BackendType::Turso => "turso",
+            #[cfg(feature = "postgres")]
+            BackendType::Postgres => "postgres",
+            #[cfg(feature = "s3")]
+            BackendType::S3 => "s3",
+        }
+    }
+
+    fn backend_temp_dir(&self) -> PathBuf {
+        Self::get_temp_dir().join(self.backend_name())
+    }
+
+    fn configure_backend_temp_dir(&self, dir: &PathBuf) {
+        #[cfg(feature = "turso")]
+        if self.backend_type == BackendType::Turso {
+            // Turso/libsql creates spill files via std::env::temp_dir(), so force them into
+            // a backend-owned directory that the test resource cleanup manages.
+            unsafe {
+                std::env::set_var("TMPDIR", dir);
+                std::env::set_var("TMP", dir);
+                std::env::set_var("TEMP", dir);
+            }
+        }
     }
 
     fn track_file(&self, path: PathBuf) {
@@ -84,20 +119,22 @@ impl FileResource {
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 impl TestResource for FileResource {
     async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = Self::get_temp_dir();
+        let dir = self.backend_temp_dir();
         std::fs::create_dir_all(&dir)?;
+        self.configure_backend_temp_dir(&dir);
         Ok(())
     }
 
     async fn get_dsn(&self, schema: Option<&str>) -> String {
-        let dir = Self::get_temp_dir();
+        let dir = self.backend_temp_dir();
         // Ensure dir exists (init might have happened once, but good to be safe)
         let _ = std::fs::create_dir_all(&dir);
+        self.configure_backend_temp_dir(&dir);
         // Canonicalize to ensure absolute path for libs/drivers
         let dir = dir.canonicalize().unwrap_or(dir);
 
         let schema_part = schema.unwrap_or("default");
-        let backend = sanitize_component(self.backend_prefix.trim_end_matches("://"));
+        let backend = sanitize_component(self.backend_name());
         let suite = sanitize_component(schema_part);
         let test = sanitize_component(
             std::thread::current()
@@ -124,20 +161,26 @@ impl TestResource for FileResource {
             match std::fs::File::create(&path) {
                 Ok(_) => eprintln!("Created SQLite DB file: {:?}", path),
                 Err(e) => eprintln!("Failed to pre-create DB file {:?}: {}", path, e),
-            }
+            };
         } else {
             eprintln!("Using existing SQLite DB file: {:?}", path);
-        }
+        };
 
-        if self.backend_prefix.starts_with("sqlite") {
-            // For sqlx specifically
-            format!("sqlite://{}?mode=rwc", path.to_string_lossy())
-        } else {
-            format!("{}{}", self.backend_prefix, path.to_string_lossy())
+        match self.backend_type {
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => {
+                // For sqlx specifically
+                format!("sqlite://{}?mode=rwc", path.to_string_lossy())
+            }
+            #[cfg(feature = "turso")]
+            BackendType::Turso => format!("{}{}", self.dsn_prefix, path.to_string_lossy()),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("FileResource only supports sqlite/turso backends"),
         }
     }
 
     async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = self.backend_temp_dir();
         let mut files = self.created_files.lock().unwrap();
         for path in files.iter() {
             if path.exists() {
@@ -157,6 +200,20 @@ impl TestResource for FileResource {
             }
         }
         files.clear();
+
+        if dir.exists() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with("tursodb-ephemeral-") {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

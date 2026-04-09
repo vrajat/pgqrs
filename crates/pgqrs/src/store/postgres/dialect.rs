@@ -252,6 +252,12 @@ SET status = 'stopped',
     shutdown_at = NOW()
 WHERE id = $1
 "#,
+        complete_poll: r#"
+UPDATE pgqrs_workers
+SET status = 'ready'
+WHERE id = $1 AND status = 'polling'
+RETURNING id
+"#,
     };
 
     #[cfg(any(feature = "sqlite", feature = "turso"))]

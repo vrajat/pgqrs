@@ -789,6 +789,48 @@ async fn test_dequeue_single_handler_poll_exits_cleanly_when_consumer_suspended(
 }
 
 #[tokio::test]
+async fn test_dequeue_handler_poll_rejects_until() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_handler_poll_rejects_until";
+    let queue_info = store.queue(queue_name).await.unwrap();
+
+    let err = pgqrs::dequeue()
+        .from(queue_name)
+        .until(Duration::from_secs(1))
+        .handle(|_msg| async move { Ok(()) })
+        .poll(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::ValidationFailed { ref reason }
+            if reason == "until() is not supported with handler poll loops"
+    ));
+
+    let err = pgqrs::dequeue()
+        .from(queue_name)
+        .until(Duration::from_secs(1))
+        .batch(5)
+        .handle_batch(|_msgs| async move { Ok(()) })
+        .poll(&store)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        pgqrs::error::Error::ValidationFailed { ref reason }
+            if reason == "until() is not supported with handler poll loops"
+    ));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn test_dequeue_fetch_all_exits_cleanly_when_consumer_suspended() {
     let store = create_store().await;
     let queue_name = "test_dequeue_fetch_all_suspended";
@@ -979,6 +1021,254 @@ async fn test_dequeue_poll_updates_worker_heartbeat_while_idle() {
         .unwrap()
         .unwrap();
     assert!(matches!(res, Err(pgqrs::error::Error::Suspended { .. })));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_until_returns_empty_on_timeout() {
+    let store = common::create_store_with_config("pgqrs_builder_test", |config| {
+        config.poll_interval_ms = 10;
+    })
+    .await;
+    let queue_name = "test_dequeue_poll_until_timeout";
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+    let consumer = pgqrs::consumer("poll-for-timeout-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+
+    let messages = pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(1)
+        .poll_interval(Duration::from_millis(10))
+        .until(Duration::from_millis(50))
+        .poll(&store)
+        .await
+        .expect("bounded poll should not fail on timeout");
+
+    assert!(messages.is_empty(), "empty queue should time out empty");
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Ready,
+        "bounded poll should return the consumer to ready"
+    );
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_until_returns_available_messages_before_timeout() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_poll_until_messages";
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+    let producer = pgqrs::producer("poll-for-producer-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create producer");
+    let consumer = pgqrs::consumer("poll-for-consumer-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+
+    producer
+        .enqueue(&json!({ "kind": "poll_until" }))
+        .await
+        .expect("message should enqueue");
+
+    let messages = pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(1)
+        .poll_interval(Duration::from_millis(10))
+        .until(Duration::from_secs(5))
+        .poll(&store)
+        .await
+        .expect("bounded poll should return available messages");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, json!({ "kind": "poll_until" }));
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Ready,
+        "bounded poll should return the consumer to ready"
+    );
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_returns_consumer_to_ready_after_message() {
+    let store = create_store().await;
+    let queue_name = "test_dequeue_poll_returns_ready";
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+    let producer = pgqrs::producer("poll-ready-producer-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create producer");
+    let consumer = pgqrs::consumer("poll-ready-consumer-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+
+    producer
+        .enqueue(&json!({ "kind": "poll" }))
+        .await
+        .expect("message should enqueue");
+
+    let messages = pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(1)
+        .poll_interval(Duration::from_millis(10))
+        .poll(&store)
+        .await
+        .expect("poll should return available messages");
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload, json!({ "kind": "poll" }));
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Ready,
+        "one-shot poll should return the consumer to ready"
+    );
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_until_updates_worker_heartbeat_while_idle() {
+    let store = common::create_store_with_config("pgqrs_builder_test", |config| {
+        config.heartbeat_interval = 1;
+        config.poll_interval_ms = 2_000;
+    })
+    .await;
+    let queue_name = "test_dequeue_poll_until_heartbeat";
+
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+
+    let consumer = pgqrs::consumer("heartbeat-until-host-9911", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+
+    let store_task = store.clone();
+    let consumer_task_handle = consumer.clone();
+    let task = tokio::spawn(async move {
+        pgqrs::dequeue()
+            .worker(&consumer_task_handle)
+            .batch(1)
+            .poll_interval(Duration::from_secs(2))
+            .until(Duration::from_secs(5))
+            .poll(&store_task)
+            .await
+    });
+
+    let worker_before = wait_for_worker_status(
+        &store,
+        consumer.worker_id(),
+        pgqrs::types::WorkerStatus::Polling,
+    )
+    .await;
+    let worker_after =
+        wait_for_worker_heartbeat_advance(&store, consumer.worker_id(), worker_before.heartbeat_at)
+            .await;
+
+    assert!(
+        worker_after.heartbeat_at > worker_before.heartbeat_at,
+        "expected heartbeat_at to advance while bounded polling idle"
+    );
+
+    consumer.interrupt().await.unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(res, Err(pgqrs::error::Error::Suspended { .. })));
+
+    pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
+    pgqrs::admin(&store)
+        .delete_queue(&queue_info)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_dequeue_poll_until_returns_suspended_when_interrupted() {
+    let store = common::create_store_with_config("pgqrs_builder_test", |config| {
+        config.heartbeat_interval = 60;
+        config.poll_interval_ms = 50;
+    })
+    .await;
+    let queue_name = "test_dequeue_poll_until_interrupted";
+    let queue_info = pgqrs::admin(&store)
+        .create_queue(queue_name)
+        .await
+        .expect("Failed to create queue");
+    let consumer = pgqrs::consumer("poll-until-interrupt-host", queue_name)
+        .create(&store)
+        .await
+        .expect("Failed to create consumer");
+
+    let store_task = store.clone();
+    let consumer_task_handle = consumer.clone();
+    let task = tokio::spawn(async move {
+        pgqrs::dequeue()
+            .worker(&consumer_task_handle)
+            .batch(1)
+            .poll_interval(Duration::from_millis(10))
+            .until(Duration::from_secs(5))
+            .poll(&store_task)
+            .await
+    });
+
+    wait_for_worker_status(
+        &store,
+        consumer.worker_id(),
+        pgqrs::types::WorkerStatus::Polling,
+    )
+    .await;
+
+    consumer.interrupt().await.unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        res,
+        Err(pgqrs::error::Error::Suspended { ref reason }) if reason == "worker interrupted"
+    ));
+    assert_eq!(
+        consumer.status().await.unwrap(),
+        pgqrs::types::WorkerStatus::Suspended,
+        "interrupt should win over bounded poll completion"
+    );
 
     pgqrs::admin(&store).purge_queue(queue_name).await.unwrap();
     pgqrs::admin(&store)

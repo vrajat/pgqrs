@@ -184,6 +184,11 @@ SET status = 'stopped',
     shutdown_at = datetime('now')
 WHERE id = ?
 "#,
+        complete_poll: r#"
+UPDATE pgqrs_workers
+SET status = 'ready'
+WHERE id = ? AND status = 'polling'
+"#,
     };
 
     const WORKFLOW: WorkflowSql = WorkflowSql {

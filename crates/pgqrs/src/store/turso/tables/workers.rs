@@ -164,6 +164,23 @@ impl TursoWorkerTable {
         Ok(())
     }
 
+    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
+        let count = crate::store::turso::query(TursoDialect::WORKER.complete_poll)
+            .bind(worker_id)
+            .execute_once(&self.db)
+            .await?;
+
+        if count == 0 {
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "ready".to_string(),
+                reason: "Worker must be in Polling state to complete polling".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub async fn poll(&self, worker_id: i64) -> Result<()> {
         let count = crate::store::turso::query(
             "UPDATE pgqrs_workers SET status = 'polling' WHERE id = ? AND status IN ('ready', 'polling')",
@@ -490,6 +507,10 @@ impl crate::store::WorkerTable for TursoWorkerTable {
 
     async fn resume(&self, id: i64) -> Result<()> {
         self.resume(id).await
+    }
+
+    async fn complete_poll(&self, id: i64) -> Result<()> {
+        self.complete_poll(id).await
     }
 
     async fn shutdown(&self, id: i64) -> Result<()> {
