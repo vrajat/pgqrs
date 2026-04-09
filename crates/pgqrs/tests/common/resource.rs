@@ -6,6 +6,7 @@ use object_store::path::Path as ObjectPath;
 #[cfg(feature = "s3")]
 use object_store::ObjectStore;
 use once_cell::sync::Lazy;
+#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use pgqrs::store::BackendType;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::path::PathBuf;
@@ -88,7 +89,6 @@ pub static RESOURCE_MANAGER: Lazy<RwLock<Option<ResourceManager>>> =
 pub struct FileResource {
     created_files: Mutex<Vec<PathBuf>>,
     backend_type: BackendType,
-    dsn_prefix: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "turso"))]
@@ -99,7 +99,6 @@ impl FileResource {
         Self {
             created_files: Mutex::new(Vec::new()),
             backend_type,
-            dsn_prefix: backend_prefix,
         }
     }
 
@@ -127,15 +126,15 @@ impl FileResource {
         Self::get_temp_dir().join(self.backend_name())
     }
 
-    fn configure_backend_temp_dir(&self, dir: &PathBuf) {
+    fn configure_backend_temp_dir(&self, _dir: &PathBuf) {
         #[cfg(feature = "turso")]
         if self.backend_type == BackendType::Turso {
             // Turso/libsql creates spill files via std::env::temp_dir(), so force them into
             // a backend-owned directory that the test resource cleanup manages.
             unsafe {
-                std::env::set_var("TMPDIR", dir);
-                std::env::set_var("TMP", dir);
-                std::env::set_var("TEMP", dir);
+                std::env::set_var("TMPDIR", _dir);
+                std::env::set_var("TMP", _dir);
+                std::env::set_var("TEMP", _dir);
             }
         }
     }
@@ -204,7 +203,7 @@ impl TestResource for FileResource {
                 format!("sqlite://{}?mode=rwc", path.to_string_lossy())
             }
             #[cfg(feature = "turso")]
-            BackendType::Turso => format!("{}{}", self.dsn_prefix, path.to_string_lossy()),
+            BackendType::Turso => format!("turso://{}", path.to_string_lossy()),
             #[allow(unreachable_patterns)]
             _ => unreachable!("FileResource only supports sqlite/turso backends"),
         }

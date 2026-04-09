@@ -4,7 +4,9 @@
 //! environment variables, or a YAML file.
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "s3")]
+use std::path::PathBuf;
 
 /// Validate a SQL identifier for schema names.
 ///

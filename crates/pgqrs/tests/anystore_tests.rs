@@ -271,6 +271,7 @@ async fn test_anystore_worker_creation() {
 #[tokio::test]
 async fn test_anystore_connect_with_dsn() {
     // This test specifically tests connect_with_dsn for Postgres
+    #[cfg(feature = "s3")]
     skip_on_backend!(BackendType::S3);
     let dsn = common::get_test_dsn("pgqrs_anystore_dsn_test").await;
 
