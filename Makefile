@@ -31,6 +31,7 @@ TOXIPROXY_UPSTREAM ?= host.docker.internal:$(LOCALSTACK_PORT)
 # Test-only features to always enable for test runs
 TEST_FEATURES ?= --features test-utils
 CARGO_TARGET_DIR_EFFECTIVE := $(if $(strip $(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),target)
+CARGO_TARGET_TMPDIR ?= $(abspath $(CARGO_TARGET_DIR_EFFECTIVE)/tmp)
 PGQRS_CLI_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/pgqrs
 SETUP_TEST_SCHEMAS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/setup_test_schemas
 
@@ -103,18 +104,18 @@ build-pgqrs-cli: ## Build the pgqrs CLI binary for the active backend
 test-rust: check-nextest build-pgqrs-cli ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
 endif
 else
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 endif
 
 
 test: build-python build-pgqrs-cli check-nextest  ## Run all tests
-	PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Optional selectors for Python tests
 # Usage examples:
@@ -124,7 +125,7 @@ PYTEST_TARGET ?= py-pgqrs
 PYTEST_ARGS ?=
 
 test-py: build-python  ## Run Python tests only
-	PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest $(PYTEST_ARGS) $(PYTEST_TARGET)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest $(PYTEST_ARGS) $(PYTEST_TARGET)
 
 # Convenience targets for each backend
 start-postgres: ## Start global Postgres container (skipped if CI_POSTGRES_RUNNING=true)

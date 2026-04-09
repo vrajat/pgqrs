@@ -5,6 +5,7 @@ import uuid
 import itertools
 import re
 import shutil
+import pgqrs
 from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,6 +199,59 @@ def _build_local_db_path(backend: str, request) -> str:
     return str(path)
 
 
+def _python_s3_cache_dir(dsn: str, request) -> Path:
+    module_name = request.module.__name__.split(".")[-1]
+    test_name = request.node.name
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    pid = os.getpid()
+    seq = next(_S3_SEQ)
+    dsn_suffix = _sanitize_key_part(dsn)
+    base = Path(
+        os.getenv(
+            "CARGO_TARGET_TMPDIR",
+            str(Path(os.getenv("TMPDIR", "/tmp")) / "tmp"),
+        )
+    ) / "pgqrs_python_s3_cache"
+    base.mkdir(parents=True, exist_ok=True)
+    cache_dir = (
+        base
+        / f"{_sanitize_key_part(module_name)}-"
+        f"{_sanitize_key_part(test_name)}-"
+        f"{dsn_suffix}-{ts}-{pid}-{seq}"
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _ensure_s3_cache_dir(config: "pgqrs.Config", request) -> "pgqrs.Config":
+    if get_backend() != TestBackend.S3:
+        return config
+    if getattr(config, "s3_cache_dir", None):
+        return config
+    config.s3_cache_dir = str(_python_s3_cache_dir(config.dsn, request))
+    return config
+
+
+@pytest.fixture(autouse=True)
+def _configure_s3_test_connectors(monkeypatch, request):
+    if get_backend() != TestBackend.S3:
+        return
+
+    original_connect = pgqrs.connect
+    original_connect_with = pgqrs.connect_with
+
+    async def connect_with_wrapper(config):
+        return await original_connect_with(_ensure_s3_cache_dir(config, request))
+
+    async def connect_wrapper(dsn):
+        config = pgqrs.Config(dsn)
+        _ensure_s3_cache_dir(config, request)
+        return await original_connect_with(config)
+
+    monkeypatch.setattr(pgqrs, "connect_with", connect_with_wrapper)
+    monkeypatch.setattr(pgqrs, "connect", connect_wrapper)
+
+
 def _keep_test_data() -> bool:
     raw = os.environ.get("PGQRS_KEEP_TEST_DATA", "").strip().lower()
     return raw not in ("", "0", "false", "no")
@@ -245,19 +299,20 @@ def _cleanup_s3_object(dsn: str) -> None:
 
 
 def _cleanup_local_s3_cache() -> None:
-    base = Path(os.getenv("PGQRS_S3_LOCAL_CACHE_DIR", Path(os.getenv("TMPDIR", "/tmp")) / "pgqrs_s3_cache"))
+    base = Path(
+        os.getenv(
+            "CARGO_TARGET_TMPDIR",
+            str(Path(os.getenv("TMPDIR", "/tmp")) / "tmp"),
+        )
+    ) / "pgqrs_python_s3_cache"
     if not base.exists():
         return
-    for db in base.glob("s3_cache_*.db"):
+    for path in base.iterdir():
         try:
-            db.unlink(missing_ok=True)
-            wal = Path(f"{db}-wal")
-            shm = Path(f"{db}-shm")
-            wal.unlink(missing_ok=True)
-            shm.unlink(missing_ok=True)
-            state_dir = db.with_suffix(".s3state")
-            if state_dir.exists():
-                shutil.rmtree(state_dir, ignore_errors=True)
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
         except Exception:
             pass
 

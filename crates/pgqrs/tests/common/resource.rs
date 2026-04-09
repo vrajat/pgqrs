@@ -21,6 +21,37 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static FILE_RESOURCE_SEQ: AtomicU64 = AtomicU64::new(1);
 #[cfg(feature = "s3")]
 static S3_RESOURCE_SEQ: AtomicU64 = AtomicU64::new(1);
+#[cfg(feature = "s3")]
+const S3_TEST_CACHE_DIR_NAME: &str = "pgqrs_s3_cache";
+#[cfg(feature = "s3")]
+static S3_CREATED_CACHE_DIRS: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+#[cfg(feature = "s3")]
+fn s3_cache_base_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = std::env::var("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .map_err(|_| "CARGO_TARGET_TMPDIR must be set for S3 test resources")?
+        .join(S3_TEST_CACHE_DIR_NAME);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.canonicalize().unwrap_or(dir))
+}
+
+#[cfg(feature = "s3")]
+pub fn allocate_s3_cache_dir(schema: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let base = s3_cache_base_dir()?;
+    let cache_dir = base.join(format!(
+        "{}-{}-{}",
+        sanitize_component(schema),
+        std::process::id(),
+        S3_RESOURCE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&cache_dir)?;
+    S3_CREATED_CACHE_DIRS
+        .lock()
+        .unwrap()
+        .push(cache_dir.clone());
+    Ok(cache_dir)
+}
 
 /// Trait for managing test backend resources (Tests Containers or Files)
 #[async_trait]
@@ -249,7 +280,7 @@ pub struct S3FileResource {
 
 #[cfg(feature = "s3")]
 impl S3FileResource {
-    pub fn new_generated(bucket: String) -> Self {
+    pub fn new(bucket: String) -> Self {
         Self {
             bucket,
             issued_dsns: Mutex::new(Vec::new()),
@@ -296,21 +327,6 @@ impl S3FileResource {
         }
         Ok(())
     }
-
-    async fn cleanup_dsns(&self, delete_remote: bool) -> Result<(), Box<dyn std::error::Error>> {
-        let snapshot = {
-            let mut dsns = self.issued_dsns.lock().unwrap();
-            let snapshot = dsns.clone();
-            dsns.clear();
-            snapshot
-        };
-
-        if delete_remote {
-            // Best effort remote cleanup.
-            let _ = Self::delete_remote_objects(&snapshot).await;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(feature = "s3")]
@@ -343,7 +359,25 @@ impl TestResource for S3FileResource {
     }
 
     async fn cleanup(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.cleanup_dsns(self.delete_remote).await
+        let snapshot = {
+            let mut dsns = self.issued_dsns.lock().unwrap();
+            let snapshot = dsns.clone();
+            dsns.clear();
+            snapshot
+        };
+        let created_dirs = {
+            let mut dirs = S3_CREATED_CACHE_DIRS.lock().unwrap();
+            std::mem::take(&mut *dirs)
+        };
+
+        if self.delete_remote {
+            // Best effort remote cleanup.
+            let _ = Self::delete_remote_objects(&snapshot).await;
+        }
+        for dir in created_dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        Ok(())
     }
 }
 

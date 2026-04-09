@@ -24,7 +24,7 @@ pub fn current_backend() -> BackendType {
     // remain runnable without extra environment setup.
     #[cfg(feature = "sqlite")]
     {
-        return BackendType::Sqlite;
+        BackendType::Sqlite
     }
     #[cfg(all(not(feature = "sqlite"), feature = "turso"))]
     {
@@ -71,6 +71,13 @@ pub async fn create_store_with_config(
     let config =
         pgqrs::config::Config::from_dsn_with_schema(&dsn, schema).expect("Failed to create config");
     let mut config = config;
+    #[cfg(feature = "s3")]
+    if current_backend() == BackendType::S3 {
+        config.s3.cache_dir = Some(
+            resource::allocate_s3_cache_dir(schema)
+                .expect("failed to allocate managed S3 test cache dir"),
+        );
+    }
     mutator(&mut config);
 
     let store = pgqrs::connect_with_config(&config)
@@ -156,7 +163,7 @@ pub async fn get_test_dsn(schema: &str) -> String {
             } else {
                 let bucket = std::env::var("PGQRS_S3_BUCKET")
                     .unwrap_or_else(|_| "pgqrs-test-bucket".to_string());
-                Box::new(resource::S3FileResource::new_generated(bucket))
+                Box::new(resource::S3FileResource::new(bucket))
             }
         }
         #[cfg(feature = "turso")]

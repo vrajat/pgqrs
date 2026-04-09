@@ -14,7 +14,7 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut dsn = None::<String>;
     let mut queue = None::<String>;
-    let mut cache_id = None::<String>;
+    let mut cache_dir = None::<std::path::PathBuf>;
     let mut sleep_before_sync_ms: u64 = 0;
 
     let mut args = std::env::args().skip(1);
@@ -22,7 +22,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         match arg.as_str() {
             "--dsn" => dsn = args.next(),
             "--queue" => queue = args.next(),
-            "--cache-id" => cache_id = args.next(),
+            "--cache-dir" => cache_dir = args.next().map(std::path::PathBuf::from),
             "--sleep-before-sync-ms" => {
                 sleep_before_sync_ms = args
                     .next()
@@ -35,11 +35,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let dsn = dsn.ok_or("missing --dsn")?;
     let queue = queue.ok_or("missing --queue")?;
-    let cache_id = cache_id.ok_or("missing --cache-id")?;
+    let cache_dir = cache_dir.ok_or("missing --cache-dir")?;
+    std::fs::create_dir_all(&cache_dir)?;
 
     let mut config = pgqrs::config::Config::from_dsn_with_schema(&dsn, "s3_process_helper")?;
     config.s3.mode = pgqrs::store::s3::DurabilityMode::Local;
-    config.s3.cache_id = cache_id;
+    config.s3.cache_dir = Some(cache_dir);
 
     let mut store = pgqrs::connect_with_config(&config).await?;
     if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {

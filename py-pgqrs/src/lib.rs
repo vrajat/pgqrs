@@ -277,20 +277,28 @@ impl PyConfig {
 
     #[cfg(feature = "s3")]
     #[getter]
-    fn get_s3_cache_id(&self) -> String {
-        self.inner.s3.cache_id.clone()
+    fn get_s3_cache_dir(&self) -> Option<String> {
+        self.inner
+            .s3
+            .cache_dir
+            .as_ref()
+            .map(|cache_dir| cache_dir.to_string_lossy().into_owned())
     }
 
     #[cfg(feature = "s3")]
     #[setter]
-    fn set_s3_cache_id(&mut self, cache_id: String) -> PyResult<()> {
-        let trimmed = cache_id.trim();
-        if trimmed.is_empty() {
-            return Err(ConfigError::new_err(
-                "Invalid config for field 's3.cache_id': cache id cannot be empty",
-            ));
+    fn set_s3_cache_dir(&mut self, cache_dir: Option<String>) -> PyResult<()> {
+        if let Some(cache_dir) = cache_dir {
+            let trimmed = cache_dir.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::new_err(
+                    "Invalid config for field 's3.cache_dir': cache dir cannot be empty",
+                ));
+            }
+            self.inner.s3.cache_dir = Some(std::path::PathBuf::from(trimmed));
+        } else {
+            self.inner.s3.cache_dir = None;
         }
-        self.inner.s3.cache_id = trimmed.to_string();
         Ok(())
     }
 }
