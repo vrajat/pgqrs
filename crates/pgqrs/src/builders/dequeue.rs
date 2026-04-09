@@ -6,7 +6,7 @@ use crate::types::QueueMessage;
 use crate::workers::Consumer;
 use std::future::Future;
 use std::time::Duration as StdDuration;
-use tokio::time::{interval_at, Instant, MissedTickBehavior};
+use tokio::time::{interval_at, sleep_until, Instant, MissedTickBehavior};
 
 struct Poller {
     consumer: Consumer,
@@ -14,9 +14,25 @@ struct Poller {
     vt_offset_seconds: Option<u32>,
     at: Option<chrono::DateTime<chrono::Utc>>,
     poll_interval: Option<StdDuration>,
+    poll_timeout: Option<StdDuration>,
 }
 
 impl Poller {
+    async fn enter_polling(&self) -> Result<()> {
+        if let Err(e) = self.consumer.poll().await {
+            if matches!(
+                &e,
+                Error::InvalidStateTransition { from, to, .. }
+                    if (from == "interrupted" || from == "suspended") && to == "polling"
+            ) {
+                self.check_terminal_status().await?;
+            }
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
     async fn check_terminal_status(&self) -> Result<()> {
         match self.consumer.status().await? {
             crate::types::WorkerStatus::Interrupted => {
@@ -29,6 +45,25 @@ impl Poller {
                 reason: "worker suspended".to_string(),
             }),
             _ => Ok(()),
+        }
+    }
+
+    async fn finish_one_shot_poll(&self) -> Result<()> {
+        match self.consumer.complete_poll().await {
+            Ok(()) => Ok(()),
+            Err(Error::InvalidStateTransition { from, to, .. })
+                if to == "ready" && (from == "interrupted" || from == "suspended") =>
+            {
+                self.check_terminal_status().await
+            }
+            Err(Error::InvalidStateTransition { from, to, .. })
+                if to == "ready" && from == "stopped" =>
+            {
+                Err(Error::Suspended {
+                    reason: "worker stopped".to_string(),
+                })
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -57,22 +92,17 @@ impl Poller {
     }
 
     async fn poll_messages(&mut self) -> Result<Vec<QueueMessage>> {
+        self.poll_messages_until(self.poll_timeout).await
+    }
+
+    async fn poll_messages_until(
+        &mut self,
+        poll_timeout: Option<StdDuration>,
+    ) -> Result<Vec<QueueMessage>> {
         if self.batch_size == 0 {
             return Err(Error::ValidationFailed {
                 reason: "batch size must be >= 1 for poll".to_string(),
             });
-        }
-
-        // Consumer-only states: Ready -> Polling
-        if let Err(e) = self.consumer.poll().await {
-            if matches!(
-                &e,
-                Error::InvalidStateTransition { from, to, .. }
-                    if (from == "interrupted" || from == "suspended") && to == "polling"
-            ) {
-                self.check_terminal_status().await?;
-            }
-            return Err(e);
         }
 
         let config = self.consumer.store().config();
@@ -83,6 +113,7 @@ impl Poller {
         let heartbeat_interval = StdDuration::from_secs(config.heartbeat_interval);
 
         let now = Instant::now();
+        let deadline = poll_timeout.map(|timeout| now + timeout);
         let mut poll_interval = interval_at(now + poll_interval, poll_interval);
         poll_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut heartbeat_interval = interval_at(now + heartbeat_interval, heartbeat_interval);
@@ -94,14 +125,30 @@ impl Poller {
                 return Ok(messages);
             }
 
-            tokio::select! {
-                _ = poll_interval.tick() => {
-                    self.check_terminal_status().await?;
+            if let Some(deadline) = deadline {
+                tokio::select! {
+                    _ = poll_interval.tick() => {
+                        self.check_terminal_status().await?;
+                    }
+                    _ = heartbeat_interval.tick() => {
+                        // Heartbeat implies liveness checks too.
+                        self.consumer.heartbeat().await?;
+                        self.check_terminal_status().await?;
+                    }
+                    _ = sleep_until(deadline) => {
+                        return Ok(Vec::new());
+                    }
                 }
-                _ = heartbeat_interval.tick() => {
-                    // Heartbeat implies liveness checks too.
-                    self.consumer.heartbeat().await?;
-                    self.check_terminal_status().await?;
+            } else {
+                tokio::select! {
+                    _ = poll_interval.tick() => {
+                        self.check_terminal_status().await?;
+                    }
+                    _ = heartbeat_interval.tick() => {
+                        // Heartbeat implies liveness checks too.
+                        self.consumer.heartbeat().await?;
+                        self.check_terminal_status().await?;
+                    }
                 }
             }
         }
@@ -206,6 +253,7 @@ impl Poller {
         F: Fn(QueueMessage) -> Fut + Send + Sync + Clone,
         Fut: Future<Output = Result<()>> + Send,
     {
+        self.enter_polling().await?;
         loop {
             self.handle_one(handler.clone()).await?;
         }
@@ -216,6 +264,7 @@ impl Poller {
         F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone,
         Fut: Future<Output = Result<()>> + Send,
     {
+        self.enter_polling().await?;
         loop {
             self.handle_batch(handler.clone()).await?;
         }
@@ -252,6 +301,7 @@ pub struct DequeueBuilder<'a> {
     vt_offset_seconds: Option<u32>,
     at: Option<chrono::DateTime<chrono::Utc>>,
     poll_interval: Option<StdDuration>,
+    poll_timeout: Option<StdDuration>,
 }
 
 impl<'a> Default for DequeueBuilder<'a> {
@@ -269,6 +319,7 @@ impl<'a> DequeueBuilder<'a> {
             vt_offset_seconds: None,
             at: None,
             poll_interval: None,
+            poll_timeout: None,
         }
     }
 
@@ -302,6 +353,14 @@ impl<'a> DequeueBuilder<'a> {
         self
     }
 
+    /// Bound polling to a maximum wait duration.
+    ///
+    /// When the deadline expires without messages, `.poll()` returns an empty vector.
+    pub fn until(mut self, timeout: StdDuration) -> Self {
+        self.poll_timeout = Some(timeout);
+        self
+    }
+
     /// Set a custom reference time for the dequeue operation (useful for testing delays)
     pub fn at(mut self, time: chrono::DateTime<chrono::Utc>) -> Self {
         self.at = Some(time);
@@ -319,12 +378,17 @@ impl<'a> DequeueBuilder<'a> {
     }
 
     /// Poll until at least one message is available or interrupted.
+    ///
+    /// When `.until(duration)` is configured, returns an empty vector on timeout.
     pub async fn poll<S>(self, store: &S) -> Result<Vec<QueueMessage>>
     where
         S: Store,
     {
         let mut poller = self.into_poller(store).await?;
-        poller.poll_messages().await
+        poller.enter_polling().await?;
+        let messages = poller.poll_messages().await?;
+        poller.finish_one_shot_poll().await?;
+        Ok(messages)
     }
 
     // (polling implementation is in Poller)
@@ -379,6 +443,7 @@ impl<'a> DequeueBuilder<'a> {
             vt_offset_seconds: self.vt_offset_seconds,
             at: self.at,
             poll_interval: self.poll_interval,
+            poll_timeout: self.poll_timeout,
         })
     }
 }
@@ -406,6 +471,15 @@ where
         Ok(())
     }
 
+    fn validate_poll_configuration(&self) -> Result<()> {
+        if self.base.poll_timeout.is_some() {
+            return Err(Error::ValidationFailed {
+                reason: "until() is not supported with handler poll loops".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Execute the dequeue and handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
         self.validate_batch_size()?;
@@ -422,6 +496,7 @@ where
         S: Store,
     {
         self.validate_batch_size()?;
+        self.validate_poll_configuration()?;
         let mut poller = self.base.into_poller(store).await?;
         poller.run_forever_one(self.handler).await
     }
@@ -438,6 +513,15 @@ where
     F: Fn(Vec<QueueMessage>) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<()>> + Send,
 {
+    fn validate_poll_configuration(&self) -> Result<()> {
+        if self.base.poll_timeout.is_some() {
+            return Err(Error::ValidationFailed {
+                reason: "until() is not supported with handler poll loops".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Execute the dequeue and batch handle operation.
     pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
         self.base
@@ -452,6 +536,7 @@ where
     where
         S: Store,
     {
+        self.validate_poll_configuration()?;
         let mut poller = self.base.into_poller(store).await?;
         poller.run_forever_batch(self.handler).await
     }

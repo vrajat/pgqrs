@@ -191,6 +191,30 @@ impl SqliteWorkerTable {
         Ok(())
     }
 
+    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'polling'",
+        )
+        .bind(worker_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "TRANSITION_POLLING_TO_READY".into(),
+            source: Box::new(e),
+            context: format!("Failed to complete poll for worker {}", worker_id),
+        })?;
+
+        if result.rows_affected() == 0 {
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: "ready".to_string(),
+                reason: "Worker must be in Polling state to complete polling".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
         let now = Utc::now();
         let now_str = format_sqlite_timestamp(&now);
@@ -578,6 +602,10 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
 
     async fn resume(&self, id: i64) -> Result<()> {
         self.resume(id).await
+    }
+
+    async fn complete_poll(&self, id: i64) -> Result<()> {
+        self.complete_poll(id).await
     }
 
     async fn shutdown(&self, id: i64) -> Result<()> {

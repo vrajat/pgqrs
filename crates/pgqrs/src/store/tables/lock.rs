@@ -481,6 +481,12 @@ where
             .await
     }
 
+    async fn complete_poll(&self, id: i64) -> Result<()> {
+        self.db
+            .with_write(|store| Box::pin(async move { store.workers().complete_poll(id).await }))
+            .await
+    }
+
     async fn shutdown(&self, id: i64) -> Result<()> {
         self.db
             .with_write(|store| Box::pin(async move { store.workers().shutdown(id).await }))
