@@ -6,6 +6,7 @@ use object_store::path::Path as ObjectPath;
 #[cfg(feature = "s3")]
 use object_store::ObjectStore;
 use once_cell::sync::Lazy;
+use pgqrs::store::BackendType;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
 use std::path::PathBuf;
 #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
@@ -55,15 +56,19 @@ pub static RESOURCE_MANAGER: Lazy<RwLock<Option<ResourceManager>>> =
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 pub struct FileResource {
     created_files: Mutex<Vec<PathBuf>>,
-    backend_prefix: String,
+    backend_type: BackendType,
+    dsn_prefix: String,
 }
 
 #[cfg(any(feature = "sqlite", feature = "turso"))]
 impl FileResource {
     pub fn new(backend_prefix: String) -> Self {
+        let backend_type = BackendType::detect(&backend_prefix)
+            .expect("FileResource requires a supported backend DSN prefix");
         Self {
             created_files: Mutex::new(Vec::new()),
-            backend_prefix,
+            backend_type,
+            dsn_prefix: backend_prefix,
         }
     }
 
@@ -75,7 +80,16 @@ impl FileResource {
     }
 
     fn backend_name(&self) -> &str {
-        self.backend_prefix.trim_end_matches("://")
+        match self.backend_type {
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => "sqlite",
+            #[cfg(feature = "turso")]
+            BackendType::Turso => "turso",
+            #[cfg(feature = "postgres")]
+            BackendType::Postgres => "postgres",
+            #[cfg(feature = "s3")]
+            BackendType::S3 => "s3",
+        }
     }
 
     fn backend_temp_dir(&self) -> PathBuf {
@@ -83,7 +97,8 @@ impl FileResource {
     }
 
     fn configure_backend_temp_dir(&self, dir: &PathBuf) {
-        if self.backend_prefix.starts_with("turso") {
+        #[cfg(feature = "turso")]
+        if self.backend_type == BackendType::Turso {
             // Turso/libsql creates spill files via std::env::temp_dir(), so force them into
             // a backend-owned directory that the test resource cleanup manages.
             unsafe {
@@ -119,7 +134,7 @@ impl TestResource for FileResource {
         let dir = dir.canonicalize().unwrap_or(dir);
 
         let schema_part = schema.unwrap_or("default");
-        let backend = sanitize_component(self.backend_prefix.trim_end_matches("://"));
+        let backend = sanitize_component(self.backend_name());
         let suite = sanitize_component(schema_part);
         let test = sanitize_component(
             std::thread::current()
@@ -146,16 +161,21 @@ impl TestResource for FileResource {
             match std::fs::File::create(&path) {
                 Ok(_) => eprintln!("Created SQLite DB file: {:?}", path),
                 Err(e) => eprintln!("Failed to pre-create DB file {:?}: {}", path, e),
-            }
+            };
         } else {
             eprintln!("Using existing SQLite DB file: {:?}", path);
-        }
+        };
 
-        if self.backend_prefix.starts_with("sqlite") {
-            // For sqlx specifically
-            format!("sqlite://{}?mode=rwc", path.to_string_lossy())
-        } else {
-            format!("{}{}", self.backend_prefix, path.to_string_lossy())
+        match self.backend_type {
+            #[cfg(feature = "sqlite")]
+            BackendType::Sqlite => {
+                // For sqlx specifically
+                format!("sqlite://{}?mode=rwc", path.to_string_lossy())
+            }
+            #[cfg(feature = "turso")]
+            BackendType::Turso => format!("{}{}", self.dsn_prefix, path.to_string_lossy()),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("FileResource only supports sqlite/turso backends"),
         }
     }
 
