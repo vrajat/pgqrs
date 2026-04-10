@@ -645,15 +645,18 @@ Monitor workers proactively to detect issues early:
 === "Rust"
 
     ```rust
-    use pgqrs::{Admin, WorkerHandle};
+    use pgqrs::{Admin, Store};
     use chrono::Duration;
 
-    async fn check_worker_health(admin: &Admin) -> Result<(), Box<dyn std::error::Error>> {
+    async fn check_worker_health(
+        store: &impl Store,
+        admin: &Admin,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let workers = pgqrs::admin(&store).get_workers().await?;
         let worker_list = workers.list().await?;
 
         for worker in worker_list {
-            let handle = WorkerHandle::new(store.clone(), worker.id);
+            let handle = store.worker(worker.id).await?;
 
             // Check if worker responded to heartbeat in last 5 minutes
             if !handle.is_healthy(Duration::minutes(5)).await? {

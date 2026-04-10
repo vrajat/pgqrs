@@ -166,20 +166,20 @@ Gracefully stop a worker:
     asyncio.run(main())
     ```
 
-## WorkerHandle
+## Worker Access by ID
 
 !!! warning "Rust Only"
-    `WorkerHandle` is only available in Rust. Python users should use the `Admin` class and its `get_workers()` method for worker management.
+    Generic worker lifecycle access by id is only available in Rust. Python users should use the `Admin` class and its `get_workers()` method for worker management.
 
-Use `WorkerHandle` to manage workers by ID without needing the original Producer/Consumer:
+Use `store.worker(id)` to manage workers by ID without needing the original Producer/Consumer handle:
 
 === "Rust"
 
     ```rust
-    use pgqrs::WorkerHandle;
+    use pgqrs::Store;
 
-    // Create a handle for any worker
-    let handle = WorkerHandle::new(pool.clone(), worker_id);
+    // Create a generic handle for any worker id
+    let handle = store.worker(worker_id).await?;
 
     // Check status
     let status = handle.status().await?;
