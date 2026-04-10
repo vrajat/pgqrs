@@ -2,6 +2,23 @@
 
 This guide will walk you through creating your first queue, sending messages, and processing them.
 
+## Step 0: Add pgqrs
+
+=== "Rust"
+
+    ```toml
+    [dependencies]
+    pgqrs = "0.15.2"
+    tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+    serde_json = "1"
+    ```
+
+=== "Python"
+
+    ```bash
+    pip install pgqrs
+    ```
+
 ## Prerequisites
 
 - pgqrs installed ([Configuration](../api/configuration.md))
