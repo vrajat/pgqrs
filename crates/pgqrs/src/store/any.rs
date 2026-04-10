@@ -328,19 +328,6 @@ impl Store for AnyStore {
         }
     }
 
-    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>> {
-        match self {
-            #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.worker(id).await,
-            #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.worker(id).await,
-            #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.worker(id).await,
-            #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.worker(id).await,
-        }
-    }
-
     async fn bootstrap(&self) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]
@@ -354,36 +341,29 @@ impl Store for AnyStore {
         }
     }
 
-    async fn admin(
-        &self,
-        name: &str,
-        config: &Config,
-    ) -> crate::error::Result<crate::workers::Admin> {
+    async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.admin(name, config).await,
+            AnyStore::Postgres(s) => s.admin(name).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.admin(name, config).await,
+            AnyStore::Sqlite(s) => s.admin(name).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.admin(name, config).await,
+            AnyStore::S3(s) => s.admin(name).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.admin(name, config).await,
+            AnyStore::Turso(s) => s.admin(name).await,
         }
     }
 
-    async fn admin_ephemeral(
-        &self,
-        config: &Config,
-    ) -> crate::error::Result<crate::workers::Admin> {
+    async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.admin_ephemeral(config).await,
+            AnyStore::Postgres(s) => s.admin_ephemeral().await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.admin_ephemeral(config).await,
+            AnyStore::Sqlite(s) => s.admin_ephemeral().await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.admin_ephemeral(config).await,
+            AnyStore::S3(s) => s.admin_ephemeral().await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.admin_ephemeral(config).await,
+            AnyStore::Turso(s) => s.admin_ephemeral().await,
         }
     }
 
@@ -443,20 +423,16 @@ impl Store for AnyStore {
         }
     }
 
-    async fn consumer_ephemeral(
-        &self,
-        queue: &str,
-        config: &Config,
-    ) -> crate::error::Result<Consumer> {
+    async fn consumer_ephemeral(&self, queue: &str) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.consumer_ephemeral(queue, config).await,
+            AnyStore::Postgres(s) => s.consumer_ephemeral(queue).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.consumer_ephemeral(queue, config).await,
+            AnyStore::Sqlite(s) => s.consumer_ephemeral(queue).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.consumer_ephemeral(queue, config).await,
+            AnyStore::S3(s) => s.consumer_ephemeral(queue).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.consumer_ephemeral(queue, config).await,
+            AnyStore::Turso(s) => s.consumer_ephemeral(queue).await,
         }
     }
 
@@ -478,21 +454,16 @@ impl Store for AnyStore {
         }
     }
 
-    async fn consumer(
-        &self,
-        queue: &str,
-        name: &str,
-        config: &Config,
-    ) -> crate::error::Result<Consumer> {
+    async fn consumer(&self, queue: &str, name: &str) -> crate::error::Result<Consumer> {
         match self {
             #[cfg(feature = "postgres")]
-            AnyStore::Postgres(s) => s.consumer(queue, name, config).await,
+            AnyStore::Postgres(s) => s.consumer(queue, name).await,
             #[cfg(feature = "sqlite")]
-            AnyStore::Sqlite(s) => s.consumer(queue, name, config).await,
+            AnyStore::Sqlite(s) => s.consumer(queue, name).await,
             #[cfg(feature = "s3")]
-            AnyStore::S3(s) => s.consumer(queue, name, config).await,
+            AnyStore::S3(s) => s.consumer(queue, name).await,
             #[cfg(feature = "turso")]
-            AnyStore::Turso(s) => s.consumer(queue, name, config).await,
+            AnyStore::Turso(s) => s.consumer(queue, name).await,
         }
     }
 

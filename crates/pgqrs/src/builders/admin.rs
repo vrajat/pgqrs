@@ -44,9 +44,9 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
 
     async fn get_admin(&self) -> Result<crate::Admin> {
         if let Some(name) = &self.name {
-            self.store.admin(name, self.store.config()).await
+            self.store.admin(name).await
         } else {
-            self.store.admin_ephemeral(self.store.config()).await
+            self.store.admin_ephemeral().await
         }
     }
 

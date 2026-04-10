@@ -258,7 +258,7 @@ impl PyDequeueBuilder {
                     consumer
                 } else if let Some(queue_name) = queue_name.as_deref() {
                     store_inner
-                        .consumer_ephemeral(queue_name, store_inner.config())
+                        .consumer_ephemeral(queue_name)
                         .await
                         .map_err(to_py_err)?
                 } else {

@@ -52,7 +52,7 @@ impl PyConsumerIterator {
                 if state.consumer.is_none() {
                     let c = state
                         .store
-                        .consumer_ephemeral(&state.queue, state.store.config())
+                        .consumer_ephemeral(&state.queue)
                         .await
                         .map_err(to_py_err)?;
                     state.consumer = Some(Arc::new(c));
@@ -474,7 +474,7 @@ pub fn consume<'a>(
     let rust_store = store.inner.clone();
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let consumer = rust_store
-            .consumer_ephemeral(&queue, rust_store.config())
+            .consumer_ephemeral(&queue)
             .await
             .map_err(to_py_err)?;
 
@@ -512,7 +512,7 @@ pub fn consume_batch<'a>(
     let rust_store = store.inner.clone();
     pyo3_asyncio::tokio::future_into_py(py, async move {
         let consumer = rust_store
-            .consumer_ephemeral(&queue, rust_store.config())
+            .consumer_ephemeral(&queue)
             .await
             .map_err(to_py_err)?;
 

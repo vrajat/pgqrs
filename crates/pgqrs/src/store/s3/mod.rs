@@ -343,14 +343,20 @@ impl Store for S3Store {
             .await
     }
 
-    async fn admin(&self, name: &str, config: &Config) -> crate::error::Result<crate::Admin> {
-        let _ = config;
-        crate::workers::Admin::new(crate::store::AnyStore::S3(self.clone()), name).await
+    async fn admin(&self, name: &str) -> crate::error::Result<crate::Admin> {
+        let worker_record = WorkerTable::register(&self.tables, None, name).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::S3(self.clone()),
+            worker_record,
+        ))
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> crate::error::Result<crate::Admin> {
-        let _ = config;
-        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::S3(self.clone())).await
+    async fn admin_ephemeral(&self) -> crate::error::Result<crate::Admin> {
+        let worker_record = WorkerTable::register_ephemeral(&self.tables, None).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::S3(self.clone()),
+            worker_record,
+        ))
     }
 
     async fn producer(
@@ -371,12 +377,7 @@ impl Store for S3Store {
         ))
     }
 
-    async fn consumer(
-        &self,
-        queue: &str,
-        name: &str,
-        _config: &Config,
-    ) -> crate::error::Result<crate::Consumer> {
+    async fn consumer(&self, queue: &str, name: &str) -> crate::error::Result<crate::Consumer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
         let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
@@ -462,14 +463,6 @@ impl Store for S3Store {
         Ok(crate::workers::Run::new(AnyStore::S3(self.clone()), record))
     }
 
-    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn crate::Worker>> {
-        let worker_record = WorkerTable::get(&self.tables, id).await?;
-        Ok(Box::new(crate::workers::WorkerHandle::new(
-            crate::store::AnyStore::S3(self.clone()),
-            worker_record,
-        )))
-    }
-
     fn concurrency_model(&self) -> ConcurrencyModel {
         self.db.concurrency_model()
     }
@@ -496,11 +489,7 @@ impl Store for S3Store {
         ))
     }
 
-    async fn consumer_ephemeral(
-        &self,
-        queue: &str,
-        _config: &Config,
-    ) -> crate::error::Result<crate::Consumer> {
+    async fn consumer_ephemeral(&self, queue: &str) -> crate::error::Result<crate::Consumer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
         let worker_record =
             WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;
