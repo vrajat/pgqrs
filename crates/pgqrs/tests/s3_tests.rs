@@ -1343,34 +1343,7 @@ mod process_isolated_sync_tests {
     use super::*;
 
     fn s3_process_helper_bin() -> std::path::PathBuf {
-        if let Some(path) = std::env::var_os("CARGO_BIN_EXE_s3_process_helper") {
-            return std::path::PathBuf::from(path);
-        }
-
-        let current_exe = std::env::current_exe().expect("current test executable should resolve");
-        let deps_dir = current_exe
-            .parent()
-            .expect("test executable should have a parent directory");
-        let profile_dir = deps_dir
-            .parent()
-            .expect("deps directory should have a parent profile directory");
-        let helper_name = if cfg!(windows) {
-            "s3_process_helper.exe"
-        } else {
-            "s3_process_helper"
-        };
-
-        for candidate in [profile_dir.join(helper_name), deps_dir.join(helper_name)] {
-            if candidate.exists() {
-                return candidate;
-            }
-        }
-
-        panic!(
-            "failed to locate s3_process_helper binary; current_exe={current_exe:?}, searched {:?} and {:?}",
-            profile_dir.join(helper_name),
-            deps_dir.join(helper_name)
-        );
+        assert_cmd::cargo::cargo_bin!("s3_process_helper").to_path_buf()
     }
 
     async fn run_helper(
