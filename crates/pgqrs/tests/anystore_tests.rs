@@ -186,10 +186,7 @@ async fn test_anystore_admin_operations() {
     let store = create_store().await;
 
     // Test admin operations through AnyStore
-    let admin = store
-        .admin_ephemeral(&store.config().clone())
-        .await
-        .expect("Failed to get admin");
+    let admin = store.admin_ephemeral().await.expect("Failed to get admin");
 
     // Verify schema
     let verify_result = admin.verify().await;
@@ -229,7 +226,7 @@ async fn test_anystore_worker_creation() {
 
     // Test consumer creation
     let consumer = store
-        .consumer(queue_name, "test-host-8001", &store.config().clone())
+        .consumer(queue_name, "test-host-8001")
         .await
         .expect("Failed to create consumer");
 
@@ -245,7 +242,7 @@ async fn test_anystore_worker_creation() {
 
     // Test ephemeral consumer creation
     let ephemeral_consumer = store
-        .consumer_ephemeral(queue_name, &store.config().clone())
+        .consumer_ephemeral(queue_name)
         .await
         .expect("Failed to create ephemeral consumer");
 

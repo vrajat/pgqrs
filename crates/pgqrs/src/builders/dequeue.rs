@@ -432,7 +432,7 @@ impl<'a> DequeueBuilder<'a> {
                     .to_string(),
             })?;
 
-        store.consumer_ephemeral(queue, store.config()).await
+        store.consumer_ephemeral(queue).await
     }
 
     async fn into_poller<S: Store>(self, store: &S) -> Result<Poller> {

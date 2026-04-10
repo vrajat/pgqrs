@@ -423,10 +423,7 @@ impl PyStore {
                 gethostname().to_string_lossy(),
                 uuid::Uuid::new_v4()
             );
-            let consumer = store
-                .consumer(&queue, &name, store.config())
-                .await
-                .map_err(to_py_err)?;
+            let consumer = store.consumer(&queue, &name).await.map_err(to_py_err)?;
 
             Ok(PyConsumer {
                 inner: Arc::new(consumer),

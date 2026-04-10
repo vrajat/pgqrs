@@ -104,7 +104,7 @@ impl PyConsumer {
 
         let consumer = rt.block_on(async {
             // Use Store trait method directly - returns Consumer struct
-            rust_pgqrs::Store::consumer(&store, &queue, &name, store.config())
+            rust_pgqrs::Store::consumer(&store, &queue, &name)
                 .await
                 .map_err(to_py_err)
         })?;

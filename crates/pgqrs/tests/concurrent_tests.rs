@@ -319,7 +319,7 @@ async fn test_single_process_producer_consumer_contention() {
         .await
         .expect("Failed to create producer");
     let consumer = store
-        .consumer(&queue_name, "serialized-cons-3102", &config)
+        .consumer(&queue_name, "serialized-cons-3102")
         .await
         .expect("Failed to create consumer");
 

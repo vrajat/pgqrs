@@ -34,32 +34,16 @@ pub trait Worker: Send + Sync {
 /// Administrative worker for queues, workers, and stats.
 #[derive(Clone, Debug)]
 pub struct Admin {
-    pub(crate) store: AnyStore,
-    pub(crate) worker_record: WorkerRecord,
-}
-
-/// Generic worker handle backed by a store and worker record.
-#[derive(Clone, Debug)]
-pub struct WorkerHandle {
-    pub(crate) store: AnyStore,
-    pub(crate) worker_record: WorkerRecord,
+    store: AnyStore,
+    worker_record: WorkerRecord,
 }
 
 impl Admin {
-    pub(crate) async fn new(store: AnyStore, name: &str) -> Result<Self> {
-        let worker_record = store.workers().register(None, name).await?;
-        Ok(Self {
+    pub fn new(store: AnyStore, worker_record: WorkerRecord) -> Self {
+        Self {
             store,
             worker_record,
-        })
-    }
-
-    pub(crate) async fn new_ephemeral(store: AnyStore) -> Result<Self> {
-        let worker_record = store.workers().register_ephemeral(None).await?;
-        Ok(Self {
-            store,
-            worker_record,
-        })
+        }
     }
 
     pub async fn verify(&self) -> Result<()> {
@@ -264,15 +248,6 @@ impl Admin {
     }
 }
 
-impl WorkerHandle {
-    pub(crate) fn new(store: AnyStore, worker_record: WorkerRecord) -> Self {
-        Self {
-            store,
-            worker_record,
-        }
-    }
-}
-
 #[async_trait]
 impl crate::store::Worker for Admin {
     fn worker_record(&self) -> &WorkerRecord {
@@ -308,7 +283,7 @@ impl crate::store::Worker for Admin {
 }
 
 #[async_trait]
-impl crate::store::Worker for WorkerHandle {
+impl crate::store::Worker for Producer {
     fn worker_record(&self) -> &WorkerRecord {
         &self.worker_record
     }
@@ -326,7 +301,7 @@ impl crate::store::Worker for WorkerHandle {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.store.workers().shutdown(self.worker_record.id).await
+        Producer::shutdown(self).await
     }
 
     async fn heartbeat(&self) -> Result<()> {
@@ -396,29 +371,22 @@ impl Producer {
 
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
-        self.store.workers().suspend(self.worker_record.id).await?;
-        Ok(())
+        self.store.workers().suspend(self.worker_record.id).await
     }
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
-        self.store.workers().resume(self.worker_record.id).await?;
-        Ok(())
+        self.store.workers().resume(self.worker_record.id).await
     }
 
     /// Shut down this worker.
     pub async fn shutdown(&self) -> crate::error::Result<()> {
-        self.store.workers().shutdown(self.worker_record.id).await?;
-        Ok(())
+        self.store.workers().shutdown(self.worker_record.id).await
     }
 
     /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.store
-            .workers()
-            .heartbeat(self.worker_record.id)
-            .await?;
-        Ok(())
+        self.store.workers().heartbeat(self.worker_record.id).await
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -610,8 +578,7 @@ impl Consumer {
 
     /// Suspend this worker.
     pub async fn suspend(&self) -> crate::error::Result<()> {
-        self.store.workers().suspend(self.worker_record.id).await?;
-        Ok(())
+        self.store.workers().suspend(self.worker_record.id).await
     }
 
     /// Mark this consumer as polling.
@@ -631,8 +598,7 @@ impl Consumer {
 
     /// Resume this worker.
     pub async fn resume(&self) -> crate::error::Result<()> {
-        self.store.workers().resume(self.worker_record.id).await?;
-        Ok(())
+        self.store.workers().resume(self.worker_record.id).await
     }
 
     /// Complete a one-shot poll and return the worker to ready.
@@ -664,11 +630,7 @@ impl Consumer {
 
     /// Record a heartbeat for this worker.
     pub async fn heartbeat(&self) -> crate::error::Result<()> {
-        self.store
-            .workers()
-            .heartbeat(self.worker_record.id)
-            .await?;
-        Ok(())
+        self.store.workers().heartbeat(self.worker_record.id).await
     }
 
     /// Check if the worker heartbeat is within the given age.
@@ -797,6 +759,40 @@ impl Consumer {
             .release_with_visibility(message_id, self.worker_record.id, visible_at)
             .await?;
         Ok(count > 0)
+    }
+}
+
+#[async_trait]
+impl crate::store::Worker for Consumer {
+    fn worker_record(&self) -> &WorkerRecord {
+        &self.worker_record
+    }
+
+    async fn status(&self) -> Result<WorkerStatus> {
+        self.store.workers().get_status(self.worker_record.id).await
+    }
+
+    async fn suspend(&self) -> Result<()> {
+        self.store.workers().suspend(self.worker_record.id).await
+    }
+
+    async fn resume(&self) -> Result<()> {
+        self.store.workers().resume(self.worker_record.id).await
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Consumer::shutdown(self).await
+    }
+
+    async fn heartbeat(&self) -> Result<()> {
+        self.store.workers().heartbeat(self.worker_record.id).await
+    }
+
+    async fn is_healthy(&self, max_age: chrono::Duration) -> Result<bool> {
+        self.store
+            .workers()
+            .is_healthy(self.worker_record.id, max_age)
+            .await
     }
 }
 

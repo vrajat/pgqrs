@@ -6,7 +6,6 @@ use crate::store::{
     DbStateTable, DbTables, MessageTable, QueueTable, RunRecordTable, SerializedLock,
     StepRecordTable, Store, Tables, WorkerTable, WorkflowTable,
 };
-use crate::Worker;
 
 use async_trait::async_trait;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
@@ -283,14 +282,20 @@ impl Store for SqliteStore {
             .await
     }
 
-    async fn admin(&self, name: &str, config: &Config) -> Result<crate::workers::Admin> {
-        let _ = config;
-        crate::workers::Admin::new(self.any_store(), name).await
+    async fn admin(&self, name: &str) -> Result<crate::workers::Admin> {
+        let worker_record = WorkerTable::register(&self.tables, None, name).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            worker_record,
+        ))
     }
 
-    async fn admin_ephemeral(&self, config: &Config) -> Result<crate::workers::Admin> {
-        let _ = config;
-        crate::workers::Admin::new_ephemeral(self.any_store()).await
+    async fn admin_ephemeral(&self) -> Result<crate::workers::Admin> {
+        let worker_record = WorkerTable::register_ephemeral(&self.tables, None).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::Sqlite(self.clone()),
+            worker_record,
+        ))
     }
 
     async fn producer(
@@ -310,13 +315,7 @@ impl Store for SqliteStore {
         ))
     }
 
-    async fn consumer(
-        &self,
-        queue: &str,
-        name: &str,
-        config: &Config,
-    ) -> Result<crate::workers::Consumer> {
-        let _ = config;
+    async fn consumer(&self, queue: &str, name: &str) -> Result<crate::workers::Consumer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
         let worker_record = WorkerTable::register(&self.tables, Some(queue_info.id), name).await?;
 
@@ -405,14 +404,6 @@ impl Store for SqliteStore {
         Ok(crate::workers::Run::new(self.any_store(), run_rec))
     }
 
-    async fn worker(&self, id: i64) -> Result<Box<dyn Worker>> {
-        let worker_record = WorkerTable::get(&self.tables, id).await?;
-        Ok(Box::new(crate::workers::WorkerHandle::new(
-            self.any_store(),
-            worker_record,
-        )))
-    }
-
     fn concurrency_model(&self) -> ConcurrencyModel {
         self.db.concurrency_model()
     }
@@ -438,12 +429,7 @@ impl Store for SqliteStore {
         ))
     }
 
-    async fn consumer_ephemeral(
-        &self,
-        queue: &str,
-        config: &Config,
-    ) -> Result<crate::workers::Consumer> {
-        let _ = config;
+    async fn consumer_ephemeral(&self, queue: &str) -> Result<crate::workers::Consumer> {
         let queue_info = QueueTable::get_by_name(&self.tables, queue).await?;
         let worker_record =
             WorkerTable::register_ephemeral(&self.tables, Some(queue_info.id)).await?;

@@ -656,14 +656,8 @@ async fn test_admin_worker_management() {
 async fn test_admin_registration_persists_worker_record() {
     let store = create_store().await;
 
-    let admin = store
-        .admin("admin-host-9100", &store.config().clone())
-        .await
-        .unwrap();
-    let ephemeral_admin = store
-        .admin_ephemeral(&store.config().clone())
-        .await
-        .unwrap();
+    let admin = store.admin("admin-host-9100").await.unwrap();
+    let ephemeral_admin = store.admin_ephemeral().await.unwrap();
 
     let admin_worker = store.workers().get(admin.worker_id()).await.unwrap();
     assert_eq!(admin_worker.id, admin.worker_id());

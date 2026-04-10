@@ -103,15 +103,10 @@ pub trait Store: Send + Sync + 'static {
     async fn bootstrap(&self) -> crate::error::Result<()>;
 
     /// Get an admin worker interface.
-    async fn admin(
-        &self,
-        name: &str,
-        config: &Config,
-    ) -> crate::error::Result<crate::workers::Admin>;
+    async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin>;
 
     /// Get an ephemeral admin worker interface.
-    async fn admin_ephemeral(&self, config: &Config)
-        -> crate::error::Result<crate::workers::Admin>;
+    async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin>;
 
     /// Get a producer interface for a specific queue with worker identity.
     async fn producer(
@@ -122,12 +117,7 @@ pub trait Store: Send + Sync + 'static {
     ) -> crate::error::Result<Producer>;
 
     /// Get a consumer interface for a specific queue with worker identity.
-    async fn consumer(
-        &self,
-        queue: &str,
-        name: &str,
-        config: &Config,
-    ) -> crate::error::Result<Consumer>;
+    async fn consumer(&self, queue: &str, name: &str) -> crate::error::Result<Consumer>;
 
     /// Create a new queue.
     async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord>;
@@ -140,9 +130,6 @@ pub trait Store: Send + Sync + 'static {
     /// This should parse the message payload and either create a new RunRecord
     /// (for new triggers) or fetch an existing one (for resumptions).
     async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Run>;
-
-    /// Get a generic worker handle by ID.
-    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn Worker>>;
 
     /// Returns the concurrency model supported by this backend.
     fn concurrency_model(&self) -> ConcurrencyModel;
@@ -158,11 +145,7 @@ pub trait Store: Send + Sync + 'static {
     ) -> crate::error::Result<Producer>;
 
     /// Create an ephemeral consumer (auto-cleanup).
-    async fn consumer_ephemeral(
-        &self,
-        queue: &str,
-        config: &Config,
-    ) -> crate::error::Result<Consumer>;
+    async fn consumer_ephemeral(&self, queue: &str) -> crate::error::Result<Consumer>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

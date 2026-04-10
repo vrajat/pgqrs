@@ -1,8 +1,8 @@
 //! Postgres implementation of the Store trait.
 
 use crate::store::{
-    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store,
-    Worker as WorkerTrait, WorkerTable, WorkflowTable,
+    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
+    WorkflowTable,
 };
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -138,28 +138,27 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn admin(
-        &self,
-        name: &str,
-        config: &Config,
-    ) -> crate::error::Result<crate::workers::Admin> {
-        let _ = config;
-        crate::workers::Admin::new(crate::store::AnyStore::Postgres(self.clone()), name).await
+    async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin> {
+        let worker_record = self.workers.register(None, name).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            worker_record,
+        ))
     }
 
-    async fn admin_ephemeral(
-        &self,
-        config: &Config,
-    ) -> crate::error::Result<crate::workers::Admin> {
-        let _ = config;
-        crate::workers::Admin::new_ephemeral(crate::store::AnyStore::Postgres(self.clone())).await
+    async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin> {
+        let worker_record = self.workers().register_ephemeral(None).await?;
+        Ok(crate::workers::Admin::new(
+            crate::store::AnyStore::Postgres(self.clone()),
+            worker_record,
+        ))
     }
 
     async fn producer(
         &self,
         queue: &str,
         name: &str,
-        _config: &Config,
+        config: &Config,
     ) -> crate::error::Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue).await?;
         let worker_record = self.workers.register(Some(queue_info.id), name).await?;
@@ -168,7 +167,7 @@ impl Store for PostgresStore {
             crate::store::AnyStore::Postgres(self.clone()),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
@@ -176,7 +175,6 @@ impl Store for PostgresStore {
         &self,
         queue: &str,
         name: &str,
-        _config: &Config,
     ) -> crate::error::Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue).await?;
         let worker_record = self.workers.register(Some(queue_info.id), name).await?;
@@ -280,14 +278,6 @@ impl Store for PostgresStore {
         ))
     }
 
-    async fn worker(&self, id: i64) -> crate::error::Result<Box<dyn WorkerTrait>> {
-        let worker_record = self.workers.get(id).await?;
-        Ok(Box::new(crate::workers::WorkerHandle::new(
-            crate::store::AnyStore::Postgres(self.clone()),
-            worker_record,
-        )))
-    }
-
     fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
         crate::store::ConcurrencyModel::MultiProcess
     }
@@ -299,7 +289,7 @@ impl Store for PostgresStore {
     async fn producer_ephemeral(
         &self,
         queue: &str,
-        _config: &Config,
+        config: &Config,
     ) -> crate::error::Result<crate::workers::Producer> {
         let queue_info = self.queues.get_by_name(queue).await?;
         let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
@@ -308,14 +298,13 @@ impl Store for PostgresStore {
             crate::store::AnyStore::Postgres(self.clone()),
             queue_info,
             worker_record,
-            _config.validation_config.clone(),
+            config.validation_config.clone(),
         ))
     }
 
     async fn consumer_ephemeral(
         &self,
         queue: &str,
-        _config: &Config,
     ) -> crate::error::Result<crate::workers::Consumer> {
         let queue_info = self.queues.get_by_name(queue).await?;
         let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
