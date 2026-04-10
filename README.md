@@ -16,7 +16,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 - **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded), S3 (portable object-store-backed state)
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing and embedded), S3 (portable object-store-backed state)
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 
@@ -25,7 +25,6 @@ Each step executes exactly once. State persists in the database. Processes resum
 | Scenario | Recommended Backend | Why |
 |----------|---------------------|-----|
 | Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
 | Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
 | Embedded applications | **SQLite / Turso** | Single-file database, no server |
 | Portable remote queue state | **S3** | Durable queue state in object storage without running PostgreSQL |

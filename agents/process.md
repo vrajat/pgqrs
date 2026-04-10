@@ -64,11 +64,11 @@ Types:
 * `test`: - Testing changes
 * `chore`: - Maintenance tasks
 * `chore(deps)`: - Dependency updates
-Common Scopes: admin, queue, cli
+Common Scopes: admin, queue, workflow
 
 Examples:
 
-feat(cli): add new command for tool management
+feat(queue): add new queue inspection helper
 fix(config): resolve parsing issue with nested tables
 test(e2e): add tests for tool installation
 
@@ -144,7 +144,6 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
   - If there is a container, run tests by setting the env var `PGQRS_TEST_DSN=postgresql://pgbench:pgbench@127.0.0.1:5432/pgbench`
 - `cargo test` - Run all tests (unit + integration)
 - `cargo test --lib` - Run library tests only
-- `cargo test --bin pgqrs` - Run CLI tests only
 - `cargo test -- --test-threads=1` - Run tests sequentially (useful for database tests)
 
 ### Database Testing
@@ -203,12 +202,6 @@ This binary:
 - `cargo doc` - Generate documentation
 - `cargo doc --open` - Generate and open documentation in browser
 
-### CLI Development
-- `cargo run -- --help` - Show CLI help
-- `cargo run -- install` - Install pgqrs schema
-- `cargo run -- queue create test-queue` - Create a test queue
-- `cargo run -- message send --queue test-queue --payload '{"test": "data"}'` - Send test message
-
 ### Benchmarking
 - `cd benchmark && docker-compose up -d` - Start benchmark environment
 - `cd benchmark && ./run_benchmark.sh 40 5 2m` - Run performance benchmarks
@@ -230,13 +223,6 @@ This binary:
 - Handle connection errors gracefully
 - Test with real PostgreSQL instances (external databases in CI/local, testcontainers for Python)
 
-### CLI Design Principles
-- Follow conventional CLI patterns with clap
-- Provide meaningful help text and examples
-- Support multiple output formats (JSON, YAML, CSV, table)
-- Use appropriate exit codes for success/failure
-- Include progress indicators for long-running operations
-
 ### Testing Best Practices
 #### Test Categories
 1. **Unit Tests** (`#[cfg(test)]` in `src/` files)
@@ -248,7 +234,6 @@ This binary:
    - Rust tests use external PostgreSQL (via `PGQRS_TEST_DSN` env var)
    - Python tests use `testcontainers` for isolated PostgreSQL testing
    - Database operations
-   - CLI command execution
    - End-to-end workflows
 
 3. **Benchmark Tests** (`benchmark/` directory)
@@ -273,10 +258,9 @@ This binary:
 ## Code Architecture
 
 ### High-Level Structure
-pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean Producer/Consumer architecture and unified table interface. The system provides both a library API and CLI tools with clear separation of concerns.
+pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean Producer/Consumer architecture and unified table interface. The primary surface is the in-process library API with Python bindings.
 
 **Core Components:**
-- `src/main.rs` - CLI entry point and command-line interface
 - `src/lib.rs` - Library entry point and public API exports
 - `src/admin.rs` - System administration (install, metrics, worker management)
 - `src/producer.rs` - Message creation, validation, and enqueue operations
@@ -294,10 +278,6 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 - `src/tables/pgqrs_queues.rs` - Queue management and metadata operations
 - `src/tables/pgqrs_workers.rs` - Worker registration and health tracking
 - `src/tables/pgqrs_messages.rs` - All message storage and operations
-
-**CLI Components:**
-- `src/output.rs` - Output formatting (JSON, CSV, YAML, tables)
-- Subcommands organized by domain (install, queue, message, metrics, worker)
 
 **Testing:**
 - `tests/` - Integration tests using external PostgreSQL for Rust, testcontainers for Python
@@ -380,7 +360,6 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 1. **Secure Schema Handling**: Uses PostgreSQL's search_path feature instead of SQL string replacement to prevent injection
 2. **Schema Pre-creation Required**: The target schema must exist before running `pgqrs install`
 3. **Configuration Options**:
-   - CLI: `--schema my_schema`
    - Environment: `PGQRS_SCHEMA=my_schema`
    - Config file: `schema: "my_schema"`
    - Programmatic: `Config::from_dsn_with_schema(dsn, "my_schema")`
@@ -398,7 +377,6 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 #### Key Dependencies
 - `sqlx` - Database operations (async PostgreSQL driver with compile-time checked queries)
 - `tokio` - Async runtime providing the foundation for all async operations
-- `clap` - CLI argument parsing with derive macros for clean command definition
 - `serde` - JSON serialization/deserialization for message payloads and configuration
 - `anyhow` - Error handling with context and chaining capabilities
 - `tracing` - Structured logging and instrumentation
@@ -423,7 +401,6 @@ pgqrs is a PostgreSQL-backed job queue system for Rust applications with a clean
 ```
 src/
 ├── lib.rs              # Public API exports (Producer, Consumer, Admin, Table trait)
-├── main.rs             # CLI entry point with subcommands
 ├── admin.rs            # System administration and cross-table operations
 ├── producer.rs         # Message creation, validation, and enqueue operations
 ├── consumer.rs         # Message consumption, processing, and completion
@@ -432,8 +409,7 @@ src/
 ├── error.rs            # Custom error types and handling
 ├── constants.rs        # SQL queries and database schema definitions
 ├── validation.rs       # Message payload validation logic
-├── rate_limit.rs       # Token bucket rate limiting implementation
-└── output.rs           # CLI output formatting
+└── rate_limit.rs       # Token bucket rate limiting implementation
 ```
 
 ### Table Interface (`src/tables/`)
@@ -450,7 +426,7 @@ src/tables/
 ### Testing (`tests/`)
 ```
 tests/
-├── cli_tests.rs        # CLI integration tests for all subcommands
+├── builder_tests.rs    # Builder integration tests
 ├── lib_tests.rs        # Library integration tests (Producer/Consumer/Admin)
 ├── default_schema_tests.rs  # Schema management and backward compatibility
 ├── error_tests.rs      # Error handling and validation testing
@@ -513,29 +489,4 @@ pub use crate::tables::{NewQueue, NewWorker, NewMessage};
 pub use crate::config::Config;
 pub use crate::error::{Error, Result};
 pub use crate::types::{QueueInfo, WorkerInfo, QueueMessage, WorkerStatus};
-```
-
-#### **CLI Command Structure**
-```
-pgqrs
-├── install          # Schema setup with all four tables
-├── uninstall        # Schema cleanup
-├── verify           # Installation verification
-├── queue            # Queue management commands
-│   ├── create       # Create new queues
-│   ├── list         # List all queues with metrics
-│   ├── delete       # Delete queues (with safety checks)
-│   ├── purge        # Remove all messages from queue
-│   └── metrics      # Detailed queue statistics
-├── message          # Message operations
-│   ├── send         # Create messages (Producer operations)
-│   ├── read         # View messages (Consumer preview)
-│   ├── dequeue      # Consume single message
-│   ├── delete       # Remove specific messages
-│   ├── count        # Message counts per queue
-│   └── show         # Message details (including archived)
-└── worker           # Worker management (future expansion)
-    ├── list         # Show registered workers
-    ├── health       # Worker health checks
-    └── purge        # Clean up stale worker registrations
 ```

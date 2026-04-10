@@ -6,7 +6,7 @@ This guide will walk you through creating your first queue, sending messages, an
 
 - pgqrs installed ([Configuration](../api/configuration.md))
 - A supported backend DSN (examples below use PostgreSQL)
-- pgqrs schema installed (`pgqrs admin install`)
+- pgqrs schema installed with `admin.install()`
 
 ## Step 1: Create a Queue
 
@@ -168,21 +168,6 @@ This guide will walk you through creating your first queue, sending messages, an
             println!("  Archived: {}", m.archived_messages);
         }
     }
-    ```
-
-=== "CLI"
-
-    ```bash
-    pgqrs queue metrics tasks
-    ```
-
-    Output:
-    ```
-    ┌────────┬───────┬─────────┬────────┬──────────┐
-    │ Queue  │ Total │ Pending │ Locked │ Archived │
-    ├────────┼───────┼─────────┼────────┼──────────┤
-    │ tasks  │ 100   │ 45      │ 5      │ 50       │
-    └────────┴───────┴─────────┴────────┴──────────┘
     ```
 
 ## Complete Example

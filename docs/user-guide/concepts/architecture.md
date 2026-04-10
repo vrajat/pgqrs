@@ -22,8 +22,6 @@ flowchart TB
         ADM[Admin API]
     end
 
-    CLI[pgqrs CLI]
-
     subgraph Pool["Connection Layer"]
         CP[PgBouncer / pgcat]
     end
@@ -43,8 +41,6 @@ flowchart TB
     PROD --> CP
     CONS --> CP
     ADM --> CP
-    CLI --> CP
-
     CP --> Schema
 ```
 

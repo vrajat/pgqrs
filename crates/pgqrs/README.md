@@ -13,7 +13,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 - **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing, CLI, embedded)
+- **Multi-backend:** Postgres (production), SQLite/Turso (testing and embedded)
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 
@@ -58,10 +58,11 @@ async fn poll_and_print_jobs(consumer: &Consumer, worker: &WorkerInfo) -> Result
 
 ## Quickstart
 
-### Install the binary
+### Add the library
 
-```bash
-cargo install pgqrs
+```toml
+[dependencies]
+pgqrs = "0.15.2"
 ```
 
 ### Start a Postgres DB or get the DSN of an existing db.
@@ -91,26 +92,11 @@ postgresql://username:password@hostname:port/database
 
 ### Configure pgqrs
 
-Set your database connection using one of these methods (in order of priority):
-
-```bash
-# Method 1: Command line argument (highest priority)
-pgqrs --dsn "postgresql://postgres:postgres@localhost:5432/postgres"
-
-# Method 2: Environment variable
-export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
-pgqrs ...
-```
+pgqrs can load configuration from environment variables or a `pgqrs.yaml` file.
 
 Create a `pgqrs.yaml` file:
 ```yaml
 dsn: "postgresql://postgres:postgres@localhost:5432/postgres"
-```
-
-Then run:
-```bash
-# Method 3: Use a yaml config file.
-pgqrs ...
 ```
 
 ### Install the pgqrs schema
@@ -118,7 +104,7 @@ pgqrs ...
 pgqrs requires a few tables to store metadata. It creates these tables as well as
 queue tables in the specified schema.
 
-**Important**: You must create the schema before running `pgqrs install`.
+**Important**: You must create the schema before calling `admin.install()`.
 
 ### Step 1: Create the schema
 
@@ -132,41 +118,14 @@ CREATE SCHEMA IF NOT EXISTS pgqrs;
 
 #### Step 2: Install pgqrs
 
-Once you have your database configured and schema created, install the pgqrs schema:
+Once you have your database configured and schema created, install and verify the pgqrs schema:
 
-```bash
-# Install in default 'public' schema
-pgqrs install
-
-# Install in custom schema
-pgqrs --schema pgqrs install
-
-# Verify the installation
-pgqrs verify
-# Or verify custom schema
-pgqrs --schema pgqrs verify
-```
-
-### Test queue commands from the CLI
-
-Items can be enqueued or dequeued using the CLI. This option is only available for testing
-or experiments.
-
-```bash
-# Create a test queue
-pgqrs queue create test_queue
-
-# Send a message to the queue
-pgqrs message send test_queue '{"message": "Hello, World!", "timestamp": "2023-01-01T00:00:00Z"}'
-
-# Send a delayed message (available after 30 seconds)
-pgqrs message send test_queue '{"task": "delayed_task"}' --delay 30
-
-# Read and immediately consume one message
-pgqrs message dequeue test_queue
-
-# Delete a specific message by ID
-pgqrs message delete test_queue 12345
+```rust
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let store = pgqrs::connect("postgresql://postgres:postgres@localhost:5432/postgres").await?;
+pgqrs::admin(&store).install().await?;
+pgqrs::admin(&store).verify().await?;
+# Ok(()) }
 ```
 
 ## License

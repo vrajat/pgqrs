@@ -722,4 +722,3 @@ Set up automated cleanup of old workers:
 ## What's Next?
 
 - [Batch Processing](batch-processing.md) - High-throughput patterns
-- [Admin, Queue, and Worker CLI](../cli-reference.md) - Worker management commands

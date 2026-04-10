@@ -25,6 +25,16 @@ async def dequeue_one(consumer):
     assert False, "expected one message, got none before deadline"
 
 
+async def dequeue_many_until(consumer, batch_size: int, expected_count: int):
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=2)
+    while datetime.now(timezone.utc) < deadline:
+        msgs = await consumer.dequeue(batch_size=batch_size)
+        if len(msgs) == expected_count:
+            return msgs
+        await asyncio.sleep(0.01)
+    assert False, f"expected {expected_count} messages, got fewer before deadline"
+
+
 async def execute_step(run: Run, name: str, current_time, action):
     step_result = await run.acquire_step(name, current_time=current_time)
     if step_result.status == pgqrs.StepResultStatus.Skipped:
@@ -74,9 +84,8 @@ async def test_zombie_consumer_race_condition(test_dsn, schema):
     assert released == 1
 
     # Consumer B dequeues the SAME message (stealing the lock)
-    msgs_b = await consumer_b.dequeue(batch_size=1)
-    assert len(msgs_b) == 1
-    assert msgs_b[0].id == msg_id
+    msg_b = await dequeue_one(consumer_b)
+    assert msg_b.id == msg_id
 
     # Consumer A tries to DELETE -> Should FAIL (return false)
     deleted_a = await consumer_a.delete(msg_id)
@@ -119,7 +128,7 @@ async def test_zombie_consumer_batch_ops(test_dsn, schema):
     assert released == 2
 
     # B dequeues both
-    msgs_b = await consumer_b.dequeue(batch_size=2)
+    msgs_b = await dequeue_many_until(consumer_b, batch_size=2, expected_count=2)
     assert len(msgs_b) == 2
 
     # A tries delete_many -> Should return [False, False]

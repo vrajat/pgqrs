@@ -68,14 +68,6 @@ pgqrs is a library-only durable execution engine with multiple storage backends.
     - [Delayed Messages](guides/delayed-messages.md)
     - [Worker Management](guides/worker-management.md)
 
--   :material-console:{ .lg .middle } **CLI Reference**
-
-    ---
-
-    Command-line tool documentation.
-
-    - [Admin, Queue, and Worker CLI](cli-reference.md)
-
 </div>
 
 ## Prerequisites
@@ -97,4 +89,3 @@ Before using pgqrs, ensure you have:
 | [Consumer](api/consumer.md) | Processing messages |
 | [S3 Queue Guide](guides/s3-queue.md) | Bootstrapping and syncing an S3-backed queue |
 | [Durable Workflows](guides/durable-workflows.md) | Multi-step, crash-resistant workflows |
-| [Admin, Queue, and Worker CLI](cli-reference.md) | Command-line operations |

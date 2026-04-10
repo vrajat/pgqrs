@@ -32,7 +32,6 @@ TOXIPROXY_UPSTREAM ?= host.docker.internal:$(LOCALSTACK_PORT)
 TEST_FEATURES ?= --features test-utils
 CARGO_TARGET_DIR_EFFECTIVE := $(if $(strip $(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),target)
 CARGO_TARGET_TMPDIR ?= $(abspath $(CARGO_TARGET_DIR_EFFECTIVE)/tmp)
-PGQRS_CLI_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/pgqrs
 SETUP_TEST_SCHEMAS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/setup_test_schemas
 
 .venv:  ## Set up Python virtual environment
@@ -98,23 +97,20 @@ check-nextest:
 build-setup-test-schemas: ## Build the test schema helper for the active backend
 	cargo build -p pgqrs --bin setup_test_schemas $(CARGO_FEATURES)
 
-build-pgqrs-cli: ## Build the pgqrs CLI binary for the active backend
-	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
-
-test-rust: check-nextest build-pgqrs-cli ## Run Rust tests only (using nextest)
+test-rust: check-nextest ## Run Rust tests only (using nextest)
 ifdef TEST
 ifdef FILTER
-	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST) -E '$(FILTER)'
 else
-	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES) --test $(TEST)
 endif
 else
-	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 endif
 
 
-test: build-python build-pgqrs-cli check-nextest  ## Run all tests
-	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) PGQRS_CLI_BIN="$(abspath $(PGQRS_CLI_BIN))" cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
+test: build-python check-nextest  ## Run all tests
+	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_DSN=$(PGQRS_TEST_DSN) PGBOUNCER_TEST_DSN=$(PGBOUNCER_TEST_DSN) PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) cargo nextest run --cargo-profile dev -p pgqrs $(CARGO_FEATURES) $(TEST_FEATURES)
 	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" PGQRS_TEST_BACKEND=$(PGQRS_TEST_BACKEND) $(UV) run pytest py-pgqrs
 
 # Optional selectors for Python tests

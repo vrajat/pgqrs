@@ -279,44 +279,6 @@ For long-running consumers, send heartbeats periodically:
     asyncio.run(main())
     ```
 
-## Managing Workers via CLI
-
-### List Workers
-
-```bash
-# List all workers
-pgqrs worker list
-
-# List workers for a specific queue
-pgqrs worker list --queue tasks
-```
-
-### Worker Statistics
-
-```bash
-pgqrs worker stats --queue tasks
-```
-
-### Health Check
-
-```bash
-# Check workers with heartbeat older than 5 minutes
-pgqrs worker health --queue tasks --max-age 300
-```
-
-### Stop a Worker
-
-```bash
-pgqrs worker stop --id 42
-```
-
-### Purge Old Workers
-
-```bash
-# Remove stopped workers older than 7 days
-pgqrs worker purge --older-than 7d
-```
-
 ## Multiple Workers
 
 Run multiple consumers for the same queue to scale processing:
@@ -555,7 +517,7 @@ Regularly check worker health in production:
 === "Python"
 
     !!! warning "Limited Health Data"
-        Python's `WorkerInfo` currently only exposes `id`, `hostname`, and `status`. Timestamps like `updated_at` are not yet available, so time-based staleness checks must be done via Rust or CLI.
+        Python's `WorkerInfo` currently only exposes `id`, `hostname`, and `status`. Timestamps like `updated_at` are not yet available, so time-based staleness checks must be done via Rust.
 
     ```python
     import asyncio
@@ -574,16 +536,6 @@ Regularly check worker health in production:
             await asyncio.sleep(60)
 
     # asyncio.run(monitor_workers(admin))
-    ```
-
-=== "CLI"
-
-    ```bash
-    # Check status of all workers
-    pgqrs worker list
-
-    # Check for stale workers
-    pgqrs worker health
     ```
 
 ### 4. Clean Up Stopped Workers
@@ -621,17 +573,7 @@ Periodically purge old stopped workers:
 === "Python"
 
     !!! warning "Limited Support"
-        Detailed worker field access (like shutdown timestamps) is currently limited in Python. Cleanup is best performed via CLI or Rust tools.
-
-=== "CLI"
-
-    ```bash
-    # Run via cron to purge stopped workers
-    pgqrs worker purge
-
-    # Crontab example (daily at 2 AM)
-    0 2 * * * pgqrs worker purge
-    ```
+        Detailed worker field access (like shutdown timestamps) is currently limited in Python. Cleanup is best performed via Rust tools.
 
 ## What's Next?
 

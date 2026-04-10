@@ -159,18 +159,6 @@ if let AnyStore::S3(s3_store) = &mut store {
 
 `snapshot()` pulls remote state into the local cache. It returns a conflict if the local cache is dirty.
 
-## CLI Usage
-
-The CLI works with `s3://...` DSNs as well:
-
-```bash
-export PGQRS_DSN="s3://my-bucket/queue.sqlite"
-pgqrs admin install
-pgqrs queue list
-```
-
-The CLI snapshots the S3 store on startup, so queue and worker commands operate on a refreshed local view.
-
 ## Current Python Limitation
 
-When the installed Python build includes S3 support, Python can connect to an S3-backed queue and bootstrap it. Explicit `snapshot()` / `sync()` lifecycle controls are not currently exposed in the Python bindings, so advanced replication control still belongs in Rust or the CLI.
+When the installed Python build includes S3 support, Python can connect to an S3-backed queue and bootstrap it. Explicit `snapshot()` / `sync()` lifecycle controls are not currently exposed in the Python bindings, so advanced replication control still belongs in Rust.

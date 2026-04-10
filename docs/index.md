@@ -22,7 +22,6 @@ Each step executes exactly once. State persists in the database. Processes resum
 | Scenario | Recommended Backend | Why |
 |----------|---------------------|-----|
 | Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
 | Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
 | Embedded applications | **SQLite / Turso** | Single-file database, no server |
 | Remote durable queue without a database server | **S3** | SQLite queue state persisted as an S3 object |
