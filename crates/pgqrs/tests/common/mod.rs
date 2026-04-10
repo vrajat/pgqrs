@@ -4,7 +4,6 @@ pub mod resource;
 use ctor::dtor;
 use pgqrs::store::{BackendType, Store};
 use resource::{ResourceManager, TestResource, RESOURCE_MANAGER};
-use std::path::PathBuf;
 
 /// Get the current test backend.
 #[allow(dead_code)]
@@ -180,14 +179,6 @@ pub async fn get_test_dsn(schema: &str) -> String {
 
     *guard = Some(ResourceManager::new(resource));
     guard.as_ref().unwrap().resource.get_dsn(Some(schema)).await
-}
-
-/// Resolve the CLI binary path used by integration tests.
-#[allow(dead_code)]
-pub fn pgqrs_cli_bin() -> PathBuf {
-    std::env::var_os("PGQRS_CLI_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(assert_cmd::cargo_bin!("pgqrs")))
 }
 
 /// Skip test if not running on specified backend.

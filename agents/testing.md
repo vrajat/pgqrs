@@ -58,7 +58,7 @@ Optional selectors:
 Examples:
 
 ```bash
-make test-rust TEST=cli_tests
+make test-rust TEST=lib_tests
 make test-rust TEST=workflow_retry_integration_tests FILTER='test(test_zero_delay_allows_immediate_retry)'
 ```
 
@@ -138,7 +138,7 @@ For a narrower Rust-only loop:
 ```bash
 make test-rust PGQRS_TEST_BACKEND=sqlite \
   CARGO_FEATURES="--no-default-features --features sqlite" \
-  TEST=cli_tests
+  TEST=lib_tests
 ```
 
 For Python-only validation:
@@ -156,7 +156,7 @@ For a narrower Rust-only loop:
 ```bash
 make test-rust PGQRS_TEST_BACKEND=turso \
   CARGO_FEATURES="--no-default-features --features turso" \
-  TEST=cli_tests
+  TEST=turso_hardening
 ```
 
 Use Turso validation when the change touches:
@@ -192,7 +192,7 @@ AWS_ACCESS_KEY_ID=test \
 AWS_SECRET_ACCESS_KEY=test \
 make test-rust PGQRS_TEST_BACKEND=s3 \
   CARGO_FEATURES="--no-default-features --features s3" \
-  TEST=cli_tests
+  TEST=s3_tests
 ```
 
 If you need a targeted S3 Python loop instead:

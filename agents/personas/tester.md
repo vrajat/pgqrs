@@ -32,7 +32,7 @@ Tests define what "working" means. They should:
 
 **Integration Tests** (`tests/` directory)
 - **Purpose:** Test components working together
-- **Scope:** Database ops, workflows, CLI
+- **Scope:** Database ops, workflows, builder behavior
 - **Speed:** Moderate (Rust: external DBs; Python: testcontainers)
 - **Run:** `cargo test`
 
@@ -143,7 +143,7 @@ fn test_transient_error() {
 tests/
 ├── workflow_retry_integration_tests.rs  # Feature-focused
 ├── lib_tests.rs                         # Core API
-├── cli_tests.rs                         # CLI commands
+├── builder_tests.rs                     # Builder behavior
 ├── turso_hardening.rs                   # Backend-specific
 └── common/                              # Shared utilities
     └── mod.rs

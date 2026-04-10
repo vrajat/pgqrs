@@ -16,7 +16,6 @@ pgqrs supports multiple storage backends, giving you flexibility to choose the r
 | Scenario | Recommended Backend | Why |
 |----------|---------------------|-----|
 | Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| CLI tools & scripts | **SQLite / Turso** | Zero-config, embedded, portable |
 | Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
 | Embedded applications | **SQLite / Turso** | Single-file database, no server required |
 | Portable remote queue state in object storage | **S3** | SQLite state replicated through a single S3 object |
@@ -95,7 +94,7 @@ pgqrs automatically configures SQLite for the best possible concurrency:
 
 ### When to Use
 
-- CLI tools and single-process scripts
+- Single-process scripts
 - Testing and prototyping
 - Embedded applications
 - Development environments
@@ -158,7 +157,7 @@ pgqrs automatically configures Turso for the best possible concurrency:
 
 ### When to Use
 
-- CLI tools and single-process scripts
+- Single-process scripts
 - Testing and prototyping
 - Embedded applications
 - Development environments
@@ -217,7 +216,7 @@ pgqrs exposes two S3 durability modes:
 ### When to Use
 
 - Simple deployments that want remote queue durability without running PostgreSQL
-- CLI and operational workflows where queue state should live in object storage
+- Operational workflows where queue state should live in object storage
 - Rust applications that benefit from explicit `snapshot()` / `sync()` control
 
 ### Limitations

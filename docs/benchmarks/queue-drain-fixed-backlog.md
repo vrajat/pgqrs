@@ -164,7 +164,7 @@ The current benchmark says:
 In practical terms:
 
 - choose PostgreSQL for multi-consumer throughput
-- choose SQLite or local-path Turso for simple embedded or CLI usage
+- choose SQLite or local-path Turso for simple embedded usage
 - choose S3 only when object-storage-backed durability and portability are worth the throughput tradeoff
 
 This should be read as scenario behavior, not as a universal backend ranking.

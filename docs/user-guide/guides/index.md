@@ -101,7 +101,7 @@ Before following these guides, ensure you have:
 
 1. pgqrs installed ([Installation Guide](../getting-started/installation.md))
 2. A supported backend DSN
-3. The pgqrs schema installed (`pgqrs admin install`)
+3. The pgqrs schema installed with `admin.install()`
 
 ## Code Examples
 

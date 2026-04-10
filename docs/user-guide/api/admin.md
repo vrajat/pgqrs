@@ -89,7 +89,7 @@ Remove the pgqrs schema (tables and data).
 === "Python"
 
     !!! warning "Not Supported"
-        `uninstall()` is not exposed in Python to prevent accidental data loss. Use the CLI or SQL for schema removal.
+        `uninstall()` is not exposed in Python to prevent accidental data loss. Use Rust or SQL for schema removal.
 
 ## Queue Management
 
@@ -147,7 +147,7 @@ Delete a queue and all its messages.
 === "Python"
 
     !!! warning "Not Supported"
-        `delete_queue()` is not directly exposed on the Admin object. Use CLI for destructive queue operations.
+        `delete_queue()` is not directly exposed on the Admin object. Use Rust or SQL for destructive queue operations.
 
 ## Metrics & Monitoring
 

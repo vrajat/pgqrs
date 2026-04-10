@@ -1,6 +1,5 @@
 use pgqrs::{store::Store, types::WorkerStatus};
 use serial_test::serial;
-use std::process::Command;
 
 mod common;
 
@@ -114,8 +113,8 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
             "Worker should be stopped"
         );
 
-        // 8. Test CLI Preparation
-        // We'll reset the state and try to reclaim via CLI
+        // 8. Test reconnect-based reclamation preparation.
+        // We'll reset the state and reclaim from a fresh store handle.
 
         // Reset: Make message owned by a new zombie
         // Use a new consumer for the next test phase
@@ -171,65 +170,23 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         )
     }; // All connections closed here
 
-    // 9. Run CLI command using pre-built binary
+    // 9. Reconnect with a fresh store handle and reclaim again.
     assert!(!dsn_str.is_empty());
-
-    let output = Command::new(common::pgqrs_cli_bin())
-        .args([
-            "-d",
-            &dsn_str,
-            "--schema",
-            "pgqrs_zombie_tests",
-            "admin",
-            "reclaim",
-            "--queue",
-            queue_name,
-            "--older-than",
-            "1m",
-        ])
-        .output()
-        .expect("Failed to execute CLI command");
-
-    // 10. Reconnect and Verify results
     {
-        assert!(
-            output.status.success(),
-            "CLI command failed: {:?}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("Reclaimed 1 message"),
-            "CLI output mismatch: {}",
-            stdout
-        );
-
-        // Use existing DSN to ensure we connect to the same DB file
-        #[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
-        let store = {
-            let config = pgqrs::config::Config::from_dsn(&dsn_str);
-            pgqrs::connect_with_config(&config)
-                .await
-                .expect("Failed to connect")
-        };
-        #[cfg(feature = "s3")]
-        let store = {
-            let mut store = store;
-            if let pgqrs::store::AnyStore::S3(s3_store) = &mut store {
-                s3_store
-                    .snapshot()
-                    .await
-                    .expect("Failed to snapshot S3 state");
-            }
-            store
-        };
-        #[cfg(all(not(feature = "sqlite"), not(feature = "turso"), not(feature = "s3")))]
-        let store = { common::create_store(schema).await };
+        let config = pgqrs::config::Config::from_dsn_with_schema(&dsn_str, schema)
+            .expect("failed to build config from reclaimed DSN");
+        let store = pgqrs::connect_with_config(&config)
+            .await
+            .expect("Failed to reconnect");
+        let reclaimed = pgqrs::admin(&store)
+            .reclaim_messages(queue_id, Some(chrono::Duration::seconds(60)))
+            .await?;
+        assert_eq!(reclaimed, 1, "reconnect-based reclaim should succeed");
 
         let c2_worker = pgqrs::tables(&store).workers().get(c2_id).await?;
         assert!(
             matches!(c2_worker.status, WorkerStatus::Stopped),
-            "Consumer 2 should be stopped by CLI"
+            "Consumer 2 should be stopped by reclaim_messages"
         );
 
         // Cleanup

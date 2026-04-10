@@ -33,6 +33,6 @@ Most features are available in both languages, with some platform-specific diffe
 | **Core Messaging** | ✅ Full Support | ✅ Full Support |
 | **Durable Workflows** | ✅ Full Support | ✅ Full Support |
 | **Worker Management** | ✅ Explicit Control | ⚠️ Automatic Only |
-| **Metrics** | ✅ Full Object Access | ⚠️ Restricted to CLI/Table |
+| **Metrics** | ✅ Full Object Access | ⚠️ Restricted Access |
 
 See specific pages for detailed API differences and limitations.

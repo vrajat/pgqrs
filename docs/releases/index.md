@@ -30,12 +30,6 @@ Version history and release notes for pgqrs.
     pip install pgqrs
     ```
 
-=== "CLI"
-
-    ```bash
-    cargo install pgqrs
-    ```
-
 ## Release Schedule
 
 pgqrs follows [Semantic Versioning](https://semver.org/):

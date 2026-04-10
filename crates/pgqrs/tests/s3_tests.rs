@@ -1342,13 +1342,17 @@ mod sync_state_tests {
 mod process_isolated_sync_tests {
     use super::*;
 
+    fn s3_process_helper_bin() -> std::path::PathBuf {
+        assert_cmd::cargo::cargo_bin!("s3_process_helper").to_path_buf()
+    }
+
     async fn run_helper(
         dsn: &str,
         queue: &str,
         cache_dir: &std::path::Path,
         sleep_before_sync_ms: u64,
     ) -> std::process::Output {
-        let bin = assert_cmd::cargo::cargo_bin!("s3_process_helper");
+        let bin = s3_process_helper_bin();
         tokio::process::Command::new(bin)
             .arg("--dsn")
             .arg(dsn)

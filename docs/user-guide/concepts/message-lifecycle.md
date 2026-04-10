@@ -271,12 +271,6 @@ To handle these messages, use administrative tools to mark them as archived for 
     !!! warning "Not Supported"
         Python bindings currently do not support the administrative APIs required to inspect `read_ct` of pending messages or trigger the `dlq()` cleanup command.
 
-        **Workaround:** Use the CLI to manage poison messages:
-        ```bash
-        # Mark all poison messages as archived
-        pgqrs queue archive-dlq
-        ```
-
 ## Archive vs Delete
 
 Choose based on your requirements:

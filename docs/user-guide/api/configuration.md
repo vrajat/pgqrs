@@ -61,7 +61,7 @@ For fine-grained control over connection pools, schema names, queue defaults, va
 
 Rust applications support hierarchical configuration loading:
 
-1. CLI Arguments
+1. Explicit values passed in code
 2. Environment Variables
 3. Config File (`pgqrs.yaml`)
 4. Defaults

@@ -9,7 +9,7 @@ pgqrs supports PostgreSQL, SQLite, Turso, and S3-backed queues. Choose based on 
 | Backend | Best For | Prerequisites |
 |---------|----------|---------------|
 | **PostgreSQL** | Production, multi-worker | PostgreSQL 12+ server |
-| **SQLite** | CLI tools, testing, embedded | None (embedded) |
+| **SQLite** | Testing, local development, embedded | None (embedded) |
 | **Turso** | Embedded SQLite-compatible deployments | Turso or local Turso database |
 | **S3** | Remote queue durability without a database server | S3 bucket and AWS-compatible credentials |
 
@@ -168,25 +168,9 @@ s3://my-bucket/queue.sqlite
 
 ## Installing the pgqrs Schema
 
-Before using pgqrs, you need to install its schema in your database. You can do this via the CLI or programmatically.
+Before using pgqrs, you need to install its schema in your database.
 
 For `s3://...` DSNs, this step bootstraps the remote object if it does not exist yet.
-
-=== "CLI"
-
-    ```bash
-    # Install the CLI
-    cargo install pgqrs
-
-    # Set your database connection
-    export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
-
-    # Install the schema
-    pgqrs admin install
-
-    # Verify the installation
-    pgqrs admin verify
-    ```
 
 === "Rust"
 
@@ -236,16 +220,6 @@ For `s3://...` DSNs, this step bootstraps the remote object if it does not exist
 Custom schemas apply to SQL backends such as PostgreSQL. SQLite, Turso, and S3-backed queues ignore the schema name.
 
 By default, pgqrs creates tables in the `public` schema. To use a custom schema:
-
-=== "CLI"
-
-    ```bash
-    # Create the schema first (in psql)
-    # CREATE SCHEMA IF NOT EXISTS pgqrs;
-
-    # Install with custom schema
-    pgqrs --schema pgqrs admin install
-    ```
 
 === "Rust"
 

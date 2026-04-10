@@ -59,7 +59,7 @@ make test-sqlite
 ```
 pgqrs/
 ├── crates/
-│   └── pgqrs/           # Main Rust library and CLI
+│   └── pgqrs/           # Main Rust library
 │       ├── src/
 │       │   ├── lib.rs   # Library exports
 │       │   ├── admin.rs # Admin API

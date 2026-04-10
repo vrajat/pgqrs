@@ -2,11 +2,28 @@
 
 This guide will walk you through creating your first queue, sending messages, and processing them.
 
+## Step 0: Add pgqrs
+
+=== "Rust"
+
+    ```toml
+    [dependencies]
+    pgqrs = "0.15.2"
+    tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+    serde_json = "1"
+    ```
+
+=== "Python"
+
+    ```bash
+    pip install pgqrs
+    ```
+
 ## Prerequisites
 
 - pgqrs installed ([Configuration](../api/configuration.md))
 - A supported backend DSN (examples below use PostgreSQL)
-- pgqrs schema installed (`pgqrs admin install`)
+- pgqrs schema installed with `admin.install()`
 
 ## Step 1: Create a Queue
 
@@ -168,21 +185,6 @@ This guide will walk you through creating your first queue, sending messages, an
             println!("  Archived: {}", m.archived_messages);
         }
     }
-    ```
-
-=== "CLI"
-
-    ```bash
-    pgqrs queue metrics tasks
-    ```
-
-    Output:
-    ```
-    ┌────────┬───────┬─────────┬────────┬──────────┐
-    │ Queue  │ Total │ Pending │ Locked │ Archived │
-    ├────────┼───────┼─────────┼────────┼──────────┤
-    │ tasks  │ 100   │ 45      │ 5      │ 50       │
-    └────────┴───────┴─────────┴────────┴──────────┘
     ```
 
 ## Complete Example
