@@ -26,7 +26,7 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     ```toml
     [dependencies]
     # PostgreSQL only (default)
-    pgqrs = "0.15.2"
+    pgqrs = "0.15.3"
 
     # SQLite only
     pgqrs = { version = "0.15.1", default-features = false, features = ["sqlite"] }

@@ -289,7 +289,7 @@ s3://my-bucket/orders/prod.sqlite
 ```toml
 [dependencies]
 # PostgreSQL only (default)
-pgqrs = "0.15.2"
+pgqrs = "0.15.3"
 
 # SQLite only
 pgqrs = { version = "0.15.1", default-features = false, features = ["sqlite"] }
