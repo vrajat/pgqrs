@@ -6,13 +6,13 @@ Version history and release notes for pgqrs.
 
 <div class="grid cards" markdown>
 
--   :material-tag:{ .lg .middle } **v0.15.1**
+-   :material-tag:{ .lg .middle } **v0.15.3**
 
     ---
 
-    Python S3 durability APIs, S3 benchmark bring-up, and backend consistency fixes.
+    Library-only distribution, refined dequeue polling, and worker lifecycle cleanup across backends.
 
-    [:octicons-arrow-right-24: Release Notes](changelog.md#0151-2026-04-02)
+    [:octicons-arrow-right-24: Release Notes](changelog.md#0153-2026-04-11)
 
 </div>
 
@@ -44,6 +44,8 @@ pgqrs follows [Semantic Versioning](https://semver.org/):
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| [0.15.3](changelog.md#0153-2026-04-11) | 2026-04-11 | Dequeue polling lifecycle fixes, library-only distribution, worker lifecycle cleanup |
+| [0.15.2](changelog.md#0152-2026-04-07) | 2026-04-07 | Worker-name identity, refined S3 sync states, process-isolated S3 cache handling |
 | [0.15.1](changelog.md#0151-2026-04-02) | 2026-04-02 | Python S3 handle support, S3 benchmarks, Turso/SQLite consistency |
 | [0.15.0](changelog.md#0150-2026-03-23) | 2026-03-23 | S3-backed queue storage, benchmark docs |
 | [0.14.0](changelog.md#0140-2026-02-21) | 2026-02-21 | Workflow trigger/worker redesign, retries, pausing |

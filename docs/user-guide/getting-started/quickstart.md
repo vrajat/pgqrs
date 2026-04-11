@@ -8,7 +8,7 @@ This guide will walk you through creating your first queue, sending messages, an
 
     ```toml
     [dependencies]
-    pgqrs = "0.15.2"
+    pgqrs = "0.15.3"
     tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
     serde_json = "1"
     ```

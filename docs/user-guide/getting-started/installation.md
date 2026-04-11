@@ -29,16 +29,16 @@ See [Backend Selection Guide](../concepts/backends.md) for detailed comparison.
     pgqrs = "0.15.3"
 
     # SQLite only
-    pgqrs = { version = "0.15.1", default-features = false, features = ["sqlite"] }
+    pgqrs = { version = "0.15.3", default-features = false, features = ["sqlite"] }
 
     # Turso only
-    pgqrs = { version = "0.15.1", default-features = false, features = ["turso"] }
+    pgqrs = { version = "0.15.3", default-features = false, features = ["turso"] }
 
     # S3 only
-    pgqrs = { version = "0.15.1", default-features = false, features = ["s3"] }
+    pgqrs = { version = "0.15.3", default-features = false, features = ["s3"] }
 
     # All backends
-    pgqrs = { version = "0.15.1", features = ["full"] }
+    pgqrs = { version = "0.15.3", features = ["full"] }
     ```
 
     pgqrs is async-first and works with [Tokio](https://tokio.rs/).

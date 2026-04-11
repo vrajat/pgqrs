@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2026-04-11
+
+### Changed
+- **Queue dequeue polling** now keeps polling state in the caller lifecycle, with builder-style `until(...).poll(&store)` semantics and bounded wait coverage
+- **pgqrs distribution** is now library-only; the CLI binary, CLI docs, and CLI-only test paths were removed
+- **Worker lifecycle internals** were simplified by flattening admin/producer/consumer worker ownership and sharing worker-table transition logic across SQL backends
+- **S3 test harnesses** now require explicit cache directories so tests avoid accidental cache sharing and clean up their temporary state more reliably
+
+### Fixed
+- **Polling lifecycle transitions** now preserve ready, timeout, heartbeat, and interrupt behavior more consistently in one-shot and looped dequeue paths
+
+## [0.15.2] - 2026-04-07
+
+### Changed
+- **Worker identity** now uses explicit worker names across Rust, Python, migrations, and examples instead of host/port fields
+- **S3 sync-state handling** now distinguishes remote-only, local-only, and concurrent changes so durable reads choose snapshot vs sync more predictably
+- **S3 process isolation support** now scopes cache usage through config and adds process-isolated helper/test coverage for distinct local caches
+
+### Fixed
+- **Stale dirty S3 durable reads** now surface a conflict instead of silently serving out-of-date local state
+- **Backend test defaults and S3 cache-id reuse** were corrected so backend suites keep passing after the worker identity migration
+
 ## [0.15.1] - 2026-04-02
 
 ### Added
