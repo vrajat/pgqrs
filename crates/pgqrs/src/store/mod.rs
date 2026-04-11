@@ -64,6 +64,8 @@ pub(crate) mod sqlite_utils {
 /// and transaction management.
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
+    type Workers: WorkerTable + ?Sized;
+
     /// Execute raw SQL without parameters.
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()>;
 
@@ -93,7 +95,7 @@ pub trait Store: Send + Sync + 'static {
     /// Get access to the repositories.
     fn queues(&self) -> &dyn QueueTable;
     fn messages(&self) -> &dyn MessageTable;
-    fn workers(&self) -> &dyn WorkerTable;
+    fn workers(&self) -> &Self::Workers;
     fn db_state(&self) -> &dyn DbStateTable;
     fn workflows(&self) -> &dyn WorkflowTable;
     fn workflow_runs(&self) -> &dyn RunRecordTable;

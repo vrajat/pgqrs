@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::store::Store;
+use crate::tables::WorkerTable;
 use crate::types::QueueRecord;
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 

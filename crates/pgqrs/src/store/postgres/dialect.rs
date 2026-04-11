@@ -252,10 +252,45 @@ SET status = 'stopped',
     shutdown_at = NOW()
 WHERE id = $1
 "#,
+        suspend: r#"
+UPDATE pgqrs_workers
+SET status = 'suspended'
+WHERE id = $1 AND status IN ('ready', 'polling', 'interrupted')
+RETURNING id
+"#,
+        poll: r#"
+UPDATE pgqrs_workers
+SET status = 'polling'
+WHERE id = $1 AND status IN ('ready', 'polling')
+RETURNING id
+"#,
+        interrupt: r#"
+UPDATE pgqrs_workers
+SET status = 'interrupted'
+WHERE id = $1 AND status = 'polling'
+RETURNING id
+"#,
+        shutdown: r#"
+UPDATE pgqrs_workers
+SET status = 'stopped', shutdown_at = $2
+WHERE id = $1 AND status = 'suspended'
+RETURNING id
+"#,
         complete_poll: r#"
 UPDATE pgqrs_workers
 SET status = 'ready'
 WHERE id = $1 AND status = 'polling'
+RETURNING id
+"#,
+        heartbeat: r#"
+UPDATE pgqrs_workers
+SET heartbeat_at = $1
+WHERE id = $2
+"#,
+        resume: r#"
+UPDATE pgqrs_workers
+SET status = 'ready'
+WHERE id = $1 AND status = 'suspended'
 RETURNING id
 "#,
     };

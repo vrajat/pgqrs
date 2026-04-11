@@ -18,8 +18,8 @@ use self::tables::pgqrs_workers::Workers as PostgresWorkerTable;
 use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
 use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
-
 use crate::config::Config;
+use crate::store::postgres::tables::Workers;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
@@ -59,6 +59,8 @@ impl PostgresStore {
 
 #[async_trait]
 impl Store for PostgresStore {
+    type Workers = Workers;
+
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         sqlx::raw_sql(sql).execute(&self.pool).await?;
         Ok(())
@@ -113,7 +115,7 @@ impl Store for PostgresStore {
         self.messages.as_ref()
     }
 
-    fn workers(&self) -> &dyn WorkerTable {
+    fn workers(&self) -> &Self::Workers {
         self.workers.as_ref()
     }
 

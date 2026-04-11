@@ -126,7 +126,7 @@ pub enum SyncState {
 }
 
 #[derive(Clone)]
-enum DurabilityStore {
+pub enum DurabilityStore {
     Local(snapshot::SnapshotDb),
     Durable(consistent::ConsistentDb),
 }
@@ -254,6 +254,8 @@ impl S3Store {
 
 #[async_trait]
 impl Store for S3Store {
+    type Workers = Tables<DurabilityStore>;
+
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         let sql = sql.to_string();
         self.db
@@ -317,7 +319,7 @@ impl Store for S3Store {
         &self.tables
     }
 
-    fn workers(&self) -> &dyn WorkerTable {
+    fn workers(&self) -> &Self::Workers {
         &self.tables
     }
 

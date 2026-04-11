@@ -24,7 +24,7 @@ use self::tables::workers::SqliteWorkerTable;
 use self::tables::workflows::SqliteWorkflowTable;
 
 #[derive(Debug, Clone)]
-pub(crate) struct SqliteTables {
+pub struct SqliteTables {
     pool: SqlitePool,
     config: Config,
     queues: Arc<SqliteQueueTable>,
@@ -200,6 +200,8 @@ impl DbTables for SqliteTables {
 
 #[async_trait]
 impl Store for SqliteStore {
+    type Workers = Tables<SerializedLock<SqliteTables>>;
+
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         let sql = sql.to_string();
         self.db
@@ -256,7 +258,7 @@ impl Store for SqliteStore {
         &self.tables
     }
 
-    fn workers(&self) -> &dyn WorkerTable {
+    fn workers(&self) -> &Self::Workers {
         &self.tables
     }
 

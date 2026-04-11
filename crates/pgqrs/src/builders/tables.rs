@@ -35,7 +35,7 @@ impl<'a, S: Store> TablesBuilder<'a, S> {
     }
 
     /// Access worker table operations
-    pub fn workers(self) -> &'a dyn crate::store::WorkerTable {
+    pub fn workers(self) -> &'a S::Workers {
         self.store.workers()
     }
 

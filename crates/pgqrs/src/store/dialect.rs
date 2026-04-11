@@ -50,7 +50,13 @@ pub(crate) struct MessageSql {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WorkerSql {
     pub mark_stopped: &'static str,
+    pub suspend: &'static str,
+    pub poll: &'static str,
+    pub interrupt: &'static str,
+    pub shutdown: &'static str,
     pub complete_poll: &'static str,
+    pub heartbeat: &'static str,
+    pub resume: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
