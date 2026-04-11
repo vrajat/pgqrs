@@ -1,5 +1,7 @@
 use crate::error::Result;
 use crate::store::dialect::SqlDialect;
+use crate::store::query::{QueryBuilder, QueryParam};
+use crate::store::tables::DialectWorkerTable;
 use crate::store::turso::dialect::TursoDialect;
 use crate::store::turso::{format_turso_timestamp, parse_turso_timestamp};
 use crate::types::{WorkerRecord, WorkerStatus};
@@ -98,19 +100,6 @@ impl TursoWorkerTable {
             .map_err(|e| crate::error::Error::Internal { message: e })
     }
 
-    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
-        let now = Utc::now();
-        let now_str = format_turso_timestamp(&now);
-
-        crate::store::turso::query("UPDATE pgqrs_workers SET heartbeat_at = ? WHERE id = ?")
-            .bind(now_str)
-            .bind(worker_id)
-            .execute_once(&self.db)
-            .await?;
-
-        Ok(())
-    }
-
     pub async fn is_healthy(&self, worker_id: i64, max_age: chrono::Duration) -> Result<bool> {
         let threshold = Utc::now() - max_age;
         let threshold_str = format_turso_timestamp(&threshold);
@@ -124,134 +113,6 @@ impl TursoWorkerTable {
         .await?;
 
         Ok(is_healthy)
-    }
-
-    pub async fn suspend(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = ? AND status IN ('ready', 'polling', 'interrupted')", 
-        )
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "suspended".to_string(),
-                reason: "Worker must be Ready, Polling, or Interrupted to suspend".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn resume(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = ? AND status = 'suspended'",
-        )
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "ready".to_string(),
-                reason: "Worker must be in Suspended state to resume".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(TursoDialect::WORKER.complete_poll)
-            .bind(worker_id)
-            .execute_once(&self.db)
-            .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "ready".to_string(),
-                reason: "Worker must be in Polling state to complete polling".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn poll(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = ? AND status IN ('ready', 'polling')",
-        )
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "polling".to_string(),
-                reason: "Worker must be Ready to start polling".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn interrupt(&self, worker_id: i64) -> Result<()> {
-        let count = crate::store::turso::query(
-            "UPDATE pgqrs_workers SET status = 'interrupted' WHERE id = ? AND status = 'polling'",
-        )
-        .bind(worker_id)
-        .execute_once(&self.db)
-        .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "interrupted".to_string(),
-                reason: "Worker must be in Polling state to be interrupted".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
-        let held_count: i64 = crate::store::turso::query_scalar(
-            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ? AND archived_at IS NULL",
-        )
-        .bind(worker_id)
-        .fetch_one(&self.db)
-        .await?;
-
-        if held_count > 0 {
-            return Err(crate::error::Error::WorkerHasPendingMessages {
-                reason: format!("Worker has {} pending messages", held_count),
-                count: held_count as u64,
-            });
-        }
-
-        let now = Utc::now();
-        let now_str = format_turso_timestamp(&now);
-
-        let count = crate::store::turso::query("UPDATE pgqrs_workers SET status = 'stopped', shutdown_at = ? WHERE id = ? AND status = 'suspended'")
-            .bind(now_str)
-            .bind(worker_id)
-            .execute_once(&self.db)
-            .await?;
-
-        if count == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "stopped".to_string(),
-                reason: "Worker must be in Suspended state to shutdown".to_string(),
-            });
-        }
-        Ok(())
     }
 }
 
@@ -502,34 +363,80 @@ impl crate::store::WorkerTable for TursoWorkerTable {
     }
 
     async fn suspend(&self, id: i64) -> Result<()> {
-        self.suspend(id).await
+        <Self as DialectWorkerTable>::dialect_suspend(self, id).await
     }
 
     async fn resume(&self, id: i64) -> Result<()> {
-        self.resume(id).await
+        <Self as DialectWorkerTable>::dialect_resume(self, id).await
     }
 
     async fn complete_poll(&self, id: i64) -> Result<()> {
-        self.complete_poll(id).await
+        <Self as DialectWorkerTable>::dialect_complete_poll(self, id).await
     }
 
     async fn shutdown(&self, id: i64) -> Result<()> {
-        self.shutdown(id).await
+        <Self as DialectWorkerTable>::dialect_shutdown(self, id).await
     }
 
     async fn poll(&self, id: i64) -> Result<()> {
-        self.poll(id).await
+        <Self as DialectWorkerTable>::dialect_poll(self, id).await
     }
 
     async fn interrupt(&self, id: i64) -> Result<()> {
-        self.interrupt(id).await
+        <Self as DialectWorkerTable>::dialect_interrupt(self, id).await
     }
 
     async fn heartbeat(&self, id: i64) -> Result<()> {
-        self.heartbeat(id).await
+        <Self as DialectWorkerTable>::dialect_heartbeat(self, id).await
     }
 
     async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> Result<bool> {
         self.is_healthy(id, max_age).await
+    }
+}
+
+#[async_trait]
+impl DialectWorkerTable for TursoWorkerTable {
+    type Dialect = TursoDialect;
+
+    async fn execute_worker_update(&self, query: QueryBuilder) -> Result<u64> {
+        let mut builder = crate::store::turso::query(query.sql());
+        for param in query.params() {
+            let value = match param {
+                QueryParam::I64(value) => turso::Value::Integer(*value),
+                QueryParam::I32(value) => turso::Value::Integer((*value).into()),
+                QueryParam::String(value) => turso::Value::Text(value.clone()),
+                QueryParam::Json(value) => turso::Value::Text(value.to_string()),
+                QueryParam::DateTime(value) => match value {
+                    Some(dt) => turso::Value::Text(format_turso_timestamp(dt)),
+                    None => turso::Value::Null,
+                },
+            };
+            builder = builder.bind(value);
+        }
+
+        builder.execute_once(&self.db).await
+    }
+
+    async fn query_worker_status(&self, worker_id: i64) -> Result<WorkerStatus> {
+        self.get_status(worker_id).await
+    }
+
+    async fn ensure_shutdown_allowed(&self, worker_id: i64) -> Result<()> {
+        let held_count: i64 = crate::store::turso::query_scalar(
+            "SELECT COUNT(*) FROM pgqrs_messages WHERE consumer_worker_id = ? AND archived_at IS NULL",
+        )
+        .bind(worker_id)
+        .fetch_one(&self.db)
+        .await?;
+
+        if held_count > 0 {
+            return Err(crate::error::Error::WorkerHasPendingMessages {
+                reason: format!("Worker has {} pending messages", held_count),
+                count: held_count as u64,
+            });
+        }
+
+        Ok(())
     }
 }

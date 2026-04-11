@@ -1,7 +1,9 @@
 use crate::error::Result;
 use crate::store::dialect::SqlDialect;
+use crate::store::query::{QueryBuilder, QueryParam};
 use crate::store::sqlite::dialect::SqliteDialect;
 use crate::store::sqlite::{format_sqlite_timestamp, parse_sqlite_timestamp};
+use crate::store::tables::DialectWorkerTable;
 use crate::types::{WorkerRecord, WorkerStatus};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -102,24 +104,6 @@ impl SqliteWorkerTable {
             .map_err(|e| crate::error::Error::Internal { message: e })
     }
 
-    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
-        let now = Utc::now();
-        let now_str = format_sqlite_timestamp(&now);
-
-        sqlx::query("UPDATE pgqrs_workers SET heartbeat_at = $1 WHERE id = $2")
-            .bind(now_str)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "UPDATE_HEARTBEAT".into(),
-                source: Box::new(e),
-                context: format!("Failed to update heartbeat for worker {}", worker_id),
-            })?;
-
-        Ok(())
-    }
-
     pub async fn is_healthy(&self, worker_id: i64, max_age: chrono::Duration) -> Result<bool> {
         let threshold = Utc::now() - max_age;
         let threshold_str = format_sqlite_timestamp(&threshold);
@@ -137,154 +121,6 @@ impl SqliteWorkerTable {
                 })?;
 
         Ok(is_healthy)
-    }
-
-    pub async fn suspend(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'suspended' WHERE id = $1 AND status IN ('ready', 'polling', 'interrupted')", 
-        )
-        .bind(worker_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_TO_SUSPENDED".into(),
-            source: Box::new(e),
-            context: format!("Failed to suspend worker {}", worker_id),
-        })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            // If status is already suspended, it's effectively a no-op / idempotent, but logic in postgres impl returns Err if not Ready.
-            // Postgres impl uses RETURNING id to check if update happened.
-            // Here we check rows_affected.
-            // If status is not ready, we error.
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "suspended".to_string(),
-                reason: "Worker must be Ready, Polling, or Interrupted to suspend".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn resume(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'ready' WHERE id = $1 AND status = 'suspended'",
-        )
-        .bind(worker_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_SUSPENDED_TO_READY".into(),
-            source: Box::new(e),
-            context: format!("Failed to resume worker {}", worker_id),
-        })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "ready".to_string(),
-                reason: "Worker must be in Suspended state to resume".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(SqliteDialect::WORKER.complete_poll)
-            .bind(worker_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "TRANSITION_POLLING_TO_READY".into(),
-                source: Box::new(e),
-                context: format!("Failed to complete poll for worker {}", worker_id),
-            })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "ready".to_string(),
-                reason: "Worker must be in Polling state to complete polling".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
-        let now = Utc::now();
-        let now_str = format_sqlite_timestamp(&now);
-
-        let result = sqlx::query("UPDATE pgqrs_workers SET status = 'stopped', shutdown_at = $2 WHERE id = $1 AND status = 'suspended'")
-            .bind(worker_id)
-            .bind(now_str)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| crate::error::Error::QueryFailed {
-                query: "TRANSITION_SUSPENDED_TO_STOPPED".into(),
-                source: Box::new(e),
-                context: format!("Failed to shutdown worker {}", worker_id),
-            })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "stopped".to_string(),
-                reason: "Worker must be in Suspended state to shutdown".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    async fn poll(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'polling' WHERE id = $1 AND status IN ('ready', 'polling')",
-        )
-        .bind(worker_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_READY_TO_POLLING".into(),
-            source: Box::new(e),
-            context: format!("Failed to set worker {} to polling", worker_id),
-        })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "polling".to_string(),
-                reason: "Worker must be Ready to start polling".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    async fn interrupt(&self, worker_id: i64) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE pgqrs_workers SET status = 'interrupted' WHERE id = $1 AND status = 'polling'",
-        )
-        .bind(worker_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "TRANSITION_POLLING_TO_INTERRUPTED".into(),
-            source: Box::new(e),
-            context: format!("Failed to interrupt worker {}", worker_id),
-        })?;
-
-        if result.rows_affected() == 0 {
-            let current_status = self.get_status(worker_id).await?;
-            return Err(crate::error::Error::InvalidStateTransition {
-                from: current_status.to_string(),
-                to: "interrupted".to_string(),
-                reason: "Worker must be in Polling state to be interrupted".to_string(),
-            });
-        }
-        Ok(())
     }
 }
 
@@ -595,34 +431,70 @@ impl crate::store::WorkerTable for SqliteWorkerTable {
     }
 
     async fn suspend(&self, id: i64) -> Result<()> {
-        self.suspend(id).await
+        <Self as DialectWorkerTable>::dialect_suspend(self, id).await
     }
 
     async fn resume(&self, id: i64) -> Result<()> {
-        self.resume(id).await
+        <Self as DialectWorkerTable>::dialect_resume(self, id).await
     }
 
     async fn complete_poll(&self, id: i64) -> Result<()> {
-        self.complete_poll(id).await
+        <Self as DialectWorkerTable>::dialect_complete_poll(self, id).await
     }
 
     async fn shutdown(&self, id: i64) -> Result<()> {
-        self.shutdown(id).await
+        <Self as DialectWorkerTable>::dialect_shutdown(self, id).await
     }
 
     async fn poll(&self, id: i64) -> Result<()> {
-        self.poll(id).await
+        <Self as DialectWorkerTable>::dialect_poll(self, id).await
     }
 
     async fn interrupt(&self, id: i64) -> Result<()> {
-        self.interrupt(id).await
+        <Self as DialectWorkerTable>::dialect_interrupt(self, id).await
     }
 
     async fn heartbeat(&self, id: i64) -> Result<()> {
-        self.heartbeat(id).await
+        <Self as DialectWorkerTable>::dialect_heartbeat(self, id).await
     }
 
     async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> Result<bool> {
         self.is_healthy(id, max_age).await
+    }
+}
+
+#[async_trait]
+impl DialectWorkerTable for SqliteWorkerTable {
+    type Dialect = SqliteDialect;
+
+    async fn execute_worker_update(&self, query: QueryBuilder) -> Result<u64> {
+        let mut builder = sqlx::query(query.sql());
+        for param in query.params() {
+            builder = match param {
+                QueryParam::I64(value) => builder.bind(*value),
+                QueryParam::I32(value) => builder.bind(*value),
+                QueryParam::String(value) => builder.bind(value),
+                QueryParam::Json(value) => builder.bind(value.to_string()),
+                QueryParam::DateTime(value) => {
+                    builder.bind(value.map(|dt| format_sqlite_timestamp(&dt)))
+                }
+            };
+        }
+
+        let result =
+            builder
+                .execute(&self.pool)
+                .await
+                .map_err(|e| crate::error::Error::QueryFailed {
+                    query: "SQLITE_WORKER_UPDATE".into(),
+                    source: Box::new(e),
+                    context: "Failed to execute sqlite worker update".into(),
+                })?;
+
+        Ok(result.rows_affected())
+    }
+
+    async fn query_worker_status(&self, worker_id: i64) -> Result<WorkerStatus> {
+        self.get_status(worker_id).await
     }
 }

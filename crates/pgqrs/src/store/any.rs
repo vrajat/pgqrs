@@ -128,6 +128,8 @@ impl AnyStore {
 
 #[async_trait]
 impl Store for AnyStore {
+    type Workers = dyn WorkerTable;
+
     async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         match self {
             #[cfg(feature = "postgres")]
@@ -250,7 +252,7 @@ impl Store for AnyStore {
         }
     }
 
-    fn workers(&self) -> &dyn WorkerTable {
+    fn workers(&self) -> &Self::Workers {
         match self {
             #[cfg(feature = "postgres")]
             AnyStore::Postgres(s) => s.workers(),

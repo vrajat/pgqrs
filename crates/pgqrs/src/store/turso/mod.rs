@@ -25,7 +25,7 @@ use self::tables::workers::TursoWorkerTable;
 use self::tables::workflows::TursoWorkflowTable;
 
 #[derive(Debug, Clone)]
-pub(crate) struct TursoTables {
+pub struct TursoTables {
     db: Arc<Database>,
     config: Config,
     queues: Arc<TursoQueueTable>,
@@ -704,6 +704,8 @@ impl DbTables for TursoTables {
 
 #[async_trait]
 impl Store for TursoStore {
+    type Workers = Tables<SerializedLock<TursoTables>>;
+
     async fn execute_raw(&self, sql: &str) -> Result<()> {
         let sql = sql.to_string();
         self.db
@@ -760,7 +762,7 @@ impl Store for TursoStore {
         &self.tables
     }
 
-    fn workers(&self) -> &dyn WorkerTable {
+    fn workers(&self) -> &Self::Workers {
         &self.tables
     }
 
