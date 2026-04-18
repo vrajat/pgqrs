@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -252,52 +254,29 @@ impl crate::store::RunRecordTable for RunRecords {
     }
 
     async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
-        let row = sqlx::query_as::<_, RunRecord>(
-            r#"
-            UPDATE pgqrs_workflow_runs
-            SET status = 'CANCELLING'::pgqrs_workflow_status,
-                updated_at = NOW()
-            WHERE id = $1
-              AND status IN (
-                'QUEUED'::pgqrs_workflow_status,
-                'RUNNING'::pgqrs_workflow_status,
-                'PAUSED'::pgqrs_workflow_status
-              )
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "CANCEL_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to cancel run {}", id),
-        })?;
+        let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.cancel)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to cancel run {}", id),
+            })?;
 
         Ok(row)
     }
 
     async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
-        let row = sqlx::query_as::<_, RunRecord>(
-            r#"
-            UPDATE pgqrs_workflow_runs
-            SET status = 'CANCELLED'::pgqrs_workflow_status,
-                completed_at = NOW(),
-                updated_at = NOW()
-            WHERE id = $1
-              AND status = 'CANCELLING'::pgqrs_workflow_status
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
-            "#,
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| crate::error::Error::QueryFailed {
-            query: "COMPLETE_CANCEL_RUN".into(),
-            source: Box::new(e),
-            context: format!("Failed to complete cancellation for run {}", id),
-        })?;
+        let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.complete_cancel)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMPLETE_CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete cancellation for run {}", id),
+            })?;
 
         Ok(row)
     }

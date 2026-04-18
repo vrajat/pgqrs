@@ -23,7 +23,6 @@ pub(crate) struct QueueSql {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub(crate) struct RunSql {
     pub insert: &'static str,
     pub get: &'static str,
@@ -91,7 +90,6 @@ pub(crate) trait SqlDialect {
     const STEP: StepSql;
     #[cfg(any(feature = "sqlite", feature = "turso"))]
     const QUEUE: QueueSql;
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const RUN: RunSql;
     const MESSAGE: MessageSql;
     const WORKER: WorkerSql;
