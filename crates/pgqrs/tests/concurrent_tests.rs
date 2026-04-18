@@ -79,6 +79,85 @@ async fn create_store() -> AnyStore {
     common::create_store("pgqrs_concurrent_test").await
 }
 
+async fn create_workflow_test_rig(
+    workflow: pgqrs::WorkflowDef<serde_json::Value, serde_json::Value>,
+    consumer_name: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<(pgqrs::WorkflowTestRig<AnyStore>, pgqrs::QueueMessage)> {
+    let store = create_store().await;
+    pgqrs::workflow()
+        .name(workflow.clone())
+        .create(&store)
+        .await?;
+
+    let consumer = pgqrs::consumer(consumer_name, workflow.name())
+        .create(&store)
+        .await?;
+    let rig = pgqrs::WorkflowTestRig::new(store.clone(), consumer);
+
+    let message = pgqrs::workflow()
+        .name(workflow)
+        .trigger(&payload)?
+        .execute(&store)
+        .await?;
+
+    Ok((rig, message))
+}
+
+async fn assert_run_status(
+    store: &AnyStore,
+    run_id: i64,
+    expected: pgqrs::WorkflowStatus,
+) -> anyhow::Result<()> {
+    let run = pgqrs::tables(store).workflow_runs().get(run_id).await?;
+    assert_eq!(run.status, expected);
+    Ok(())
+}
+
+async fn assert_message_archived(
+    store: &AnyStore,
+    message: &pgqrs::QueueMessage,
+) -> anyhow::Result<()> {
+    let archived = pgqrs::tables(store)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].id, message.id);
+    Ok(())
+}
+
+async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+    Ok(store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|entry| entry.run_id == run_id)
+        .collect())
+}
+
+async fn dispatch_attempt_message<F, Fut>(
+    consumer: &pgqrs::Consumer,
+    attempt: &pgqrs::WorkflowAttempt,
+    handler: F,
+) -> anyhow::Result<()>
+where
+    F: Fn(pgqrs::QueueMessage) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = pgqrs::Result<()>> + Send,
+{
+    match handler(attempt.message.clone()).await {
+        Ok(()) => {
+            attempt.archive(consumer).await?;
+            Ok(())
+        }
+        Err(err) => {
+            attempt.release(consumer).await?;
+            Err(err.into())
+        }
+    }
+}
+
 async fn app_step_success(step_state: &Arc<Mutex<Option<String>>>) -> Result<String> {
     let mut state = step_state.lock().expect("state lock poisoned");
     if state.is_none() {
@@ -236,6 +315,23 @@ async fn app_workflow_cancel_replay(
         .lock()
         .expect("execution_calls lock poisoned");
     *calls += 1;
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_cancel_before_first_step(
+    run: Run,
+    step1_calls: Arc<Mutex<u32>>,
+) -> Result<serde_json::Value> {
+    let _: String = pgqrs::workflow_step(&run, "step1", || {
+        let step1_calls = step1_calls.clone();
+        async move {
+            let mut calls = step1_calls.lock().expect("step1_calls lock poisoned");
+            *calls += 1;
+            Ok::<_, pgqrs::Error>("step1_done".to_string())
+        }
+    })
+    .await?;
+
     Ok(json!({"done": true}))
 }
 
@@ -1205,40 +1301,22 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial]
-async fn test_workflow_cancellation_before_run_start_archives_without_running_handler(
-) -> anyhow::Result<()> {
-    let store = create_store().await;
+async fn test_workflow_cancellation_before_consumer_materializes_run() -> anyhow::Result<()> {
+    let (rig, message) = create_workflow_test_rig(
+        scenario_cancel_replay_wf,
+        "scenario_cancel_before_start_cons",
+        json!({"msg": "cancel_before_start"}),
+    )
+    .await?;
 
-    let workflow_name = "scenario_cancel_replay";
-    pgqrs::workflow()
-        .name(scenario_cancel_replay_wf)
-        .create(&store)
-        .await?;
-
-    let consumer = pgqrs::consumer("scenario_cancel_before_start_cons", workflow_name)
-        .create(&store)
-        .await?;
-
-    let message = pgqrs::workflow()
-        .name(scenario_cancel_replay_wf)
-        .trigger(&json!({"msg": "cancel_before_start"}))?
-        .execute(&store)
-        .await?;
-
-    // External actor materializes the run and requests cancellation before any consumer dequeues
-    // the workflow message or calls run.start().
-    let run = pgqrs::run()
-        .message(message.clone())
-        .store(&store)
-        .execute()
-        .await?;
-    let run = run.cancel().await?;
-
-    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
+    // External actor resolves the run directly from the trigger message and requests
+    // cancellation before the consumer even dequeues the workflow trigger.
+    let run = rig.as_external_actor_get_run(&message).await?;
+    let _ = run.cancel().await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
 
     let execution_calls = Arc::new(Mutex::new(0u32));
-    let handler = pgqrs::workflow_handler(store.clone(), {
+    let handler = pgqrs::workflow_handler(rig.store().clone(), {
         let execution_calls = execution_calls.clone();
         move |run, _input: serde_json::Value| {
             let execution_calls = execution_calls.clone();
@@ -1246,25 +1324,28 @@ async fn test_workflow_cancellation_before_run_start_archives_without_running_ha
         }
     });
 
-    // When the consumer later dequeues the message, workflow_handler should finalize cancellation
-    // before calling run.start() or entering user code.
-    pgqrs::dequeue()
-        .worker(&consumer)
-        .handle({
-            let handler = handler.clone();
-            move |msg| (handler)(msg)
-        })
-        .execute(&store)
-        .await?;
+    // Consumer later dequeues the message and opens an attempt. Start is already no longer
+    // allowed, and a later queue dispatch should finalize cancellation without user code running.
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let attempt = rig.as_consumer_open_attempt(dequeued).await?;
 
-    let archived = pgqrs::tables(&store)
-        .messages()
-        .list_archived_by_queue(message.queue_id)
-        .await?;
-    assert_eq!(archived.len(), 1);
+    let start_result = attempt.clone().run.start().await;
+    assert!(
+        matches!(start_result, Err(pgqrs::Error::ValidationFailed { .. })),
+        "expected cancellation to block start, got {start_result:?}"
+    );
 
-    let final_run = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(final_run.status, pgqrs::WorkflowStatus::Cancelled);
+    dispatch_attempt_message(rig.consumer(), &attempt, {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    })
+    .await?;
+
+    assert_message_archived(rig.store(), &message).await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelled).await?;
 
     let execution_calls = execution_calls
         .lock()
@@ -1276,103 +1357,158 @@ async fn test_workflow_cancellation_before_run_start_archives_without_running_ha
 
 #[tokio::test]
 #[serial]
-async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
-    let store = create_store().await;
+async fn test_workflow_cancellation_after_run_exists_before_start() -> anyhow::Result<()> {
+    let (rig, message) = create_workflow_test_rig(
+        scenario_cancel_replay_wf,
+        "scenario_cancel_between_open_and_start_cons",
+        json!({"msg": "cancel_between_open_and_start"}),
+    )
+    .await?;
 
-    let workflow_name = "scenario_cancel_boundary";
-    pgqrs::workflow()
-        .name(scenario_cancel_boundary_wf)
-        .create(&store)
-        .await?;
+    // Consumer acquires the trigger and materializes the run, but has not started it yet.
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let mut attempt = rig.as_consumer_open_attempt(dequeued).await?;
 
-    let consumer = pgqrs::consumer("scenario_cancel_boundary_cons", workflow_name)
-        .create(&store)
-        .await?;
+    // External actor sends the cancellation request against the same run.
+    let run = rig.as_external_actor_get_run(&attempt.message).await?;
+    let _ = run.cancel().await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
 
-    let message = pgqrs::workflow()
-        .name(scenario_cancel_boundary_wf)
-        .trigger(&json!({"msg": "cancel"}))?
-        .execute(&store)
-        .await?;
+    // The consumer's later start() call should be rejected before user workflow code runs.
+    let start_result = attempt.start().await;
+    assert!(
+        matches!(start_result, Err(pgqrs::Error::ValidationFailed { .. })),
+        "expected cancellation to block start, got {start_result:?}"
+    );
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
+
+    let _ = message;
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_cancellation_after_start_before_first_step() -> anyhow::Result<()> {
+    let (rig, message) = create_workflow_test_rig(
+        scenario_cancel_replay_wf,
+        "scenario_cancel_before_first_step_cons",
+        json!({"msg": "cancel_before_first_step"}),
+    )
+    .await?;
+
+    // Consumer acquires the trigger, materializes the run, and moves it to RUNNING.
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let mut attempt = rig.as_consumer_open_attempt(dequeued).await?;
+    attempt.start().await?;
+
+    // External actor requests cancellation after the run is already RUNNING.
+    let run = rig.as_external_actor_get_run(&attempt.message).await?;
+    let _ = run.cancel().await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
+
+    let step1_calls = Arc::new(Mutex::new(0u32));
+
+    // When the consumer invokes workflow logic, the first step boundary should observe the
+    // cancellation request, finalize the run, and avoid entering the step body.
+    let invoke_result = attempt
+        .invoke({
+            let step1_calls = step1_calls.clone();
+            move |run| async move { app_workflow_cancel_before_first_step(run, step1_calls).await }
+        })
+        .await;
+    assert!(matches!(invoke_result, Err(pgqrs::Error::Cancelled { .. })));
+
+    attempt.archive(rig.consumer()).await?;
+    assert_message_archived(rig.store(), &message).await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelled).await?;
+
+    let step1_calls = step1_calls.lock().expect("step1_calls lock poisoned");
+    assert_eq!(*step1_calls, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_cancellation_during_step_execution() -> anyhow::Result<()> {
+    let (rig, message) = create_workflow_test_rig(
+        scenario_cancel_boundary_wf,
+        "scenario_cancel_boundary_cons",
+        json!({"msg": "cancel"}),
+    )
+    .await?;
 
     let step1_started = Arc::new(Notify::new());
     let allow_step1_finish = Arc::new(Notify::new());
     let step2_calls = Arc::new(Mutex::new(0u32));
-    let handler = pgqrs::workflow_handler(store.clone(), {
-        let step1_started = step1_started.clone();
-        let allow_step1_finish = allow_step1_finish.clone();
-        let step2_calls = step2_calls.clone();
-        move |run, _input: serde_json::Value| {
-            let step1_started = step1_started.clone();
-            let allow_step1_finish = allow_step1_finish.clone();
-            let step2_calls = step2_calls.clone();
-            async move {
-                app_workflow_cancelled_by_other_actor(
-                    run,
-                    step1_started,
-                    allow_step1_finish,
-                    step2_calls,
-                )
-                .await
+
+    // Consumer acquires the trigger, materializes the run, and starts it.
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let mut attempt = rig.as_consumer_open_attempt(dequeued).await?;
+    attempt.start().await?;
+
+    let worker_attempt = attempt.clone();
+    let worker_consumer = rig.consumer().clone();
+    let step1_started_for_worker = step1_started.clone();
+    let allow_step1_finish_for_worker = allow_step1_finish.clone();
+    let step2_calls_for_worker = step2_calls.clone();
+    let worker_task = tokio::spawn(async move {
+        let mut worker_attempt = worker_attempt;
+        let result = worker_attempt
+            .invoke({
+                let step1_started = step1_started_for_worker.clone();
+                let allow_step1_finish = allow_step1_finish_for_worker.clone();
+                let step2_calls = step2_calls_for_worker.clone();
+                move |run| async move {
+                    app_workflow_cancelled_by_other_actor(
+                        run,
+                        step1_started,
+                        allow_step1_finish,
+                        step2_calls,
+                    )
+                    .await
+                }
+            })
+            .await;
+
+        match result {
+            Ok(_) => worker_attempt.archive(&worker_consumer).await?,
+            Err(pgqrs::Error::Cancelled { .. }) => worker_attempt.archive(&worker_consumer).await?,
+            Err(err) => {
+                worker_attempt.release(&worker_consumer).await?;
+                return Err(anyhow::Error::from(err));
             }
         }
+
+        Ok::<_, anyhow::Error>(worker_attempt)
     });
 
-    let store_for_worker = store.clone();
-    let consumer_for_worker = consumer.clone();
-    let worker_task = tokio::spawn(async move {
-        pgqrs::dequeue()
-            .worker(&consumer_for_worker)
-            .handle({
-                let handler = handler.clone();
-                move |msg| (handler)(msg)
-            })
-            .execute(&store_for_worker)
-            .await
-    });
-
-    // Consumer starts the workflow and enters step1. We block there so an external actor can send
-    // a cancellation request while user code is still running.
+    // Step1 is in flight. An external actor sends the cancellation request while user code is
+    // still blocked inside that step body.
     step1_started.notified().await;
-
-    let run = pgqrs::run()
-        .message(message.clone())
-        .store(&store)
-        .execute()
-        .await?;
+    let run = rig.as_external_actor_get_run(&attempt.message).await?;
     let _ = run.cancel().await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
 
-    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
-
-    // Once step1 returns, the next step acquisition should observe CANCELLING, finalize the run
-    // to CANCELLED, and prevent step2 from executing.
+    // Once step1 completes, the next workflow boundary should observe CANCELLING and prevent
+    // step2 from starting.
     allow_step1_finish.notify_one();
-    worker_task.await??;
+    let worker_attempt = worker_task.await??;
+    let _ = worker_attempt;
 
-    let archived = pgqrs::tables(&store)
-        .messages()
-        .list_archived_by_queue(message.queue_id)
-        .await?;
-    assert_eq!(archived.len(), 1);
+    assert_message_archived(rig.store(), &message).await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelled).await?;
 
-    let workflow = store.workflows().get_by_name(workflow_name).await?;
-    let run = pgqrs::tables(&store)
-        .workflow_runs()
-        .list()
-        .await?
-        .into_iter()
-        .find(|entry| entry.workflow_id == workflow.id)
-        .expect("run not found");
-    assert_eq!(run.status, pgqrs::WorkflowStatus::Cancelled);
-
-    let steps: Vec<_> = store
-        .workflow_steps()
-        .list()
-        .await?
-        .into_iter()
-        .filter(|entry| entry.run_id == run.id)
-        .collect();
+    let steps = steps_for_run(rig.store(), run.id()).await?;
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].step_name, "step1");
     assert_eq!(steps[0].status, pgqrs::WorkflowStatus::Success);
@@ -1385,41 +1521,37 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial]
-async fn test_workflow_cancellation_after_run_start_archives_without_running_handler(
+async fn test_workflow_redelivery_while_cancelling_archives_without_running_handler(
 ) -> anyhow::Result<()> {
-    let store = create_store().await;
+    let (rig, message) = create_workflow_test_rig(
+        scenario_cancel_replay_wf,
+        "scenario_cancel_after_start_cons",
+        json!({"msg": "cancel_replay"}),
+    )
+    .await?;
 
-    let workflow_name = "scenario_cancel_replay";
-    pgqrs::workflow()
-        .name(scenario_cancel_replay_wf)
-        .create(&store)
-        .await?;
+    // First consumer attempt materializes and starts the run.
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let attempt = rig.as_consumer_open_attempt(dequeued).await?;
+    let mut started_attempt = attempt.clone();
+    started_attempt.start().await?;
 
-    let consumer = pgqrs::consumer("scenario_cancel_after_start_cons", workflow_name)
-        .create(&store)
+    // External actor requests cancellation while the run is already RUNNING.
+    let run = rig
+        .as_external_actor_get_run(&started_attempt.message)
         .await?;
-
-    let message = pgqrs::workflow()
-        .name(scenario_cancel_replay_wf)
-        .trigger(&json!({"msg": "cancel_replay"}))?
-        .execute(&store)
-        .await?;
-
-    let run = pgqrs::run()
-        .message(message.clone())
-        .store(&store)
-        .execute()
-        .await?;
-    // Consumer-visible run exists and has already transitioned to RUNNING, but user workflow code
-    // has not resumed from the queued message yet.
-    let run = run.start().await?;
     let _ = run.cancel().await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelling).await?;
 
-    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
+    // Simulate redelivery by releasing the in-flight trigger and letting the consumer receive it
+    // again later.
+    started_attempt.release(rig.consumer()).await?;
 
     let execution_calls = Arc::new(Mutex::new(0u32));
-    let handler = pgqrs::workflow_handler(store.clone(), {
+    let handler = pgqrs::workflow_handler(rig.store().clone(), {
         let execution_calls = execution_calls.clone();
         move |run, _input: serde_json::Value| {
             let execution_calls = execution_calls.clone();
@@ -1427,25 +1559,19 @@ async fn test_workflow_cancellation_after_run_start_archives_without_running_han
         }
     });
 
-    // Redelivery / later dequeue should finalize the pending cancellation immediately and archive
-    // the message without entering the user handler again.
-    pgqrs::dequeue()
-        .worker(&consumer)
-        .handle({
-            let handler = handler.clone();
-            move |msg| (handler)(msg)
-        })
-        .execute(&store)
-        .await?;
+    let dequeued = rig
+        .as_consumer_dequeue()
+        .await?
+        .expect("expected one message");
+    let redelivery_attempt = rig.as_consumer_open_attempt(dequeued).await?;
+    dispatch_attempt_message(rig.consumer(), &redelivery_attempt, {
+        let handler = handler.clone();
+        move |msg| (handler)(msg)
+    })
+    .await?;
 
-    let archived = pgqrs::tables(&store)
-        .messages()
-        .list_archived_by_queue(message.queue_id)
-        .await?;
-    assert_eq!(archived.len(), 1);
-
-    let final_run = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(final_run.status, pgqrs::WorkflowStatus::Cancelled);
+    assert_message_archived(rig.store(), &message).await?;
+    assert_run_status(rig.store(), run.id(), pgqrs::WorkflowStatus::Cancelled).await?;
 
     let execution_calls = execution_calls
         .lock()
