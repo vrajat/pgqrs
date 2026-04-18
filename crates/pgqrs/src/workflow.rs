@@ -182,6 +182,9 @@ where
         let handler = handler.clone();
         Box::pin(async move {
             let mut run = store.run(msg.clone()).await?;
+            if run.record().status == crate::types::WorkflowStatus::Cancelled {
+                return Ok(());
+            }
             if let Some(time) = current_time {
                 run = run.with_time(time);
             }
@@ -216,6 +219,9 @@ where
                     }
                     Error::Transient { .. } | Error::StepNotReady { .. } => {
                         return Err(e);
+                    }
+                    Error::Cancelled { .. } => {
+                        return Ok(());
                     }
                     #[cfg(any(test, feature = "test-utils"))]
                     Error::TestCrash => {

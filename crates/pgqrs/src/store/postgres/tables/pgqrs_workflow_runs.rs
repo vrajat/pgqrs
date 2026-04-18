@@ -35,6 +35,8 @@ impl crate::store::RunRecordTable for RunRecords {
               input,
               output,
               error,
+              cancel_reason,
+              cancelled_at,
               created_at,
               updated_at
             "#,
@@ -64,6 +66,8 @@ impl crate::store::RunRecordTable for RunRecords {
               input,
               output,
               error,
+              cancel_reason,
+              cancelled_at,
               created_at,
               updated_at
             FROM pgqrs_workflow_runs
@@ -93,6 +97,8 @@ impl crate::store::RunRecordTable for RunRecords {
               input,
               output,
               error,
+              cancel_reason,
+              cancelled_at,
               created_at,
               updated_at
             FROM pgqrs_workflow_runs
@@ -149,7 +155,7 @@ impl crate::store::RunRecordTable for RunRecords {
                 updated_at = NOW()
             WHERE id = $1
               AND status IN ('QUEUED'::pgqrs_workflow_status, 'PAUSED'::pgqrs_workflow_status)
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -178,7 +184,10 @@ impl crate::store::RunRecordTable for RunRecords {
 
         if let Some(s) = status_str {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
-                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                if matches!(
+                    status,
+                    WorkflowStatus::Error | WorkflowStatus::Success | WorkflowStatus::Cancelled
+                ) {
                     return Err(crate::error::Error::ValidationFailed {
                         reason: format!("Run {} is in terminal {} state", id, status),
                     });
@@ -195,7 +204,7 @@ impl crate::store::RunRecordTable for RunRecords {
             UPDATE pgqrs_workflow_runs
             SET status = 'SUCCESS'::pgqrs_workflow_status, output = $2, completed_at = NOW(), updated_at = NOW()
             WHERE id = $1
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -229,7 +238,7 @@ impl crate::store::RunRecordTable for RunRecords {
                 paused_at = NOW(),
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -245,13 +254,44 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
+    async fn cancel_run(&self, id: i64, reason: serde_json::Value) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(
+            r#"
+            UPDATE pgqrs_workflow_runs
+            SET status = 'CANCELLED'::pgqrs_workflow_status,
+                cancel_reason = $2,
+                cancelled_at = NOW(),
+                completed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+              AND status IN (
+                'QUEUED'::pgqrs_workflow_status,
+                'RUNNING'::pgqrs_workflow_status,
+                'PAUSED'::pgqrs_workflow_status
+              )
+            RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(reason)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| crate::error::Error::QueryFailed {
+            query: "CANCEL_RUN".into(),
+            source: Box::new(e),
+            context: format!("Failed to cancel run {}", id),
+        })?;
+
+        Ok(row)
+    }
+
     async fn fail_run(&self, id: i64, error: serde_json::Value) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
             SET status = 'ERROR'::pgqrs_workflow_status, error = $2, completed_at = NOW(), updated_at = NOW()
             WHERE id = $1
-            RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+            RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -278,6 +318,8 @@ impl crate::store::RunRecordTable for RunRecords {
               input,
               output,
               error,
+              cancel_reason,
+              cancelled_at,
               created_at,
               updated_at
             FROM pgqrs_workflow_runs

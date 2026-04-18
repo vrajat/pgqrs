@@ -881,6 +881,25 @@ impl Run {
         Ok(self.with_record(record))
     }
 
+    /// Cancel the run with a structured reason payload.
+    pub async fn cancel_with_json(&self, reason: serde_json::Value) -> crate::error::Result<Run> {
+        let record = self
+            .store
+            .workflow_runs()
+            .cancel_run(self.record.id, reason)
+            .await?;
+        Ok(self.with_record(record))
+    }
+
+    /// Cancel the run with a serializable reason payload.
+    pub async fn cancel<T: serde::Serialize + Send + Sync>(
+        &self,
+        reason: &T,
+    ) -> crate::error::Result<Run> {
+        let value = serde_json::to_value(reason).map_err(crate::error::Error::Serialization)?;
+        self.cancel_with_json(value).await
+    }
+
     /// Fail the run with a structured error payload.
     pub async fn fail_with_json(&self, error: serde_json::Value) -> crate::error::Result<Run> {
         let record = self
@@ -915,6 +934,14 @@ impl Run {
         step_name: &str,
         current_time: chrono::DateTime<chrono::Utc>,
     ) -> crate::error::Result<Step> {
+        let run_record = self.store.workflow_runs().get(self.record.id).await?;
+        if run_record.status == crate::types::WorkflowStatus::Cancelled {
+            return Err(crate::error::Error::Cancelled {
+                run_id: run_record.id,
+                reason: run_record.cancel_reason.unwrap_or(serde_json::Value::Null),
+            });
+        }
+
         let step_name_string = step_name.to_string();
         let row = self
             .store

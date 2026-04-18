@@ -150,6 +150,18 @@ impl PyRun {
         })
     }
 
+    fn cancel<'a>(&self, py: Python<'a>, reason: PyObject) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        let json_reason = py_to_json(py, reason.as_ref(py))?;
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let _ = inner
+                .cancel_with_json(json_reason)
+                .await
+                .map_err(to_py_err)?;
+            Ok(true)
+        })
+    }
+
     fn complete_step<'a>(
         &self,
         py: Python<'a>,

@@ -26,6 +26,14 @@ async fn pause_wf(
     Ok(input)
 }
 
+#[pgqrs_workflow(name = "cancel_wf")]
+async fn cancel_wf(
+    _run: &pgqrs::Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
 #[pgqrs_workflow(name = "get_wf")]
 async fn get_wf(_run: &pgqrs::Run, input: serde_json::Value) -> anyhow::Result<serde_json::Value> {
     Ok(input)
@@ -211,6 +219,48 @@ async fn test_workflow_pause_resume_lifecycle() -> anyhow::Result<()> {
 
     let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
     assert_eq!(record.status, pgqrs::WorkflowStatus::Running);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_workflow_cancel_lifecycle() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    pgqrs::workflow().name(cancel_wf).create(&store).await?;
+
+    let run_msg = pgqrs::workflow()
+        .name(cancel_wf)
+        .trigger(&TestData {
+            msg: "cancel".to_string(),
+        })?
+        .execute(&store)
+        .await?;
+
+    let mut run = pgqrs::run()
+        .message(run_msg)
+        .store(&store)
+        .execute()
+        .await?;
+
+    run = run.start().await?;
+    run = run
+        .cancel(&serde_json::json!({"reason": "operator requested"}))
+        .await?;
+
+    let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Cancelled);
+    assert_eq!(
+        record.cancel_reason,
+        Some(serde_json::json!({"reason": "operator requested"}))
+    );
+    assert!(record.cancelled_at.is_some());
+
+    let res = run.start().await;
+    assert!(
+        res.is_err(),
+        "Workflow start should fail if currently CANCELLED"
+    );
 
     Ok(())
 }

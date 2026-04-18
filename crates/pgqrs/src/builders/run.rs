@@ -61,6 +61,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
     /// Returns:
     /// - `Ok(Some(T))` if the workflow succeeded.
     /// - `Err(Error::ExecutionFailed)` if the workflow failed.
+    /// - `Err(Error::Cancelled)` if the workflow was cancelled.
     /// - `Ok(None)` if the workflow is still running, queued, or not yet started.
     pub async fn get<T>(self) -> Result<Option<T>>
     where
@@ -91,6 +92,10 @@ impl<'a, S: Store> RunBuilder<'a, S> {
                     run_id: record.id,
                     error: record.error.unwrap_or(serde_json::Value::Null),
                 }),
+                crate::types::WorkflowStatus::Cancelled => Err(crate::error::Error::Cancelled {
+                    run_id: record.id,
+                    reason: record.cancel_reason.unwrap_or(serde_json::Value::Null),
+                }),
                 _ => Ok(None),
             },
             Err(crate::error::Error::NotFound { .. }) => Ok(None),
@@ -103,6 +108,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
     /// Returns:
     /// - `Ok(T)` if the workflow succeeded.
     /// - `Err(Error::ExecutionFailed)` if the workflow failed.
+    /// - `Err(Error::Cancelled)` if the workflow was cancelled.
     /// - Continues polling if the workflow is still running or not yet started.
     pub async fn result<T>(self) -> Result<T>
     where
@@ -143,6 +149,12 @@ impl<'a, S: Store> RunBuilder<'a, S> {
                     return Err(crate::error::Error::ExecutionFailed {
                         run_id: record.id,
                         error: record.error.unwrap_or(serde_json::Value::Null),
+                    });
+                }
+                crate::types::WorkflowStatus::Cancelled => {
+                    return Err(crate::error::Error::Cancelled {
+                        run_id: record.id,
+                        reason: record.cancel_reason.unwrap_or(serde_json::Value::Null),
                     });
                 }
                 _ => {

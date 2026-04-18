@@ -752,6 +752,14 @@ where
             .await
     }
 
+    async fn cancel_run(&self, id: i64, reason: Value) -> Result<RunRecord> {
+        self.db
+            .with_write(|store| {
+                Box::pin(async move { store.workflow_runs().cancel_run(id, reason).await })
+            })
+            .await
+    }
+
     async fn fail_run(&self, id: i64, error: Value) -> Result<RunRecord> {
         self.db
             .with_write(|store| {

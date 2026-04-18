@@ -96,15 +96,15 @@ SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = ?)
         insert: r#"
 INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input)
 VALUES (?, ?, 'QUEUED', ?)
-RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
 "#,
         get: r#"
-SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+SELECT id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
 FROM pgqrs_workflow_runs
 WHERE id = ?
 "#,
         list: r#"
-SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+SELECT id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
 FROM pgqrs_workflow_runs
 ORDER BY created_at DESC
 "#,
@@ -120,7 +120,7 @@ SET status = 'RUNNING',
     updated_at = datetime('now'),
     started_at = CASE WHEN status = 'QUEUED' THEN datetime('now') ELSE started_at END
 WHERE id = ? AND status IN ('QUEUED', 'PAUSED')
-RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+RETURNING id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
 "#,
         get_status: r#"
 SELECT status FROM pgqrs_workflow_runs WHERE id = ?
@@ -135,13 +135,18 @@ UPDATE pgqrs_workflow_runs
 SET status = 'PAUSED', error = ?2, paused_at = datetime('now'), updated_at = datetime('now')
 WHERE id = ?1
 "#,
+        cancel: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'CANCELLED', cancel_reason = ?2, cancelled_at = datetime('now'), completed_at = datetime('now'), updated_at = datetime('now')
+WHERE id = ?1 AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+"#,
         fail: r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'ERROR', error = ?2, updated_at = datetime('now'), completed_at = datetime('now')
 WHERE id = ?1
 "#,
         get_by_message_id: r#"
-SELECT id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+SELECT id, workflow_id, message_id, status, input, output, error, cancel_reason, cancelled_at, created_at, updated_at
 FROM pgqrs_workflow_runs
 WHERE message_id = ?
 "#,

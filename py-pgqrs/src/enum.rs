@@ -30,6 +30,7 @@ pub enum PyWorkflowStatus {
     Queued,
     Running,
     Paused,
+    Cancelled,
     Success,
     Error,
 }
@@ -40,6 +41,7 @@ impl From<RustWorkflowStatus> for PyWorkflowStatus {
             RustWorkflowStatus::Queued => Self::Queued,
             RustWorkflowStatus::Running => Self::Running,
             RustWorkflowStatus::Paused => Self::Paused,
+            RustWorkflowStatus::Cancelled => Self::Cancelled,
             RustWorkflowStatus::Success => Self::Success,
             RustWorkflowStatus::Error => Self::Error,
         }

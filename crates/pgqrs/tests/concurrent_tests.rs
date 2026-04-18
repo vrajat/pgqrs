@@ -58,6 +58,22 @@ async fn scenario_pause_wf(
     Ok(input)
 }
 
+#[pgqrs_workflow(name = "scenario_cancel_boundary")]
+async fn scenario_cancel_boundary_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_cancel_replay")]
+async fn scenario_cancel_replay_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
 async fn create_store() -> AnyStore {
     common::create_store("pgqrs_concurrent_test").await
 }
@@ -178,6 +194,41 @@ async fn app_workflow_pause(run: Run, should_pause: bool) -> Result<serde_json::
     })
     .await?;
 
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_cancel_at_boundary(
+    run: Run,
+    step2_calls: Arc<Mutex<u32>>,
+) -> Result<serde_json::Value> {
+    let _: String = pgqrs::workflow_step(&run, "step1", || async {
+        Ok::<_, pgqrs::Error>("step1_done".to_string())
+    })
+    .await?;
+
+    let _ = run.cancel(&json!({"reason": "operator requested"})).await?;
+
+    let _: String = pgqrs::workflow_step(&run, "step2", || {
+        let step2_calls = step2_calls.clone();
+        async move {
+            let mut calls = step2_calls.lock().expect("step2_calls lock poisoned");
+            *calls += 1;
+            Ok::<_, pgqrs::Error>("step2_done".to_string())
+        }
+    })
+    .await?;
+
+    Ok(json!({"done": true}))
+}
+
+async fn app_workflow_cancel_replay(
+    _run: Run,
+    execution_calls: Arc<Mutex<u32>>,
+) -> Result<serde_json::Value> {
+    let mut calls = execution_calls
+        .lock()
+        .expect("execution_calls lock poisoned");
+    *calls += 1;
     Ok(json!({"done": true}))
 }
 
@@ -1141,6 +1192,147 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
         .find(|entry| entry.run_id == run.id)
         .expect("step not found");
     assert_eq!(step.status, pgqrs::WorkflowStatus::Success);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_cancel_boundary";
+    pgqrs::workflow()
+        .name(scenario_cancel_boundary_wf)
+        .create(&store)
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_cancel_boundary_cons", workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(scenario_cancel_boundary_wf)
+        .trigger(&json!({"msg": "cancel"}))?
+        .execute(&store)
+        .await?;
+
+    let step2_calls = Arc::new(Mutex::new(0u32));
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let step2_calls = step2_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let step2_calls = step2_calls.clone();
+            async move { app_workflow_cancel_at_boundary(run, step2_calls).await }
+        }
+    });
+
+    pgqrs::dequeue()
+        .worker(&consumer)
+        .handle({
+            let handler = handler.clone();
+            move |msg| (handler)(msg)
+        })
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let workflow = store.workflows().get_by_name(workflow_name).await?;
+    let run = pgqrs::tables(&store)
+        .workflow_runs()
+        .list()
+        .await?
+        .into_iter()
+        .find(|entry| entry.workflow_id == workflow.id)
+        .expect("run not found");
+    assert_eq!(run.status, pgqrs::WorkflowStatus::Cancelled);
+    assert_eq!(
+        run.cancel_reason,
+        Some(json!({"reason": "operator requested"}))
+    );
+    assert!(run.cancelled_at.is_some());
+
+    let steps: Vec<_> = store
+        .workflow_steps()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|entry| entry.run_id == run.id)
+        .collect();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].step_name, "step1");
+    assert_eq!(steps[0].status, pgqrs::WorkflowStatus::Success);
+
+    let step2_calls = step2_calls.lock().expect("step2_calls lock poisoned");
+    assert_eq!(*step2_calls, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_workflow_cancellation_replay_archives_without_running_handler() -> anyhow::Result<()>
+{
+    let store = create_store().await;
+
+    let workflow_name = "scenario_cancel_replay";
+    pgqrs::workflow()
+        .name(scenario_cancel_replay_wf)
+        .create(&store)
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_cancel_replay_cons", workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(scenario_cancel_replay_wf)
+        .trigger(&json!({"msg": "cancel_replay"}))?
+        .execute(&store)
+        .await?;
+
+    let run = pgqrs::run()
+        .message(message.clone())
+        .store(&store)
+        .execute()
+        .await?;
+    let run = run.start().await?;
+    let _ = run
+        .cancel(&json!({"reason": "cancel before replay"}))
+        .await?;
+
+    let execution_calls = Arc::new(Mutex::new(0u32));
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let execution_calls = execution_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let execution_calls = execution_calls.clone();
+            async move { app_workflow_cancel_replay(run, execution_calls).await }
+        }
+    });
+
+    pgqrs::dequeue()
+        .worker(&consumer)
+        .handle({
+            let handler = handler.clone();
+            move |msg| (handler)(msg)
+        })
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let execution_calls = execution_calls
+        .lock()
+        .expect("execution_calls lock poisoned");
+    assert_eq!(*execution_calls, 0);
 
     Ok(())
 }

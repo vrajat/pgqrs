@@ -213,6 +213,7 @@ pub enum WorkflowStatus {
     Queued,
     Running,
     Paused,
+    Cancelled,
     Success,
     Error,
 }
@@ -223,6 +224,7 @@ impl fmt::Display for WorkflowStatus {
             WorkflowStatus::Queued => write!(f, "QUEUED"),
             WorkflowStatus::Running => write!(f, "RUNNING"),
             WorkflowStatus::Paused => write!(f, "PAUSED"),
+            WorkflowStatus::Cancelled => write!(f, "CANCELLED"),
             WorkflowStatus::Success => write!(f, "SUCCESS"),
             WorkflowStatus::Error => write!(f, "ERROR"),
         }
@@ -237,6 +239,7 @@ impl std::str::FromStr for WorkflowStatus {
             "QUEUED" => Ok(WorkflowStatus::Queued),
             "RUNNING" => Ok(WorkflowStatus::Running),
             "PAUSED" => Ok(WorkflowStatus::Paused),
+            "CANCELLED" => Ok(WorkflowStatus::Cancelled),
             "SUCCESS" => Ok(WorkflowStatus::Success),
             "ERROR" => Ok(WorkflowStatus::Error),
             _ => Err(format!("Invalid workflow status: {}", s)),
@@ -271,6 +274,8 @@ pub struct RunRecord {
     pub input: Option<serde_json::Value>,
     pub output: Option<serde_json::Value>,
     pub error: Option<serde_json::Value>,
+    pub cancel_reason: Option<serde_json::Value>,
+    pub cancelled_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

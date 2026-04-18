@@ -34,6 +34,7 @@ pub(crate) struct RunSql {
     pub get_status: &'static str,
     pub complete: &'static str,
     pub pause: &'static str,
+    pub cancel: &'static str,
     pub fail: &'static str,
     pub get_by_message_id: &'static str,
 }

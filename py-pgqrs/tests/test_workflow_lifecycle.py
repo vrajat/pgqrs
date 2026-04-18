@@ -108,3 +108,32 @@ async def test_workflow_pause_resume_lifecycle(test_dsn, schema):
     # If it doesn't raise, it resumed.
 
     await run.success({"msg": "done"})
+
+
+@pytest.mark.asyncio
+async def test_workflow_cancel_lifecycle(test_dsn, schema):
+    store, admin = await setup_test(test_dsn, schema)
+
+    wf_name = "cancel_wf"
+    await pgqrs.workflow().name(wf_name).store(store).create()
+
+    msg = (
+        await pgqrs.workflow()
+        .name(wf_name)
+        .store(store)
+        .trigger({"msg": "cancel"})
+        .execute()
+    )
+    run = await pgqrs.run().message(msg).store(store).execute()
+
+    await run.start()
+    await run.cancel({"reason": "operator requested"})
+
+    runs = await (await store.get_workflow_runs()).list()
+    run_entry = next(entry for entry in runs if entry.message_id == msg.id)
+    assert run_entry.status == pgqrs.WorkflowStatus.Cancelled
+    assert run_entry.cancel_reason == {"reason": "operator requested"}
+    assert run_entry.cancelled_at is not None
+
+    with pytest.raises(pgqrs.ValidationError):
+        await run.start()

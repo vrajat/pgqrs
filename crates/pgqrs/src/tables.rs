@@ -232,6 +232,11 @@ pub trait RunRecordTable: Send + Sync {
         message: String,
         resume_after: std::time::Duration,
     ) -> crate::error::Result<RunRecord>;
+    async fn cancel_run(
+        &self,
+        id: i64,
+        reason: serde_json::Value,
+    ) -> crate::error::Result<RunRecord>;
     async fn fail_run(&self, id: i64, error: serde_json::Value) -> crate::error::Result<RunRecord>;
     async fn get_by_message_id(&self, message_id: i64) -> crate::error::Result<RunRecord>;
 }
