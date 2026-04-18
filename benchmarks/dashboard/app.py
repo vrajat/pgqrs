@@ -17,8 +17,19 @@ from benchmarks.dashboard.views import backend_summary, runs  # noqa: E402
 st.set_page_config(page_title="pgqrs Benchmarks", layout="wide")
 
 
+def _data_signature() -> tuple[int, int, int]:
+    files = list((REPO_ROOT / "benchmarks" / "data").rglob("*.jsonl"))
+    if not files:
+        return (0, 0, 0)
+    count = len(files)
+    max_mtime_ns = max(int(path.stat().st_mtime_ns) for path in files)
+    total_size = sum(int(path.stat().st_size) for path in files)
+    return (count, max_mtime_ns, total_size)
+
+
 @st.cache_data(show_spinner=False)
-def _load_frame() -> object:
+def _load_frame(signature: tuple[int, int, int], schema_version: str) -> object:
+    _ = (signature, schema_version)
     return load_dashboard_frame(REPO_ROOT)
 
 
@@ -80,7 +91,10 @@ st.caption(
     "Review backend-specific scaling behavior first, then browse raw runs and curated baselines."
 )
 
-frame = _load_frame()
+if st.sidebar.button("Refresh Data Cache"):
+    st.cache_data.clear()
+
+frame = _load_frame(_data_signature(), "s3-metrics-v2")
 filtered = _apply_filters(frame)
 
 tabs = st.tabs(["Postgres", "SQLite", "Turso", "S3", "Raw Data", "Baselines"])

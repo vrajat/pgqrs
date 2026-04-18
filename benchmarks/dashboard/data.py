@@ -10,6 +10,7 @@ from benchmarks.bench.baselines import attach_latest_baseline_delta
 from benchmarks.bench.flatten import flatten_result_files, iter_result_files
 
 OPTIONAL_COLUMNS = (
+    "process_mode",
     "durability_mode",
     "s3_latency_profile",
     "s3_transport",
@@ -17,6 +18,23 @@ OPTIONAL_COLUMNS = (
     "s3_latency_ms",
     "s3_jitter_ms",
     "s3_proxy_name",
+    "s3_ops_put",
+    "s3_ops_get",
+    "s3_ops_head",
+    "s3_ops_delete",
+    "s3_ops_total",
+    "s3_ops_per_message",
+    "s3_est_request_cost_usd",
+    "s3_est_request_cost_per_message_usd",
+    "s3_cost_per_msg_vs_batch1_x",
+    "s3_payload_vs_batch1_x",
+    "s3_cost_per_msg_reduction_vs_batch1_pct",
+    "s3_payload_reduction_vs_batch1_pct",
+    "s3_est_object_bytes",
+    "s3_est_payload_transfer_mb",
+    "s3_transfer_mb",
+    "s3_io_localstack_total_bytes",
+    "s3_io_toxiproxy_total_bytes",
 )
 
 
