@@ -67,8 +67,32 @@ async fn scenario_cancel_boundary_wf(
     Ok(input)
 }
 
-#[pgqrs_workflow(name = "scenario_cancel_replay")]
-async fn scenario_cancel_replay_wf(
+#[pgqrs_workflow(name = "scenario_cancel_before_materialize")]
+async fn scenario_cancel_before_materialize_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_cancel_before_start")]
+async fn scenario_cancel_before_start_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_cancel_before_first_step")]
+async fn scenario_cancel_before_first_step_wf(
+    _run: &Run,
+    input: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    Ok(input)
+}
+
+#[pgqrs_workflow(name = "scenario_cancel_redelivery")]
+async fn scenario_cancel_redelivery_wf(
     _run: &Run,
     input: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -1303,7 +1327,7 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
 #[serial]
 async fn test_workflow_cancellation_before_consumer_materializes_run() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
-        scenario_cancel_replay_wf,
+        scenario_cancel_before_materialize_wf,
         "scenario_cancel_before_start_cons",
         json!({"msg": "cancel_before_start"}),
     )
@@ -1359,7 +1383,7 @@ async fn test_workflow_cancellation_before_consumer_materializes_run() -> anyhow
 #[serial]
 async fn test_workflow_cancellation_after_run_exists_before_start() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
-        scenario_cancel_replay_wf,
+        scenario_cancel_before_start_wf,
         "scenario_cancel_between_open_and_start_cons",
         json!({"msg": "cancel_between_open_and_start"}),
     )
@@ -1393,7 +1417,7 @@ async fn test_workflow_cancellation_after_run_exists_before_start() -> anyhow::R
 #[serial]
 async fn test_workflow_cancellation_after_start_before_first_step() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
-        scenario_cancel_replay_wf,
+        scenario_cancel_before_first_step_wf,
         "scenario_cancel_before_first_step_cons",
         json!({"msg": "cancel_before_first_step"}),
     )
@@ -1524,7 +1548,7 @@ async fn test_workflow_cancellation_during_step_execution() -> anyhow::Result<()
 async fn test_workflow_redelivery_while_cancelling_archives_without_running_handler(
 ) -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
-        scenario_cancel_replay_wf,
+        scenario_cancel_redelivery_wf,
         "scenario_cancel_after_start_cons",
         json!({"msg": "cancel_replay"}),
     )
