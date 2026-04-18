@@ -1205,6 +1205,77 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial]
+async fn test_workflow_cancellation_before_run_start_archives_without_running_handler(
+) -> anyhow::Result<()> {
+    let store = create_store().await;
+
+    let workflow_name = "scenario_cancel_replay";
+    pgqrs::workflow()
+        .name(scenario_cancel_replay_wf)
+        .create(&store)
+        .await?;
+
+    let consumer = pgqrs::consumer("scenario_cancel_before_start_cons", workflow_name)
+        .create(&store)
+        .await?;
+
+    let message = pgqrs::workflow()
+        .name(scenario_cancel_replay_wf)
+        .trigger(&json!({"msg": "cancel_before_start"}))?
+        .execute(&store)
+        .await?;
+
+    // External actor materializes the run and requests cancellation before any consumer dequeues
+    // the workflow message or calls run.start().
+    let run = pgqrs::run()
+        .message(message.clone())
+        .store(&store)
+        .execute()
+        .await?;
+    let run = run.cancel().await?;
+
+    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
+
+    let execution_calls = Arc::new(Mutex::new(0u32));
+    let handler = pgqrs::workflow_handler(store.clone(), {
+        let execution_calls = execution_calls.clone();
+        move |run, _input: serde_json::Value| {
+            let execution_calls = execution_calls.clone();
+            async move { app_workflow_cancel_replay(run, execution_calls).await }
+        }
+    });
+
+    // When the consumer later dequeues the message, workflow_handler should finalize cancellation
+    // before calling run.start() or entering user code.
+    pgqrs::dequeue()
+        .worker(&consumer)
+        .handle({
+            let handler = handler.clone();
+            move |msg| (handler)(msg)
+        })
+        .execute(&store)
+        .await?;
+
+    let archived = pgqrs::tables(&store)
+        .messages()
+        .list_archived_by_queue(message.queue_id)
+        .await?;
+    assert_eq!(archived.len(), 1);
+
+    let final_run = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(final_run.status, pgqrs::WorkflowStatus::Cancelled);
+
+    let execution_calls = execution_calls
+        .lock()
+        .expect("execution_calls lock poisoned");
+    assert_eq!(*execution_calls, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
 async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
     let store = create_store().await;
 
@@ -1260,6 +1331,8 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
             .await
     });
 
+    // Consumer starts the workflow and enters step1. We block there so an external actor can send
+    // a cancellation request while user code is still running.
     step1_started.notified().await;
 
     let run = pgqrs::run()
@@ -1272,6 +1345,8 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
     let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
     assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
 
+    // Once step1 returns, the next step acquisition should observe CANCELLING, finalize the run
+    // to CANCELLED, and prevent step2 from executing.
     allow_step1_finish.notify_one();
     worker_task.await??;
 
@@ -1310,8 +1385,8 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[serial]
-async fn test_workflow_cancellation_replay_archives_without_running_handler() -> anyhow::Result<()>
-{
+async fn test_workflow_cancellation_after_run_start_archives_without_running_handler(
+) -> anyhow::Result<()> {
     let store = create_store().await;
 
     let workflow_name = "scenario_cancel_replay";
@@ -1320,7 +1395,7 @@ async fn test_workflow_cancellation_replay_archives_without_running_handler() ->
         .create(&store)
         .await?;
 
-    let consumer = pgqrs::consumer("scenario_cancel_replay_cons", workflow_name)
+    let consumer = pgqrs::consumer("scenario_cancel_after_start_cons", workflow_name)
         .create(&store)
         .await?;
 
@@ -1335,6 +1410,8 @@ async fn test_workflow_cancellation_replay_archives_without_running_handler() ->
         .store(&store)
         .execute()
         .await?;
+    // Consumer-visible run exists and has already transitioned to RUNNING, but user workflow code
+    // has not resumed from the queued message yet.
     let run = run.start().await?;
     let _ = run.cancel().await?;
 
@@ -1350,6 +1427,8 @@ async fn test_workflow_cancellation_replay_archives_without_running_handler() ->
         }
     });
 
+    // Redelivery / later dequeue should finalize the pending cancellation immediately and archive
+    // the message without entering the user handler again.
     pgqrs::dequeue()
         .worker(&consumer)
         .handle({
