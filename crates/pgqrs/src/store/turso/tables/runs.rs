@@ -45,20 +45,8 @@ impl TursoRunRecordTable {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
-
-        let cancel_reason_str: Option<String> = row.get(7)?;
-        let cancel_reason: Option<Value> = match cancel_reason_str {
-            Some(s) => Some(serde_json::from_str(&s)?),
-            None => None,
-        };
-
-        let cancelled_at = row
-            .get::<Option<String>>(8)?
-            .map(|s| parse_turso_timestamp(&s))
-            .transpose()?;
-
-        let created_at = parse_turso_timestamp(&row.get::<String>(9)?)?;
-        let updated_at = parse_turso_timestamp(&row.get::<String>(10)?)?;
+        let created_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
+        let updated_at = parse_turso_timestamp(&row.get::<String>(8)?)?;
 
         Ok(RunRecord {
             id,
@@ -68,8 +56,6 @@ impl TursoRunRecordTable {
             input,
             output,
             error,
-            cancel_reason,
-            cancelled_at,
             created_at,
             updated_at,
         })
@@ -148,7 +134,10 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
                 if matches!(
                     status,
-                    WorkflowStatus::Error | WorkflowStatus::Success | WorkflowStatus::Cancelled
+                    WorkflowStatus::Error
+                        | WorkflowStatus::Success
+                        | WorkflowStatus::Cancelling
+                        | WorkflowStatus::Cancelled
                 ) {
                     return Err(crate::error::Error::ValidationFailed {
                         reason: format!("Run {} is in terminal {} state", id, status),
@@ -199,11 +188,17 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
         self.get(id).await
     }
 
-    async fn cancel_run(&self, id: i64, reason: serde_json::Value) -> Result<RunRecord> {
-        let reason_str = reason.to_string();
+    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
         let _rows = crate::store::turso::query(TursoDialect::RUN.cancel)
             .bind(id)
-            .bind(reason_str)
+            .execute_once(&self.db)
+            .await?;
+        self.get(id).await
+    }
+
+    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let _rows = crate::store::turso::query(TursoDialect::RUN.complete_cancel)
+            .bind(id)
             .execute_once(&self.db)
             .await?;
         self.get(id).await

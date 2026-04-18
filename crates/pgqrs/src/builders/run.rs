@@ -92,10 +92,9 @@ impl<'a, S: Store> RunBuilder<'a, S> {
                     run_id: record.id,
                     error: record.error.unwrap_or(serde_json::Value::Null),
                 }),
-                crate::types::WorkflowStatus::Cancelled => Err(crate::error::Error::Cancelled {
-                    run_id: record.id,
-                    reason: record.cancel_reason.unwrap_or(serde_json::Value::Null),
-                }),
+                crate::types::WorkflowStatus::Cancelled => {
+                    Err(crate::error::Error::Cancelled { run_id: record.id })
+                }
                 _ => Ok(None),
             },
             Err(crate::error::Error::NotFound { .. }) => Ok(None),
@@ -152,10 +151,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
                     });
                 }
                 crate::types::WorkflowStatus::Cancelled => {
-                    return Err(crate::error::Error::Cancelled {
-                        run_id: record.id,
-                        reason: record.cancel_reason.unwrap_or(serde_json::Value::Null),
-                    });
+                    return Err(crate::error::Error::Cancelled { run_id: record.id });
                 }
                 _ => {
                     // Still running or queued, continue polling

@@ -230,11 +230,8 @@ pub enum Error {
     },
 
     /// Workflow execution cancelled
-    #[error("Workflow cancelled for run {run_id}: {reason}")]
-    Cancelled {
-        run_id: i64,
-        reason: serde_json::Value,
-    },
+    #[error("Workflow cancelled for run {run_id}")]
+    Cancelled { run_id: i64 },
 
     /// Test-only crash to simulate worker failure
     #[cfg(any(test, feature = "test-utils"))]

@@ -752,10 +752,16 @@ where
             .await
     }
 
-    async fn cancel_run(&self, id: i64, reason: Value) -> Result<RunRecord> {
+    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
+        self.db
+            .with_write(|store| Box::pin(async move { store.workflow_runs().cancel_run(id).await }))
+            .await
+    }
+
+    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
         self.db
             .with_write(|store| {
-                Box::pin(async move { store.workflow_runs().cancel_run(id, reason).await })
+                Box::pin(async move { store.workflow_runs().complete_cancel_run(id).await })
             })
             .await
     }

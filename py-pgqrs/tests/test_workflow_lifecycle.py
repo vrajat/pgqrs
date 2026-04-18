@@ -127,13 +127,11 @@ async def test_workflow_cancel_lifecycle(test_dsn, schema):
     run = await pgqrs.run().message(msg).store(store).execute()
 
     await run.start()
-    await run.cancel({"reason": "operator requested"})
+    await run.cancel()
 
     runs = await (await store.get_workflow_runs()).list()
     run_entry = next(entry for entry in runs if entry.message_id == msg.id)
-    assert run_entry.status == pgqrs.WorkflowStatus.Cancelled
-    assert run_entry.cancel_reason == {"reason": "operator requested"}
-    assert run_entry.cancelled_at is not None
+    assert run_entry.status == pgqrs.WorkflowStatus.Cancelling
 
     with pytest.raises(pgqrs.ValidationError):
         await run.start()

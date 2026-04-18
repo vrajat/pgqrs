@@ -7,6 +7,7 @@ use serde_json::json;
 use serial_test::serial;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Notify;
 
 mod common;
 
@@ -197,16 +198,22 @@ async fn app_workflow_pause(run: Run, should_pause: bool) -> Result<serde_json::
     Ok(json!({"done": true}))
 }
 
-async fn app_workflow_cancel_at_boundary(
+async fn app_workflow_cancelled_by_other_actor(
     run: Run,
+    step1_started: Arc<Notify>,
+    allow_step1_finish: Arc<Notify>,
     step2_calls: Arc<Mutex<u32>>,
 ) -> Result<serde_json::Value> {
-    let _: String = pgqrs::workflow_step(&run, "step1", || async {
-        Ok::<_, pgqrs::Error>("step1_done".to_string())
+    let _: String = pgqrs::workflow_step(&run, "step1", || {
+        let step1_started = step1_started.clone();
+        let allow_step1_finish = allow_step1_finish.clone();
+        async move {
+            step1_started.notify_one();
+            allow_step1_finish.notified().await;
+            Ok::<_, pgqrs::Error>("step1_done".to_string())
+        }
     })
     .await?;
-
-    let _ = run.cancel(&json!({"reason": "operator requested"})).await?;
 
     let _: String = pgqrs::workflow_step(&run, "step2", || {
         let step2_calls = step2_calls.clone();
@@ -1217,23 +1224,56 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
         .execute(&store)
         .await?;
 
+    let step1_started = Arc::new(Notify::new());
+    let allow_step1_finish = Arc::new(Notify::new());
     let step2_calls = Arc::new(Mutex::new(0u32));
     let handler = pgqrs::workflow_handler(store.clone(), {
+        let step1_started = step1_started.clone();
+        let allow_step1_finish = allow_step1_finish.clone();
         let step2_calls = step2_calls.clone();
         move |run, _input: serde_json::Value| {
+            let step1_started = step1_started.clone();
+            let allow_step1_finish = allow_step1_finish.clone();
             let step2_calls = step2_calls.clone();
-            async move { app_workflow_cancel_at_boundary(run, step2_calls).await }
+            async move {
+                app_workflow_cancelled_by_other_actor(
+                    run,
+                    step1_started,
+                    allow_step1_finish,
+                    step2_calls,
+                )
+                .await
+            }
         }
     });
 
-    pgqrs::dequeue()
-        .worker(&consumer)
-        .handle({
-            let handler = handler.clone();
-            move |msg| (handler)(msg)
-        })
-        .execute(&store)
+    let store_for_worker = store.clone();
+    let consumer_for_worker = consumer.clone();
+    let worker_task = tokio::spawn(async move {
+        pgqrs::dequeue()
+            .worker(&consumer_for_worker)
+            .handle({
+                let handler = handler.clone();
+                move |msg| (handler)(msg)
+            })
+            .execute(&store_for_worker)
+            .await
+    });
+
+    step1_started.notified().await;
+
+    let run = pgqrs::run()
+        .message(message.clone())
+        .store(&store)
+        .execute()
         .await?;
+    let _ = run.cancel().await?;
+
+    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
+
+    allow_step1_finish.notify_one();
+    worker_task.await??;
 
     let archived = pgqrs::tables(&store)
         .messages()
@@ -1250,11 +1290,6 @@ async fn test_workflow_cancellation_at_step_boundary() -> anyhow::Result<()> {
         .find(|entry| entry.workflow_id == workflow.id)
         .expect("run not found");
     assert_eq!(run.status, pgqrs::WorkflowStatus::Cancelled);
-    assert_eq!(
-        run.cancel_reason,
-        Some(json!({"reason": "operator requested"}))
-    );
-    assert!(run.cancelled_at.is_some());
 
     let steps: Vec<_> = store
         .workflow_steps()
@@ -1301,9 +1336,10 @@ async fn test_workflow_cancellation_replay_archives_without_running_handler() ->
         .execute()
         .await?;
     let run = run.start().await?;
-    let _ = run
-        .cancel(&json!({"reason": "cancel before replay"}))
-        .await?;
+    let _ = run.cancel().await?;
+
+    let run_record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(run_record.status, pgqrs::WorkflowStatus::Cancelling);
 
     let execution_calls = Arc::new(Mutex::new(0u32));
     let handler = pgqrs::workflow_handler(store.clone(), {
@@ -1328,6 +1364,9 @@ async fn test_workflow_cancellation_replay_archives_without_running_handler() ->
         .list_archived_by_queue(message.queue_id)
         .await?;
     assert_eq!(archived.len(), 1);
+
+    let final_run = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
+    assert_eq!(final_run.status, pgqrs::WorkflowStatus::Cancelled);
 
     let execution_calls = execution_calls
         .lock()

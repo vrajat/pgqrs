@@ -244,22 +244,15 @@ async fn test_workflow_cancel_lifecycle() -> anyhow::Result<()> {
         .await?;
 
     run = run.start().await?;
-    run = run
-        .cancel(&serde_json::json!({"reason": "operator requested"}))
-        .await?;
+    run = run.cancel().await?;
 
     let record = pgqrs::tables(&store).workflow_runs().get(run.id()).await?;
-    assert_eq!(record.status, pgqrs::WorkflowStatus::Cancelled);
-    assert_eq!(
-        record.cancel_reason,
-        Some(serde_json::json!({"reason": "operator requested"}))
-    );
-    assert!(record.cancelled_at.is_some());
+    assert_eq!(record.status, pgqrs::WorkflowStatus::Cancelling);
 
     let res = run.start().await;
     assert!(
         res.is_err(),
-        "Workflow start should fail if currently CANCELLED"
+        "Workflow start should fail if currently CANCELLING"
     );
 
     Ok(())

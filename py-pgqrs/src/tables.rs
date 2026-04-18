@@ -276,10 +276,6 @@ pub struct PyRunRecord {
     #[pyo3(get)]
     pub error: Option<PyObject>,
     #[pyo3(get)]
-    pub cancel_reason: Option<PyObject>,
-    #[pyo3(get)]
-    pub cancelled_at: Option<String>,
-    #[pyo3(get)]
     pub created_at: String,
     #[pyo3(get)]
     pub updated_at: String,
@@ -301,10 +297,6 @@ impl From<rust_pgqrs::types::RunRecord> for PyRunRecord {
             error: r
                 .error
                 .map(|value| json_to_py(py, &value).unwrap_or(py.None())),
-            cancel_reason: r
-                .cancel_reason
-                .map(|value| json_to_py(py, &value).unwrap_or(py.None())),
-            cancelled_at: r.cancelled_at.map(|dt| dt.to_rfc3339()),
             created_at: r.created_at.to_rfc3339(),
             updated_at: r.updated_at.to_rfc3339(),
         })

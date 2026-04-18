@@ -662,10 +662,6 @@ impl DbTables for TursoTables {
                 "05_create_workflows",
                 include_str!("../../../migrations/turso/05_create_workflows.sql"),
             ),
-            (
-                "06_add_workflow_cancellation",
-                include_str!("../../../migrations/turso/06_add_workflow_cancellation.sql"),
-            ),
         ];
 
         for (name, script) in scripts {
