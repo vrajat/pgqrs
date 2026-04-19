@@ -107,7 +107,7 @@ async fn create_workflow_test_rig(
     workflow: pgqrs::WorkflowDef<serde_json::Value, serde_json::Value>,
     consumer_name: &str,
     payload: serde_json::Value,
-) -> anyhow::Result<(pgqrs::WorkflowTestRig<AnyStore>, pgqrs::QueueMessage)> {
+) -> anyhow::Result<(pgqrs::WorkflowTestRig, pgqrs::QueueMessage)> {
     let store = create_store().await;
     pgqrs::workflow()
         .name(workflow.clone())
@@ -1324,7 +1324,6 @@ async fn test_workflow_scenario_pause() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_workflow_cancellation_before_consumer_materializes_run() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
         scenario_cancel_before_materialize_wf,
@@ -1380,7 +1379,6 @@ async fn test_workflow_cancellation_before_consumer_materializes_run() -> anyhow
 }
 
 #[tokio::test]
-#[serial]
 async fn test_workflow_cancellation_after_run_exists_before_start() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
         scenario_cancel_before_start_wf,
@@ -1414,7 +1412,6 @@ async fn test_workflow_cancellation_after_run_exists_before_start() -> anyhow::R
 }
 
 #[tokio::test]
-#[serial]
 async fn test_workflow_cancellation_after_start_before_first_step() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
         scenario_cancel_before_first_step_wf,
@@ -1459,7 +1456,6 @@ async fn test_workflow_cancellation_after_start_before_first_step() -> anyhow::R
 }
 
 #[tokio::test]
-#[serial]
 async fn test_workflow_cancellation_during_step_execution() -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
         scenario_cancel_boundary_wf,
@@ -1544,7 +1540,6 @@ async fn test_workflow_cancellation_during_step_execution() -> anyhow::Result<()
 }
 
 #[tokio::test]
-#[serial]
 async fn test_workflow_redelivery_while_cancelling_archives_without_running_handler(
 ) -> anyhow::Result<()> {
     let (rig, message) = create_workflow_test_rig(
