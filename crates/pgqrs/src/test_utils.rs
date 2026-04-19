@@ -1,7 +1,7 @@
 //! Test-only workflow lifecycle helpers.
 
 use crate::error::Result;
-use crate::store::Store;
+use crate::store::{AnyStore, Store};
 use crate::types::QueueMessage;
 use crate::workers::{Consumer, Run};
 use std::future::Future;
@@ -12,13 +12,13 @@ use std::future::Future;
 /// phases directly so integration tests can model workflow lifecycle checkpoints
 /// without relying entirely on timing-based orchestration.
 #[derive(Clone)]
-pub struct WorkflowTestRig<S: Store> {
-    store: S,
+pub struct WorkflowTestRig {
+    store: AnyStore,
     consumer: Consumer,
 }
 
 /// Backward-compatible alias for the more role-oriented harness name.
-pub type WorkflowAttemptHarness<S> = WorkflowTestRig<S>;
+pub type WorkflowAttemptHarness = WorkflowTestRig;
 
 /// A single workflow delivery attempt consisting of the dequeued trigger
 /// message and the materialized run handle tied to that message.
@@ -28,9 +28,9 @@ pub struct WorkflowAttempt {
     pub run: Run,
 }
 
-impl<S: Store> WorkflowTestRig<S> {
+impl WorkflowTestRig {
     /// Create a test rig from a store and consumer representing the actor roles.
-    pub fn new(store: S, consumer: Consumer) -> Self {
+    pub fn new(store: AnyStore, consumer: Consumer) -> Self {
         Self { store, consumer }
     }
 
@@ -40,7 +40,7 @@ impl<S: Store> WorkflowTestRig<S> {
     }
 
     /// Access the store backing this rig.
-    pub fn store(&self) -> &S {
+    pub fn store(&self) -> &AnyStore {
         &self.store
     }
 
