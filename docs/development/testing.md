@@ -118,10 +118,31 @@ make test-localstack
 
 - Rust integration tests live in `crates/pgqrs/tests/`.
 - Shared Rust test helpers live in `crates/pgqrs/tests/common/mod.rs`.
+- Test-only workflow lifecycle helpers live in `crates/pgqrs/src/test_utils.rs`.
 - Python tests live in `py-pgqrs/tests/`.
 - Guide-level coverage lives in `crates/pgqrs/tests/guide_tests.rs` and `py-pgqrs/tests/test_guides.py`.
 
 When adding tests, prefer the existing backend-aware helpers instead of wiring DSNs manually in each file.
+
+### Workflow Lifecycle Tests
+
+Workflow cancellation and replay tests now use a test-only harness rather than
+encoding the full actor model inline in every test.
+
+The main helpers are:
+
+- `WorkflowTestRig`: role-oriented shortcuts such as "as consumer, dequeue" and
+  "as external actor, get run"
+- `WorkflowAttempt`: a dequeued trigger message plus its materialized run handle
+
+Use those helpers when a test needs to model:
+
+- consumer dequeue/materialize/start
+- external actor cancellation
+- consumer archive/release after invoking workflow logic
+
+This keeps cancellation tests readable as lifecycle state-machine checks instead
+of ad hoc queue/run plumbing.
 
 ## Troubleshooting
 

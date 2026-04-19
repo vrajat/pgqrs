@@ -132,6 +132,12 @@ Simple, reliable message queue for background processing:
 
 Orchestrate multi-step processes that survive crashes and resume from where they left off:
 
+Workflow cancellation is also durable. When another actor requests cancellation,
+the run first moves to `CANCELLING`. Once the workflow observes that request at
+its next boundary, the run becomes terminal as `CANCELLED`. This makes it
+possible to distinguish "cancel has been requested" from "the workflow has fully
+stopped."
+
 === "Rust"
 
     ```rust

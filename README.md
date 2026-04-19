@@ -209,6 +209,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Workflow runs move through persisted states. For cancellation, pgqrs uses a
+two-phase workflow lifecycle:
+
+- `CANCELLING`: an external actor has requested cancellation, but in-flight work
+  may still be finishing
+- `CANCELLED`: cancellation has been observed at a workflow boundary and the run
+  is now terminal
+
+This distinction matters when another actor cancels a run that is already
+running. A step that is already in progress is allowed to finish, and the next
+workflow boundary finalizes the run to `CANCELLED`.
+
 #### Python
 
 ```python
