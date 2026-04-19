@@ -1,6 +1,6 @@
-use crate::store::dialect::{DbStateSql, MessageSql, SqlDialect, StepSql, WorkerSql};
+use crate::store::dialect::{DbStateSql, MessageSql, RunSql, SqlDialect, StepSql, WorkerSql};
 #[cfg(any(feature = "sqlite", feature = "turso"))]
-use crate::store::dialect::{QueueSql, RunSql, WorkflowSql};
+use crate::store::dialect::{QueueSql, WorkflowSql};
 
 pub(crate) struct PostgresDialect;
 
@@ -159,7 +159,6 @@ SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1)
 "#,
     };
 
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const RUN: RunSql = RunSql {
         insert: r#"
 INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input, created_at, updated_at)
@@ -202,6 +201,23 @@ WHERE id = $1
 UPDATE pgqrs_workflow_runs
 SET status = 'PAUSED', error = $2, paused_at = NOW(), updated_at = NOW()
 WHERE id = $1
+"#,
+        cancel: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'CANCELLING',
+    updated_at = NOW()
+WHERE id = $1
+  AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
+"#,
+        complete_cancel: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'CANCELLED',
+    completed_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+  AND status = 'CANCELLING'
+RETURNING id, workflow_id, message_id, status, input, output, error, created_at, updated_at
 "#,
         fail: r#"
 UPDATE pgqrs_workflow_runs

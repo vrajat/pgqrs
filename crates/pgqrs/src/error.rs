@@ -229,6 +229,10 @@ pub enum Error {
         resume_after: std::time::Duration,
     },
 
+    /// Workflow execution cancelled
+    #[error("Workflow cancelled for run {run_id}")]
+    Cancelled { run_id: i64 },
+
     /// Test-only crash to simulate worker failure
     #[cfg(any(test, feature = "test-utils"))]
     #[error("Test crash")]

@@ -150,6 +150,14 @@ impl PyRun {
         })
     }
 
+    fn cancel<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
+        let inner = self.inner.clone();
+        pyo3_asyncio::tokio::future_into_py(py, async move {
+            let _ = inner.cancel().await.map_err(to_py_err)?;
+            Ok(true)
+        })
+    }
+
     fn complete_step<'a>(
         &self,
         py: Python<'a>,

@@ -45,7 +45,6 @@ impl TursoRunRecordTable {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
-
         let created_at = parse_turso_timestamp(&row.get::<String>(7)?)?;
         let updated_at = parse_turso_timestamp(&row.get::<String>(8)?)?;
 
@@ -133,7 +132,13 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
 
         if let Some(s) = status_str {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
-                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                if matches!(
+                    status,
+                    WorkflowStatus::Error
+                        | WorkflowStatus::Success
+                        | WorkflowStatus::Cancelling
+                        | WorkflowStatus::Cancelled
+                ) {
                     return Err(crate::error::Error::ValidationFailed {
                         reason: format!("Run {} is in terminal {} state", id, status),
                     });
@@ -178,6 +183,22 @@ impl crate::store::RunRecordTable for TursoRunRecordTable {
         let _rows = crate::store::turso::query(TursoDialect::RUN.fail)
             .bind(id)
             .bind(error_str)
+            .execute_once(&self.db)
+            .await?;
+        self.get(id).await
+    }
+
+    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let _rows = crate::store::turso::query(TursoDialect::RUN.cancel)
+            .bind(id)
+            .execute_once(&self.db)
+            .await?;
+        self.get(id).await
+    }
+
+    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let _rows = crate::store::turso::query(TursoDialect::RUN.complete_cancel)
+            .bind(id)
             .execute_once(&self.db)
             .await?;
         self.get(id).await

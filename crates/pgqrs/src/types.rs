@@ -213,6 +213,8 @@ pub enum WorkflowStatus {
     Queued,
     Running,
     Paused,
+    Cancelling,
+    Cancelled,
     Success,
     Error,
 }
@@ -223,6 +225,8 @@ impl fmt::Display for WorkflowStatus {
             WorkflowStatus::Queued => write!(f, "QUEUED"),
             WorkflowStatus::Running => write!(f, "RUNNING"),
             WorkflowStatus::Paused => write!(f, "PAUSED"),
+            WorkflowStatus::Cancelling => write!(f, "CANCELLING"),
+            WorkflowStatus::Cancelled => write!(f, "CANCELLED"),
             WorkflowStatus::Success => write!(f, "SUCCESS"),
             WorkflowStatus::Error => write!(f, "ERROR"),
         }
@@ -237,6 +241,8 @@ impl std::str::FromStr for WorkflowStatus {
             "QUEUED" => Ok(WorkflowStatus::Queued),
             "RUNNING" => Ok(WorkflowStatus::Running),
             "PAUSED" => Ok(WorkflowStatus::Paused),
+            "CANCELLING" => Ok(WorkflowStatus::Cancelling),
+            "CANCELLED" => Ok(WorkflowStatus::Cancelled),
             "SUCCESS" => Ok(WorkflowStatus::Success),
             "ERROR" => Ok(WorkflowStatus::Error),
             _ => Err(format!("Invalid workflow status: {}", s)),

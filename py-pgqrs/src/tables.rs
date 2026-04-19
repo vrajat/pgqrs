@@ -266,6 +266,8 @@ pub struct PyRunRecord {
     #[pyo3(get)]
     pub workflow_id: i64,
     #[pyo3(get)]
+    pub message_id: i64,
+    #[pyo3(get)]
     pub status: PyWorkflowStatus,
     #[pyo3(get)]
     pub input: Option<PyObject>,
@@ -284,6 +286,7 @@ impl From<rust_pgqrs::types::RunRecord> for PyRunRecord {
         Python::with_gil(|py| PyRunRecord {
             id: r.id,
             workflow_id: r.workflow_id,
+            message_id: r.message_id,
             status: PyWorkflowStatus::from(r.status),
             input: r
                 .input

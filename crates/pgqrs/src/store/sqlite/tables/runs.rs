@@ -45,7 +45,6 @@ impl SqliteRunRecordTable {
             Some(s) => Some(serde_json::from_str(&s)?),
             None => None,
         };
-
         let created_at = parse_sqlite_timestamp(&row.try_get::<String, _>("created_at")?)?;
         let updated_at = parse_sqlite_timestamp(&row.try_get::<String, _>("updated_at")?)?;
 
@@ -127,6 +126,40 @@ impl SqliteRunRecordTable {
                 query: "PAUSE_RUN".into(),
                 source: Box::new(e),
                 context: format!("Failed to pause run {}", id),
+            })?;
+        Ok(())
+    }
+
+    pub async fn cancel_run(executor: &mut sqlx::SqliteConnection, id: i64) -> Result<()> {
+        let now = Utc::now();
+        let now_str = format_sqlite_timestamp(&now);
+
+        sqlx::query(SqliteDialect::RUN.cancel)
+            .bind(id)
+            .bind(now_str)
+            .execute(executor)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to cancel run {}", id),
+            })?;
+        Ok(())
+    }
+
+    pub async fn complete_cancel_run(executor: &mut sqlx::SqliteConnection, id: i64) -> Result<()> {
+        let now = Utc::now();
+        let now_str = format_sqlite_timestamp(&now);
+
+        sqlx::query(SqliteDialect::RUN.complete_cancel)
+            .bind(id)
+            .bind(now_str)
+            .execute(executor)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMPLETE_CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete cancellation for run {}", id),
             })?;
         Ok(())
     }
@@ -238,7 +271,13 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
 
         if let Some(s) = status_str {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
-                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                if matches!(
+                    status,
+                    WorkflowStatus::Error
+                        | WorkflowStatus::Success
+                        | WorkflowStatus::Cancelling
+                        | WorkflowStatus::Cancelled
+                ) {
                     return Err(crate::error::Error::ValidationFailed {
                         reason: format!("Run {} is in terminal {} state", id, status),
                     });
@@ -287,6 +326,28 @@ impl crate::store::RunRecordTable for SqliteRunRecordTable {
             .await
             .map_err(crate::error::Error::Database)?;
         Self::fail_run(&mut conn, id, error).await?;
+        drop(conn);
+        self.get(id).await
+    }
+
+    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(crate::error::Error::Database)?;
+        Self::cancel_run(&mut conn, id).await?;
+        drop(conn);
+        self.get(id).await
+    }
+
+    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(crate::error::Error::Database)?;
+        Self::complete_cancel_run(&mut conn, id).await?;
         drop(conn);
         self.get(id).await
     }

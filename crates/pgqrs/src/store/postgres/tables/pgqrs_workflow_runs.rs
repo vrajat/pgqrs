@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
+use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -178,7 +180,13 @@ impl crate::store::RunRecordTable for RunRecords {
 
         if let Some(s) = status_str {
             if let Ok(status) = WorkflowStatus::from_str(&s) {
-                if matches!(status, WorkflowStatus::Error | WorkflowStatus::Success) {
+                if matches!(
+                    status,
+                    WorkflowStatus::Error
+                        | WorkflowStatus::Success
+                        | WorkflowStatus::Cancelling
+                        | WorkflowStatus::Cancelled
+                ) {
                     return Err(crate::error::Error::ValidationFailed {
                         reason: format!("Run {} is in terminal {} state", id, status),
                     });
@@ -241,6 +249,34 @@ impl crate::store::RunRecordTable for RunRecords {
             source: Box::new(e),
             context: format!("Failed to pause run {}", id),
         })?;
+
+        Ok(row)
+    }
+
+    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.cancel)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to cancel run {}", id),
+            })?;
+
+        Ok(row)
+    }
+
+    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
+        let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.complete_cancel)
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| crate::error::Error::QueryFailed {
+                query: "COMPLETE_CANCEL_RUN".into(),
+                source: Box::new(e),
+                context: format!("Failed to complete cancellation for run {}", id),
+            })?;
 
         Ok(row)
     }

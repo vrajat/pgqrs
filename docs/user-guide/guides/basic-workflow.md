@@ -160,6 +160,29 @@ You can retrieve the status and output of a workflow run at any time using its m
     asyncio.run(main())
     ```
 
+## Workflow Cancellation
+
+Workflow cancellation is actor-driven. A worker may be executing a run while a
+different actor decides that the run should stop.
+
+pgqrs persists that in two phases:
+
+- `CANCELLING`: a cancel request has been recorded
+- `CANCELLED`: the workflow has observed that request and reached a terminal
+  state
+
+That distinction is important for long-running handlers. If a step body is
+already executing when cancellation is requested, pgqrs does not pretend the
+step never ran. Instead, it lets the in-flight work reach the next workflow
+boundary and then finalizes the run as `CANCELLED`.
+
+From a caller's point of view:
+
+- `Run::cancel()` records the cancellation request
+- `run().get()` / `run().result()` treat only `CANCELLED` as terminal
+- a later dequeue or step acquisition is what usually transitions
+  `CANCELLING -> CANCELLED`
+
 ## Key Concepts in v0.14
 
 - **Workflow Definition**: A named template (e.g., "process_task") that maps to a queue.

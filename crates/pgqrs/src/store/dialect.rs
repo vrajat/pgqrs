@@ -23,7 +23,6 @@ pub(crate) struct QueueSql {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(any(feature = "sqlite", feature = "turso"))]
 pub(crate) struct RunSql {
     pub insert: &'static str,
     pub get: &'static str,
@@ -34,6 +33,8 @@ pub(crate) struct RunSql {
     pub get_status: &'static str,
     pub complete: &'static str,
     pub pause: &'static str,
+    pub cancel: &'static str,
+    pub complete_cancel: &'static str,
     pub fail: &'static str,
     pub get_by_message_id: &'static str,
 }
@@ -89,7 +90,6 @@ pub(crate) trait SqlDialect {
     const STEP: StepSql;
     #[cfg(any(feature = "sqlite", feature = "turso"))]
     const QUEUE: QueueSql;
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
     const RUN: RunSql;
     const MESSAGE: MessageSql;
     const WORKER: WorkerSql;

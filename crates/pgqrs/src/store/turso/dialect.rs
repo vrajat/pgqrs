@@ -135,6 +135,16 @@ UPDATE pgqrs_workflow_runs
 SET status = 'PAUSED', error = ?2, paused_at = datetime('now'), updated_at = datetime('now')
 WHERE id = ?1
 "#,
+        cancel: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'CANCELLING', updated_at = datetime('now')
+WHERE id = ?1 AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+"#,
+        complete_cancel: r#"
+UPDATE pgqrs_workflow_runs
+SET status = 'CANCELLED', updated_at = datetime('now'), completed_at = datetime('now')
+WHERE id = ?1 AND status = 'CANCELLING'
+"#,
         fail: r#"
 UPDATE pgqrs_workflow_runs
 SET status = 'ERROR', error = ?2, updated_at = datetime('now'), completed_at = datetime('now')
