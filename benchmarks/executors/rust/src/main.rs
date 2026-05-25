@@ -1,5 +1,5 @@
 use clap::Parser;
-use pgqrs::{self, Config, Store};
+use pgqrs::{self, store::AnyStore, Config, Store};
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, AtomicI64, Ordering},
@@ -32,6 +32,8 @@ struct Args {
     payload_profile: String,
     #[arg(long, default_value = "durable")]
     durability_mode: String,
+    #[arg(long)]
+    process_mode: String,
 }
 
 #[derive(Default)]
@@ -40,6 +42,7 @@ struct ConsumerStats {
     archives: Vec<f64>,
     processed: usize,
     empty_polls: usize,
+    dequeue_conflicts: usize,
     errors: usize,
 }
 
@@ -101,6 +104,18 @@ fn maybe_apply_s3_mode(config: &mut Config, backend: &str, durability_mode: &str
     let _ = (config, backend, durability_mode);
 }
 
+async fn connect_store(
+    dsn: &str,
+    backend: &str,
+    durability_mode: &str,
+) -> Result<AnyStore, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = Config::from_dsn(dsn);
+    config.validation_config.max_enqueue_per_second = None;
+    config.validation_config.max_enqueue_burst = None;
+    maybe_apply_s3_mode(&mut config, backend, durability_mode);
+    Ok(pgqrs::connect_with_config(&config).await?)
+}
+
 async fn prefill_queue(
     producer: &pgqrs::workers::Producer,
     prefill_jobs: usize,
@@ -137,7 +152,14 @@ async fn consumer_loop(
         }
 
         let dequeue_start = Instant::now();
-        let messages = consumer.dequeue_many(batch_size).await?;
+        let messages = match consumer.dequeue_many(batch_size).await {
+            Ok(messages) => messages,
+            Err(pgqrs::error::Error::Conflict { .. }) => {
+                stats.dequeue_conflicts += 1;
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        };
         stats.dequeues.push(dequeue_start.elapsed().as_secs_f64());
 
         if messages.is_empty() {
@@ -166,13 +188,15 @@ async fn consumer_loop(
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
+    let use_isolated_consumer_stores = match args.process_mode.as_str() {
+        "single_process" => false,
+        "multi_process" => true,
+        other => {
+            return Err(format!("Unsupported process mode: {other}").into());
+        }
+    };
 
-    let mut config = Config::from_dsn(&args.dsn);
-    config.validation_config.max_enqueue_per_second = None;
-    config.validation_config.max_enqueue_burst = None;
-    maybe_apply_s3_mode(&mut config, &args.backend, &args.durability_mode);
-
-    let store = pgqrs::connect_with_config(&config).await?;
+    let store = connect_store(&args.dsn, &args.backend, &args.durability_mode).await?;
     pgqrs::admin(&store).install().await?;
 
     let queue_name = format!(
@@ -192,14 +216,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // fast points can do real work before `start` and inflate throughput.
     let start_barrier = Arc::new(Barrier::new(args.consumers + 1));
     let mut handles = Vec::with_capacity(args.consumers);
+    let mut consumer_stores = Vec::new();
     for index in 0..args.consumers {
-        let consumer = pgqrs::consumer(
-            &format!("{worker_prefix}-consumer-{index}"),
-            index as i32,
-            &queue_name,
-        )
-        .create(&store)
-        .await?;
+        let consumer_store = if use_isolated_consumer_stores {
+            let consumer_store =
+                connect_store(&args.dsn, &args.backend, &args.durability_mode).await?;
+            consumer_stores.push(consumer_store.clone());
+            consumer_store
+        } else {
+            store.clone()
+        };
+        let consumer =
+            pgqrs::consumer(
+                &format!("{worker_prefix}-consumer-{index}"),
+                index as i32,
+                &queue_name,
+            )
+            .create(&consumer_store)
+            .await?;
         handles.push(tokio::spawn(consumer_loop(
             consumer,
             args.dequeue_batch_size,
@@ -221,12 +255,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut total_processed = 0usize;
     let mut total_errors = 0usize;
     let mut empty_polls = 0usize;
+    let mut dequeue_conflicts = 0usize;
     for stats in all_stats {
         dequeue_latencies.extend(stats.dequeues);
         archive_latencies.extend(stats.archives);
         total_processed += stats.processed;
         total_errors += stats.errors;
         empty_polls += stats.empty_polls;
+        dequeue_conflicts += stats.dequeue_conflicts;
     }
 
     let result = json!({
@@ -242,6 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "prefill_jobs": args.prefill_jobs,
                 "queue_mode": "drain",
                 "durability_mode": args.durability_mode,
+                "process_mode": args.process_mode,
             },
             "point_parameters": {
                 "consumers": args.consumers,
@@ -263,7 +300,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 0.0
             },
             "processed_messages": total_processed,
+            "dequeue_calls": dequeue_latencies.len(),
+            "archive_calls": archive_latencies.len(),
             "empty_polls": empty_polls,
+            "dequeue_conflicts": dequeue_conflicts,
         },
         "samples": [],
     });

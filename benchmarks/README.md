@@ -13,7 +13,7 @@ It contains:
 - placeholder Python orchestration modules
 - placeholder executor modules
 - scenario templates
-- three concrete starter queue scenarios
+- four concrete starter queue scenarios
 - a placeholder Streamlit dashboard
 - storage conventions for benchmark artifacts
 
@@ -76,6 +76,7 @@ Start with a single benchmark scenario, for example:
 - `queue.e2e.steady_state`
 - `queue.drain_fixed_backlog`
 - `queue.e2e.capacity_knee`
+- `queue.coarse_job_viability`
 - `workflow.simple.1_step`
 
 Do not implement the entire matrix first.
@@ -85,6 +86,7 @@ The current starter scenarios live in:
 - `benchmarks/scenarios/queue/e2e_steady_state.toml`
 - `benchmarks/scenarios/queue/drain_fixed_backlog.toml`
 - `benchmarks/scenarios/queue/e2e_capacity_knee.toml`
+- `benchmarks/scenarios/queue/coarse_job_viability.toml`
 
 ### 2. Write The Scenario Spec
 

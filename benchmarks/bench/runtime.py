@@ -9,6 +9,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_PROCESS_MODE_BY_BACKEND = {
+    "postgres": "multi_process",
+    "s3": "multi_process",
+    "sqlite": "single_process",
+    "turso": "single_process",
+}
+
 
 @dataclass
 class BackendRuntime:
@@ -38,6 +45,24 @@ class BackendRuntime:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def resolve_process_mode(backend: str, profile: str) -> str:
+    if profile == "single_process":
+        if backend == "s3":
+            raise RuntimeError("S3 benchmarks require multi_process store isolation.")
+        return "single_process"
+
+    if profile == "multi_process":
+        return "multi_process"
+
+    if profile == "compat":
+        try:
+            return DEFAULT_PROCESS_MODE_BY_BACKEND[backend]
+        except KeyError as exc:
+            raise RuntimeError(f"Unsupported backend runtime: {backend}") from exc
+
+    raise RuntimeError(f"Unsupported benchmark profile for process mode: {profile}")
 
 
 def resolve_backend_runtime(backend: str) -> BackendRuntime:

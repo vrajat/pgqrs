@@ -84,6 +84,7 @@ nav:
   - Benchmarks:
     - benchmarks/index.md
     - Queue Drain Fixed Backlog: benchmarks/queue-drain-fixed-backlog.md
+    - Coarse Job Viability: benchmarks/coarse-job-viability.md
   - Development:
     - development/index.md
     - Contributing: development/contributing.md

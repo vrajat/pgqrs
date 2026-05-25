@@ -1,0 +1,40 @@
+id = "queue.coarse_job_viability"
+kind = "queue"
+question = "For coarse-grained durable jobs, at what task duration does queue overhead become small enough for the backend to be operationally acceptable?"
+
+backends = ["postgres", "sqlite", "turso", "s3"]
+bindings = ["rust", "python"]
+profiles = ["compat", "single_process"]
+
+[action.fixed]
+payload_profile = "small"
+prefill_jobs = 500
+queue_mode = "drain"
+work_model = "simulated_service_time"
+archive_after_work = true
+
+[action.variables]
+consumers = [1, 2, 4]
+dequeue_batch_size = [1, 10, 50]
+simulated_task_duration_ms = [0, 100, 1000, 10000, 60000]
+
+[answer]
+kind = "series_family"
+primary = "queue_overhead_fraction"
+series = [
+  "queue_overhead_fraction",
+  "completed_jobs_per_second",
+  "p95_end_to_end_job_time_ms",
+  "request_operations_per_completed_job",
+  "estimated_payload_transfer_bytes_per_completed_job",
+  "estimated_request_cost_per_completed_job_usd",
+  "conflicts_per_1000_completed_jobs",
+]
+vary_by = ["simulated_task_duration_ms", "consumers", "dequeue_batch_size"]
+
+[analysis]
+viability_signal = "The backend becomes a good fit when queue overhead is a small fraction of total job time and contention-related amplification stays bounded."
+negative_control = "queue.drain_fixed_backlog remains the low-latency stress scenario and should be treated as a deliberate anti-fit test for remote durable stores."
+
+[notes]
+limitations = "This scenario is intentionally not a max-throughput race. It is meant to find the workload envelope where durable queue overhead becomes negligible relative to job time."

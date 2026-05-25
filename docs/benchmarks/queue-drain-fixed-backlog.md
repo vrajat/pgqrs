@@ -7,6 +7,8 @@ It measures how fast a pre-populated queue can be drained under a sweep of:
 - consumer count
 - dequeue batch size
 
+For S3-backed queue state, this scenario should be read as a deliberate stress test and anti-fit benchmark, not as the benchmark that defines where S3 is useful.
+
 ## Question
 
 For a fixed pre-populated backlog, how do throughput, completion time, and latency vary with consumer count and dequeue batch size?
@@ -101,6 +103,10 @@ This is the useful queue-drain takeaway for S3Store today:
 - batching is still the main lever
 - extra consumers do not help and can reduce throughput once they add contention on the shared remote-backed state
 
+This does not mean S3 is categorically useless.
+It means this particular benchmark shape is close to the worst case for S3: tiny units of work, immediate dequeue pressure, and little useful computation to hide queue overhead.
+Use [Coarse Job Viability](coarse-job-viability.md) to answer the more relevant "when is S3 acceptable?" question.
+
 ## Latency Behavior
 
 ### PostgreSQL
@@ -177,7 +183,7 @@ Curated baselines used for this page:
 
 - [`postgres-rust-compat-release-20260321.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/postgres-rust-compat-release-20260321.jsonl)
 - [`sqlite-rust-compat-release-20260321.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/sqlite-rust-compat-release-20260321.jsonl)
-- [`s3-rust-single_process-baseline-20260331.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/s3-rust-single_process-baseline-20260331.jsonl)
+- [`20260402T161856Z-s3-rust-compat.jsonl`](https://github.com/vrajat/pgqrs/blob/main/benchmarks/data/baselines/queue.drain_fixed_backlog/20260402T161856Z-s3-rust-compat.jsonl)
 
 Directional run referenced for Turso:
 

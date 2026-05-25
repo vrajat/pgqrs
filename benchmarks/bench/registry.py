@@ -47,6 +47,14 @@ SCENARIOS: tuple[ScenarioRegistration, ...] = (
         profiles=("single_process",),
         executor_hint="queue",
     ),
+    ScenarioRegistration(
+        scenario_id="queue.coarse_job_viability",
+        scenario_path="benchmarks/scenarios/queue/coarse_job_viability.toml",
+        backends=("postgres", "sqlite", "turso", "s3"),
+        bindings=("rust", "python"),
+        profiles=("compat", "single_process"),
+        executor_hint="queue",
+    ),
 )
 
 

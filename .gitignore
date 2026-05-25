@@ -19,3 +19,9 @@ benchmarks/*.egg-info/
 # Bug report files (should be filed as issues, not committed)
 BUG_REPORT_*.md
 WORKFLOW_RESTART_BUG.md
+
+# Generated benchmark doc charts for directional backends.
+docs/assets/benchmarks/queue-drain-fixed-backlog/postgres-*.svg
+docs/assets/benchmarks/queue-drain-fixed-backlog/s3-*.svg
+docs/assets/benchmarks/queue-drain-fixed-backlog/sqlite-*.svg
+docs/assets/benchmarks/queue-drain-fixed-backlog/turso-*.svg

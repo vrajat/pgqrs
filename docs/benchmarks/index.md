@@ -8,6 +8,7 @@ The current benchmark set is meant to explain behavior under specific queue and 
 - how throughput changes as batch size increases
 - how latency changes as concurrency increases
 - where a backend stops scaling cleanly
+- when durable queue overhead becomes negligible relative to job execution time
 
 ## How To Read These Results
 
@@ -36,15 +37,32 @@ That framing is intentionally avoided. PostgreSQL, SQLite, Turso, and S3 serve d
 
 ## Current Scenario Coverage
 
-The first documented benchmark scenario is:
+The current documented benchmark pages are:
 
 - [Queue Drain Fixed Backlog](queue-drain-fixed-backlog.md)
+- [Coarse Job Viability](coarse-job-viability.md)
 
-This scenario asks a narrow, useful question:
+These two pages answer different questions:
 
-- for a fixed pre-populated backlog, how do throughput, completion time, and latency change as consumer count and dequeue batch size vary?
+- `Queue Drain Fixed Backlog` is the stress case:
+  for a fixed pre-populated backlog, how do throughput, completion time, and latency change as consumer count and dequeue batch size vary?
+- `Coarse Job Viability` is the fit case:
+  for coarse-grained durable jobs, when does queue overhead become small enough that a slower but more portable backend is still operationally acceptable?
 
-That makes it a good first benchmark for understanding queue drain behavior before adding more complex steady-state or workflow benchmarks.
+Together they avoid a common mistake: using one tight-loop drain benchmark as a universal backend ranking.
+
+## Workload Classes
+
+The benchmark program now distinguishes between at least three workload classes:
+
+- `Streaming queue` workloads optimize for low per-message latency and scale-out throughput.
+- `General work queue` workloads optimize for reliable competing-consumer task dispatch.
+- `Coarse-grained durable job` workloads optimize for portability and durability while individual jobs take much longer than queue operations.
+
+This matters most for S3-backed queue state.
+
+The current drain benchmark is a valid anti-fit test for S3 because it shows what happens when queue latency dominates useful work.
+The coarse-job viability benchmark is the more decision-useful benchmark for S3 because it asks when queue overhead becomes small relative to job runtime.
 
 ## Methodology Notes
 
