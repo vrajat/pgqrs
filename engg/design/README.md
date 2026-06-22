@@ -21,6 +21,8 @@ Comprehensive technical design documentation for major features and components.
 - [Turso Store Implementation](turso_store.md)
 - [Store SQL Dialect Constants](store-sql-dialect-constants.md)
 - [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
+- [Postgres-Only Extension Runtime Implementation Plan](postgres-only-extension-runtime-implementation.md)
+- [Postgres-Only Shared Worker Protocol Design](postgres-only-shared-worker-protocol.md)
 
 ## Design Doc Template
 
