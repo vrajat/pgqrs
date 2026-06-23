@@ -1345,3 +1345,35 @@ The Postgres-only cleanup is complete when:
   Rust/Python workflows without executing Rust/Python code in Postgres.
 - Extension rollout docs describe install, upgrade, version compatibility, and
   operational requirements.
+
+## Logs
+
+- `2026-06-23`: `687caa4` (`feat: make pgqrs postgres-only`) landed on
+  `postgres-only-extension-runtime`. This was an initial Postgres-only cleanup,
+  but it did not finish removal of all SQLite, Turso, and S3 runtime surface.
+
+- `2026-06-23`: additional cleanup work was done in worktree
+  `/private/tmp/pgqrs-worktree-pg-only-2` on branch `worktree/pg-only-2` and
+  committed as `ae2cfd9` (`refactor(runtime): remove non-postgres backends`).
+  This branch name was misleading relative to the implementation plan because
+  it did not correspond to pure workstream 2.
+
+- `2026-06-23`: `ae2cfd9` was squash-merged into
+  `postgres-only-extension-runtime` as `554e5ec`
+  (`refactor(runtime): remove remaining non-postgres runtime surface`).
+
+- Scope note for `554e5ec`: this latest commit contains work from multiple
+  workstreams and should not be treated as a clean implementation of one
+  numbered workstream. It primarily includes:
+  - workstream 1: backend removal
+  - workstream 4: Rust test cleanup
+  - workstream 5: Python binding cleanup
+  - workstream 6: Python test cleanup
+  - workstream 7: documentation cleanup
+  - minor workstream 3-style portability cleanup in the remaining dialect code
+
+- Explicitly not completed by `554e5ec`: workstream 2 (`Store API
+  Consolidation`) remains outstanding. In particular, the implementation plan's
+  workstream 2 goals around removing `AnyStore`, removing `BackendType`,
+  removing runtime backend selection, and returning a concrete Postgres store
+  from connect paths were not completed in that commit.
