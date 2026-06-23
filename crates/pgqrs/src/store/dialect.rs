@@ -23,6 +23,7 @@ pub(crate) struct QueueSql {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) struct RunSql {
     pub insert: &'static str,
     pub get: &'static str,
