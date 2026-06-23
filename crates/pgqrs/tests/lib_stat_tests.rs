@@ -187,16 +187,7 @@ async fn test_worker_health_stats() {
     let queue_info = store.queue(queue_name).await.unwrap();
 
     // Insert a stale worker manually
-    let sql = match common::current_backend() {
-        #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', NOW() - INTERVAL '1 hour')",
-        #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
-        #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
-        #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', datetime('now', '-1 hour'))",
-    };
+    let sql = "INSERT INTO pgqrs_lib_stat_test.pgqrs_workers (queue_id, name, status, heartbeat_at) VALUES ($1, 'stale_worker', 'ready', NOW() - INTERVAL '1 hour')";
 
     store
         .execute_raw_with_i64(sql, queue_info.id)
@@ -229,20 +220,7 @@ async fn test_worker_health_stats() {
     assert_eq!(q_stat.total_workers, 1);
 
     // Cleanup
-    let cleanup_sql = match common::current_backend() {
-        #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => {
-            "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE name = 'stale_worker'"
-        }
-        #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'",
-        #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => {
-            "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'"
-        }
-        #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => "DELETE FROM pgqrs_workers WHERE name = 'stale_worker'",
-    };
+    let cleanup_sql = "DELETE FROM pgqrs_lib_stat_test.pgqrs_workers WHERE name = 'stale_worker'";
     store.execute_raw(cleanup_sql).await.unwrap();
     pgqrs::admin(&store)
         .delete_queue(&queue_info)

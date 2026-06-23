@@ -5,7 +5,7 @@
 
 **pgqrs is a postgres-native, library-only durable execution engine.**
 
-Written in Rust with Python bindings. Built for Postgres. Also supports SQLite, Turso, and S3.
+Written in Rust with Python bindings. Built for PostgreSQL.
 
 ## What is Durable Execution?
 
@@ -16,36 +16,33 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 - **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing and embedded), S3 (portable object-store-backed state)
+- **Postgres-only runtime:** one backend, one concurrency model, one operational path
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 
-## Choose Your Backend
+## Why PostgreSQL
 
-| Scenario | Recommended Backend | Why |
-|----------|---------------------|-----|
-| Production with multiple workers | **PostgreSQL** | Full concurrency, no writer conflicts |
-| Testing & prototyping | **SQLite / Turso** | Fast setup, no external dependencies |
-| Embedded applications | **SQLite / Turso** | Single-file database, no server |
-| Portable remote queue state | **S3** | Durable queue state in object storage without running PostgreSQL |
-| High write throughput | **PostgreSQL** | SQLite/Turso allow only 1 writer at a time |
-
-> ⚠️ **SQLite/Turso Concurrency Limit**: SQLite and Turso use database-level locks. With many concurrent writers, you may hit lock contention. See [SkyPilot's findings on SQLite concurrency](https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/). pgqrs enables WAL mode and sets a 5s busy timeout to mitigate this, but PostgreSQL is recommended for multi-worker scenarios.
+| Scenario | Why PostgreSQL fits |
+|----------|---------------------|
+| Production with multiple workers | `SKIP LOCKED` and transactional dequeue support concurrent workers cleanly |
+| Durable workflows | Workflow state, queue state, and step results live in one transactional store |
+| Operational simplicity | One database model across Rust, Python, CI, and production |
+| High write throughput | No single-writer file lock ceiling |
 
 ### Benchmark Highlights
 
 Current queue benchmark baselines show:
 
 - **PostgreSQL is the gold standard**: strong throughput with one consumer, and close to linear scaling as more consumers are added
-- **SQLite has similar single-consumer behavior** for this queue-drain scenario, but it does not scale with more consumers
-- **Turso currently behaves like SQLite** in this repo's local-path mode
-- **S3 is much slower on the durable object-store path** because per-message latency is much higher
+- **PostgreSQL is the supported benchmark baseline**
+- **More consumers generally improve throughput** until another bottleneck dominates
+- **Queue and workflow benchmarks reflect the supported runtime surface**
 
 See:
 
 - [Benchmark overview](docs/benchmarks/index.md)
 - [Queue Drain Fixed Backlog](docs/benchmarks/queue-drain-fixed-backlog.md)
-- [Backend Selection Guide](docs/user-guide/concepts/backends.md)
+- [PostgreSQL Runtime Guide](docs/user-guide/concepts/backends.md)
 
 ## Quick Start
 
@@ -305,17 +302,7 @@ pip install pgqrs
 
 ```toml
 [dependencies]
-# PostgreSQL only (default)
 pgqrs = "0.15.3"
-
-# SQLite only
-pgqrs = { version = "0.15.3", default-features = false, features = ["sqlite"] }
-
-# Turso only
-pgqrs = { version = "0.15.3", default-features = false, features = ["turso"] }
-
-# All backends
-pgqrs = { version = "0.15.3", features = ["full"] }
 
 # Workflow macros (optional)
 pgqrs-macros = "0.15.3"

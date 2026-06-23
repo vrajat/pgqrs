@@ -594,16 +594,8 @@ async fn test_referential_integrity_checks() {
 
     // Create an orphaned message by inserting directly with invalid queue_id
     // This simulates what would happen if referential integrity was broken
-    let sql = match common::current_backend() {
-        #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
-        #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-    };
+    let sql =
+        "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)";
 
     let orphan_result = store.execute_raw(sql).await;
 

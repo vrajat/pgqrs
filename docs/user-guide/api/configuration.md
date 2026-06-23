@@ -1,15 +1,12 @@
 # Configuration API
 
-`pgqrs` supports flexible configuration via connection strings, environment variables, configuration files, and programmatic builders.
+`pgqrs` supports PostgreSQL configuration via connection strings, environment variables, configuration files, and programmatic builders.
 
 ## Basic Connection
 
-pgqrs selects the backend from the DSN scheme:
+pgqrs accepts PostgreSQL DSNs:
 
 - `postgresql://...` or `postgres://...`
-- `sqlite:///...`
-- `turso:///...`
-- `s3://bucket/key.sqlite`
 
 === "Rust"
 
@@ -27,18 +24,15 @@ pgqrs selects the backend from the DSN scheme:
 
 ## Advanced Configuration
 
-For fine-grained control over connection pools, schema names, queue defaults, validation, and S3 durability behavior.
+For fine-grained control over connection pools, schema names, queue defaults, and validation.
 
 === "Rust"
 
     ```rust
     use pgqrs::Config;
-    use pgqrs::store::s3::DurabilityMode;
-
     // Load from DSN and customize
-    let mut config = Config::from_dsn("s3://my-bucket/queue.sqlite")
+    let config = Config::from_dsn("postgresql://localhost/mydb")
         .with_max_connections(32);
-    config.s3.mode = DurabilityMode::Durable;
 
     let store = pgqrs::connect_with_config(&config).await?;
     ```
@@ -75,7 +69,7 @@ let config = Config::load()?;
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `dsn` | Backend DSN | **Required** |
+| `dsn` | PostgreSQL DSN | **Required** |
 | `schema` | Database schema name | `public` |
 | `max_connections` | Connection pool size | `16` |
 | `connection_timeout_seconds` | Timeout for acquiring connection | `30` |
@@ -84,8 +78,6 @@ let config = Config::load()?;
 | `max_read_ct` | Dead-letter threshold | `5` |
 | `heartbeat_interval` | Worker heartbeat interval | `5` |
 | `poll_interval_ms` | Poll loop sleep interval | `250` |
-| `sqlite.use_wal` | Enable SQLite WAL mode | `true` |
-| `s3.mode` | `durable` or `local` for `s3://...` DSNs | `durable` |
 
 ## Environment Variables
 
@@ -100,17 +92,6 @@ let config = Config::load()?;
 | `PGQRS_MAX_READ_CT` | Dead-letter threshold |
 | `PGQRS_HEARTBEAT_INTERVAL` | Worker heartbeat interval |
 | `PGQRS_POLL_INTERVAL_MS` | Poll loop interval |
-| `PGQRS_SQLITE_USE_WAL` | SQLite WAL toggle |
-| `PGQRS_S3_MODE` | S3 durability mode: `durable` or `local` |
-
-### Object Store Environment
-
-For `s3://...` DSNs, pgqrs also reads AWS-compatible object store settings:
-
-- `AWS_REGION`
-- `AWS_ENDPOINT_URL`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
 
 ### Python Environment Usage
 
@@ -125,15 +106,11 @@ store = await pgqrs.connect(dsn)
 ## Configuration File Example
 
 ```yaml
-dsn: "s3://my-bucket/queue.sqlite"
+dsn: "postgresql://localhost/mydb"
 max_connections: 16
 default_lock_time_seconds: 5
 default_max_batch_size: 100
 poll_interval_ms: 250
-sqlite:
-  use_wal: false
-s3:
-  mode: durable
 ```
 
 ## Python Validation Settings

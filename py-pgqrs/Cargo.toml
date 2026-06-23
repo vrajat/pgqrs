@@ -13,11 +13,7 @@ crate-type = ["cdylib"]
 
 [features]
 default = ["postgres"]
-full = ["pgqrs/full"]
 postgres = ["pgqrs/postgres"]
-sqlite = ["pgqrs/sqlite"]
-turso = ["pgqrs/turso"]
-s3 = ["pgqrs/s3"]
 test-utils = ["pgqrs/test-utils"]
 
 [dependencies]

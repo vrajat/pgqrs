@@ -1,7 +1,7 @@
 #![allow(clippy::await_holding_lock)]
 
 use ctor::dtor;
-use pgqrs::store::BackendType;
+use pgqrs::{store::BackendType, Store};
 
 /// Get the current test backend.
 #[allow(dead_code)]

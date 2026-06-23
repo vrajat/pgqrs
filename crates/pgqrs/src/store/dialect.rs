@@ -11,18 +11,6 @@ pub(crate) struct StepSql {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(any(feature = "sqlite", feature = "turso"))]
-pub(crate) struct QueueSql {
-    pub insert: &'static str,
-    pub get: &'static str,
-    pub get_by_name: &'static str,
-    pub list: &'static str,
-    pub delete: &'static str,
-    pub delete_by_name: &'static str,
-    pub exists: &'static str,
-}
-
-#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub(crate) struct RunSql {
     pub insert: &'static str,
@@ -62,17 +50,6 @@ pub(crate) struct WorkerSql {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(any(feature = "sqlite", feature = "turso"))]
-pub(crate) struct WorkflowSql {
-    pub get_by_name: &'static str,
-    pub insert: &'static str,
-    pub get: &'static str,
-    pub list: &'static str,
-    pub count: &'static str,
-    pub delete: &'static str,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub(crate) struct DbStateSql {
     pub check_table_exists: &'static str,
     pub check_orphaned_messages: &'static str,
@@ -89,12 +66,8 @@ pub(crate) struct DbStateSql {
 
 pub(crate) trait SqlDialect {
     const STEP: StepSql;
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
-    const QUEUE: QueueSql;
     const RUN: RunSql;
     const MESSAGE: MessageSql;
     const WORKER: WorkerSql;
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
-    const WORKFLOW: WorkflowSql;
     const DB_STATE: DbStateSql;
 }

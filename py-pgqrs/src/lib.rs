@@ -3,8 +3,6 @@ use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-#[cfg(feature = "s3")]
-use rust_pgqrs::store::s3::S3Store as RustS3Store;
 use rust_pgqrs::store::{AnyStore, Store};
 use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
 
@@ -262,45 +260,6 @@ impl PyConfig {
     fn set_max_enqueue_burst(&mut self, burst: Option<u32>) {
         self.inner.validation_config.max_enqueue_burst = burst;
     }
-
-    #[cfg(feature = "s3")]
-    #[getter]
-    fn get_s3_mode(&self) -> PyDurabilityMode {
-        self.inner.s3.mode.into()
-    }
-
-    #[cfg(feature = "s3")]
-    #[setter]
-    fn set_s3_mode(&mut self, mode: PyDurabilityMode) {
-        self.inner.s3.mode = mode.into();
-    }
-
-    #[cfg(feature = "s3")]
-    #[getter]
-    fn get_s3_cache_dir(&self) -> Option<String> {
-        self.inner
-            .s3
-            .cache_dir
-            .as_ref()
-            .map(|cache_dir| cache_dir.to_string_lossy().into_owned())
-    }
-
-    #[cfg(feature = "s3")]
-    #[setter]
-    fn set_s3_cache_dir(&mut self, cache_dir: Option<String>) -> PyResult<()> {
-        if let Some(cache_dir) = cache_dir {
-            let trimmed = cache_dir.trim();
-            if trimmed.is_empty() {
-                return Err(ConfigError::new_err(
-                    "Invalid config for field 's3.cache_dir': cache dir cannot be empty",
-                ));
-            }
-            self.inner.s3.cache_dir = Some(std::path::PathBuf::from(trimmed));
-        } else {
-            self.inner.s3.cache_dir = None;
-        }
-        Ok(())
-    }
 }
 
 /// Backoff strategy for step retries
@@ -481,41 +440,6 @@ impl PyStore {
     }
 }
 
-#[cfg(feature = "s3")]
-#[pyclass(name = "S3StoreHandle")]
-#[derive(Clone)]
-pub struct PyS3StoreHandle {
-    pub(crate) inner: RustS3Store,
-}
-
-#[cfg(feature = "s3")]
-#[pymethods]
-impl PyS3StoreHandle {
-    fn snapshot<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let mut store = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(
-            py,
-            async move { store.snapshot().await.map_err(to_py_err) },
-        )
-    }
-
-    fn sync<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let mut store = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(
-            py,
-            async move { store.sync().await.map_err(to_py_err) },
-        )
-    }
-
-    fn state<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let store = self.inner.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let state = store.state().await.map_err(to_py_err)?;
-            Ok(PySyncState::from(state))
-        })
-    }
-}
-
 #[pyfunction]
 fn connect<'a>(py: Python<'a>, dsn: String) -> PyResult<&'a PyAny> {
     pyo3_asyncio::tokio::future_into_py(py, async move {
@@ -535,20 +459,6 @@ fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
             .map_err(to_py_err)?;
         Ok(PyStore { inner: store })
     })
-}
-
-#[cfg(feature = "s3")]
-#[pyfunction]
-fn as_s3(store: &PyStore) -> PyResult<PyS3StoreHandle> {
-    match &store.inner {
-        AnyStore::S3(store) => Ok(PyS3StoreHandle {
-            inner: store.clone(),
-        }),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
-            "store backend is '{}', expected 's3'",
-            store.inner.backend_name()
-        ))),
-    }
 }
 
 #[pyclass(name = "Admin")]
@@ -656,10 +566,6 @@ fn admin(store: PyStore) -> PyAdmin {
 
 #[pymodule]
 fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
-    #[cfg(feature = "s3")]
-    m.add_class::<PyDurabilityMode>()?;
-    #[cfg(feature = "s3")]
-    m.add_class::<PySyncState>()?;
     m.add_class::<PyAdmin>()?;
     m.add_class::<PyProducer>()?;
     m.add_class::<PyConsumer>()?;
@@ -676,8 +582,6 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWorkflowStatus>()?;
     m.add_class::<PyStepResultStatus>()?;
     m.add_class::<PyStore>()?;
-    #[cfg(feature = "s3")]
-    m.add_class::<PyS3StoreHandle>()?;
     m.add_class::<PyQueueMessage>()?;
     m.add_class::<PyQueueInfo>()?;
     m.add_class::<PyRun>()?;
@@ -697,8 +601,6 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(connect_with, m)?)?;
-    #[cfg(feature = "s3")]
-    m.add_function(wrap_pyfunction!(as_s3, m)?)?;
     m.add_function(wrap_pyfunction!(admin, m)?)?;
     m.add_function(wrap_pyfunction!(produce, m)?)?;
     m.add_function(wrap_pyfunction!(produce_batch, m)?)?;

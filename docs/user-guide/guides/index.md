@@ -23,14 +23,6 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 
     [:octicons-arrow-right-24: Basic Workflow](basic-workflow.md)
 
--   :material-cloud-outline:{ .lg .middle } **S3 Queue**
-
-    ---
-
-    Bootstrap and operate a queue stored as a SQLite object in S3.
-
-    [:octicons-arrow-right-24: S3 Queue](s3-queue.md)
-
 -   :material-package-variant:{ .lg .middle } **Batch Processing**
 
     ---
@@ -87,7 +79,6 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 |-------|----------|
 | [Basic Queue](basic-queue.md) | Minimal producer-consumer queue usage |
 | [Basic Workflow](basic-workflow.md) | Getting started, understanding the basics |
-| [S3 Queue](s3-queue.md) | Object-storage-backed queues with bootstrap and sync semantics |
 | [Durable Workflows](durable-workflows.md) | Multi-step processes, crash recovery |
 | [Retry Strategies](durable-workflows.md) | Error handling, backoff |
 | [Pausing Workflows](durable-workflows.md) | Human-in-the-loop, external webhooks |
@@ -100,7 +91,7 @@ Step-by-step tutorials and practical guides for common pgqrs use cases.
 Before following these guides, ensure you have:
 
 1. pgqrs installed ([Installation Guide](../getting-started/installation.md))
-2. A supported backend DSN
+2. A PostgreSQL DSN
 3. The pgqrs schema installed with `admin.install()`
 
 ## Code Examples

@@ -283,8 +283,6 @@ Here's a complete example showing a producer and consumer working together:
 
 ## What's Next?
 
-- Want an object-storage-backed queue? See [S3 Queue Guide](../guides/s3-queue.md)
-
 - [Workflow API](../api/workflows.md): Detailed API reference
 - [Producer API](../api/producer.md) - Learn about batch operations and delayed messages
 - [Consumer API](../api/consumer.md) - Learn about batch processing and visibility timeouts

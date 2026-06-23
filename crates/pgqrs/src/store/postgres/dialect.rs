@@ -1,6 +1,4 @@
 use crate::store::dialect::{DbStateSql, MessageSql, RunSql, SqlDialect, StepSql, WorkerSql};
-#[cfg(any(feature = "sqlite", feature = "turso"))]
-use crate::store::dialect::{QueueSql, WorkflowSql};
 
 pub(crate) struct PostgresDialect;
 
@@ -121,41 +119,6 @@ RETURNING
     updated_at,
     retry_at,
     retry_count
-"#,
-    };
-
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
-    const QUEUE: QueueSql = QueueSql {
-        insert: r#"
-INSERT INTO pgqrs_queues (queue_name)
-VALUES ($1)
-RETURNING id, queue_name, created_at
-"#,
-        get: r#"
-SELECT id, queue_name, created_at
-FROM pgqrs_queues
-WHERE id = $1
-"#,
-        get_by_name: r#"
-SELECT id, queue_name, created_at
-FROM pgqrs_queues
-WHERE queue_name = $1
-"#,
-        list: r#"
-SELECT id, queue_name, created_at
-FROM pgqrs_queues
-ORDER BY created_at DESC
-"#,
-        delete: r#"
-DELETE FROM pgqrs_queues
-WHERE id = $1
-"#,
-        delete_by_name: r#"
-DELETE FROM pgqrs_queues
-WHERE queue_name = $1
-"#,
-        exists: r#"
-SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = $1)
 "#,
     };
 
@@ -308,36 +271,6 @@ UPDATE pgqrs_workers
 SET status = 'ready'
 WHERE id = $1 AND status = 'suspended'
 RETURNING id
-"#,
-    };
-
-    #[cfg(any(feature = "sqlite", feature = "turso"))]
-    const WORKFLOW: WorkflowSql = WorkflowSql {
-        get_by_name: r#"
-SELECT id, name, queue_id, created_at
-FROM pgqrs_workflows
-WHERE name = $1
-"#,
-        insert: r#"
-INSERT INTO pgqrs_workflows (name, queue_id, created_at)
-VALUES ($1, $2, $3)
-RETURNING id, name, queue_id, created_at
-"#,
-        get: r#"
-SELECT id, name, queue_id, created_at
-FROM pgqrs_workflows
-WHERE id = $1
-"#,
-        list: r#"
-SELECT id, name, queue_id, created_at
-FROM pgqrs_workflows
-ORDER BY created_at DESC
-"#,
-        count: r#"
-SELECT COUNT(*) FROM pgqrs_workflows
-"#,
-        delete: r#"
-DELETE FROM pgqrs_workflows WHERE id = $1
 "#,
     };
 

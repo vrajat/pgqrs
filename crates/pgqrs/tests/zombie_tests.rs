@@ -6,13 +6,6 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
-    #[cfg(feature = "s3")]
-    {
-        if common::current_backend() == pgqrs::store::BackendType::S3 {
-            eprintln!("Skipping test: not supported on S3 backend");
-            return Ok(());
-        }
-    }
     let queue_name = "zombie-queue";
     let schema = "pgqrs_zombie_tests";
     // 1-8. Phase 1: Library-based Zombie Reclamation
@@ -58,16 +51,8 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         // Manually set the worker's heartbeat to be old (e.g., 1 hour ago)
         let consumer_worker_id = consumer.worker_id();
 
-        let update_sql = match common::current_backend() {
-            #[cfg(feature = "postgres")]
-            pgqrs::store::BackendType::Postgres => "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2",
-            #[cfg(feature = "s3")]
-            pgqrs::store::BackendType::S3 => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
-            #[cfg(feature = "sqlite")]
-            pgqrs::store::BackendType::Sqlite => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
-            #[cfg(feature = "turso")]
-            pgqrs::store::BackendType::Turso => "UPDATE pgqrs_workers SET heartbeat_at = datetime('now', '-' || ? || ' seconds') WHERE id = ?",
-        };
+        let update_sql =
+            "UPDATE pgqrs_workers SET heartbeat_at = NOW() - $1 * INTERVAL '1 second' WHERE id = $2";
 
         store
             .execute_raw_with_two_i64(update_sql, 3600, consumer_worker_id)
@@ -135,31 +120,6 @@ async fn test_zombie_lifecycle_and_reclamation() -> anyhow::Result<()> {
         store
             .execute_raw_with_two_i64(update_sql, 3600, c2_id)
             .await?;
-
-        #[cfg(any(feature = "sqlite", feature = "turso"))]
-        {
-            let mut needs_checkpoint = false;
-            let backend = common::current_backend();
-
-            #[cfg(feature = "sqlite")]
-            if backend == pgqrs::store::BackendType::Sqlite {
-                needs_checkpoint = true;
-            }
-
-            #[cfg(feature = "s3")]
-            if backend == pgqrs::store::BackendType::S3 {
-                needs_checkpoint = true;
-            }
-
-            #[cfg(feature = "turso")]
-            if backend == pgqrs::store::BackendType::Turso {
-                needs_checkpoint = true;
-            }
-
-            if needs_checkpoint {
-                let _ = store.execute_raw("PRAGMA wal_checkpoint(TRUNCATE)").await;
-            }
-        }
 
         (
             queue.id,
