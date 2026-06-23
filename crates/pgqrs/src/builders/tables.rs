@@ -5,47 +5,47 @@ use crate::store::Store;
 /// Start a tables builder.
 ///
 /// ```rust,no_run
-/// # use pgqrs::store::AnyStore;
-/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
+/// # use pgqrs::store::Store;
+/// # async fn example(store: Store) -> pgqrs::error::Result<()> {
 /// let workers = pgqrs::tables(&store).workers().list().await?;
 /// # Ok(()) }
 /// ```
-pub fn tables<S: Store>(store: &S) -> TablesBuilder<'_, S> {
+pub fn tables(store: &Store) -> TablesBuilder<'_> {
     TablesBuilder::new(store)
 }
 
 /// Builder for accessing store tables.
-pub struct TablesBuilder<'a, S: Store> {
-    store: &'a S,
+pub struct TablesBuilder<'a> {
+    store: &'a Store,
 }
 
-impl<'a, S: Store> TablesBuilder<'a, S> {
-    pub fn new(store: &'a S) -> Self {
+impl<'a> TablesBuilder<'a> {
+    pub fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
     /// Access message table operations
-    pub fn messages(self) -> &'a dyn crate::store::MessageTable {
+    pub fn messages(self) -> &'a crate::store::Messages {
         self.store.messages()
     }
 
     /// Access queue table operations
-    pub fn queues(self) -> &'a dyn crate::store::QueueTable {
+    pub fn queues(self) -> &'a crate::store::Queues {
         self.store.queues()
     }
 
     /// Access worker table operations
-    pub fn workers(self) -> &'a S::Workers {
+    pub fn workers(self) -> &'a crate::store::Workers {
         self.store.workers()
     }
 
     /// Access workflow table operations
-    pub fn workflows(self) -> &'a dyn crate::store::WorkflowTable {
+    pub fn workflows(self) -> &'a crate::store::Workflows {
         self.store.workflows()
     }
 
     /// Access workflow run table operations
-    pub fn workflow_runs(self) -> &'a dyn crate::store::RunRecordTable {
+    pub fn workflow_runs(self) -> &'a crate::store::RunRecords {
         self.store.workflow_runs()
     }
 }

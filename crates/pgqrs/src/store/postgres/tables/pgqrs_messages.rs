@@ -7,7 +7,6 @@ use crate::error::Result;
 use crate::store::dialect::SqlDialect;
 use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::QueueMessage;
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -204,9 +203,8 @@ impl Messages {
     }
 }
 
-#[async_trait]
-impl crate::store::MessageTable for Messages {
-    async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
+impl Messages {
+    pub async fn insert(&self, data: crate::types::NewQueueMessage) -> Result<QueueMessage> {
         let message = sqlx::query_as::<_, QueueMessage>(INSERT_MESSAGE)
             .bind(data.queue_id)
             .bind(data.payload)
@@ -226,7 +224,7 @@ impl crate::store::MessageTable for Messages {
         Ok(message)
     }
 
-    async fn get(&self, id: i64) -> Result<QueueMessage> {
+    pub async fn get(&self, id: i64) -> Result<QueueMessage> {
         let message = sqlx::query_as::<_, QueueMessage>(GET_MESSAGE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -240,7 +238,7 @@ impl crate::store::MessageTable for Messages {
         Ok(message)
     }
 
-    async fn list(&self) -> Result<Vec<QueueMessage>> {
+    pub async fn list(&self) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(LIST_ALL_MESSAGES)
             .fetch_all(&self.pool)
             .await
@@ -253,7 +251,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let count =
             sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE archived_at IS NULL")
                 .fetch_one(&self.pool)
@@ -266,7 +264,7 @@ impl crate::store::MessageTable for Messages {
         Ok(count)
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_MESSAGE_BY_ID)
             .bind(id)
             .execute(&self.pool)
@@ -281,7 +279,7 @@ impl crate::store::MessageTable for Messages {
         Ok(rows_affected)
     }
 
-    async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<QueueMessage>> {
+    pub async fn filter_by_fk(&self, foreign_key_value: i64) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_QUEUE)
             .bind(foreign_key_value)
             .fetch_all(&self.pool)
@@ -295,7 +293,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
+    pub async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
         sqlx::query_as::<_, QueueMessage>(PostgresDialect::MESSAGE.list_by_consumer_worker)
             .bind(worker_id)
             .fetch_all(&self.pool)
@@ -307,7 +305,7 @@ impl crate::store::MessageTable for Messages {
             })
     }
 
-    async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
+    pub async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
         sqlx::query_scalar(PostgresDialect::MESSAGE.count_by_consumer_worker)
             .bind(worker_id)
             .fetch_one(&self.pool)
@@ -319,7 +317,7 @@ impl crate::store::MessageTable for Messages {
             })
     }
 
-    async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
+    pub async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
         sqlx::query_scalar(PostgresDialect::MESSAGE.count_worker_references)
             .bind(worker_id)
             .bind(worker_id)
@@ -335,7 +333,7 @@ impl crate::store::MessageTable for Messages {
             })
     }
 
-    async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
+    pub async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
         sqlx::query_scalar(PostgresDialect::MESSAGE.move_to_dlq)
             .bind(max_read_ct)
             .fetch_all(&self.pool)
@@ -347,7 +345,7 @@ impl crate::store::MessageTable for Messages {
             })
     }
 
-    async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
+    pub async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
         let result = sqlx::query(PostgresDialect::MESSAGE.release_by_consumer_worker)
             .bind(worker_id)
             .execute(&self.pool)
@@ -360,7 +358,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result.rows_affected())
     }
 
-    async fn batch_insert(
+    pub async fn batch_insert(
         &self,
         queue_id: i64,
         payloads: &[serde_json::Value],
@@ -385,7 +383,7 @@ impl crate::store::MessageTable for Messages {
         Ok(ids)
     }
 
-    async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
+    pub async fn get_by_ids(&self, ids: &[i64]) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(GET_MESSAGES_BY_IDS)
             .bind(ids)
             .fetch_all(&self.pool)
@@ -399,7 +397,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
+    pub async fn update_payload(&self, id: i64, payload: serde_json::Value) -> Result<u64> {
         let rows_affected = sqlx::query(UPDATE_MESSAGE_PAYLOAD)
             .bind(id)
             .bind(payload)
@@ -415,7 +413,7 @@ impl crate::store::MessageTable for Messages {
         Ok(rows_affected)
     }
 
-    async fn extend_visibility(
+    pub async fn extend_visibility(
         &self,
         id: i64,
         worker_id: i64,
@@ -437,7 +435,7 @@ impl crate::store::MessageTable for Messages {
         Ok(rows_affected)
     }
 
-    async fn extend_visibility_batch(
+    pub async fn extend_visibility_batch(
         &self,
         message_ids: &[i64],
         worker_id: i64,
@@ -471,7 +469,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result)
     }
 
-    async fn release_messages_by_ids(
+    pub async fn release_messages_by_ids(
         &self,
         message_ids: &[i64],
         worker_id: i64,
@@ -500,7 +498,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result)
     }
 
-    async fn release_with_visibility(
+    pub async fn release_with_visibility(
         &self,
         id: i64,
         worker_id: i64,
@@ -522,7 +520,7 @@ impl crate::store::MessageTable for Messages {
         Ok(rows_affected)
     }
 
-    async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
+    pub async fn count_pending_for_queue(&self, queue_id: i64) -> Result<i64> {
         let count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
@@ -542,7 +540,7 @@ impl crate::store::MessageTable for Messages {
         Ok(count)
     }
 
-    async fn count_pending_for_queue_and_worker(
+    pub async fn count_pending_for_queue_and_worker(
         &self,
         queue_id: i64,
         worker_id: i64,
@@ -567,7 +565,7 @@ impl crate::store::MessageTable for Messages {
         Ok(count)
     }
 
-    async fn dequeue_at(
+    pub async fn dequeue_at(
         &self,
         queue_id: i64,
         limit: usize,
@@ -594,7 +592,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
+    pub async fn archive(&self, id: i64, worker_id: i64) -> Result<Option<QueueMessage>> {
         let result: Option<QueueMessage> = sqlx::query_as::<_, QueueMessage>(ARCHIVE_MESSAGE)
             .bind(id)
             .bind(worker_id)
@@ -609,7 +607,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result)
     }
 
-    async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+    pub async fn archive_many(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -630,7 +628,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result)
     }
 
-    async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
+    pub async fn replay_dlq(&self, id: i64) -> Result<Option<QueueMessage>> {
         let msg = sqlx::query_as::<_, QueueMessage>(REPLAY_FROM_DLQ)
             .bind(id)
             .fetch_optional(&self.pool)
@@ -644,7 +642,7 @@ impl crate::store::MessageTable for Messages {
         Ok(msg)
     }
 
-    async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
+    pub async fn delete_owned(&self, id: i64, worker_id: i64) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_MESSAGE_OWNED)
             .bind(id)
             .bind(worker_id)
@@ -660,7 +658,7 @@ impl crate::store::MessageTable for Messages {
         Ok(rows_affected)
     }
 
-    async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
+    pub async fn delete_many_owned(&self, ids: &[i64], worker_id: i64) -> Result<Vec<bool>> {
         let deleted_ids: Vec<i64> = sqlx::query_scalar(DELETE_MESSAGE_BATCH_OWNED)
             .bind(ids)
             .bind(worker_id)
@@ -677,7 +675,7 @@ impl crate::store::MessageTable for Messages {
         Ok(result)
     }
 
-    async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
+    pub async fn list_archived_by_queue(&self, queue_id: i64) -> Result<Vec<QueueMessage>> {
         let messages = sqlx::query_as::<_, QueueMessage>(
             r#"
             SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
@@ -698,7 +696,7 @@ impl crate::store::MessageTable for Messages {
         Ok(messages)
     }
 
-    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+    pub async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_messages WHERE queue_id = $1")
                 .bind(queue_id)
@@ -712,7 +710,7 @@ impl crate::store::MessageTable for Messages {
         Ok(count)
     }
 
-    async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
+    pub async fn delete_by_ids(&self, ids: &[i64]) -> Result<Vec<bool>> {
         let mut results = Vec::with_capacity(ids.len());
 
         for &id in ids {

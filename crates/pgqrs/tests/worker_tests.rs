@@ -1,14 +1,13 @@
 //! Integration tests for worker management functionality
 
 use chrono::Duration;
-use pgqrs::store::AnyStore;
 use pgqrs::types::WorkerStatus;
 use pgqrs::{Store, Worker};
 use serde_json::json;
 
 mod common;
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("pgqrs_worker_test").await
 }
 

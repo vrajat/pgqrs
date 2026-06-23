@@ -1,4 +1,4 @@
-use pgqrs::{store::Store, types::WorkerStatus};
+use pgqrs::types::WorkerStatus;
 use serial_test::serial;
 
 mod common;

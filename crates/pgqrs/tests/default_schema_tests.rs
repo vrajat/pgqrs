@@ -1,8 +1,6 @@
-use pgqrs::Store;
-
 mod common;
 
-async fn create_store() -> pgqrs::store::AnyStore {
+async fn create_store() -> pgqrs::store::Store {
     let dsn = common::get_test_dsn("public").await;
     let config = pgqrs::config::Config::from_dsn(&dsn);
     let store = pgqrs::connect_with_config(&config)

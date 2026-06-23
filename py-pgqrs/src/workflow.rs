@@ -2,7 +2,7 @@ use crate::tables::PyQueueMessage;
 use crate::{json_to_py, py_to_json, to_py_err, PgqrsError, PyStepResultStatus, PyStore};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
-use rust_pgqrs::store::{AnyStore, Store};
+use rust_pgqrs::store::Store;
 use rust_pgqrs::types::QueueMessage as RustQueueMessage;
 use rust_pgqrs::{Run, Step};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub fn step() -> PyStepBuilder {
 #[pyclass(name = "Run")]
 pub struct PyRun {
     pub(crate) inner: Arc<Run>,
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
     pub(crate) workflow_id: i64,
 }
 
@@ -356,7 +356,7 @@ impl PyStepGuard {
 #[pyclass(name = "WorkflowBuilder")]
 #[derive(Default)]
 pub struct PyWorkflowBuilder {
-    pub(crate) store: Option<AnyStore>,
+    pub(crate) store: Option<Store>,
     pub(crate) name: Option<String>,
     pub(crate) id: Option<i64>,
 }
@@ -412,7 +412,7 @@ impl PyWorkflowBuilder {
 
 #[pyclass(name = "WorkflowTriggerBuilder")]
 pub struct PyWorkflowTriggerBuilder {
-    pub(crate) store: Option<AnyStore>,
+    pub(crate) store: Option<Store>,
     pub(crate) name: Option<String>,
     #[allow(dead_code)]
     pub(crate) id: Option<i64>,
@@ -461,7 +461,7 @@ impl PyWorkflowTriggerBuilder {
 #[pyclass(name = "RunBuilder")]
 #[derive(Default)]
 pub struct PyRunBuilder {
-    pub(crate) store: Option<AnyStore>,
+    pub(crate) store: Option<Store>,
     pub(crate) message: Option<RustQueueMessage>,
 }
 

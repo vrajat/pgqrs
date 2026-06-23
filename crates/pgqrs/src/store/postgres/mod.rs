@@ -1,10 +1,7 @@
 //! Postgres implementation of the Store trait.
 
-use crate::store::{
-    DbStateTable, MessageTable, QueueTable, RunRecordTable, StepRecordTable, Store, WorkerTable,
-    WorkflowTable,
-};
-use async_trait::async_trait;
+use crate::store::ConcurrencyModel;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -19,12 +16,11 @@ use self::tables::pgqrs_workflow_runs::RunRecords as PostgresRunRecordTable;
 use self::tables::pgqrs_workflow_steps::StepRecords as PostgresStepRecordTable;
 use self::tables::pgqrs_workflows::Workflows as PostgresWorkflowTable;
 use crate::config::Config;
-use crate::store::postgres::tables::Workers;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
 #[derive(Debug, Clone)]
-pub struct PostgresStore {
+pub struct Store {
     pool: PgPool,
     config: Config,
     queues: Arc<PostgresQueueTable>,
@@ -36,7 +32,7 @@ pub struct PostgresStore {
     workflow_steps: Arc<PostgresStepRecordTable>,
 }
 
-impl PostgresStore {
+impl Store {
     pub fn new(pool: PgPool, config: &Config) -> Self {
         Self {
             pool: pool.clone(),
@@ -51,27 +47,63 @@ impl PostgresStore {
         }
     }
 
+    /// Connect to a database using a configuration object.
+    pub async fn connect(config: &Config) -> crate::error::Result<Self> {
+        const POSTGRES_PREFIXES: &[&str] = &["postgres://", "postgresql://", "postgres", "pg"];
+
+        if !POSTGRES_PREFIXES.iter().any(|p| config.dsn.starts_with(p)) {
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: format!("Unsupported DSN format: {}", config.dsn),
+            });
+        }
+
+        let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
+
+        let pool = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .after_connect(move |conn, _meta| {
+                let sql = search_path_sql.clone();
+                Box::pin(async move {
+                    sqlx::query(&sql).execute(&mut *conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&config.dsn)
+            .await
+            .map_err(|e| crate::error::Error::ConnectionFailed {
+                source: Box::new(e),
+                context: "Failed to connect to postgres".into(),
+            })?;
+
+        Ok(Store::new(pool, config))
+    }
+
+    /// Connect to a database using just a DSN string (simple connection).
+    pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
+        let config = Config::from_dsn(dsn);
+        Self::connect(&config).await
+    }
+
     /// Get access to the underlying PgPool.
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
-}
 
-#[async_trait]
-impl Store for PostgresStore {
-    type Workers = Workers;
-
-    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
+    /// Execute raw SQL without parameters.
+    pub async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
         sqlx::raw_sql(sql).execute(&self.pool).await?;
         Ok(())
     }
 
-    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
+    /// Execute raw SQL with a single i64 parameter.
+    pub async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
         sqlx::query(sql).bind(param).execute(&self.pool).await?;
         Ok(())
     }
 
-    async fn execute_raw_with_two_i64(
+    /// Execute raw SQL with two i64 parameters.
+    pub async fn execute_raw_with_two_i64(
         &self,
         sql: &str,
         param1: i64,
@@ -85,78 +117,81 @@ impl Store for PostgresStore {
         Ok(())
     }
 
-    async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
+    /// Query a single i64 value using raw SQL.
+    pub async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
         use sqlx::Row;
         let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
         Ok(row.try_get(0)?)
     }
 
-    async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
+    /// Query a single string value using raw SQL.
+    pub async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
         use sqlx::Row;
         let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
         Ok(row.try_get(0)?)
     }
 
-    async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
+    /// Query a single boolean value using raw SQL.
+    pub async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
         use sqlx::Row;
         let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
         Ok(row.try_get(0)?)
     }
 
-    fn config(&self) -> &Config {
+    /// Get the configuration for this store
+    pub fn config(&self) -> &Config {
         &self.config
     }
 
-    fn queues(&self) -> &dyn QueueTable {
+    /// Get access to the repositories.
+    pub fn queues(&self) -> &PostgresQueueTable {
         self.queues.as_ref()
     }
 
-    fn messages(&self) -> &dyn MessageTable {
+    pub fn messages(&self) -> &PostgresMessageTable {
         self.messages.as_ref()
     }
 
-    fn workers(&self) -> &Self::Workers {
+    pub fn workers(&self) -> &PostgresWorkerTable {
         self.workers.as_ref()
     }
 
-    fn db_state(&self) -> &dyn DbStateTable {
+    pub fn db_state(&self) -> &PostgresDbState {
         self.db_state.as_ref()
     }
 
-    fn workflows(&self) -> &dyn WorkflowTable {
+    pub fn workflows(&self) -> &PostgresWorkflowTable {
         self.workflows.as_ref()
     }
 
-    fn workflow_runs(&self) -> &dyn RunRecordTable {
+    pub fn workflow_runs(&self) -> &PostgresRunRecordTable {
         self.workflow_runs.as_ref()
     }
 
-    fn workflow_steps(&self) -> &dyn StepRecordTable {
+    pub fn workflow_steps(&self) -> &PostgresStepRecordTable {
         self.workflow_steps.as_ref()
     }
 
-    async fn bootstrap(&self) -> crate::error::Result<()> {
+    /// Initialize the pgqrs schema in the database.
+    pub async fn bootstrap(&self) -> crate::error::Result<()> {
         MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
 
-    async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin> {
+    /// Get an admin worker interface.
+    pub async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin> {
         let worker_record = self.workers.register(None, name).await?;
-        Ok(crate::workers::Admin::new(
-            crate::store::AnyStore::Postgres(self.clone()),
-            worker_record,
-        ))
+        Ok(crate::workers::Admin::new(self.clone(), worker_record))
     }
 
-    async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin> {
+    /// Get an ephemeral admin worker interface.
+    pub async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin> {
         let worker_record = self.workers().register_ephemeral(None).await?;
-        Ok(crate::workers::Admin::new(
-            crate::store::AnyStore::Postgres(self.clone()),
-            worker_record,
-        ))
+        Ok(crate::workers::Admin::new(self.clone(), worker_record))
     }
 
-    async fn producer(
+    /// Get a producer interface for a specific queue with worker identity.
+    pub async fn producer(
         &self,
         queue: &str,
         name: &str,
@@ -166,14 +201,15 @@ impl Store for PostgresStore {
         let worker_record = self.workers.register(Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Postgres(self.clone()),
+            self.clone(),
             queue_info,
             worker_record,
             config.validation_config.clone(),
         ))
     }
 
-    async fn consumer(
+    /// Get a consumer interface for a specific queue with worker identity.
+    pub async fn consumer(
         &self,
         queue: &str,
         name: &str,
@@ -182,13 +218,14 @@ impl Store for PostgresStore {
         let worker_record = self.workers.register(Some(queue_info.id), name).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Postgres(self.clone()),
+            self.clone(),
             queue_info,
             worker_record,
         ))
     }
 
-    async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
+    /// Create a new queue.
+    pub async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
         let queue_exists = self.queues.exists(name).await?;
         if queue_exists {
             return Err(crate::error::Error::QueueAlreadyExists {
@@ -203,7 +240,8 @@ impl Store for PostgresStore {
             .await
     }
 
-    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
+    /// Get a workflow definition handle.
+    pub async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
         // Ensure backing queue exists.
         let queue_exists = self.queues.exists(name).await?;
         if !queue_exists {
@@ -243,17 +281,15 @@ impl Store for PostgresStore {
         Ok(workflow_record)
     }
 
-    async fn run(
+    /// Create a local run handle from a message.
+    pub async fn run(
         &self,
         message: crate::types::QueueMessage,
     ) -> crate::error::Result<crate::workers::Run> {
         // Try to find existing run by message_id
         match self.workflow_runs.get_by_message_id(message.id).await {
             Ok(record) => {
-                return Ok(crate::workers::Run::new(
-                    crate::store::AnyStore::Postgres(self.clone()),
-                    record,
-                ));
+                return Ok(crate::workers::Run::new(self.clone(), record));
             }
             Err(crate::error::Error::NotFound { .. }) => {
                 // Not found, continue to create new run
@@ -274,21 +310,21 @@ impl Store for PostgresStore {
             })
             .await?;
 
-        Ok(crate::workers::Run::new(
-            crate::store::AnyStore::Postgres(self.clone()),
-            run_rec,
-        ))
+        Ok(crate::workers::Run::new(self.clone(), run_rec))
     }
 
-    fn concurrency_model(&self) -> crate::store::ConcurrencyModel {
-        crate::store::ConcurrencyModel::MultiProcess
+    /// Returns the concurrency model supported by this backend.
+    pub fn concurrency_model(&self) -> ConcurrencyModel {
+        ConcurrencyModel::MultiProcess
     }
 
-    fn backend_name(&self) -> &'static str {
+    /// Returns the backend name.
+    pub fn backend_name(&self) -> &'static str {
         "postgres"
     }
 
-    async fn producer_ephemeral(
+    /// Create an ephemeral producer (auto-cleanup).
+    pub async fn producer_ephemeral(
         &self,
         queue: &str,
         config: &Config,
@@ -297,14 +333,15 @@ impl Store for PostgresStore {
         let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
 
         Ok(crate::workers::Producer::new(
-            crate::store::AnyStore::Postgres(self.clone()),
+            self.clone(),
             queue_info,
             worker_record,
             config.validation_config.clone(),
         ))
     }
 
-    async fn consumer_ephemeral(
+    /// Create an ephemeral consumer (auto-cleanup).
+    pub async fn consumer_ephemeral(
         &self,
         queue: &str,
     ) -> crate::error::Result<crate::workers::Consumer> {
@@ -312,7 +349,7 @@ impl Store for PostgresStore {
         let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
 
         Ok(crate::workers::Consumer::new(
-            crate::store::AnyStore::Postgres(self.clone()),
+            self.clone(),
             queue_info,
             worker_record,
         ))

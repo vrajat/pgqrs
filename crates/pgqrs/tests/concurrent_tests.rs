@@ -1,8 +1,6 @@
 use pgqrs::error::Result;
 use pgqrs::pgqrs_workflow;
-use pgqrs::store::AnyStore;
-use pgqrs::Run;
-use pgqrs::Store;
+use pgqrs::{Run, Store};
 use serde_json::json;
 use serial_test::serial;
 use std::sync::{Arc, Mutex};
@@ -99,7 +97,7 @@ async fn scenario_cancel_redelivery_wf(
     Ok(input)
 }
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("pgqrs_concurrent_test").await
 }
 
@@ -129,7 +127,7 @@ async fn create_workflow_test_rig(
 }
 
 async fn assert_run_status(
-    store: &AnyStore,
+    store: &Store,
     run_id: i64,
     expected: pgqrs::WorkflowStatus,
 ) -> anyhow::Result<()> {
@@ -139,7 +137,7 @@ async fn assert_run_status(
 }
 
 async fn assert_message_archived(
-    store: &AnyStore,
+    store: &Store,
     message: &pgqrs::QueueMessage,
 ) -> anyhow::Result<()> {
     let archived = pgqrs::tables(store)
@@ -151,7 +149,7 @@ async fn assert_message_archived(
     Ok(())
 }
 
-async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+async fn steps_for_run(store: &Store, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
     Ok(store
         .workflow_steps()
         .list()

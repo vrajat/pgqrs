@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use crate::rate_limit::RateLimitStatus;
 use crate::stats::WorkerStats;
-use crate::store::{AnyStore, Store};
+use crate::store::Store;
 pub use crate::types::{
     QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
@@ -34,12 +34,12 @@ pub trait Worker: Send + Sync {
 /// Administrative worker for queues, workers, and stats.
 #[derive(Clone, Debug)]
 pub struct Admin {
-    store: AnyStore,
+    store: Store,
     worker_record: WorkerRecord,
 }
 
 impl Admin {
-    pub fn new(store: AnyStore, worker_record: WorkerRecord) -> Self {
+    pub fn new(store: Store, worker_record: WorkerRecord) -> Self {
         Self {
             store,
             worker_record,
@@ -319,7 +319,7 @@ impl crate::store::Worker for Producer {
 /// Producer for enqueueing messages to a queue.
 #[derive(Clone, Debug)]
 pub struct Producer {
-    store: AnyStore,
+    store: Store,
     queue_info: QueueRecord,
     worker_record: WorkerRecord,
     validator: PayloadValidator,
@@ -329,7 +329,7 @@ pub struct Producer {
 impl Producer {
     /// Create a producer bound to a queue and worker record.
     pub fn new(
-        store: AnyStore,
+        store: Store,
         queue_info: QueueRecord,
         worker_record: WorkerRecord,
         validation_config: ValidationConfig,
@@ -529,7 +529,7 @@ impl Producer {
 /// Consumer for dequeueing and managing messages.
 #[derive(Clone, Debug)]
 pub struct Consumer {
-    store: AnyStore,
+    store: Store,
     queue_info: QueueRecord,
     worker_record: WorkerRecord,
     current_time: Option<DateTime<Utc>>,
@@ -537,7 +537,7 @@ pub struct Consumer {
 
 impl Consumer {
     /// Create a consumer bound to a queue and worker record.
-    pub fn new(store: AnyStore, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
+    pub fn new(store: Store, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
         Self {
             store,
             queue_info,
@@ -562,7 +562,7 @@ impl Consumer {
         self.worker_record.id
     }
 
-    pub(crate) fn store(&self) -> &AnyStore {
+    pub(crate) fn store(&self) -> &Store {
         &self.store
     }
 
@@ -801,14 +801,14 @@ impl crate::store::Worker for Consumer {
 /// Use this to acquire steps and complete or pause a workflow run.
 #[derive(Clone, Debug)]
 pub struct Run {
-    store: AnyStore,
+    store: Store,
     record: RunRecord,
     current_time: Option<DateTime<Utc>>,
 }
 
 impl Run {
     /// Create a run handle from a run record.
-    pub fn new(store: AnyStore, record: RunRecord) -> Self {
+    pub fn new(store: Store, record: RunRecord) -> Self {
         Self {
             store,
             record,
@@ -1027,14 +1027,14 @@ impl Run {
 /// Workflow step execution handle.
 #[derive(Clone, Debug)]
 pub struct Step {
-    store: AnyStore,
+    store: Store,
     record: StepRecord,
     current_time: Option<DateTime<Utc>>,
 }
 
 impl Step {
     /// Create a step handle from a step record.
-    pub fn new(store: AnyStore, record: StepRecord) -> Self {
+    pub fn new(store: Store, record: StepRecord) -> Self {
         Self {
             store,
             record,

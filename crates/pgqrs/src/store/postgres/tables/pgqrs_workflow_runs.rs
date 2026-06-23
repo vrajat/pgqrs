@@ -2,7 +2,6 @@ use crate::error::Result;
 use crate::store::dialect::SqlDialect;
 use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::{NewRunRecord, RunRecord, WorkflowStatus};
-use async_trait::async_trait;
 use sqlx::PgPool;
 use std::str::FromStr;
 
@@ -17,9 +16,8 @@ impl RunRecords {
     }
 }
 
-#[async_trait]
-impl crate::store::RunRecordTable for RunRecords {
-    async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
+impl RunRecords {
+    pub async fn insert(&self, data: NewRunRecord) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             INSERT INTO pgqrs_workflow_runs (workflow_id, message_id, status, input)
@@ -55,7 +53,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn get(&self, id: i64) -> Result<RunRecord> {
+    pub async fn get(&self, id: i64) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             SELECT
@@ -84,7 +82,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn list(&self) -> Result<Vec<RunRecord>> {
+    pub async fn list(&self) -> Result<Vec<RunRecord>> {
         let rows = sqlx::query_as::<_, RunRecord>(
             r#"
             SELECT
@@ -112,7 +110,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(rows)
     }
 
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflow_runs")
             .fetch_one(&self.pool)
             .await
@@ -125,7 +123,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(count)
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let result = sqlx::query("DELETE FROM pgqrs_workflow_runs WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -139,7 +137,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(result.rows_affected())
     }
 
-    async fn start_run(&self, id: i64) -> Result<RunRecord> {
+    pub async fn start_run(&self, id: i64) -> Result<RunRecord> {
         let result: Option<RunRecord> = sqlx::query_as(
             r#"
             UPDATE pgqrs_workflow_runs
@@ -197,7 +195,7 @@ impl crate::store::RunRecordTable for RunRecords {
         self.get(id).await
     }
 
-    async fn complete_run(&self, id: i64, output: serde_json::Value) -> Result<RunRecord> {
+    pub async fn complete_run(&self, id: i64, output: serde_json::Value) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
@@ -219,7 +217,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn pause_run(
+    pub async fn pause_run(
         &self,
         id: i64,
         message: String,
@@ -253,7 +251,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
+    pub async fn cancel_run(&self, id: i64) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.cancel)
             .bind(id)
             .fetch_one(&self.pool)
@@ -267,7 +265,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
+    pub async fn complete_cancel_run(&self, id: i64) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(PostgresDialect::RUN.complete_cancel)
             .bind(id)
             .fetch_one(&self.pool)
@@ -281,7 +279,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn fail_run(&self, id: i64, error: serde_json::Value) -> Result<RunRecord> {
+    pub async fn fail_run(&self, id: i64, error: serde_json::Value) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             UPDATE pgqrs_workflow_runs
@@ -303,7 +301,7 @@ impl crate::store::RunRecordTable for RunRecords {
         Ok(row)
     }
 
-    async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
+    pub async fn get_by_message_id(&self, message_id: i64) -> Result<RunRecord> {
         let row = sqlx::query_as::<_, RunRecord>(
             r#"
             SELECT

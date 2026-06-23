@@ -1,17 +1,8 @@
-#![allow(clippy::await_holding_lock)]
-
 use ctor::dtor;
-use pgqrs::{store::BackendType, Store};
-
-/// Get the current test backend.
-#[allow(dead_code)]
-pub fn current_backend() -> BackendType {
-    BackendType::Postgres
-}
 
 /// Create a store for the currently selected test backend.
 #[allow(dead_code)]
-pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
+pub async fn create_store(schema: &str) -> pgqrs::store::Store {
     create_store_with_config(schema, |_: &mut pgqrs::config::Config| {}).await
 }
 
@@ -20,7 +11,7 @@ pub async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
 pub async fn create_store_with_config(
     schema: &str,
     mutator: impl FnOnce(&mut pgqrs::config::Config),
-) -> pgqrs::store::AnyStore {
+) -> pgqrs::store::Store {
     let dsn = get_test_dsn(schema).await;
 
     let mut config =
@@ -47,29 +38,6 @@ pub async fn get_test_dsn(_schema: &str) -> String {
             )
         })
 }
-
-/// Skip test if not running on specified backend.
-#[macro_export]
-macro_rules! skip_unless_backend {
-    ($backend:expr) => {
-        if common::current_backend() != $backend {
-            eprintln!("Skipping test: requires {:?} backend", $backend);
-            return;
-        }
-    };
-}
-
-/// Skip test if running on specified backend.
-#[macro_export]
-macro_rules! skip_on_backend {
-    ($backend:expr) => {
-        if common::current_backend() == $backend {
-            eprintln!("Skipping test: not supported on {:?} backend", $backend);
-            return;
-        }
-    };
-}
-
 #[dtor]
 fn drop_database() {
     if keep_test_data() {

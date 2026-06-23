@@ -75,7 +75,6 @@ mod rate_limit;
 /// Metrics and system statistics.
 pub mod stats;
 pub mod store;
-pub mod tables;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 pub mod types;
@@ -96,9 +95,8 @@ pub mod builders {
     pub mod workflow;
 }
 
-pub use crate::store::Store;
-pub use crate::tables::{
-    MessageTable, QueueTable, RunRecordTable, StepRecordTable, WorkerTable, WorkflowTable,
+pub use crate::store::{
+    DbState, Messages, Queues, RunRecords, StepRecords, Store, Workers, Workflows,
 };
 pub use crate::workers::{Admin, Consumer, Producer, Run, Step, Worker};
 #[cfg(any(test, feature = "test-utils"))]
@@ -133,7 +131,7 @@ pub use pgqrs_macros::{pgqrs_step, pgqrs_workflow};
 /// pgqrs::admin(&store).install().await?;
 /// # Ok(()) }
 /// ```
-pub fn admin<S: Store>(store: &S) -> builders::admin::AdminBuilder<'_, S> {
+pub fn admin(store: &Store) -> builders::admin::AdminBuilder<'_> {
     builders::admin::AdminBuilder::new(store)
 }
 
@@ -201,12 +199,12 @@ pub fn dequeue() -> builders::dequeue::DequeueBuilder<'static> {
 /// Start a tables builder.
 ///
 /// ```rust,no_run
-/// # use pgqrs::store::AnyStore;
-/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
+/// # use pgqrs::store::Store;
+/// # async fn example(store: Store) -> pgqrs::error::Result<()> {
 /// let workers = pgqrs::tables(&store).workers().list().await?;
 /// # Ok(()) }
 /// ```
-pub fn tables<S: Store>(store: &S) -> builders::tables::TablesBuilder<'_, S> {
+pub fn tables(store: &Store) -> builders::tables::TablesBuilder<'_> {
     builders::tables::TablesBuilder::new(store)
 }
 
@@ -256,7 +254,7 @@ where
 ///     .await?;
 /// # Ok(()) }
 /// ```
-pub fn run() -> builders::run::RunBuilder<'static, crate::store::AnyStore> {
+pub fn run() -> builders::run::RunBuilder<'static> {
     builders::run::RunBuilder::new()
 }
 
@@ -290,13 +288,13 @@ pub fn step() -> builders::step::StepBuilder<'static> {
 }
 
 /// Connect to a database using a DSN string.
-pub async fn connect(dsn: &str) -> crate::error::Result<crate::store::AnyStore> {
-    crate::store::any::AnyStore::connect_with_dsn(dsn).await
+pub async fn connect(dsn: &str) -> crate::error::Result<crate::store::Store> {
+    crate::store::Store::connect_with_dsn(dsn).await
 }
 
 /// Connect to a database using a custom configuration.
 pub async fn connect_with_config(
     config: &crate::config::Config,
-) -> crate::error::Result<crate::store::AnyStore> {
-    crate::store::any::AnyStore::connect(config).await
+) -> crate::error::Result<crate::store::Store> {
+    crate::store::Store::connect(config).await
 }

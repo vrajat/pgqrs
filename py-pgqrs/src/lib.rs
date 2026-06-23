@@ -3,7 +3,7 @@ use ::pgqrs as rust_pgqrs;
 use gethostname::gethostname;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use rust_pgqrs::store::{AnyStore, Store};
+use rust_pgqrs::store::Store;
 use rust_pgqrs::{BackoffStrategy as RustBackoffStrategy, StepRetryPolicy as RustStepRetryPolicy};
 
 use std::future::Future;
@@ -350,7 +350,7 @@ impl PyStepRetryPolicy {
 #[pyclass(name = "Store")]
 #[derive(Clone)]
 pub struct PyStore {
-    pub(crate) inner: AnyStore,
+    pub(crate) inner: Store,
 }
 
 #[pymethods]
@@ -463,7 +463,7 @@ fn connect_with<'a>(py: Python<'a>, config: PyConfig) -> PyResult<&'a PyAny> {
 
 #[pyclass(name = "Admin")]
 pub struct PyAdmin {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pymethods]

@@ -2,7 +2,6 @@ use crate::error::Result;
 use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats};
 use crate::store::dialect::SqlDialect;
 use crate::store::postgres::dialect::PostgresDialect;
-use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
 
@@ -17,9 +16,8 @@ impl DbState {
     }
 }
 
-#[async_trait]
-impl crate::store::DbStateTable for DbState {
-    async fn verify(&self) -> Result<()> {
+impl DbState {
+    pub async fn verify(&self) -> Result<()> {
         let required_tables = [
             ("pgqrs_queues", "Queue repository table"),
             ("pgqrs_workers", "Worker repository table"),
@@ -69,7 +67,7 @@ impl crate::store::DbStateTable for DbState {
         Ok(())
     }
 
-    async fn purge_queue(&self, queue_id: i64) -> Result<()> {
+    pub async fn purge_queue(&self, queue_id: i64) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(PostgresDialect::DB_STATE.purge_queue_messages)
             .bind(queue_id)
@@ -83,7 +81,7 @@ impl crate::store::DbStateTable for DbState {
         Ok(())
     }
 
-    async fn queue_metrics(&self, queue_id: i64) -> Result<QueueMetrics> {
+    pub async fn queue_metrics(&self, queue_id: i64) -> Result<QueueMetrics> {
         sqlx::query_as(PostgresDialect::DB_STATE.queue_metrics)
             .bind(queue_id)
             .fetch_one(&self.pool)
@@ -91,21 +89,21 @@ impl crate::store::DbStateTable for DbState {
             .map_err(Into::into)
     }
 
-    async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
+    pub async fn all_queues_metrics(&self) -> Result<Vec<QueueMetrics>> {
         sqlx::query_as(PostgresDialect::DB_STATE.all_queues_metrics)
             .fetch_all(&self.pool)
             .await
             .map_err(Into::into)
     }
 
-    async fn system_stats(&self) -> Result<SystemStats> {
+    pub async fn system_stats(&self) -> Result<SystemStats> {
         sqlx::query_as(PostgresDialect::DB_STATE.system_stats)
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
     }
 
-    async fn worker_health_stats(
+    pub async fn worker_health_stats(
         &self,
         heartbeat_timeout: chrono::Duration,
         group_by_queue: bool,
@@ -123,7 +121,7 @@ impl crate::store::DbStateTable for DbState {
             .map_err(Into::into)
     }
 
-    async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
+    pub async fn purge_old_workers(&self, older_than: chrono::Duration) -> Result<u64> {
         let threshold = Utc::now() - older_than;
         let result = sqlx::query(PostgresDialect::DB_STATE.purge_old_workers)
             .bind(threshold)

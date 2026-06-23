@@ -7,9 +7,9 @@ use crate::error::Result;
 use crate::store::dialect::SqlDialect;
 use crate::store::postgres::dialect::PostgresDialect;
 use crate::store::query::{QueryBuilder, QueryParam};
-use crate::store::tables::DialectWorkerTable;
+
 use crate::types::{WorkerRecord, WorkerStatus};
-use async_trait::async_trait;
+
 use chrono::Utc;
 use sqlx::{PgPool, Postgres};
 
@@ -227,9 +227,8 @@ impl Workers {
 }
 
 // Implement the public WorkerTable trait by delegating to inherent methods
-#[async_trait]
-impl crate::store::WorkerTable for Workers {
-    async fn insert(&self, data: crate::types::NewWorkerRecord) -> Result<WorkerRecord> {
+impl Workers {
+    pub async fn insert(&self, data: crate::types::NewWorkerRecord) -> Result<WorkerRecord> {
         let now = Utc::now();
 
         let worker_id: i64 = sqlx::query_scalar(INSERT_WORKER)
@@ -257,7 +256,7 @@ impl crate::store::WorkerTable for Workers {
         })
     }
 
-    async fn get(&self, id: i64) -> Result<WorkerRecord> {
+    pub async fn get(&self, id: i64) -> Result<WorkerRecord> {
         let worker = sqlx::query_as::<_, WorkerRecord>(GET_WORKER_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -271,7 +270,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker)
     }
 
-    async fn list(&self) -> Result<Vec<WorkerRecord>> {
+    pub async fn list(&self) -> Result<Vec<WorkerRecord>> {
         let workers = sqlx::query_as::<_, WorkerRecord>(LIST_ALL_WORKERS)
             .fetch_all(&self.pool)
             .await
@@ -284,7 +283,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_workers";
         let row = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
@@ -297,7 +296,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(row)
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let result = sqlx::query(DELETE_WORKER_BY_ID)
             .bind(id)
             .execute(&self.pool)
@@ -311,7 +310,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(result.rows_affected())
     }
 
-    async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
+    pub async fn filter_by_fk(&self, queue_id: i64) -> Result<Vec<WorkerRecord>> {
         let workers = sqlx::query_as::<_, WorkerRecord>(LIST_WORKERS_BY_QUEUE)
             .bind(queue_id)
             .fetch_all(&self.pool)
@@ -324,7 +323,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
+    pub async fn count_by_fk(&self, queue_id: i64) -> Result<i64> {
         let count: i64 = sqlx::query_scalar(COUNT_WORKERS_BY_QUEUE_TX)
             .bind(queue_id)
             .fetch_one(&self.pool)
@@ -337,7 +336,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(count)
     }
 
-    async fn mark_stopped(&self, id: i64) -> Result<()> {
+    pub async fn mark_stopped(&self, id: i64) -> Result<()> {
         sqlx::query(PostgresDialect::WORKER.mark_stopped)
             .bind(id)
             .execute(&self.pool)
@@ -350,7 +349,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(())
     }
 
-    async fn count_for_queue(
+    pub async fn count_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -381,7 +380,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(count)
     }
 
-    async fn count_zombies_for_queue(
+    pub async fn count_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -408,7 +407,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(count)
     }
 
-    async fn list_for_queue(
+    pub async fn list_for_queue(
         &self,
         queue_id: i64,
         state: crate::types::WorkerStatus,
@@ -433,7 +432,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn list_zombies_for_queue(
+    pub async fn list_zombies_for_queue(
         &self,
         queue_id: i64,
         older_than: chrono::Duration,
@@ -451,7 +450,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(workers)
     }
 
-    async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
+    pub async fn register(&self, queue_id: Option<i64>, name: &str) -> Result<WorkerRecord> {
         let existing_worker: Option<WorkerRecord> = sqlx::query_as(FIND_WORKER_BY_NAME)
             .bind(name)
             .fetch_optional(&self.pool)
@@ -535,7 +534,7 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker_info)
     }
 
-    async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
+    pub async fn register_ephemeral(&self, queue_id: Option<i64>) -> Result<WorkerRecord> {
         let name = format!("__ephemeral__{}", uuid::Uuid::new_v4());
 
         let worker_info = sqlx::query_as::<_, WorkerRecord>(INSERT_EPHEMERAL_WORKER)
@@ -552,48 +551,111 @@ impl crate::store::WorkerTable for Workers {
         Ok(worker_info)
     }
 
-    async fn get_status(&self, id: i64) -> Result<WorkerStatus> {
-        self.get_status(id).await
+    pub async fn suspend(&self, worker_id: i64) -> Result<()> {
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.suspend).bind_i64(worker_id),
+            worker_id,
+            Some((
+                "suspended",
+                "Worker must be Ready, Polling, or Interrupted to suspend",
+            )),
+        )
+        .await
     }
 
-    async fn suspend(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_suspend(self, id).await
+    pub async fn complete_poll(&self, worker_id: i64) -> Result<()> {
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.complete_poll).bind_i64(worker_id),
+            worker_id,
+            Some((
+                "ready",
+                "Worker must be in Polling state to complete polling",
+            )),
+        )
+        .await
     }
 
-    async fn resume(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_resume(self, id).await
+    pub async fn resume(&self, worker_id: i64) -> Result<()> {
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.resume).bind_i64(worker_id),
+            worker_id,
+            Some(("ready", "Worker must be in Suspended state to resume")),
+        )
+        .await
     }
 
-    async fn complete_poll(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_complete_poll(self, id).await
+    pub async fn poll(&self, worker_id: i64) -> Result<()> {
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.poll).bind_i64(worker_id),
+            worker_id,
+            Some(("polling", "Worker must be Ready to start polling")),
+        )
+        .await
     }
 
-    async fn shutdown(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_shutdown(self, id).await
+    pub async fn interrupt(&self, worker_id: i64) -> Result<()> {
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.interrupt).bind_i64(worker_id),
+            worker_id,
+            Some((
+                "interrupted",
+                "Worker must be in Polling state to be interrupted",
+            )),
+        )
+        .await
     }
 
-    async fn poll(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_poll(self, id).await
+    pub async fn shutdown(&self, worker_id: i64) -> Result<()> {
+        let now = Utc::now();
+
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.shutdown)
+                .bind_i64(worker_id)
+                .bind_datetime(Some(now)),
+            worker_id,
+            Some(("stopped", "Worker must be in Suspended state to shutdown")),
+        )
+        .await
     }
 
-    async fn interrupt(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_interrupt(self, id).await
+    pub async fn heartbeat(&self, worker_id: i64) -> Result<()> {
+        let now = Utc::now();
+
+        self.ensure_transition(
+            QueryBuilder::new(PostgresDialect::WORKER.heartbeat)
+                .bind_datetime(Some(now))
+                .bind_i64(worker_id),
+            worker_id,
+            None,
+        )
+        .await
     }
 
-    async fn heartbeat(&self, id: i64) -> Result<()> {
-        <Self as DialectWorkerTable>::dialect_heartbeat(self, id).await
+    async fn ensure_transition(
+        &self,
+        query: QueryBuilder,
+        worker_id: i64,
+        invalid_transition: Option<(&'static str, &'static str)>,
+    ) -> Result<()> {
+        let count = self.execute_worker_update(query).await?;
+
+        if count > 0 {
+            return Ok(());
+        }
+
+        if let Some((to, reason)) = invalid_transition {
+            let current_status = self.get_status(worker_id).await?;
+            return Err(crate::error::Error::InvalidStateTransition {
+                from: current_status.to_string(),
+                to: to.to_string(),
+                reason: reason.to_string(),
+            });
+        }
+
+        Err(crate::error::Error::WorkerNotFound { id: worker_id })
     }
 
-    async fn is_healthy(&self, id: i64, max_age: chrono::Duration) -> Result<bool> {
-        self.is_healthy(id, max_age).await
-    }
-}
-
-#[async_trait]
-impl DialectWorkerTable for Workers {
-    type Dialect = PostgresDialect;
-
-    async fn execute_worker_update(&self, query: QueryBuilder) -> Result<u64> {
+    pub async fn execute_worker_update(&self, query: QueryBuilder) -> Result<u64> {
         if query.sql().contains("RETURNING") {
             let maybe_id = Self::bind_returning_query(sqlx::query_scalar(query.sql()), &query)
                 .fetch_optional(&self.pool)
@@ -617,9 +679,5 @@ impl DialectWorkerTable for Workers {
             })?;
 
         Ok(result.rows_affected())
-    }
-
-    async fn query_worker_status(&self, worker_id: i64) -> Result<WorkerStatus> {
-        self.get_status(worker_id).await
     }
 }

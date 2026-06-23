@@ -5,7 +5,6 @@
 
 use crate::error::Result;
 use crate::types::QueueRecord;
-use async_trait::async_trait;
 use sqlx::PgPool;
 
 // SQL constants for queue table operations
@@ -88,8 +87,7 @@ impl Queues {
     }
 }
 
-#[async_trait]
-impl crate::store::QueueTable for Queues {
+impl Queues {
     /// Insert a new queue record.
     ///
     /// # Arguments
@@ -97,7 +95,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The created queue with generated ID and timestamp
-    async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
+    pub async fn insert(&self, data: crate::types::NewQueueRecord) -> Result<QueueRecord> {
         let queue = sqlx::query_as::<_, QueueRecord>(INSERT_QUEUE)
             .bind(&data.queue_name)
             .fetch_one(&self.pool)
@@ -129,7 +127,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The queue record
-    async fn get(&self, id: i64) -> Result<QueueRecord> {
+    pub async fn get(&self, id: i64) -> Result<QueueRecord> {
         let queue = sqlx::query_as::<_, QueueRecord>(GET_QUEUE_BY_ID)
             .bind(id)
             .fetch_one(&self.pool)
@@ -147,7 +145,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// List of all queue records
-    async fn list(&self) -> Result<Vec<QueueRecord>> {
+    pub async fn list(&self) -> Result<Vec<QueueRecord>> {
         let queues = sqlx::query_as::<_, QueueRecord>(LIST_ALL_QUEUES)
             .fetch_all(&self.pool)
             .await
@@ -164,7 +162,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// Total number of queues in the table
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let query = "SELECT COUNT(*) FROM pgqrs_queues";
         let count = sqlx::query_scalar(query)
             .fetch_one(&self.pool)
@@ -184,7 +182,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// Number of rows affected (should be 1 if successful)
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_QUEUE_BY_ID)
             .bind(id)
             .execute(&self.pool)
@@ -206,7 +204,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// The queue record
-    async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
+    pub async fn get_by_name(&self, name: &str) -> Result<QueueRecord> {
         let queue = sqlx::query_as::<_, QueueRecord>(GET_QUEUE_BY_NAME)
             .bind(name)
             .fetch_one(&self.pool)
@@ -232,7 +230,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// True if queue exists, false otherwise
-    async fn exists(&self, name: &str) -> Result<bool> {
+    pub async fn exists(&self, name: &str) -> Result<bool> {
         let exists: bool = sqlx::query_scalar(CHECK_QUEUE_EXISTS)
             .bind(name)
             .fetch_one(&self.pool)
@@ -253,7 +251,7 @@ impl crate::store::QueueTable for Queues {
     ///
     /// # Returns
     /// Number of rows affected (should be 1 if successful)
-    async fn delete_by_name(&self, name: &str) -> Result<u64> {
+    pub async fn delete_by_name(&self, name: &str) -> Result<u64> {
         let rows_affected = sqlx::query(DELETE_QUEUE_BY_NAME)
             .bind(name)
             .execute(&self.pool)

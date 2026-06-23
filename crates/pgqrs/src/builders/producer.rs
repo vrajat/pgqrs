@@ -28,7 +28,7 @@ impl<'a> ProducerBuilder<'a> {
     }
 
     /// Create the producer worker
-    pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Producer> {
+    pub async fn create(self, store: &Store) -> Result<crate::workers::Producer> {
         store.producer(self.queue, self.name, store.config()).await
     }
 }

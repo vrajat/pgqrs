@@ -1,6 +1,5 @@
 use crate::error::Result;
 use crate::types::{NewWorkflowRecord, WorkflowRecord};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
@@ -27,11 +26,8 @@ impl Workflows {
             created_at,
         })
     }
-}
 
-#[async_trait]
-impl crate::store::WorkflowTable for Workflows {
-    async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
+    pub async fn get_by_name(&self, name: &str) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, name, queue_id, created_at
@@ -51,7 +47,7 @@ impl crate::store::WorkflowTable for Workflows {
         Self::map_row(row)
     }
 
-    async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
+    pub async fn insert(&self, data: NewWorkflowRecord) -> Result<WorkflowRecord> {
         // Workflow definitions require `queue_id` (FK to pgqrs_queues).
         let row = sqlx::query(
             r#"
@@ -73,7 +69,7 @@ impl crate::store::WorkflowTable for Workflows {
         Self::map_row(row)
     }
 
-    async fn get(&self, id: i64) -> Result<WorkflowRecord> {
+    pub async fn get(&self, id: i64) -> Result<WorkflowRecord> {
         let row = sqlx::query(
             r#"
             SELECT id, name, queue_id, created_at
@@ -93,7 +89,7 @@ impl crate::store::WorkflowTable for Workflows {
         Self::map_row(row)
     }
 
-    async fn list(&self) -> Result<Vec<WorkflowRecord>> {
+    pub async fn list(&self) -> Result<Vec<WorkflowRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, queue_id, created_at
@@ -112,7 +108,7 @@ impl crate::store::WorkflowTable for Workflows {
         rows.into_iter().map(Self::map_row).collect()
     }
 
-    async fn count(&self) -> Result<i64> {
+    pub async fn count(&self) -> Result<i64> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pgqrs_workflows")
             .fetch_one(&self.pool)
             .await
@@ -124,7 +120,7 @@ impl crate::store::WorkflowTable for Workflows {
         Ok(count)
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
+    pub async fn delete(&self, id: i64) -> Result<u64> {
         let result = sqlx::query("DELETE FROM pgqrs_workflows WHERE id = $1")
             .bind(id)
             .execute(&self.pool)

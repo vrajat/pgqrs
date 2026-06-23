@@ -1,5 +1,5 @@
 use pgqrs::pgqrs_workflow;
-use pgqrs::store::AnyStore;
+use pgqrs::store::Store;
 use pgqrs::Run;
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +39,7 @@ struct TestParams {
     count: i32,
 }
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("pgqrs_workflow_creation_test").await
 }
 

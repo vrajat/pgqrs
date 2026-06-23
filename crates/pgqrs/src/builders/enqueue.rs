@@ -111,7 +111,7 @@ impl<'a, T: Serialize + Send + Sync> EnqueueBuilder<'a, T> {
     /// Execute the enqueue operation.
     ///
     /// Returns message IDs for all payloads.
-    pub async fn execute<S: Store + Send + Sync>(self, store: &S) -> Result<Vec<i64>> {
+    pub async fn execute(self, store: &Store) -> Result<Vec<i64>> {
         if self.messages.is_empty() {
             return Err(crate::error::Error::ValidationFailed {
                 reason: "No messages to enqueue. Use .message() or .messages() before .execute()."

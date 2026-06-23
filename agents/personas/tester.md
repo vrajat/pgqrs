@@ -269,7 +269,7 @@ fn test_delay_calculation() {
 ```rust
 // Common test utilities
 mod fixtures {
-    pub async fn create_test_store() -> AnyStore {
+    pub async fn create_test_store() -> Store {
         // Reusable test setup
     }
     

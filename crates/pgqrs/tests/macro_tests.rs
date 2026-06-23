@@ -1,9 +1,9 @@
-use pgqrs::{pgqrs_step, pgqrs_workflow, Run, Store};
+use pgqrs::{pgqrs_step, pgqrs_workflow, Run};
 use serde::{Deserialize, Serialize};
 
 mod common;
 
-async fn create_store(schema: &str) -> pgqrs::store::AnyStore {
+async fn create_store(schema: &str) -> pgqrs::store::Store {
     common::create_store(schema).await
 }
 

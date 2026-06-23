@@ -1,9 +1,9 @@
-use pgqrs::store::{AnyStore, Store};
+use pgqrs::store::Store;
 use serde_json::json;
 
 mod common;
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("pgqrs_lib_stat_test").await
 }
 

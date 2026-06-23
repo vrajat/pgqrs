@@ -1,7 +1,7 @@
 //! Test-only workflow lifecycle helpers.
 
 use crate::error::Result;
-use crate::store::{AnyStore, Store};
+use crate::store::Store;
 use crate::types::QueueMessage;
 use crate::workers::{Consumer, Run};
 use std::future::Future;
@@ -13,7 +13,7 @@ use std::future::Future;
 /// without relying entirely on timing-based orchestration.
 #[derive(Clone)]
 pub struct WorkflowTestRig {
-    store: AnyStore,
+    store: Store,
     consumer: Consumer,
 }
 
@@ -30,7 +30,7 @@ pub struct WorkflowAttempt {
 
 impl WorkflowTestRig {
     /// Create a test rig from a store and consumer representing the actor roles.
-    pub fn new(store: AnyStore, consumer: Consumer) -> Self {
+    pub fn new(store: Store, consumer: Consumer) -> Self {
         Self { store, consumer }
     }
 
@@ -40,7 +40,7 @@ impl WorkflowTestRig {
     }
 
     /// Access the store backing this rig.
-    pub fn store(&self) -> &AnyStore {
+    pub fn store(&self) -> &Store {
         &self.store
     }
 

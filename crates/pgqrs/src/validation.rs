@@ -229,16 +229,14 @@ impl PayloadValidator {
                     self.validate_single_pass(item, depth + 1, false)?;
                 }
             }
-            serde_json::Value::String(s) => {
-                if s.len() > self.config.max_string_length {
-                    return Err(crate::error::Error::ValidationFailed {
-                        reason: format!(
-                            "String length {} exceeds limit {}",
-                            s.len(),
-                            self.config.max_string_length
-                        ),
-                    });
-                }
+            serde_json::Value::String(s) if s.len() > self.config.max_string_length => {
+                return Err(crate::error::Error::ValidationFailed {
+                    reason: format!(
+                        "String length {} exceeds limit {}",
+                        s.len(),
+                        self.config.max_string_length
+                    ),
+                });
             }
             _ => {}
         }

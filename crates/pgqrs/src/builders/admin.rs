@@ -2,33 +2,32 @@
 
 use crate::error::Result;
 use crate::store::Store;
-use crate::tables::WorkerTable;
 use crate::types::QueueRecord;
 use crate::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 
 /// Start an admin builder.
 ///
 /// ```rust,no_run
-/// # use pgqrs::store::AnyStore;
-/// # async fn example(store: AnyStore) -> pgqrs::error::Result<()> {
+/// # use pgqrs::store::Store;
+/// # async fn example(store: Store) -> pgqrs::error::Result<()> {
 /// pgqrs::admin(&store).install().await?;
 /// # Ok(()) }
 /// ```
-pub fn admin<S: Store>(store: &S) -> AdminBuilder<'_, S> {
+pub fn admin(store: &Store) -> AdminBuilder<'_> {
     AdminBuilder::new(store)
 }
 
 /// Builder for admin operations.
 ///
 /// Provides a fluent API for administrative tasks.
-pub struct AdminBuilder<'a, S: Store> {
-    store: &'a S,
+pub struct AdminBuilder<'a> {
+    store: &'a Store,
     name: Option<String>,
 }
 
-impl<'a, S: Store> AdminBuilder<'a, S> {
+impl<'a> AdminBuilder<'a> {
     /// Create a new AdminBuilder with the given store
-    pub fn new(store: &'a S) -> Self {
+    pub fn new(store: &'a Store) -> Self {
         Self { store, name: None }
     }
 
@@ -39,7 +38,7 @@ impl<'a, S: Store> AdminBuilder<'a, S> {
     }
 
     /// Get access to the underlying store
-    pub fn store(&self) -> &S {
+    pub fn store(&self) -> &Store {
         self.store
     }
 

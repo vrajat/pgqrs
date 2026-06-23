@@ -1,9 +1,8 @@
 use crate::error::Result;
+use crate::store::dialect::SqlDialect;
 use crate::store::postgres::dialect::PostgresDialect;
 use crate::store::query::{QueryBuilder, QueryParam};
-use crate::store::tables::DialectStepTable;
 use crate::types::StepRecord;
-use async_trait::async_trait;
 use sqlx::{PgPool, Postgres};
 
 #[derive(Debug, Clone)]
@@ -63,49 +62,68 @@ impl StepRecords {
         }
         builder
     }
-}
 
-#[async_trait]
-impl crate::store::StepRecordTable for StepRecords {
-    async fn get(&self, id: i64) -> Result<StepRecord> {
-        <Self as DialectStepTable>::dialect_get_step(self, id).await
+    pub async fn get(&self, id: i64) -> Result<StepRecord> {
+        self.execute(QueryBuilder::new(PostgresDialect::STEP.get).bind_i64(id))
+            .await
     }
 
-    async fn list(&self) -> Result<Vec<StepRecord>> {
-        <Self as DialectStepTable>::dialect_list_steps(self).await
+    pub async fn list(&self) -> Result<Vec<StepRecord>> {
+        self.fetch_all_steps(QueryBuilder::new(PostgresDialect::STEP.list))
+            .await
     }
 
-    async fn count(&self) -> Result<i64> {
-        <Self as DialectStepTable>::dialect_count_steps(self).await
+    pub async fn count(&self) -> Result<i64> {
+        self.query_step_count(QueryBuilder::new(PostgresDialect::STEP.count))
+            .await
     }
 
-    async fn delete(&self, id: i64) -> Result<u64> {
-        <Self as DialectStepTable>::dialect_delete_step(self, id).await
+    pub async fn delete(&self, id: i64) -> Result<u64> {
+        self.execute_step_delete(QueryBuilder::new(PostgresDialect::STEP.delete).bind_i64(id))
+            .await
     }
 
-    async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
-        <Self as DialectStepTable>::dialect_acquire_step(self, run_id, step_name).await
+    pub async fn acquire_step(&self, run_id: i64, step_name: &str) -> Result<StepRecord> {
+        self.execute(
+            QueryBuilder::new(PostgresDialect::STEP.acquire)
+                .bind_i64(run_id)
+                .bind_string(step_name.to_string()),
+        )
+        .await
     }
 
-    async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
-        <Self as DialectStepTable>::dialect_clear_retry(self, id).await
+    pub async fn clear_retry(&self, id: i64) -> Result<StepRecord> {
+        self.execute(QueryBuilder::new(PostgresDialect::STEP.clear_retry).bind_i64(id))
+            .await
     }
 
-    async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<StepRecord> {
-        <Self as DialectStepTable>::dialect_complete_step(self, id, output).await
+    pub async fn complete_step(&self, id: i64, output: serde_json::Value) -> Result<StepRecord> {
+        self.execute(
+            QueryBuilder::new(PostgresDialect::STEP.complete)
+                .bind_i64(id)
+                .bind_json(output),
+        )
+        .await
     }
 
-    async fn fail_step(
+    pub async fn fail_step(
         &self,
         id: i64,
         error: serde_json::Value,
         retry_at: Option<chrono::DateTime<chrono::Utc>>,
         retry_count: i32,
     ) -> Result<StepRecord> {
-        <Self as DialectStepTable>::dialect_fail_step(self, id, error, retry_at, retry_count).await
+        self.execute(
+            QueryBuilder::new(PostgresDialect::STEP.fail)
+                .bind_i64(id)
+                .bind_json(error)
+                .bind_datetime(retry_at)
+                .bind_i32(retry_count),
+        )
+        .await
     }
 
-    async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
+    pub async fn execute(&self, query: QueryBuilder) -> Result<StepRecord> {
         Self::bind_query_as(sqlx::query_as::<_, StepRecord>(query.sql()), &query)
             .fetch_one(&self.pool)
             .await
@@ -115,13 +133,8 @@ impl crate::store::StepRecordTable for StepRecords {
                 context: "Failed to execute postgres workflow step query".into(),
             })
     }
-}
 
-#[async_trait]
-impl DialectStepTable for StepRecords {
-    type Dialect = PostgresDialect;
-
-    async fn fetch_all_steps(&self, query: QueryBuilder) -> Result<Vec<StepRecord>> {
+    pub async fn fetch_all_steps(&self, query: QueryBuilder) -> Result<Vec<StepRecord>> {
         Self::bind_query_as(sqlx::query_as::<_, StepRecord>(query.sql()), &query)
             .fetch_all(&self.pool)
             .await
@@ -132,7 +145,7 @@ impl DialectStepTable for StepRecords {
             })
     }
 
-    async fn query_step_count(&self, query: QueryBuilder) -> Result<i64> {
+    pub async fn query_step_count(&self, query: QueryBuilder) -> Result<i64> {
         Self::bind_scalar_query(sqlx::query_scalar(query.sql()), &query)
             .fetch_one(&self.pool)
             .await
@@ -143,7 +156,7 @@ impl DialectStepTable for StepRecords {
             })
     }
 
-    async fn execute_step_delete(&self, query: QueryBuilder) -> Result<u64> {
+    pub async fn execute_step_delete(&self, query: QueryBuilder) -> Result<u64> {
         let res = Self::bind_query(sqlx::query(query.sql()), &query)
             .execute(&self.pool)
             .await
