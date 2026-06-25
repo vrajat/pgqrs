@@ -161,3 +161,59 @@ else
 		$(SETUP_TEST_SCHEMAS_BIN) --cleanup
 endif
 endif
+
+fmt:  ## Format code
+	cargo fmt --all
+	$(MAKE) -C benchmarks fmt UV="$(UV)"
+
+clippy:  ## Run clippy
+	cargo clippy --workspace --all-targets --all-features
+
+check:  ## Run all checks (fmt, clippy, deny)
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets --all-features
+	$(MAKE) -C benchmarks check UV="$(UV)"
+
+clean:  ## Clean artifacts
+	cargo clean
+	rm -rf .venv
+	rm -rf target
+	rm -rf site
+
+docs: docs-requirements  ## Serve documentation
+	$(UV) run mkdocs serve -f mkdocs.yml
+
+docs-build: docs-requirements  ## Build documentation
+	$(UV) run mkdocs build --strict -f mkdocs.yml
+
+help:  ## Display this help screen
+	@echo "Usage: make [target]"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+release-dry-run: docs-requirements  ## Dry run of the release process
+	cargo release $${LEVEL:-minor} --no-push --no-publish
+	$(UV) run maturin build --release -m py-pgqrs/Cargo.toml
+
+release: docs-requirements  ## Execute the release process (LEVEL=patch|minor|major, default=minor)
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$BRANCH" != "main" ]; then \
+		echo "Error: Must be on main branch (currently on $$BRANCH)"; \
+		exit 1; \
+	fi
+	@echo "Creating release with version bump: $${LEVEL:-minor}"
+	@echo "Note: CI will build multi-platform wheels and publish to PyPI on tag push"
+	cargo release $${LEVEL:-minor} --execute --no-publish
+
+bump-version: ## Update version in documentation files (Usage: make bump-version VERSION=x.y.z)
+	@if [ -z "$(VERSION)" ]; then echo "Error: VERSION not set"; exit 1; fi
+	@echo "Bumping documentation versions to $(VERSION)..."
+	@$(UV) run python3 -c "from functools import reduce; from pathlib import Path; import re; \
+		version = '$(VERSION)'; \
+		dep_files = ['README.md', 'docs/user-guide/getting-started/installation.md', 'docs/user-guide/concepts/backends.md']; \
+		dep_patterns = [(r'((?:pgqrs|pgqrs-macros)\s*=\s*)\"[^\"]+\"', rf'\1\"{version}\"'), (r'((?:pgqrs|pgqrs-macros)\s*=\s*\{{\s*version\s*=\s*)\"[^\"]+\"', rf'\1\"{version}\"')]; \
+		[path.write_text(reduce(lambda content, pattern: re.sub(pattern[0], pattern[1], content), dep_patterns, path.read_text())) for path in map(Path, dep_files)]; \
+		pyproject = Path('py-pgqrs/pyproject.toml'); \
+		content = pyproject.read_text(); \
+		content = re.sub(r'(?m)^version\s*=\s*\"[^\"]+\"', f'version = \"{version}\"', content, count=1); \
+		pyproject.write_text(content)"
+
