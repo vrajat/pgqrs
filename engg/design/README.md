@@ -14,7 +14,7 @@ Comprehensive technical design documentation for major features and components.
 ## Current Documents
 
 - [Postgres-Only Extension Runtime Implementation Plan](postgres-only-extension-runtime-implementation.md)
-- [Postgres-Only Shared Worker Protocol Design](postgres-only-shared-worker-protocol.md)
+- [Postgres-Only Shared Worker Protocol Design](postgres-only-worker-protocol.md)
 - [Durable Workflows Engineering Design](durable-workflows-engineering-design.md)
 - [Durable Workflows Product Requirements](durable-workflows-product-requirements.md)
 - [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
