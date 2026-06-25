@@ -10,8 +10,6 @@ const TEST_SCHEMAS: &[&str] = &[
     "pgqrs_builder_ergonomics_test",
     "pgqrs_concurrent_test",
     "pgqrs_error_test",
-    "pgqrs_anystore_test",
-    "pgqrs_anystore_dsn_test",
     "pgqrs_lib_test",
     "pgqrs_zombie_tests",
     "pgqrs_lib_stat_test",
