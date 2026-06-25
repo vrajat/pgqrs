@@ -2,7 +2,7 @@
 
 **pgqrs is a postgres-native, library-only durable execution engine.**
 
-Written in Rust. Built for Postgres. Also supports SQLite and Turso.
+Written in Rust. Built for Postgres.
 
 ## What is Durable Execution?
 
@@ -13,7 +13,7 @@ Each step executes exactly once. State persists in the database. Processes resum
 
 - **Postgres-native:** Leverages SKIP LOCKED, ACID transactions
 - **Library-only:** Runs in-process with your application
-- **Multi-backend:** Postgres (production), SQLite/Turso (testing and embedded)
+- **Postgres-only runtime:** Aligned with the supported Postgres backend
 - **Type-safe:** Rust core with idiomatic Python bindings
 - **Transaction-safe:** Exactly-once step execution within database transactions
 

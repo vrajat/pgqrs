@@ -61,14 +61,11 @@ export PGQRS_DSN="postgresql://postgres:postgres@localhost:5432/postgres"
 # Full suite on Postgres (Docker + PgBouncer)
 make test-postgres
 
-# Full suite on SQLite
-make test-sqlite
-
 # Rust-only tests (nextest)
 make test-rust
 
 # Python-only tests
-make test-py PGQRS_TEST_BACKEND=sqlite
+make test-py
 ```
 
 ## Development Workflow

@@ -50,8 +50,8 @@ make requirements
 # Build Rust + Python bindings
 make build
 
-# Run full test suite on SQLite
-make test-sqlite
+# Run full Postgres test suite
+make test-postgres
 ```
 
 ### Project Structure

@@ -1,12 +1,12 @@
 //! pgqrs is a postgres-native, library-only durable execution engine.
 //!
 //! Built in Rust with Python bindings, pgqrs runs in-process and persists workflow state in your
-//! database. It supports PostgreSQL for production and SQLite/Turso for embedded or test setups.
+//! database.
 //!
 //! ## Key Properties
 //! - Postgres-native execution using SKIP LOCKED and ACID transactions
 //! - Library-only runtime that runs alongside your application
-//! - Multi-backend support: Postgres, SQLite, and Turso
+//! - Postgres-only runtime: one backend, one concurrency model, one operational path
 //! - Exactly-once step execution with durable workflow state
 //!
 //! ## Quick Start (Queue)

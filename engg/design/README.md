@@ -13,16 +13,19 @@ Comprehensive technical design documentation for major features and components.
 
 ## Current Documents
 
-- [Database Abstraction Design](database_abstraction_design.md)
+- [Postgres-Only Extension Runtime Implementation Plan](postgres-only-extension-runtime-implementation.md)
+- [Postgres-Only Shared Worker Protocol Design](postgres-only-shared-worker-protocol.md)
 - [Durable Workflows Engineering Design](durable-workflows-engineering-design.md)
 - [Durable Workflows Product Requirements](durable-workflows-product-requirements.md)
+- [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
+
+## Historical / Deprecated Documents (ADR-0004 Postgres-Only Transition)
+
+- [Database Abstraction Design](database_abstraction_design.md)
 - [Store Access and Serialized DB Design](store_access_and_serialized_db.md)
 - [SQLite Store Implementation](sqlite_store.md)
 - [Turso Store Implementation](turso_store.md)
 - [Store SQL Dialect Constants](store-sql-dialect-constants.md)
-- [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
-- [Postgres-Only Extension Runtime Implementation Plan](postgres-only-extension-runtime-implementation.md)
-- [Postgres-Only Shared Worker Protocol Design](postgres-only-shared-worker-protocol.md)
 
 ## Design Doc Template
 

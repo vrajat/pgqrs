@@ -89,14 +89,11 @@ Add release notes to `CHANGELOG.md`:
 ### 4. Run Tests
 
 ```bash
-# Full test suite on Postgres
+# Full Postgres test suite
 make test-postgres
 
-# Full test suite on SQLite
-make test-sqlite
-
 # Python tests only
-make test-py PGQRS_TEST_BACKEND=postgres
+make test-py
 ```
 
 ### 5. Release Build Dry Run
