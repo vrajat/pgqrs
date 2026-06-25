@@ -9,15 +9,6 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 
 
-class TestBackend(Enum):
-    POSTGRES = "postgres"
-
-
-@pytest.fixture(scope="session")
-def test_backend() -> str:
-    return "postgres"
-
-
 @pytest.fixture(scope="session")
 def base_dsn() -> Generator[str, None, None]:
     dsn = os.environ.get("PGQRS_TEST_POSTGRES_DSN") or os.environ.get("PGQRS_TEST_DSN")
@@ -59,9 +50,4 @@ async def store(test_dsn: str, schema: str):
     return store
 
 
-def requires_backend(_backend: str):
-    return pytest.mark.skipif(False, reason="Postgres-only test suite")
 
-
-def skip_on_backend(_backend: str):
-    return pytest.mark.skipif(False, reason="Postgres-only test suite")
