@@ -11,9 +11,7 @@ pub enum ConcurrencyModel {
     SingleProcess,
 }
 
-pub(crate) mod dialect;
 pub mod postgres;
-pub(crate) mod query;
 
 pub use crate::workers::*;
 pub use postgres::tables::{

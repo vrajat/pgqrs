@@ -4,8 +4,6 @@
 //! Complex operations like dequeue with worker assignment and visibility timeout management remain in queue.rs.
 
 use crate::error::Result;
-use crate::store::dialect::SqlDialect;
-use crate::store::postgres::dialect::PostgresDialect;
 use crate::types::QueueMessage;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -87,6 +85,38 @@ const ARCHIVE_BATCH: &str = r#"
     SET archived_at = NOW()
     WHERE id = ANY($1) AND consumer_worker_id = $2 AND archived_at IS NULL
     RETURNING id;
+"#;
+
+const LIST_MESSAGES_BY_CONSUMER_WORKER: &str = r#"
+    SELECT id, queue_id, payload, vt, enqueued_at, read_ct, dequeued_at, producer_worker_id, consumer_worker_id, archived_at
+    FROM pgqrs_messages
+    WHERE consumer_worker_id = $1
+    ORDER BY id;
+"#;
+
+const COUNT_MESSAGES_BY_CONSUMER_WORKER: &str = r#"
+    SELECT COUNT(*)
+    FROM pgqrs_messages
+    WHERE consumer_worker_id = $1 AND archived_at IS NULL;
+"#;
+
+const COUNT_WORKER_REFERENCES: &str = r#"
+    SELECT COUNT(*) as total_references FROM (
+        SELECT 1 FROM pgqrs_messages WHERE producer_worker_id = $1 OR consumer_worker_id = $2
+    ) refs;
+"#;
+
+const MOVE_TO_DLQ: &str = r#"
+    UPDATE pgqrs_messages
+    SET archived_at = NOW()
+    WHERE read_ct >= $1 AND archived_at IS NULL
+    RETURNING id as original_msg_id;
+"#;
+
+const RELEASE_BY_CONSUMER_WORKER: &str = r#"
+    UPDATE pgqrs_messages
+    SET vt = NOW(), consumer_worker_id = NULL
+    WHERE consumer_worker_id = $1 AND archived_at IS NULL;
 "#;
 
 const DEQUEUE_MESSAGES_AT: &str = r#"
@@ -294,7 +324,7 @@ impl Messages {
     }
 
     pub async fn list_by_consumer_worker(&self, worker_id: i64) -> Result<Vec<QueueMessage>> {
-        sqlx::query_as::<_, QueueMessage>(PostgresDialect::MESSAGE.list_by_consumer_worker)
+        sqlx::query_as::<_, QueueMessage>(LIST_MESSAGES_BY_CONSUMER_WORKER)
             .bind(worker_id)
             .fetch_all(&self.pool)
             .await
@@ -306,7 +336,7 @@ impl Messages {
     }
 
     pub async fn count_by_consumer_worker(&self, worker_id: i64) -> Result<i64> {
-        sqlx::query_scalar(PostgresDialect::MESSAGE.count_by_consumer_worker)
+        sqlx::query_scalar(COUNT_MESSAGES_BY_CONSUMER_WORKER)
             .bind(worker_id)
             .fetch_one(&self.pool)
             .await
@@ -318,7 +348,7 @@ impl Messages {
     }
 
     pub async fn count_worker_references(&self, worker_id: i64) -> Result<i64> {
-        sqlx::query_scalar(PostgresDialect::MESSAGE.count_worker_references)
+        sqlx::query_scalar(COUNT_WORKER_REFERENCES)
             .bind(worker_id)
             .bind(worker_id)
             .fetch_one(&self.pool)
@@ -334,7 +364,7 @@ impl Messages {
     }
 
     pub async fn move_to_dlq(&self, max_read_ct: i32) -> Result<Vec<i64>> {
-        sqlx::query_scalar(PostgresDialect::MESSAGE.move_to_dlq)
+        sqlx::query_scalar(MOVE_TO_DLQ)
             .bind(max_read_ct)
             .fetch_all(&self.pool)
             .await
@@ -346,7 +376,7 @@ impl Messages {
     }
 
     pub async fn release_by_consumer_worker(&self, worker_id: i64) -> Result<u64> {
-        let result = sqlx::query(PostgresDialect::MESSAGE.release_by_consumer_worker)
+        let result = sqlx::query(RELEASE_BY_CONSUMER_WORKER)
             .bind(worker_id)
             .execute(&self.pool)
             .await

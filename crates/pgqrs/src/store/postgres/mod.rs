@@ -5,7 +5,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-pub(crate) mod dialect;
 pub mod tables;
 
 use self::tables::db_state::DbState as PostgresDbState;
