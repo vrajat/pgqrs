@@ -23,6 +23,11 @@ include = [
 name = "setup_test_schemas"
 path = "src/bin/setup_test_schemas.rs"
 
+[[bin]]
+name = "pgqrs-admin"
+path = "src/bin/pgqrs_admin.rs"
+
+
 [dev-dependencies]
 tokio-test = "0.4"
 ctor = "0.2.4"
@@ -38,8 +43,10 @@ postgres = ["sqlx", "sqlx/postgres"]
 test-utils = []
 
 [dependencies]
+cron = "0.12.1"
 sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros", "migrate"], optional = true }
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

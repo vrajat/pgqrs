@@ -6,6 +6,10 @@ const TEST_DB_DSN_ENV: &str = "PGQRS_TEST_DSN";
 const DEFAULT_TEST_DSN: &str = "postgres://postgres:postgres@localhost:5432/postgres";
 
 const TEST_SCHEMAS: &[&str] = &[
+    "pgqrs_admin_scan_interval_test",
+    "pgqrs_admin_scan_cron_test",
+    "pgqrs_admin_reclaim_test",
+    "pgqrs_admin_timeout_test",
     "pgqrs_builder_test",
     "pgqrs_builder_ergonomics_test",
     "pgqrs_concurrent_test",
