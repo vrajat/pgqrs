@@ -21,6 +21,8 @@ Comprehensive technical design documentation for major features and components.
 - [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
 - [pgqrs-admin Coordinator and Scheduler Design](pgqrs-admin-coordinator.md)
 - [pgqrs-sql-worker External SQL Executor Design](pgqrs-sql-worker.md)
+- [pgqrs-extension pgrx Scaffold and Install Path Design](pgqrs-extension-scaffold.md)
+
 
 
 

@@ -84,6 +84,22 @@ test: build-python check-nextest
 test-py: build-python
 	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" $(UV) run pytest $(PYTEST_ARGS) $(PYTEST_TARGET)
 
+pgrx-init:
+	which cargo-pgrx >/dev/null || cargo install cargo-pgrx --version 0.12.6 --locked
+	cargo pgrx init --pg15 download
+
+pgrx-build:
+	cargo build -p pgqrs-extension
+
+pgrx-test:
+	cargo pgrx test -p pgqrs-extension
+
+pgrx-install:
+	cargo pgrx install -p pgqrs-extension
+
+pgrx-schema:
+	cargo pgrx schema -p pgqrs-extension
+
 start-postgres:
 ifdef CI_POSTGRES_RUNNING
 	@echo "Skipping Postgres container start (CI_POSTGRES_RUNNING=true)"

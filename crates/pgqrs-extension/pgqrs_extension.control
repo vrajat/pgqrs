@@ -1,0 +1,5 @@
+comment = 'pgqrs extension - Postgres-native durable task queues and workflows'
+default_version = '0.1.0'
+module_pathname = '$libdir/pgqrs_extension'
+relocatable = false
+superuser = false

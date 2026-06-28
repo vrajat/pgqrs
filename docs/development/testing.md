@@ -108,7 +108,36 @@ Use those helpers when a test needs to model:
 - external actor cancellation
 - consumer archive/release after invoking workflow logic
 
+## Postgres Extension (pgrx) Testing
+
+The `pgqrs-extension` is built using the `pgrx` framework.
+
+### Prerequisites
+
+- `cargo-pgrx` CLI (`make pgrx-init` or `cargo install cargo-pgrx --version 0.12.6 --locked`)
+- A local PostgreSQL 15 installation (compiled automatically by pgrx via `make pgrx-init`)
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `make pgrx-init` | Installs `cargo-pgrx` and downloads/compiles PostgreSQL 15 for local development |
+| `make pgrx-build` | Compiles the extension |
+| `make pgrx-test` | Runs the extension unit/integration tests inside a temporary Postgres instance |
+| `make pgrx-install` | Installs the extension into the pgrx-managed Postgres installation |
+| `make pgrx-schema` | Generates the SQL schema definition files for the extension |
+
+### Linker Configuration (macOS)
+
+Developing `pgrx` extensions on macOS requires allowing unresolved symbols at link time because Postgres symbols are resolved dynamically when the library is loaded by the database server. This is handled automatically by the workspace configuration in `.cargo/config.toml`:
+
+```toml
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
+```
+
 ## Troubleshooting
+
 
 ### `cargo-nextest` Missing
 

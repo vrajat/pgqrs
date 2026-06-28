@@ -2,6 +2,7 @@
 members = [
     "crates/pgqrs",
     "crates/pgqrs-macros",
+    "crates/pgqrs-extension",
     "py-pgqrs",
 ]
 resolver = "2"
