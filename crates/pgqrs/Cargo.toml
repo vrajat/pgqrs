@@ -27,6 +27,11 @@ path = "src/bin/setup_test_schemas.rs"
 name = "pgqrs-admin"
 path = "src/bin/pgqrs_admin.rs"
 
+[[bin]]
+name = "pgqrs-sql-worker"
+path = "src/bin/pgqrs_sql_worker.rs"
+
+
 
 [dev-dependencies]
 tokio-test = "0.4"

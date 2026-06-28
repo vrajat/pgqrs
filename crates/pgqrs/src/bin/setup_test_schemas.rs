@@ -37,6 +37,11 @@ const TEST_SCHEMAS: &[&str] = &[
     "workflow_fk_tests",
     "workflow_retry_integration_tests",
     "guide_tests",
+    "test_sql_job_success",
+    "test_sql_job_select",
+    "test_sql_job_safety",
+    "test_sql_workflow",
+    "test_sql_wf_fail",
 ];
 
 async fn run_postgres_schema_setup(cleanup_mode: bool) -> Result<(), Box<dyn std::error::Error>> {

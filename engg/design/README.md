@@ -20,6 +20,8 @@ Comprehensive technical design documentation for major features and components.
 - [Durable Workflows Product Requirements](durable-workflows-product-requirements.md)
 - [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
 - [pgqrs-admin Coordinator and Scheduler Design](pgqrs-admin-coordinator.md)
+- [pgqrs-sql-worker External SQL Executor Design](pgqrs-sql-worker.md)
+
 
 
 ## Historical / Deprecated Documents (ADR-0004 Postgres-Only Transition)
