@@ -23,6 +23,8 @@ Comprehensive technical design documentation for major features and components.
 - [pgqrs-sql-worker External SQL Executor Design](pgqrs-sql-worker.md)
 - [pgqrs-extension pgrx Scaffold and Install Path Design](pgqrs-extension-scaffold.md)
 - [pgqrs-extension Background Worker Design](pgqrs-extension-background-worker.md)
+- [pgqrs-extension Built-In Executor Capabilities Design](pgqrs-extension-builtins.md)
+
 
 
 

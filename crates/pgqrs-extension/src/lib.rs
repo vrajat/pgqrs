@@ -1,6 +1,7 @@
 use pgrx::prelude::*;
 
 pub mod bgworker;
+pub mod builtins;
 
 pub use bgworker::pgqrs_coordinator_main;
 
@@ -9,6 +10,7 @@ pgrx::pg_module_magic!();
 #[pg_guard]
 pub extern "C" fn _PG_init() {
     bgworker::init_gucs();
+    builtins::init_gucs();
 
     if bgworker::COORDINATOR_ENABLED.get() {
         pgrx::bgworkers::BackgroundWorkerBuilder::new("pgqrs coordinator")
@@ -74,9 +76,12 @@ mod tests {
 
             CREATE TABLE IF NOT EXISTS pgqrs_workers (
                 id BIGSERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                queue_id BIGINT,
                 status worker_status NOT NULL,
                 heartbeat_at TIMESTAMPTZ NOT NULL,
-                shutdown_at TIMESTAMPTZ
+                shutdown_at TIMESTAMPTZ,
+                started_at TIMESTAMPTZ DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS pgqrs_queues (
                 id BIGSERIAL PRIMARY KEY,
@@ -89,6 +94,9 @@ mod tests {
                 vt TIMESTAMPTZ NOT NULL,
                 archived_at TIMESTAMPTZ,
                 consumer_worker_id BIGINT,
+                producer_worker_id BIGINT,
+                read_ct INTEGER NOT NULL DEFAULT 0,
+                dequeued_at TIMESTAMPTZ,
                 enqueued_at TIMESTAMPTZ NOT NULL
             );
             CREATE TABLE IF NOT EXISTS pgqrs_schedules (
@@ -101,10 +109,20 @@ mod tests {
                 next_fire_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+            CREATE TABLE IF NOT EXISTS pgqrs_workflows (
+                id BIGSERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                queue_id BIGINT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS pgqrs_workflow_runs (
                 id BIGSERIAL PRIMARY KEY,
+                workflow_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL UNIQUE,
                 status pgqrs_workflow_status NOT NULL,
+                input JSONB,
+                output JSONB,
                 error JSONB,
+                worker_id BIGINT,
                 completed_at TIMESTAMPTZ,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -134,7 +152,7 @@ mod tests {
 
             // 1. Insert stale worker (heartbeat 60 seconds ago)
             let worker_id: i64 = client.select(
-                "INSERT INTO pgqrs_workers (status, heartbeat_at) VALUES ('polling'::worker_status, NOW() - interval '60 seconds') RETURNING id",
+                "INSERT INTO pgqrs_workers (name, status, heartbeat_at) VALUES ('stale-worker-test', 'polling'::worker_status, NOW() - interval '60 seconds') RETURNING id",
                 None, None
             ).unwrap().next().unwrap().get_by_name("id").unwrap().unwrap();
 
@@ -234,6 +252,90 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(!next_fire_due);
+        });
+    }
+
+    #[pg_test]
+    fn test_builtins_inspection() {
+        Spi::connect(|client| {
+            let mut table = client
+                .select(
+                    "SELECT capability, version FROM pgqrs_builtins()",
+                    None,
+                    None,
+                )
+                .unwrap();
+            let mut caps = Vec::new();
+            while let Some(row) = table.next() {
+                let cap: String = row.get_by_name("capability").unwrap().unwrap();
+                caps.push(cap);
+            }
+            assert!(caps.contains(&"sql".to_string()));
+            assert!(caps.contains(&"timer".to_string()));
+            assert!(caps.contains(&"maintenance".to_string()));
+            assert!(caps.contains(&"metrics".to_string()));
+        });
+    }
+
+    #[pg_test]
+    fn test_builtin_sql_executor() {
+        Spi::connect(|mut client| {
+            setup_test_tables(&mut client).unwrap();
+
+            // Clean slate
+            client
+                .update(
+                    "TRUNCATE pgqrs_queues, pgqrs_messages, pgqrs_workers CASCADE",
+                    None,
+                    None,
+                )
+                .unwrap();
+
+            // 1. Resolve queue_id
+            let queue_id: i64 = client.select(
+                "INSERT INTO pgqrs_queues (queue_name) VALUES ('test-builtin-sql') RETURNING id",
+                None, None
+            ).unwrap().next().unwrap().get_by_name("id").unwrap().unwrap();
+
+            // 2. Enqueue standalone SQL job (insert a new queue named 'dynamically-added-queue')
+            let payload = serde_json::json!({
+                "statement": "INSERT INTO pgqrs_queues (queue_name) VALUES ($1)",
+                "params": ["dynamically-added-queue"]
+            });
+            let payload_str = serde_json::to_string(&payload).unwrap();
+
+            let msg_id: i64 = client.select(
+                "INSERT INTO pgqrs_messages (queue_id, payload, vt, enqueued_at) VALUES ($1, $2::jsonb, NOW(), NOW()) RETURNING id",
+                None, Some(vec![
+                    (PgBuiltInOids::INT8OID.oid(), queue_id.into_datum()),
+                    (PgBuiltInOids::TEXTOID.oid(), payload_str.into_datum()),
+                ])
+            ).unwrap().next().unwrap().get_by_name("id").unwrap().unwrap();
+
+            // 3. Process the queue using the builtin executor
+            crate::builtins::process_builtin_queue_once("test-builtin-sql");
+
+            // 4. Verify that the SQL statement executed (i.e. 'dynamically-added-queue' exists in pgqrs_queues)
+            let queue_exists: bool = client.select(
+                "SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = 'dynamically-added-queue') as exists",
+                None, None
+            ).unwrap().next().unwrap().get_by_name("exists").unwrap().unwrap();
+            assert!(queue_exists);
+
+            // 5. Verify message was archived
+            let archived: bool = client
+                .select(
+                    "SELECT archived_at IS NOT NULL as archived FROM pgqrs_messages WHERE id = $1",
+                    None,
+                    Some(vec![(PgBuiltInOids::INT8OID.oid(), msg_id.into_datum())]),
+                )
+                .unwrap()
+                .next()
+                .unwrap()
+                .get_by_name("archived")
+                .unwrap()
+                .unwrap();
+            assert!(archived);
         });
     }
 }

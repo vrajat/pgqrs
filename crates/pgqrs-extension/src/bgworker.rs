@@ -131,6 +131,23 @@ pub extern "C" fn pgqrs_coordinator_main(_arg: pg_sys::Datum) {
             }
         });
 
+        // 3. Process built-in worker queues
+        if let Some(queues_str) = crate::builtins::BUILTIN_QUEUES
+            .get()
+            .and_then(|s| s.to_str().ok())
+        {
+            if !queues_str.is_empty() {
+                let queues: Vec<&str> = queues_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                for queue in queues {
+                    crate::builtins::process_builtin_queue_once(queue);
+                }
+            }
+        }
+
         BackgroundWorker::wait_latch(Some(Duration::from_millis(interval_ms)));
     }
 
