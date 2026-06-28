@@ -50,7 +50,16 @@ version = "1.2.3"
 
 # py-pgqrs/Cargo.toml
 version = "1.2.3"
+
+# crates/pgqrs-extension/Cargo.toml
+version = "1.2.3"
 ```
+
+### Version Compatibility Rules
+
+The `pgqrs` clients (Rust/Python) and the `pgqrs-extension` share the database schemas.
+- **Extension & Client Alignment**: Major and minor versions must match (e.g., client `0.15.x` is compatible with extension `0.15.y`).
+- **Protocols**: Schema migrations are backwards-compatible within the same minor release. Always run `pgqrs::admin::install()` or upgrade the extension to the latest patch version during releases.
 
 **Python package:**
 

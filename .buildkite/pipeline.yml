@@ -79,3 +79,4 @@ steps:
       - "trap '.buildkite/scripts/postgres-services.sh stop' EXIT"
       - ".buildkite/scripts/postgres-services.sh start"
       - "CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres mise exec -- make test-postgres"
+      - "mise exec -- make pgrx-init pgrx-test"

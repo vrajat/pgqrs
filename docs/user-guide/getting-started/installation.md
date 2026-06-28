@@ -150,6 +150,61 @@ Before using pgqrs, install its schema in your database.
     asyncio.run(main())
     ```
 
+## Installing the pgqrs-extension (Optional - Self-Hosted Deployments)
+
+For self-hosted deployments, you can install the PostgreSQL extension to run the coordinator loop and built-in capabilities natively inside Postgres without running the separate `pgqrs-admin` coordinator process.
+
+### 1. Build and Install the Extension
+
+The extension is packaged using `pgrx`.
+
+```bash
+# Build the extension library
+cargo build -p pgqrs-extension
+
+# Install the extension into your PostgreSQL instance
+cargo pgrx install -p pgqrs-extension
+```
+
+### 2. Configure PostgreSQL
+
+Add the extension to `shared_preload_libraries` in `postgresql.conf`:
+
+```ini
+shared_preload_libraries = 'pgqrs_extension'
+```
+
+Restart your PostgreSQL server to load the extension.
+
+### 3. Initialize the Extension
+
+In your database, run the following SQL command to register the extension:
+
+```sql
+CREATE EXTENSION pgqrs_extension;
+```
+
+### 4. Extension Configuration Parameters (GUC)
+
+Configure the following options in `postgresql.conf` to customize the background worker and built-in execution:
+
+```ini
+# Enable the background worker coordinator loop (defaults to true)
+pgqrs.coordinator_enabled = true
+
+# The database containing the pgqrs tables (defaults to 'postgres')
+pgqrs.database = 'postgres'
+
+# The user used to execute SPI queries (defaults to 'postgres')
+pgqrs.user = 'postgres'
+
+# Interval for scheduler sweeps and cron execution in milliseconds
+pgqrs.coordinator_interval_ms = 1000
+
+# Comma-separated list of queues to poll and execute via native built-ins
+pgqrs.builtin_queues = 'sql-tasks,sys-maintenance'
+```
+
 ## Custom Schema
 
 Custom schemas apply to PostgreSQL.
