@@ -127,6 +127,21 @@ The `pgqrs-extension` is built using the `pgrx` framework.
 | `make pgrx-install` | Installs the extension into the pgrx-managed Postgres installation |
 | `make pgrx-schema` | Generates the SQL schema definition files for the extension |
 
+### Background Worker & GUC Configuration
+
+The background worker registers a background coordinator loop inside Postgres, enabling self-hosted deployments to run cron schedules and maintain queue sweeps (like lease reclamation and workflow timeouts) without the separate `pgqrs-admin` daemon.
+
+It registers several GUC (Grand Unified Configuration) settings to customize behavior:
+
+- `pgqrs.coordinator_enabled` (bool, default: `true`): Enables the resident coordinator loop.
+- `pgqrs.database` (string, default: `"postgres"`): The database containing the `pgqrs` schema tables to execute SPI queries against.
+- `pgqrs.user` (string, default: `"postgres"`): The database user role used for running coordinator SPI queries.
+- `pgqrs.coordinator_interval_ms` (integer, default: `1000`): Frequency of scheduler scans and sweeps.
+- `pgqrs.heartbeat_timeout_secs` (integer, default: `30`): Timeout for flagging stale consumers.
+- `pgqrs.workflow_timeout_secs` (integer, default: `3600`): Max active execution duration for workflow runs.
+
+These settings are registered in the `Sighup` context, allowing runtime updates by updating `postgresql.conf` and reloading configuration.
+
 ### Linker Configuration (macOS)
 
 Developing `pgrx` extensions on macOS requires allowing unresolved symbols at link time because Postgres symbols are resolved dynamically when the library is loaded by the database server. This is handled automatically by the workspace configuration in `.cargo/config.toml`:

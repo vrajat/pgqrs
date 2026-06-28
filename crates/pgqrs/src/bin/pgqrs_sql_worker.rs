@@ -1,10 +1,9 @@
+use serde_json::Value;
 use std::env;
 use std::time::Duration;
-use serde_json::Value;
 
+use pgqrs::{connect_with_config, QueueMessage, Store};
 use sqlx::{Column, Row, TypeInfo};
-use pgqrs::{Store, QueueMessage, connect_with_config};
-
 
 #[derive(Debug)]
 struct Args {
@@ -17,7 +16,9 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     let mut args = env::args().skip(1);
-    let mut dsn = env::var("PGQRS_DSN").ok().or_else(|| env::var("DATABASE_URL").ok());
+    let mut dsn = env::var("PGQRS_DSN")
+        .ok()
+        .or_else(|| env::var("DATABASE_URL").ok());
     let mut schema = env::var("PGQRS_SCHEMA").unwrap_or_else(|_| "public".to_string());
     let mut queues = Vec::new();
     let mut interval_ms = 250;
@@ -33,11 +34,17 @@ fn parse_args() -> Result<Args, String> {
             }
             "--queues" => {
                 let list = args.next().ok_or("Missing value for --queues")?;
-                queues = list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                queues = list
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
             }
             "--interval-ms" => {
                 let val = args.next().ok_or("Missing value for --interval-ms")?;
-                interval_ms = val.parse::<u64>().map_err(|_| "Invalid integer for --interval-ms")?;
+                interval_ms = val
+                    .parse::<u64>()
+                    .map_err(|_| "Invalid integer for --interval-ms")?;
             }
             "--worker-name" => {
                 worker_name = args.next().ok_or("Missing value for --worker-name")?;
@@ -65,16 +72,24 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
-async fn process_message(store: &Store, msg: QueueMessage, queue_name: &str) -> pgqrs::error::Result<()> {
+async fn process_message(
+    store: &Store,
+    msg: QueueMessage,
+    queue_name: &str,
+) -> pgqrs::error::Result<()> {
     // 1. Try to treat it as a workflow execution
     match store.run(msg.clone()).await {
         Ok(run) => {
-            println!("Executing SQL workflow run {} for queue '{}'", run.id(), queue_name);
+            println!(
+                "Executing SQL workflow run {} for queue '{}'",
+                run.id(),
+                queue_name
+            );
             let run = run.start().await?;
 
             // Prepare the dynamic function call. The PL/pgSQL function name is same as workflow name (queue_name).
             let sql = format!("SELECT {} ($1, $2)", queue_name);
-            
+
             let execute_result = sqlx::query_scalar::<_, Option<Value>>(&sql)
                 .bind(run.id())
                 .bind(run.record().input.clone().unwrap_or(Value::Null))
@@ -121,11 +136,12 @@ async fn process_message(store: &Store, msg: QueueMessage, queue_name: &str) -> 
 
             // 2. Not a workflow -> treat as raw standalone SQL job
             let payload = msg.payload;
-            let statement = payload.get("statement").and_then(|v| v.as_str()).ok_or_else(|| {
-                pgqrs::error::Error::ValidationFailed {
+            let statement = payload
+                .get("statement")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| pgqrs::error::Error::ValidationFailed {
                     reason: "Missing 'statement' string field in SQL job payload".to_string(),
-                }
-            })?;
+                })?;
 
             // Safety check: no transaction control commands
             let stmt_upper = statement.trim().to_uppercase();
@@ -141,42 +157,68 @@ async fn process_message(store: &Store, msg: QueueMessage, queue_name: &str) -> 
             }
 
             let use_tx = payload.get("tx").and_then(|v| v.as_bool()).unwrap_or(true);
-            let timeout_ms = payload.get("statement_timeout_ms").and_then(|v| v.as_u64()).unwrap_or(30000);
+            let timeout_ms = payload
+                .get("statement_timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30000);
 
-            println!("Executing standalone SQL job {} (tx={}): {}", msg.id, use_tx, statement);
+            println!(
+                "Executing standalone SQL job {} (tx={}): {}",
+                msg.id, use_tx, statement
+            );
 
             let exec_outcome = if use_tx {
-                let mut tx = store.pool().begin().await.map_err(|e| pgqrs::error::Error::QueryFailed {
-                    query: "BEGIN TRANSACTION".into(),
-                    source: Box::new(e),
-                    context: "Failed to begin transaction for SQL job".into(),
-                })?;
-                
-                let outcome = run_statement_with_timeout(&mut *tx, statement, payload.get("params"), timeout_ms).await;
+                let mut tx =
+                    store
+                        .pool()
+                        .begin()
+                        .await
+                        .map_err(|e| pgqrs::error::Error::QueryFailed {
+                            query: "BEGIN TRANSACTION".into(),
+                            source: Box::new(e),
+                            context: "Failed to begin transaction for SQL job".into(),
+                        })?;
+
+                let outcome = run_statement_with_timeout(
+                    &mut *tx,
+                    statement,
+                    payload.get("params"),
+                    timeout_ms,
+                )
+                .await;
                 if outcome.is_ok() {
-                    tx.commit().await.map_err(|e| pgqrs::error::Error::QueryFailed {
-                        query: "COMMIT TRANSACTION".into(),
-                        source: Box::new(e),
-                        context: "Failed to commit transaction for SQL job".into(),
-                    })?;
+                    tx.commit()
+                        .await
+                        .map_err(|e| pgqrs::error::Error::QueryFailed {
+                            query: "COMMIT TRANSACTION".into(),
+                            source: Box::new(e),
+                            context: "Failed to commit transaction for SQL job".into(),
+                        })?;
                 } else {
                     let _ = tx.rollback().await;
                 }
                 outcome
             } else {
-                let mut conn = store.pool().acquire().await.map_err(|e| pgqrs::error::Error::QueryFailed {
-                    query: "ACQUIRE CONNECTION".into(),
-                    source: Box::new(e),
-                    context: "Failed to acquire connection for SQL job".into(),
-                })?;
-                run_statement_with_timeout(&mut *conn, statement, payload.get("params"), timeout_ms).await
+                let mut conn =
+                    store
+                        .pool()
+                        .acquire()
+                        .await
+                        .map_err(|e| pgqrs::error::Error::QueryFailed {
+                            query: "ACQUIRE CONNECTION".into(),
+                            source: Box::new(e),
+                            context: "Failed to acquire connection for SQL job".into(),
+                        })?;
+                run_statement_with_timeout(&mut *conn, statement, payload.get("params"), timeout_ms)
+                    .await
             };
-
-
 
             match exec_outcome {
                 Ok(result_value) => {
-                    println!("Successfully executed SQL job {}. Result: {}", msg.id, result_value);
+                    println!(
+                        "Successfully executed SQL job {}. Result: {}",
+                        msg.id, result_value
+                    );
                     Ok(())
                 }
                 Err(e) => {
@@ -196,13 +238,14 @@ async fn run_statement_with_timeout(
 ) -> pgqrs::error::Result<Value> {
     // Set statement timeout
     let timeout_sql = format!("SET LOCAL statement_timeout = {}", timeout_ms);
-    sqlx::query(&timeout_sql).execute(&mut *conn).await.map_err(|e| {
-        pgqrs::error::Error::QueryFailed {
+    sqlx::query(&timeout_sql)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| pgqrs::error::Error::QueryFailed {
             query: timeout_sql,
             source: Box::new(e),
             context: "Failed to set statement timeout".into(),
-        }
-    })?;
+        })?;
 
     // Prepare query
     let mut query = sqlx::query(statement);
@@ -227,14 +270,14 @@ async fn run_statement_with_timeout(
     }
 
     // Execute statement and capture rows
-    let rows = query.fetch_all(&mut *conn).await.map_err(|e| {
-        pgqrs::error::Error::QueryFailed {
+    let rows = query
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| pgqrs::error::Error::QueryFailed {
             query: statement.to_string(),
             source: Box::new(e),
             context: "Failed to execute SQL statement".into(),
-        }
-    })?;
-
+        })?;
 
     let mut result_rows = Vec::new();
     for row in rows {
@@ -242,17 +285,39 @@ async fn run_statement_with_timeout(
         for col in row.columns() {
             let name = col.name();
             let val = match col.type_info().name() {
-                "INT8" | "BIGINT" => row.try_get::<i64, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "INT4" | "INTEGER" => row.try_get::<i32, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "INT2" | "SMALLINT" => row.try_get::<i16, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "FLOAT8" | "DOUBLE PRECISION" => row.try_get::<f64, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "FLOAT4" | "REAL" => row.try_get::<f32, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "BOOL" | "BOOLEAN" => row.try_get::<bool, _>(name).map(Value::from).unwrap_or(Value::Null),
-                "TEXT" | "VARCHAR" | "CHAR" | "NAME" => row.try_get::<String, _>(name).map(Value::from).unwrap_or(Value::Null),
+                "INT8" | "BIGINT" => row
+                    .try_get::<i64, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "INT4" | "INTEGER" => row
+                    .try_get::<i32, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "INT2" | "SMALLINT" => row
+                    .try_get::<i16, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "FLOAT8" | "DOUBLE PRECISION" => row
+                    .try_get::<f64, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "FLOAT4" | "REAL" => row
+                    .try_get::<f32, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "BOOL" | "BOOLEAN" => row
+                    .try_get::<bool, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
+                "TEXT" | "VARCHAR" | "CHAR" | "NAME" => row
+                    .try_get::<String, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
                 "JSON" | "JSONB" => row.try_get::<Value, _>(name).unwrap_or(Value::Null),
-                _ => {
-                    row.try_get::<String, _>(name).map(Value::from).unwrap_or(Value::Null)
-                }
+                _ => row
+                    .try_get::<String, _>(name)
+                    .map(Value::from)
+                    .unwrap_or(Value::Null),
             };
             row_obj.insert(name.to_string(), val);
         }
@@ -295,11 +360,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let worker_name = args.worker_name.clone();
 
         tokio::spawn(async move {
-            println!("Registering worker '{}' for queue '{}'", worker_name, queue_name);
+            println!(
+                "Registering worker '{}' for queue '{}'",
+                worker_name, queue_name
+            );
             let consumer = match store.consumer(&queue_name, &worker_name).await {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("Failed to register consumer for queue {}: {}", queue_name, e);
+                    eprintln!(
+                        "Failed to register consumer for queue {}: {}",
+                        queue_name, e
+                    );
                     return;
                 }
             };
@@ -310,9 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 move |msg| {
                     let store = store.clone();
                     let queue_name = queue_name.clone();
-                    Box::pin(async move {
-                        process_message(&store, msg, &queue_name).await
-                    })
+                    Box::pin(async move { process_message(&store, msg, &queue_name).await })
                 }
             };
 

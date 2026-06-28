@@ -1587,6 +1587,8 @@ dependencies = [
 name = "pgqrs-extension"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "cron",
  "pgrx",
  "pgrx-tests",
  "serde",
