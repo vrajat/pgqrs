@@ -581,6 +581,7 @@ fn _pgqrs(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyWorkerStatus>()?;
     m.add_class::<PyWorkflowStatus>()?;
     m.add_class::<PyStepResultStatus>()?;
+    m.add_class::<PyTriggerState>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PyQueueMessage>()?;
     m.add_class::<PyQueueInfo>()?;

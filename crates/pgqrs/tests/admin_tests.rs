@@ -6,21 +6,6 @@ use pgqrs::Store;
 
 mod common;
 
-#[derive(Debug, sqlx::FromRow)]
-#[allow(dead_code)]
-struct ScheduleRow {
-    id: i64,
-    name: String,
-    cron_expression: String,
-    workflow_name: String,
-    input: Option<serde_json::Value>,
-}
-
-#[derive(sqlx::FromRow)]
-struct TimedOutRun {
-    id: i64,
-}
-
 #[derive(sqlx::FromRow)]
 struct SchedCheck {
     status: String,
@@ -39,142 +24,13 @@ struct StepCheck {
     error: Option<serde_json::Value>,
 }
 
-// Re-implement or import the helper functions for testing
-fn parse_cron_or_interval(
-    expr: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
-    let expr = expr.trim();
-    let parts: Vec<&str> = expr.split_whitespace().collect();
-
-    // 1. Try parsing as an interval
-    if parts.len() == 2 {
-        if let Ok(amount) = parts[0].parse::<i64>() {
-            let unit = parts[1].to_lowercase();
-            let seconds = if unit.starts_with("second") {
-                Some(amount)
-            } else if unit.starts_with("minute") {
-                Some(amount * 60)
-            } else if unit.starts_with("hour") {
-                Some(amount * 3600)
-            } else if unit.starts_with("day") {
-                Some(amount * 86400)
-            } else if unit.starts_with("week") {
-                Some(amount * 86400 * 7)
-            } else {
-                None
-            };
-            if let Some(secs) = seconds {
-                return Ok(now + chrono::Duration::seconds(secs));
-            }
-        }
-    }
-
-    // 2. Try parsing as cron expression
-    let cron_str = if parts.len() == 5 {
-        format!("0 {}", expr)
-    } else {
-        expr.to_string()
-    };
-
-    use std::str::FromStr;
-    let schedule = cron::Schedule::from_str(&cron_str)
-        .map_err(|e| anyhow::anyhow!("Invalid cron or interval expression '{}': {}", expr, e))?;
-
-    let next = schedule
-        .upcoming(chrono::Utc)
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No upcoming execution time for schedule '{}'", expr))?;
-
-    Ok(next)
-}
-
-async fn scan_schedules_once(store: &Store) -> anyhow::Result<bool> {
-    let mut tx = store.pool().begin().await?;
-
-    let row_opt = sqlx::query_as::<_, ScheduleRow>(
-        r#"
-        SELECT id, name, cron_expression, workflow_name, input
-        FROM pgqrs_schedules
-        WHERE status = 'active'
-          AND next_fire_at <= NOW()
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED
-        "#,
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let row = match row_opt {
-        Some(r) => r,
-        None => {
-            tx.commit().await?;
-            return Ok(false);
-        }
-    };
-
-    let queue_id: i64 = sqlx::query_scalar(
-        r#"
-        INSERT INTO pgqrs_queues (queue_name)
-        VALUES ($1)
-        ON CONFLICT (queue_name) DO UPDATE SET queue_name = EXCLUDED.queue_name
-        RETURNING id
-        "#,
-    )
-    .bind(&row.workflow_name)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let payload = serde_json::json!({
-        "input": row.input.unwrap_or(serde_json::Value::Null)
-    });
-
-    sqlx::query(
-        r#"
-        INSERT INTO pgqrs_messages (queue_id, payload, vt, enqueued_at)
-        VALUES ($1, $2, NOW(), NOW())
-        RETURNING id
-        "#,
-    )
-    .bind(queue_id)
-    .bind(&payload)
-    .execute(&mut *tx)
-    .await?;
-
-    let next_fire = match parse_cron_or_interval(&row.cron_expression, chrono::Utc::now()) {
-        Ok(t) => t,
-        Err(_) => {
-            sqlx::query(
-                r#"
-                UPDATE pgqrs_schedules
-                SET status = 'paused',
-                    updated_at = NOW()
-                WHERE id = $1
-                "#,
-            )
-            .bind(row.id)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Ok(true);
-        }
-    };
-
-    sqlx::query(
-        r#"
-        UPDATE pgqrs_schedules
-        SET next_fire_at = $2,
-            updated_at = NOW()
-        WHERE id = $1
-        "#,
-    )
-    .bind(row.id)
-    .bind(next_fire)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(true)
+// Re-implement thin helpers pointing to library admin API for tests
+async fn scan_cron_once(store: &Store) -> anyhow::Result<bool> {
+    let mut producers = std::collections::HashMap::new();
+    let res = pgqrs::admin(store)
+        .scan_cron_batch(&mut producers, 10)
+        .await?;
+    Ok(res)
 }
 
 async fn run_maintenance_sweep(
@@ -182,104 +38,48 @@ async fn run_maintenance_sweep(
     heartbeat_timeout_secs: i64,
     workflow_timeout_secs: i64,
 ) -> anyhow::Result<()> {
-    // 1. Worker Health
-    sqlx::query(
-        r#"
-        UPDATE pgqrs_workers
-        SET status = 'stopped'::worker_status,
-            shutdown_at = NOW()
-        WHERE status IN ('ready'::worker_status, 'polling'::worker_status, 'suspended'::worker_status, 'interrupted'::worker_status)
-          AND heartbeat_at < NOW() - make_interval(secs => $1::double precision)
-        "#
-    )
-    .bind(heartbeat_timeout_secs as f64)
-    .execute(store.pool())
-    .await?;
-
-    // 2. Lease Reclamation
-    sqlx::query(
-        r#"
-        UPDATE pgqrs_messages
-        SET vt = NOW(),
-            consumer_worker_id = NULL
-        WHERE consumer_worker_id IS NOT NULL
-          AND vt <= NOW()
-          AND archived_at IS NULL
-          AND consumer_worker_id IN (
-              SELECT id FROM pgqrs_workers
-              WHERE status = 'stopped'
-                 OR heartbeat_at < NOW() - make_interval(secs => $1::double precision)
-          )
-        "#,
-    )
-    .bind(heartbeat_timeout_secs as f64)
-    .execute(store.pool())
-    .await?;
-
-    // 3. Workflow Timeout
-    let timed_out_runs = sqlx::query_as::<_, TimedOutRun>(
-        r#"
-        UPDATE pgqrs_workflow_runs
-        SET status = 'ERROR'::pgqrs_workflow_status,
-            error = '{"message": "Workflow run execution timed out"}'::jsonb,
-            completed_at = NOW(),
-            updated_at = NOW()
-        WHERE status = 'RUNNING'::pgqrs_workflow_status
-          AND started_at < NOW() - make_interval(secs => $1::double precision)
-        RETURNING id
-        "#,
-    )
-    .bind(workflow_timeout_secs as f64)
-    .fetch_all(store.pool())
-    .await?;
-
-    if !timed_out_runs.is_empty() {
-        let timed_out_ids: Vec<i64> = timed_out_runs.iter().map(|r| r.id).collect();
-        sqlx::query(
-            r#"
-            UPDATE pgqrs_workflow_steps
-            SET status = 'ERROR'::pgqrs_workflow_status,
-                error = '{"message": "Workflow run execution timed out"}'::jsonb,
-                completed_at = NOW(),
-                updated_at = NOW()
-            WHERE run_id = ANY($1)
-              AND status IN ('RUNNING'::pgqrs_workflow_status, 'QUEUED'::pgqrs_workflow_status)
-            "#,
-        )
-        .bind(&timed_out_ids)
-        .execute(store.pool())
+    pgqrs::admin(store)
+        .run_maintenance_sweep(heartbeat_timeout_secs, workflow_timeout_secs)
         .await?;
-    }
-
     Ok(())
 }
 
 #[tokio::test]
-async fn test_schedule_scanning_interval() {
+async fn test_cron_scanning_every_minute() {
     let store = common::create_store("pgqrs_admin_scan_interval_test").await;
 
-    // Create a schedule that is due (interval style)
+    // Create backing queue
+    let queue = store
+        .queues()
+        .insert(pgqrs::types::NewQueueRecord {
+            queue_name: "target_workflow_1".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Create a cron schedule that is due (every minute cron style)
     let next_fire = Utc::now() - Duration::seconds(10);
     sqlx::query(
         r#"
-        INSERT INTO pgqrs_schedules (name, cron_expression, workflow_name, input, status, next_fire_at)
-        VALUES ('test_sched_1', '10 seconds', 'target_workflow_1', '{"user_id": 42}'::jsonb, 'active', $1)
-        "#
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, input, status, next_fire_at)
+        VALUES ('test_cron_1', $1, '* * * * *', '{"user_id": 42}'::jsonb, 'active', $2)
+        "#,
     )
+    .bind(queue.id)
     .bind(next_fire)
     .execute(store.pool())
     .await
     .unwrap();
 
     // Scan
-    let triggered = scan_schedules_once(&store).await.unwrap();
+    let triggered = scan_cron_once(&store).await.unwrap();
     assert!(triggered);
 
-    // Verify schedule updated
+    // Verify cron updated
     let sched = sqlx::query_as::<_, SchedCheck>(
-        "SELECT status, next_fire_at FROM pgqrs_schedules WHERE name = $1",
+        "SELECT status, next_fire_at FROM pgqrs_cron WHERE name = $1",
     )
-    .bind("test_sched_1")
+    .bind("test_cron_1")
     .fetch_one(store.pool())
     .await
     .unwrap();
@@ -288,48 +88,157 @@ async fn test_schedule_scanning_interval() {
     assert!(sched.next_fire_at > Utc::now());
 
     // Verify message enqueued
-    let queue_info = store
-        .queues()
-        .get_by_name("target_workflow_1")
-        .await
-        .unwrap();
-    let messages = store.messages().filter_by_fk(queue_info.id).await.unwrap();
+    let messages = store.messages().filter_by_fk(queue.id).await.unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].payload["input"]["user_id"], 42);
 }
 
 #[tokio::test]
-async fn test_schedule_scanning_cron() {
+async fn test_cron_scanning_custom() {
     let store = common::create_store("pgqrs_admin_scan_cron_test").await;
 
-    // Create a schedule that is due (cron style)
+    // Create backing queue
+    let queue = store
+        .queues()
+        .insert(pgqrs::types::NewQueueRecord {
+            queue_name: "target_workflow_cron".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Create a cron that is due
     let next_fire = Utc::now() - Duration::seconds(10);
     sqlx::query(
         r#"
-        INSERT INTO pgqrs_schedules (name, cron_expression, workflow_name, input, status, next_fire_at)
-        VALUES ('test_sched_cron', '*/5 * * * *', 'target_workflow_cron', '{"task": "cron"}'::jsonb, 'active', $1)
-        "#
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, input, status, next_fire_at)
+        VALUES ('test_cron_custom', $1, '*/5 * * * *', '{"task": "cron"}'::jsonb, 'active', $2)
+        "#,
     )
+    .bind(queue.id)
     .bind(next_fire)
     .execute(store.pool())
     .await
     .unwrap();
 
     // Scan
-    let triggered = scan_schedules_once(&store).await.unwrap();
+    let triggered = scan_cron_once(&store).await.unwrap();
     assert!(triggered);
 
-    // Verify schedule updated next fire
+    // Verify cron updated next fire
     let sched = sqlx::query_as::<_, SchedCheck>(
-        "SELECT status, next_fire_at FROM pgqrs_schedules WHERE name = $1",
+        "SELECT status, next_fire_at FROM pgqrs_cron WHERE name = $1",
     )
-    .bind("test_sched_cron")
+    .bind("test_cron_custom")
     .fetch_one(store.pool())
     .await
     .unwrap();
 
     assert_eq!(sched.status, "active");
     assert!(sched.next_fire_at > Utc::now());
+}
+
+#[tokio::test]
+async fn test_cron_constraints() {
+    let store = common::create_store("pgqrs_cron_constraints_test").await;
+
+    // 1. Trying to insert a cron with a non-existent queue_id must fail (foreign key constraint)
+    let res = sqlx::query(
+        r#"
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, status, next_fire_at)
+        VALUES ('test_orphan_cron', 999999, '* * * * *', 'active', NOW())
+        "#,
+    )
+    .execute(store.pool())
+    .await;
+    assert!(res.is_err()); // Violates FK constraint
+
+    // Create a queue
+    let queue = store
+        .queues()
+        .insert(pgqrs::types::NewQueueRecord {
+            queue_name: "test_constraint_queue".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // 2. Insert valid cron
+    let res = sqlx::query(
+        r#"
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, status, next_fire_at)
+        VALUES ('valid_cron_1', $1, '* * * * *', 'active', NOW())
+        "#,
+    )
+    .bind(queue.id)
+    .execute(store.pool())
+    .await;
+    assert!(res.is_ok());
+
+    // 3. Trying to insert a second cron for the same queue_id must fail (unique constraint)
+    let res = sqlx::query(
+        r#"
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, status, next_fire_at)
+        VALUES ('duplicate_cron_for_queue', $1, '* * * * *', 'active', NOW())
+        "#,
+    )
+    .bind(queue.id)
+    .execute(store.pool())
+    .await;
+    assert!(res.is_err()); // Violates UNIQUE constraint
+}
+
+#[tokio::test]
+async fn test_cron_crash_recovery_firing() {
+    let store = common::create_store("pgqrs_cron_crash_recovery_test").await;
+
+    // Create queue
+    let queue = store
+        .queues()
+        .insert(pgqrs::types::NewQueueRecord {
+            queue_name: "target_workflow_recovery".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Create a cron that crashed in the 'firing' state (next_fire_at is in the future, but trigger_state is 'firing')
+    let next_fire = Utc::now() + Duration::minutes(5);
+    sqlx::query(
+        r#"
+        INSERT INTO pgqrs_cron (name, queue_id, cron_expression, input, status, trigger_state, next_fire_at)
+        VALUES ('crashed_cron', $1, '*/5 * * * *', '{"recovered": true}'::jsonb, 'active', 'firing', $2)
+        "#
+    )
+    .bind(queue.id)
+    .bind(next_fire)
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    // Scan should detect the 'firing' state, recovery-trigger it, and reset state to 'idle'
+    let triggered = scan_cron_once(&store).await.unwrap();
+    assert!(triggered);
+
+    // Verify cron trigger_state reset to idle
+    let sched = sqlx::query_as::<_, SchedCheck>(
+        "SELECT status, next_fire_at FROM pgqrs_cron WHERE name = $1",
+    )
+    .bind("crashed_cron")
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(sched.status, "active");
+
+    let state: pgqrs::types::TriggerState =
+        sqlx::query_scalar("SELECT trigger_state FROM pgqrs_cron WHERE name = $1")
+            .bind("crashed_cron")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(state, pgqrs::types::TriggerState::Idle);
+
+    // Verify message enqueued
+    let messages = store.messages().filter_by_fk(queue.id).await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload["input"]["recovered"], true);
 }
 
 #[tokio::test]

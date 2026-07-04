@@ -102,6 +102,8 @@ impl WorkflowAttempt {
 pub const TEST_SCHEMAS: &[&str] = &[
     "pgqrs_admin_scan_interval_test",
     "pgqrs_admin_scan_cron_test",
+    "pgqrs_cron_constraints_test",
+    "pgqrs_cron_crash_recovery_test",
     "pgqrs_admin_reclaim_test",
     "pgqrs_admin_timeout_test",
     "pgqrs_builder_test",

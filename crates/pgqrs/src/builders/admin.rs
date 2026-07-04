@@ -177,4 +177,26 @@ impl<'a> AdminBuilder<'a> {
         let admin = self.get_admin().await?;
         admin.release_worker_messages(worker_id).await
     }
+
+    /// Scan and trigger a batch of active cron schedules.
+    pub async fn scan_cron_batch(
+        self,
+        producers: &mut std::collections::HashMap<String, crate::workers::Producer>,
+        batch_size: usize,
+    ) -> Result<bool> {
+        let admin = self.get_admin().await?;
+        admin.scan_cron_batch(producers, batch_size).await
+    }
+
+    /// Execute maintenance sweep.
+    pub async fn run_maintenance_sweep(
+        self,
+        heartbeat_timeout_secs: i64,
+        workflow_timeout_secs: i64,
+    ) -> Result<()> {
+        let admin = self.get_admin().await?;
+        admin
+            .run_maintenance_sweep(heartbeat_timeout_secs, workflow_timeout_secs)
+            .await
+    }
 }

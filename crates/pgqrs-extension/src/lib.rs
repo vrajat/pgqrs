@@ -99,13 +99,14 @@ mod tests {
                 dequeued_at TIMESTAMPTZ,
                 enqueued_at TIMESTAMPTZ NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS pgqrs_schedules (
+            CREATE TABLE IF NOT EXISTS pgqrs_cron (
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT UNIQUE NOT NULL,
+                queue_id BIGINT NOT NULL UNIQUE,
                 cron_expression TEXT NOT NULL,
-                workflow_name TEXT NOT NULL,
                 input JSONB,
                 status TEXT NOT NULL DEFAULT 'active',
+                trigger_state TEXT NOT NULL DEFAULT 'idle',
                 next_fire_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
@@ -194,35 +195,42 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_coordinator_schedule_scanner() {
+    fn test_coordinator_cron_scanner() {
         Spi::connect(|mut client| {
             setup_test_tables(&mut client).unwrap();
 
             // Clean slate
             client
                 .update(
-                    "TRUNCATE pgqrs_schedules, pgqrs_queues, pgqrs_messages CASCADE",
+                    "TRUNCATE pgqrs_cron, pgqrs_queues, pgqrs_messages CASCADE",
                     None,
                     None,
                 )
                 .unwrap();
 
-            // 1. Insert schedule due for firing
-            let schedule_id: i64 = client.select(
-                "INSERT INTO pgqrs_schedules (name, cron_expression, workflow_name, input, next_fire_at) VALUES ('test-cron', '*/5 * * * *', 'test-wf', '{\"x\": 1}'::jsonb, NOW() - interval '1 minute') RETURNING id",
-                None, None
+            // 1. Insert backing queue first
+            let queue_id: i64 = client
+                .select(
+                    "INSERT INTO pgqrs_queues (queue_name) VALUES ('test-wf') RETURNING id",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .next()
+                .unwrap()
+                .get_by_name("id")
+                .unwrap()
+                .unwrap();
+
+            // 2. Insert cron due for firing referencing the queue_id
+            let cron_id: i64 = client.select(
+                "INSERT INTO pgqrs_cron (name, queue_id, cron_expression, input, next_fire_at) VALUES ('test-cron', $1, '*/5 * * * *', '{\"x\": 1}'::jsonb, NOW() - interval '1 minute') RETURNING id",
+                None, Some(vec![(PgBuiltInOids::INT8OID.oid(), queue_id.into_datum())])
             ).unwrap().next().unwrap().get_by_name("id").unwrap().unwrap();
 
-            // 2. Run schedule scanner
-            let triggered = crate::bgworker::scan_schedules_once().unwrap();
+            // 3. Run cron scanner
+            let triggered = crate::bgworker::scan_cron_once().unwrap();
             assert!(triggered);
-
-            // 3. Verify queue was created
-            let queue_exists: bool = client.select(
-                "SELECT EXISTS(SELECT 1 FROM pgqrs_queues WHERE queue_name = 'test-wf') as exists",
-                None, None
-            ).unwrap().next().unwrap().get_by_name("exists").unwrap().unwrap();
-            assert!(queue_exists);
 
             // 4. Verify trigger message was enqueued
             let msg_count: i64 = client
@@ -235,15 +243,12 @@ mod tests {
                 .unwrap();
             assert_eq!(msg_count, 1);
 
-            // 5. Verify next_fire_at on the schedule was updated to a future time
+            // 5. Verify next_fire_at on the cron was updated to a future time
             let next_fire_due: bool = client
                 .select(
-                    "SELECT next_fire_at <= NOW() as due FROM pgqrs_schedules WHERE id = $1",
+                    "SELECT next_fire_at <= NOW() as due FROM pgqrs_cron WHERE id = $1",
                     None,
-                    Some(vec![(
-                        PgBuiltInOids::INT8OID.oid(),
-                        schedule_id.into_datum(),
-                    )]),
+                    Some(vec![(PgBuiltInOids::INT8OID.oid(), cron_id.into_datum())]),
                 )
                 .unwrap()
                 .next()

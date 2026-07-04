@@ -29,6 +29,10 @@ enum Commands {
         #[arg(long, default_value_t = 1000)]
         interval_ms: u64,
 
+        /// Max number of crons to process in a single batch
+        #[arg(long, default_value_t = 10)]
+        cron_batch_size: usize,
+
         /// Stale worker heartbeat timeout in seconds
         #[arg(long, default_value_t = 30)]
         heartbeat_timeout_secs: i64,
@@ -81,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dsn,
             schema,
             interval_ms,
+            cron_batch_size,
             heartbeat_timeout_secs,
             workflow_timeout_secs,
         } => {
@@ -95,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 interval_ms,
                 heartbeat_timeout_secs,
                 workflow_timeout_secs,
+                cron_batch_size,
             )
             .await?;
         }

@@ -1,6 +1,9 @@
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
-use rust_pgqrs::types::{WorkerStatus as RustWorkerStatus, WorkflowStatus as RustWorkflowStatus};
+use rust_pgqrs::types::{
+    TriggerState as RustTriggerState, WorkerStatus as RustWorkerStatus,
+    WorkflowStatus as RustWorkflowStatus,
+};
 
 #[pyclass(name = "WorkerStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,4 +58,20 @@ impl From<RustWorkflowStatus> for PyWorkflowStatus {
 pub enum PyStepResultStatus {
     Execute,
     Skipped,
+}
+
+#[pyclass(name = "TriggerState")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PyTriggerState {
+    Idle,
+    Firing,
+}
+
+impl From<RustTriggerState> for PyTriggerState {
+    fn from(state: RustTriggerState) -> Self {
+        match state {
+            RustTriggerState::Idle => Self::Idle,
+            RustTriggerState::Firing => Self::Firing,
+        }
+    }
 }

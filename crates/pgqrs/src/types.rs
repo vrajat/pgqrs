@@ -313,3 +313,42 @@ pub struct NewStepRecord {
     pub step_name: String,
     pub input: Option<serde_json::Value>,
 }
+
+/// Cron trigger state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(
+    feature = "sqlx",
+    sqlx(type_name = "pgqrs_trigger_state", rename_all = "lowercase")
+)]
+pub enum TriggerState {
+    Idle,
+    Firing,
+}
+
+impl Default for TriggerState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl fmt::Display for TriggerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TriggerState::Idle => write!(f, "idle"),
+            TriggerState::Firing => write!(f, "firing"),
+        }
+    }
+}
+
+impl std::str::FromStr for TriggerState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "idle" => Ok(TriggerState::Idle),
+            "firing" => Ok(TriggerState::Firing),
+            _ => Err(format!("Invalid trigger state: {}", s)),
+        }
+    }
+}

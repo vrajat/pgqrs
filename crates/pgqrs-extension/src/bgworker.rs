@@ -113,11 +113,11 @@ pub extern "C" fn pgqrs_coordinator_main(_arg: pg_sys::Datum) {
 
             // 1. Scan cron schedules
             loop {
-                match scan_schedules_once() {
+                match scan_cron_once() {
                     Ok(true) => continue,
                     Ok(false) => break,
                     Err(e) => {
-                        pgrx::log!("Error in pgqrs schedule scanner: {:?}", e);
+                        pgrx::log!("Error in pgqrs cron scanner: {:?}", e);
                         break;
                     }
                 }
@@ -154,37 +154,10 @@ pub extern "C" fn pgqrs_coordinator_main(_arg: pg_sys::Datum) {
     pgrx::log!("pgqrs coordinator shutting down...");
 }
 
-fn parse_cron_or_interval(
-    expr: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<chrono::DateTime<chrono::Utc>, String> {
+fn parse_cron(expr: &str) -> Result<chrono::DateTime<chrono::Utc>, String> {
     let expr = expr.trim();
     let parts: Vec<&str> = expr.split_whitespace().collect();
 
-    // 1. Try parsing as an interval
-    if parts.len() == 2 {
-        if let Ok(amount) = parts[0].parse::<i64>() {
-            let unit = parts[1].to_lowercase();
-            let seconds = if unit.starts_with("second") {
-                Some(amount)
-            } else if unit.starts_with("minute") {
-                Some(amount * 60)
-            } else if unit.starts_with("hour") {
-                Some(amount * 3600)
-            } else if unit.starts_with("day") {
-                Some(amount * 86400)
-            } else if unit.starts_with("week") {
-                Some(amount * 86400 * 7)
-            } else {
-                None
-            };
-            if let Some(secs) = seconds {
-                return Ok(now + chrono::Duration::seconds(secs));
-            }
-        }
-    }
-
-    // 2. Try parsing as cron expression
     let cron_str = if parts.len() == 5 {
         format!("0 {}", expr)
     } else {
@@ -193,24 +166,26 @@ fn parse_cron_or_interval(
 
     use std::str::FromStr;
     let schedule = cron::Schedule::from_str(&cron_str)
-        .map_err(|e| format!("Invalid cron or interval expression '{}': {}", expr, e))?;
+        .map_err(|e| format!("Invalid cron expression '{}': {}", expr, e))?;
 
     let next = schedule
         .upcoming(chrono::Utc)
         .next()
-        .ok_or_else(|| format!("No upcoming execution time for schedule '{}'", expr))?;
+        .ok_or_else(|| format!("No upcoming execution time for cron expression '{}'", expr))?;
 
     Ok(next)
 }
 
-pub(crate) fn scan_schedules_once() -> Result<bool, pgrx::spi::Error> {
-    // 1. SELECT next active schedule due for fire
+pub(crate) fn scan_cron_once() -> Result<bool, pgrx::spi::Error> {
+    // 1. SELECT next active cron due for fire
     let row_opt = Spi::connect(|client| -> Result<_, pgrx::spi::Error> {
         let select_sql = r#"
-            SELECT id, name, cron_expression, workflow_name, input
-            FROM pgqrs_schedules
-            WHERE status = 'active'
-              AND next_fire_at <= NOW()
+            SELECT c.id, c.name, c.cron_expression, c.queue_id, q.queue_name as workflow_name, c.input
+            FROM pgqrs_cron c
+            JOIN pgqrs_queues q ON c.queue_id = q.id
+            WHERE c.status = 'active'
+              AND c.next_fire_at <= NOW()
+            ORDER BY c.next_fire_at ASC, c.id ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
         "#;
@@ -222,33 +197,26 @@ pub(crate) fn scan_schedules_once() -> Result<bool, pgrx::spi::Error> {
         let id: i64 = row.get_by_name("id")?.unwrap();
         let name: String = row.get_by_name("name")?.unwrap();
         let cron_expression: String = row.get_by_name("cron_expression")?.unwrap();
+        let queue_id: i64 = row.get_by_name("queue_id")?.unwrap();
         let workflow_name: String = row.get_by_name("workflow_name")?.unwrap();
         let input: Option<pgrx::JsonB> = row.get_by_name("input")?;
 
-        Ok(Some((id, name, cron_expression, workflow_name, input)))
+        Ok(Some((
+            id,
+            name,
+            cron_expression,
+            queue_id,
+            workflow_name,
+            input,
+        )))
     })?;
 
-    let (id, name, cron_expression, workflow_name, input) = match row_opt {
+    let (id, name, cron_expression, queue_id, workflow_name, input) = match row_opt {
         Some(val) => val,
         None => return Ok(false),
     };
 
-    // 2. Resolve queue_id for the workflow
-    let queue_id = Spi::get_one_with_args::<i64>(
-        r#"
-        INSERT INTO pgqrs_queues (queue_name)
-        VALUES ($1)
-        ON CONFLICT (queue_name) DO UPDATE SET queue_name = EXCLUDED.queue_name
-        RETURNING id
-        "#,
-        vec![(
-            PgBuiltInOids::TEXTOID.oid(),
-            workflow_name.clone().into_datum(),
-        )],
-    )?
-    .unwrap();
-
-    // 3. Enqueue trigger message
+    // 2. Enqueue trigger message directly using queue_id
     let payload = serde_json::json!({
         "input": input.map(|j| j.0).unwrap_or(serde_json::Value::Null)
     });
@@ -267,20 +235,20 @@ pub(crate) fn scan_schedules_once() -> Result<bool, pgrx::spi::Error> {
     )?
     .unwrap();
 
-    // 4. Calculate next fire time
-    let next_fire = match parse_cron_or_interval(&cron_expression, chrono::Utc::now()) {
+    // 3. Calculate next fire time
+    let next_fire = match parse_cron(&cron_expression) {
         Ok(t) => t,
         Err(e) => {
             pgrx::log!(
-                "Error parsing schedule expression '{}' for schedule '{}': {:?}",
+                "Error parsing cron expression '{}' for cron '{}': {:?}",
                 cron_expression,
                 name,
                 e
             );
-            // Pause the schedule
+            // Pause the cron
             let _ = Spi::run_with_args(
                 r#"
-                UPDATE pgqrs_schedules
+                UPDATE pgqrs_cron
                 SET status = 'paused',
                     updated_at = NOW()
                 WHERE id = $1
@@ -291,12 +259,13 @@ pub(crate) fn scan_schedules_once() -> Result<bool, pgrx::spi::Error> {
         }
     };
 
-    // 5. Update next fire time
+    // 4. Update next fire time and reset trigger_state to idle
     let next_fire_str = next_fire.to_rfc3339();
     let _ = Spi::run_with_args(
         r#"
-        UPDATE pgqrs_schedules
+        UPDATE pgqrs_cron
         SET next_fire_at = $2::timestamptz,
+            trigger_state = 'idle',
             updated_at = NOW()
         WHERE id = $1
         "#,
@@ -310,7 +279,7 @@ pub(crate) fn scan_schedules_once() -> Result<bool, pgrx::spi::Error> {
     )?;
 
     pgrx::log!(
-        "Triggered schedule '{}' (workflow: '{}'), enqueued message_id={}, next_fire_at={}",
+        "Triggered cron '{}' (workflow: '{}'), enqueued message_id={}, next_fire_at={}",
         name,
         workflow_name,
         message_id,
