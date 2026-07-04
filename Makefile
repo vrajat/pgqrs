@@ -65,7 +65,7 @@ check-nextest:
 	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
 
 build-setup-test-schemas:
-	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES)
+	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES) --features test-utils
 
 test-rust: check-nextest
 ifdef TEST

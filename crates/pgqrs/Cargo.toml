@@ -21,7 +21,7 @@ include = [
 
 [[bin]]
 name = "pgqrs"
-path = "src/bin/pgqrs.rs"
+path = "src/main.rs"
 
 
 
