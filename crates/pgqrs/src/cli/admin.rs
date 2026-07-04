@@ -115,9 +115,8 @@ fn parse_cron_or_interval(
         expr.to_string()
     };
 
-    let schedule = cron::Schedule::from_str(&cron_str).map_err(|e| {
-        anyhow::anyhow!("Invalid cron or interval expression '{}': {}", expr, e)
-    })?;
+    let schedule = cron::Schedule::from_str(&cron_str)
+        .map_err(|e| anyhow::anyhow!("Invalid cron or interval expression '{}': {}", expr, e))?;
 
     let next = schedule
         .upcoming(chrono::Utc)

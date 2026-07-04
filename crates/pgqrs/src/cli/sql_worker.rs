@@ -1,8 +1,8 @@
-use pgqrs::Store;
 use pgqrs::QueueMessage;
+use pgqrs::Store;
 use serde_json::Value;
-use std::time::Duration;
 use sqlx::{Column, Row, TypeInfo};
+use std::time::Duration;
 
 pub async fn run(
     dsn: String,
@@ -179,13 +179,16 @@ async fn process_message(
             );
 
             let exec_outcome = if use_tx {
-                let mut tx = store.pool().begin().await.map_err(|e| {
-                    pgqrs::error::Error::QueryFailed {
-                        query: "BEGIN TRANSACTION".into(),
-                        source: Box::new(e),
-                        context: "Failed to begin transaction for SQL job".into(),
-                    }
-                })?;
+                let mut tx =
+                    store
+                        .pool()
+                        .begin()
+                        .await
+                        .map_err(|e| pgqrs::error::Error::QueryFailed {
+                            query: "BEGIN TRANSACTION".into(),
+                            source: Box::new(e),
+                            context: "Failed to begin transaction for SQL job".into(),
+                        })?;
 
                 let outcome = run_statement_with_timeout(
                     &mut tx,
@@ -207,20 +210,18 @@ async fn process_message(
                 }
                 outcome
             } else {
-                let mut conn = store.pool().acquire().await.map_err(|e| {
-                    pgqrs::error::Error::QueryFailed {
-                        query: "ACQUIRE CONNECTION".into(),
-                        source: Box::new(e),
-                        context: "Failed to acquire connection for SQL job".into(),
-                    }
-                })?;
-                run_statement_with_timeout(
-                    &mut conn,
-                    statement,
-                    payload.get("params"),
-                    timeout_ms,
-                )
-                .await
+                let mut conn =
+                    store
+                        .pool()
+                        .acquire()
+                        .await
+                        .map_err(|e| pgqrs::error::Error::QueryFailed {
+                            query: "ACQUIRE CONNECTION".into(),
+                            source: Box::new(e),
+                            context: "Failed to acquire connection for SQL job".into(),
+                        })?;
+                run_statement_with_timeout(&mut conn, statement, payload.get("params"), timeout_ms)
+                    .await
             };
 
             match exec_outcome {
@@ -280,15 +281,14 @@ async fn run_statement_with_timeout(
     }
 
     // Execute statement and capture rows
-    let rows =
-        query
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(|e| pgqrs::error::Error::QueryFailed {
-                query: statement.to_string(),
-                source: Box::new(e),
-                context: "Failed to execute SQL statement".into(),
-            })?;
+    let rows = query
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| pgqrs::error::Error::QueryFailed {
+            query: statement.to_string(),
+            source: Box::new(e),
+            context: "Failed to execute SQL statement".into(),
+        })?;
 
     let mut result_rows = Vec::new();
     for row in rows {

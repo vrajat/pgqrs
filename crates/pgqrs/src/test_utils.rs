@@ -138,13 +138,13 @@ pub const TEST_SCHEMAS: &[&str] = &[
     "test_sql_wf_fail",
 ];
 
-pub async fn run_postgres_schema_setup(dsn: &str, cleanup_mode: bool) -> std::result::Result<(), Box<dyn std::error::Error>> {
+pub async fn run_postgres_schema_setup(
+    dsn: &str,
+    cleanup_mode: bool,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     use sqlx::postgres::PgPoolOptions;
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(dsn)
-        .await?;
+    let pool = PgPoolOptions::new().max_connections(5).connect(dsn).await?;
 
     if cleanup_mode {
         println!("Cleaning up test schemas using DSN: {}", dsn);

@@ -89,7 +89,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or_else(|| std::env::var("DATABASE_URL").ok())
                 .ok_or("Database DSN is required. Set via --dsn argument, PGQRS_DSN env var, or DATABASE_URL env var.")?;
 
-            cli::admin::run(dsn, schema, interval_ms, heartbeat_timeout_secs, workflow_timeout_secs).await?;
+            cli::admin::run(
+                dsn,
+                schema,
+                interval_ms,
+                heartbeat_timeout_secs,
+                workflow_timeout_secs,
+            )
+            .await?;
         }
         Commands::SqlWorker {
             dsn,
@@ -103,7 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .or_else(|| std::env::var("DATABASE_URL").ok())
                 .ok_or("Database DSN is required. Set via --dsn argument, PGQRS_DSN env var, or DATABASE_URL env var.")?;
 
-            let worker_name = worker_name.unwrap_or_else(|| format!("sql-worker-{}", uuid::Uuid::new_v4()));
+            let worker_name =
+                worker_name.unwrap_or_else(|| format!("sql-worker-{}", uuid::Uuid::new_v4()));
 
             cli::sql_worker::run(dsn, schema, queues, interval_ms, worker_name).await?;
         }
@@ -112,7 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let dsn = dsn
                     .or_else(|| std::env::var("PGQRS_TEST_DSN").ok())
-                    .unwrap_or_else(|| "postgres://postgres:postgres@localhost:5432/postgres".to_string());
+                    .unwrap_or_else(|| {
+                        "postgres://postgres:postgres@localhost:5432/postgres".to_string()
+                    });
 
                 pgqrs::test_utils::run_postgres_schema_setup(&dsn, cleanup).await?;
             }
@@ -120,7 +130,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let _dsn = dsn;
                 let _cleanup = cleanup;
-                return Err("setup-test-schemas subcommand requires the 'test-utils' feature to be enabled".into());
+                return Err(
+                    "setup-test-schemas subcommand requires the 'test-utils' feature to be enabled"
+                        .into(),
+                );
             }
         }
     }

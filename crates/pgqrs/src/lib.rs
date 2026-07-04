@@ -111,7 +111,9 @@ pub use crate::policy::{BackoffStrategy, StepRetryPolicy, WorkflowConfig};
 pub use crate::rate_limit::RateLimitStatus;
 pub use crate::stats::{QueueMetrics, SystemStats, WorkerHealthStats, WorkerStats};
 #[cfg(any(test, feature = "test-utils"))]
-pub use crate::test_utils::{WorkflowAttempt, WorkflowAttemptHarness, WorkflowTestRig, run_postgres_schema_setup};
+pub use crate::test_utils::{
+    run_postgres_schema_setup, WorkflowAttempt, WorkflowAttemptHarness, WorkflowTestRig,
+};
 
 pub use crate::types::{
     NewQueueMessage, NewQueueRecord, NewRunRecord, NewStepRecord, NewWorkerRecord,
