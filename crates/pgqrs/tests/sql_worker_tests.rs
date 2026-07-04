@@ -100,7 +100,7 @@ async fn process_message(
                         })?;
 
                 let outcome = run_statement_with_timeout(
-                    &mut *tx,
+                    &mut tx,
                     statement,
                     payload.get("params"),
                     timeout_ms,
@@ -129,7 +129,7 @@ async fn process_message(
                             source: Box::new(e),
                             context: "Failed to acquire connection for SQL job".into(),
                         })?;
-                run_statement_with_timeout(&mut *conn, statement, payload.get("params"), timeout_ms)
+                run_statement_with_timeout(&mut conn, statement, payload.get("params"), timeout_ms)
                     .await
             };
 

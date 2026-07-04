@@ -20,16 +20,8 @@ include = [
 ]
 
 [[bin]]
-name = "setup_test_schemas"
-path = "src/bin/setup_test_schemas.rs"
-
-[[bin]]
-name = "pgqrs-admin"
-path = "src/bin/pgqrs_admin.rs"
-
-[[bin]]
-name = "pgqrs-sql-worker"
-path = "src/bin/pgqrs_sql_worker.rs"
+name = "pgqrs"
+path = "src/bin/pgqrs.rs"
 
 
 
@@ -48,6 +40,7 @@ postgres = ["sqlx", "sqlx/postgres"]
 test-utils = []
 
 [dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
 cron = "0.12.1"
 sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "uuid", "json", "runtime-tokio-rustls", "macros", "migrate"], optional = true }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }

@@ -4,7 +4,8 @@ CARGO_FEATURES ?= --no-default-features --features postgres
 TEST_FEATURES ?= --features test-utils
 CARGO_TARGET_DIR_EFFECTIVE := $(if $(strip $(CARGO_TARGET_DIR)),$(CARGO_TARGET_DIR),target)
 CARGO_TARGET_TMPDIR ?= $(abspath $(CARGO_TARGET_DIR_EFFECTIVE)/tmp)
-SETUP_TEST_SCHEMAS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/setup_test_schemas
+PGQRS_BIN := $(CARGO_TARGET_DIR_EFFECTIVE)/debug/pgqrs
+SETUP_TEST_SCHEMAS_CMD := $(PGQRS_BIN) setup-test-schemas
 PYTEST_TARGET ?= py-pgqrs
 PYTEST_ARGS ?=
 
@@ -64,7 +65,7 @@ check-nextest:
 	@which cargo-nextest >/dev/null || (echo "cargo-nextest not found. Run 'make install-nextest' or 'cargo install cargo-nextest'" && exit 1)
 
 build-setup-test-schemas:
-	cargo build -p pgqrs --bin setup_test_schemas $(CARGO_FEATURES)
+	cargo build -p pgqrs --bin pgqrs $(CARGO_FEATURES)
 
 test-rust: check-nextest
 ifdef TEST
@@ -141,10 +142,10 @@ endif
 test-setup-postgres: start-pgbouncer build-setup-test-schemas
 ifdef CI_POSTGRES_RUNNING
 	@echo "Using CI Postgres database"
-	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" $(SETUP_TEST_SCHEMAS_BIN)
+	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" $(SETUP_TEST_SCHEMAS_CMD)
 else
 	@echo "Using local Postgres database"
-	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" $(SETUP_TEST_SCHEMAS_BIN)
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" $(SETUP_TEST_SCHEMAS_CMD)
 endif
 
 test-postgres: test-setup-postgres
@@ -170,11 +171,11 @@ else
 ifdef CI_POSTGRES_RUNNING
 	@echo "Cleaning up CI Postgres schemas"
 	PGQRS_TEST_DSN="$${PGQRS_TEST_DSN:-postgres://postgres:postgres@localhost:5432/postgres}" \
-		$(SETUP_TEST_SCHEMAS_BIN) --cleanup
+		$(SETUP_TEST_SCHEMAS_CMD) --cleanup
 else
 	@echo "Cleaning up local Postgres schemas"
 	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
-		$(SETUP_TEST_SCHEMAS_BIN) --cleanup
+		$(SETUP_TEST_SCHEMAS_CMD) --cleanup
 endif
 endif
 

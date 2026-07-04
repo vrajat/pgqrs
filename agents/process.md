@@ -152,19 +152,19 @@ Many git and gh commands use pagers (like `less`) which can interfere with termi
 
 **Rust Tests (PostgreSQL):**
 - Use **Global Setup** pattern for faster, parallel test execution
-- Schema provisioning handled by `setup_test_schemas` binary (in `src/bin/setup_test_schemas.rs`)
+- Schema provisioning handled by the unified `pgqrs` binary's `setup-test-schemas` subcommand (in `src/bin/pgqrs.rs`)
 - All test schemas are created once at the start of the test suite
 - Individual tests verify connection and use pre-provisioned schemas
 - External PostgreSQL required (CI services or local Docker via Makefile)
 
-**Global Setup Binary (`setup_test_schemas`):**
+**Global Setup Subcommand (`pgqrs setup-test-schemas`):**
 ```rust
-// Located at: crates/pgqrs/src/bin/setup_test_schemas.rs
+// Implemented in: crates/pgqrs/src/bin/pgqrs.rs
 // Purpose: Pre-provision all test schemas before running test suite
-// Invoked by: make test-postgres (via setup_test_schemas target)
+// Invoked by: make test-postgres (via build-setup-test-schemas target)
 ```
 
-This binary:
+This subcommand:
 1. Connects to PostgreSQL using `PGQRS_TEST_DSN`
 2. Creates all test schemas (e.g., `pgqrs_workflow_test`, `pgqrs_builder_test`)
 3. Runs migrations (`install()`) for each schema
@@ -190,7 +190,7 @@ This binary:
 - Schemas are automatically dropped after `make test-postgres` completes
 - Set `PGQRS_KEEP_TEST_DATA=1` to preserve schemas for debugging
 - Manual cleanup: `make test-cleanup-postgres`
-- Uses same binary as setup: `setup_test_schemas --cleanup`
+- Uses same subcommand as setup: `pgqrs setup-test-schemas --cleanup`
 
 ### Code Quality and Linting
 - `cargo clippy` - Run Rust linter
