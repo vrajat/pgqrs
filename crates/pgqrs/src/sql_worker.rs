@@ -36,13 +36,27 @@ pub async fn run(
                 "Registering worker '{}' for queue '{}'",
                 worker_name, queue_name
             );
-            let consumer = match store.consumer(&queue_name, &worker_name).await {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!(
-                        "Failed to register consumer for queue {}: {}",
-                        queue_name, e
-                    );
+            let mut consumer = None;
+            for attempt in 1..=60 {
+                match store.consumer(&queue_name, &worker_name).await {
+                    Ok(c) => {
+                        consumer = Some(c);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to register consumer for queue {} (attempt {}/60): {}",
+                            queue_name, attempt, e
+                        );
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+
+            let consumer = match consumer {
+                Some(c) => c,
+                None => {
+                    eprintln!("Giving up registering consumer for queue {}", queue_name);
                     return;
                 }
             };

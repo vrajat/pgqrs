@@ -139,6 +139,7 @@ pub const TEST_SCHEMAS: &[&str] = &[
     "test_sql_workflow",
     "test_sql_wf_fail",
     "test_sql_dml",
+    "test_sql_enqueue",
 ];
 
 pub async fn run_postgres_schema_setup(

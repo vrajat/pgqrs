@@ -93,3 +93,9 @@ jobs:
           PGQRS_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres
           PGBOUNCER_TEST_DSN: postgres://postgres@localhost:6432/postgres
           CARGO_TARGET_TMPDIR: ${{ runner.temp }}
+
+      - name: Run Docker Compose integration tests
+        run: |
+          make test-docker-compose
+        env:
+          CARGO_TARGET_TMPDIR: ${{ runner.temp }}

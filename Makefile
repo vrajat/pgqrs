@@ -85,6 +85,21 @@ test: build-python check-nextest
 test-py: build-python
 	CARGO_TARGET_TMPDIR="$(CARGO_TARGET_TMPDIR)" $(UV) run pytest $(PYTEST_ARGS) $(PYTEST_TARGET)
 
+test-docker-compose: start-postgres ## Run Docker Compose integration tests
+	@echo "==> Cleaning up old compose containers..."
+	docker compose down -v
+	@echo "==> Building and starting coordinator and worker services..."
+	docker compose up -d --build
+	@echo "==> Waiting for coordinator bootstrap and workers..."
+	sleep 5
+	@echo "==> Running the docker-compose integration test via Cargo..."
+	PGQRS_TEST_DSN="postgres://postgres:postgres@localhost:5433/postgres" \
+		cargo test --test sql_worker_tests test_docker_compose_integration -- --nocapture
+	@echo "==> Cleaning up docker-compose..."
+	docker compose down -v
+	$(MAKE) stop-postgres
+
+
 pgrx-init:
 	which cargo-pgrx >/dev/null || cargo install cargo-pgrx --version 0.12.6 --locked
 	cargo pgrx init --pg15 download

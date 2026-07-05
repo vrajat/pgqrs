@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
 mod common;
 
@@ -253,4 +253,189 @@ async fn test_sql_workflow_dml_and_datatypes() {
     );
     assert_eq!(datatypes_output[0]["price"], 123.45);
     assert!(datatypes_output[0]["t_stamp"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn test_sql_enqueue_function() {
+    let store = common::create_store("test_sql_enqueue").await;
+    let queue_name = "test_enqueue_queue";
+
+    // 1. Test pgqrs_enqueue_raw() and pgqrs_get_message_status() for READY
+    let payload = json!({ "x": 100 });
+    let msg_id: i64 = sqlx::query_scalar("SELECT pgqrs_enqueue_raw($1, $2::jsonb)")
+        .bind(queue_name)
+        .bind(payload.clone())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+
+    let status_ready: String = sqlx::query_scalar("SELECT pgqrs_get_message_status($1)")
+        .bind(msg_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(status_ready, "READY");
+
+    // 2. Test pgqrs_enqueue_raw() with delay and pgqrs_get_message_status() for DELAYED
+    let msg_id_delayed: i64 = sqlx::query_scalar("SELECT pgqrs_enqueue_raw($1, $2::jsonb, 60)")
+        .bind(queue_name)
+        .bind(payload.clone())
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+
+    let status_delayed: String = sqlx::query_scalar("SELECT pgqrs_get_message_status($1)")
+        .bind(msg_id_delayed)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(status_delayed, "DELAYED");
+
+    // 3. Test pgqrs_enqueue() and pgqrs_get_run()
+    // Define a dummy workflow first using pgqrs_workflow and pgqrs_step
+    let define_sql = r#"
+        SELECT pgqrs_workflow(
+            'test_wf_trigger_proc',
+            ARRAY[
+                pgqrs_step('step_a', 'SELECT :input->>''val'' AS val')
+            ]
+        );
+    "#;
+    sqlx::query(define_sql).execute(store.pool()).await.unwrap();
+
+    let wf_input = json!({ "val": "abc" });
+    let trigger_msg_id: i64 =
+        sqlx::query_scalar("SELECT pgqrs_enqueue('test_wf_trigger_proc', $1::jsonb)")
+            .bind(wf_input.clone())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+
+    // Verify it is enqueued with payload: {"input": {"val": "abc"}}
+    let msg = pgqrs::tables(&store)
+        .messages()
+        .get(trigger_msg_id)
+        .await
+        .unwrap();
+    assert_eq!(msg.payload["input"], wf_input);
+
+    // Create consumer and run it to execute the workflow so steps are populated
+    let consumer_name = format!("test-consumer-{}", uuid::Uuid::new_v4());
+    let consumer = pgqrs::consumer(&consumer_name, "test_wf_trigger_proc")
+        .create(&store)
+        .await
+        .unwrap();
+    let handler = pgqrs::sql_worker::workflow_handler(&store);
+
+    pgqrs::dequeue()
+        .worker(&consumer)
+        .batch(1)
+        .handle(handler)
+        .execute(&store)
+        .await
+        .unwrap();
+
+    // Query pgqrs_get_run helper
+    #[derive(sqlx::FromRow, Debug)]
+    struct WfRunRow {
+        run_id: i64,
+        status: String,
+        input: Value,
+        output: Option<Value>,
+        error: Option<Value>,
+    }
+
+    let run_row = sqlx::query_as::<_, WfRunRow>(
+        "SELECT run_id, status, input, output, error FROM pgqrs_get_run($1)",
+    )
+    .bind(trigger_msg_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(run_row.status, "SUCCESS");
+    assert_eq!(run_row.input["input"]["val"], "abc");
+
+    // Query pgqrs_get_steps helper
+    #[derive(sqlx::FromRow, Debug)]
+    struct WfStepRow {
+        step_name: String,
+        status: String,
+        output: Option<Value>,
+        error: Option<Value>,
+    }
+
+    let step_rows = sqlx::query_as::<_, WfStepRow>(
+        "SELECT step_name, status, output, error FROM pgqrs_get_steps($1)",
+    )
+    .bind(trigger_msg_id)
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(step_rows.len(), 1);
+    assert_eq!(step_rows[0].step_name, "step_a");
+    assert_eq!(step_rows[0].status, "SUCCESS");
+    assert_eq!(step_rows[0].output.as_ref().unwrap()[0]["val"], "abc");
+
+    // Check message status is now COMPLETED (archived)
+    let status_completed: String = sqlx::query_scalar("SELECT pgqrs_get_message_status($1)")
+        .bind(trigger_msg_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(status_completed, "COMPLETED");
+}
+
+#[tokio::test]
+async fn test_docker_compose_integration() {
+    let dsn = std::env::var("PGQRS_TEST_DSN")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5433/postgres".to_string());
+    let store = pgqrs::connect(&dsn).await.unwrap();
+
+    // Define the workflow using the pgqrs_workflow SQL API
+    let define_sql = r#"
+        SELECT pgqrs_workflow(
+            'my_workflow',
+            ARRAY[
+                pgqrs_step('step_a', 'SELECT 1 AS val')
+            ]
+        );
+    "#;
+    sqlx::query(define_sql).execute(store.pool()).await.unwrap();
+
+    // Trigger the workflow using the pgqrs_enqueue SQL API
+    let trigger_msg_id: i64 =
+        sqlx::query_scalar("SELECT pgqrs_enqueue('my_workflow', '{}'::jsonb)")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+
+    // Poll until the workflow status is SUCCESS (relying on docker compose worker to process it)
+    let mut success = false;
+    for _ in 0..30 {
+        #[derive(sqlx::FromRow)]
+        struct StatusRow {
+            status: String,
+        }
+
+        if let Ok(row) = sqlx::query_as::<_, StatusRow>("SELECT status FROM pgqrs_get_run($1)")
+            .bind(trigger_msg_id)
+            .fetch_one(store.pool())
+            .await
+        {
+            if row.status == "SUCCESS" {
+                success = true;
+                break;
+            } else if row.status == "FAILED" {
+                panic!("Workflow run failed!");
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    assert!(
+        success,
+        "Workflow run did not complete successfully within timeout!"
+    );
 }

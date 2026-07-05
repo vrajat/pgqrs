@@ -80,3 +80,43 @@ steps:
       - ".buildkite/scripts/postgres-services.sh start"
       - "CI_POSTGRES_RUNNING=true DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres PGQRS_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres PGBOUNCER_TEST_DSN=postgres://postgres@localhost:6432/postgres mise exec -- make test-postgres"
       - "mise exec -- make pgrx-init pgrx-test"
+
+  - label: ":docker: test docker-compose"
+    key: "test-docker-compose"
+    depends_on: "format"
+    agents:
+      queue: "getafix"
+    env:
+      BUILDKITE_PLUGIN_FS_CACHE_FOLDER: "/var/lib/buildkite-agent/.local/buildkite-agent/cache"
+    plugins:
+      - cache#v1.8.1:
+          manifest: "Cargo.lock"
+          path: "/var/lib/buildkite-agent/.cargo/registry"
+          restore: file
+          save: file
+          key-extra: "cargo-registry"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: "Cargo.lock"
+          path: "/var/lib/buildkite-agent/.cargo/git"
+          restore: file
+          save: file
+          key-extra: "cargo-git"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: "Cargo.lock"
+          path: "target"
+          restore: file
+          save: file
+          key-extra: "cargo-target-docker-compose"
+          soft-fail: true
+      - cache#v1.8.1:
+          manifest: "mise.toml"
+          path: "/var/lib/buildkite-agent/.local/share/mise"
+          restore: file
+          save: file
+          key-extra: "mise-data"
+          soft-fail: true
+    command:
+      - ".buildkite/scripts/bootstrap.sh"
+      - "mise exec -- make test-docker-compose"
