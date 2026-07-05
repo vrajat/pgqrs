@@ -315,21 +315,16 @@ pub struct NewStepRecord {
 }
 
 /// Cron trigger state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(
     feature = "sqlx",
     sqlx(type_name = "pgqrs_trigger_state", rename_all = "lowercase")
 )]
 pub enum TriggerState {
+    #[default]
     Idle,
     Firing,
-}
-
-impl Default for TriggerState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl fmt::Display for TriggerState {

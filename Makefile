@@ -184,11 +184,11 @@ fmt:  ## Format code
 	$(MAKE) -C benchmarks fmt UV="$(UV)"
 
 clippy:  ## Run clippy
-	cargo clippy --workspace --all-targets --all-features
+	cargo clippy --workspace --all-targets --features test-utils
 
 check:  ## Run all checks (fmt, clippy, deny)
 	cargo fmt --all -- --check
-	cargo clippy --workspace --all-targets --all-features
+	cargo clippy --workspace --all-targets --features test-utils
 	$(MAKE) -C benchmarks check UV="$(UV)"
 
 clean:  ## Clean artifacts

@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 use pgrx::prelude::*;
 
 pub mod bgworker;
@@ -263,7 +264,7 @@ mod tests {
     #[pg_test]
     fn test_builtins_inspection() {
         Spi::connect(|client| {
-            let mut table = client
+            let table = client
                 .select(
                     "SELECT capability, version FROM pgqrs_builtins()",
                     None,
@@ -271,7 +272,7 @@ mod tests {
                 )
                 .unwrap();
             let mut caps = Vec::new();
-            while let Some(row) = table.next() {
+            for row in table {
                 let cap: String = row.get_by_name("capability").unwrap().unwrap();
                 caps.push(cap);
             }

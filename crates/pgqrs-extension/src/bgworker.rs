@@ -99,7 +99,7 @@ pub extern "C" fn pgqrs_coordinator_main(_arg: pg_sys::Datum) {
     while BackgroundWorker::worker_continue() {
         let interval_ms = COORDINATOR_INTERVAL_MS.get() as u64;
 
-        let _ = BackgroundWorker::transaction(|| {
+        BackgroundWorker::transaction(|| {
             // Acquire transaction advisory lock to guarantee exactly-once execution
             // Key: 5784604930263089153 (0x5047515253000001)
             let has_lock =
@@ -261,7 +261,7 @@ pub(crate) fn scan_cron_once() -> Result<bool, pgrx::spi::Error> {
 
     // 4. Update next fire time and reset trigger_state to idle
     let next_fire_str = next_fire.to_rfc3339();
-    let _ = Spi::run_with_args(
+    Spi::run_with_args(
         r#"
         UPDATE pgqrs_cron
         SET next_fire_at = $2::timestamptz,
@@ -357,7 +357,7 @@ pub(crate) fn run_maintenance_sweep(
               AND started_at < NOW() - make_interval(secs => $1::double precision)
             RETURNING id
         "#;
-        let mut table = client.select(
+        let table = client.select(
             sql,
             None,
             Some(vec![(
@@ -366,7 +366,7 @@ pub(crate) fn run_maintenance_sweep(
             )]),
         )?;
         let mut ids = Vec::new();
-        while let Some(row) = table.next() {
+        for row in table {
             let id: i64 = row.get_by_name("id")?.unwrap();
             ids.push(id);
         }
@@ -381,7 +381,7 @@ pub(crate) fn run_maintenance_sweep(
         );
 
         // Abort outstanding steps for these timed-out workflow runs
-        let _ = Spi::connect(|client| -> Result<_, pgrx::spi::Error> {
+        Spi::connect(|client| -> Result<_, pgrx::spi::Error> {
             let sql = r#"
                 UPDATE pgqrs_workflow_steps
                 SET status = 'ERROR'::pgqrs_workflow_status,

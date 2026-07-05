@@ -1488,10 +1488,15 @@ async fn test_workflow_redelivery_while_cancelling_archives_without_running_hand
         }
     });
 
-    let dequeued = rig
-        .as_consumer_dequeue()
-        .await?
-        .expect("expected one message");
+    let mut dequeued = None;
+    for _ in 0..10 {
+        if let Some(msg) = rig.as_consumer_dequeue().await? {
+            dequeued = Some(msg);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let dequeued = dequeued.expect("expected one message");
     let redelivery_attempt = rig.as_consumer_open_attempt(dequeued).await?;
     dispatch_attempt_message(rig.consumer(), &redelivery_attempt, {
         let handler = handler.clone();

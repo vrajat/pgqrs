@@ -2,7 +2,6 @@ use clap::{Parser, Subcommand};
 
 mod cli {
     pub mod admin;
-    pub mod sql_worker;
 }
 
 #[derive(Parser, Debug)]
@@ -119,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let worker_name =
                 worker_name.unwrap_or_else(|| format!("sql-worker-{}", uuid::Uuid::new_v4()));
 
-            cli::sql_worker::run(dsn, schema, queues, interval_ms, worker_name).await?;
+            pgqrs::sql_worker::run(dsn, schema, queues, interval_ms, worker_name).await?;
         }
         Commands::SetupTestSchemas { dsn, cleanup } => {
             #[cfg(any(test, feature = "test-utils"))]

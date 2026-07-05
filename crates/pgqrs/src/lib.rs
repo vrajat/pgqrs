@@ -72,6 +72,7 @@ pub mod error;
 /// Retry policies and workflow backoff strategies.
 pub mod policy;
 mod rate_limit;
+pub mod sql_worker;
 /// Metrics and system statistics.
 pub mod stats;
 pub mod store;

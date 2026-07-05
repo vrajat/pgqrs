@@ -65,7 +65,7 @@ fn pgqrs_builtins() -> TableIterator<
             "Log current queue size, worker status, and delay statistics".to_string(),
         ),
     ];
-    TableIterator::new(list.into_iter())
+    TableIterator::new(list)
 }
 
 /// Process a single message from the specified queue if available
@@ -178,7 +178,7 @@ pub fn process_builtin_queue_once(queue_name: &str) {
                 msg_id,
                 e
             );
-            let _ = in_transaction(|| {
+            in_transaction(|| {
                 let _ = Spi::run_with_args(
                     "UPDATE pgqrs_messages SET archived_at = NOW(), consumer_worker_id = NULL WHERE id = $1",
                     Some(vec![(PgBuiltInOids::INT8OID.oid(), msg_id.into_datum())])
@@ -311,7 +311,7 @@ pub fn process_builtin_queue_once(queue_name: &str) {
         if let Err(e) = exec_result {
             pgrx::log!("Workflow execution failed for message {}: {:?}", msg_id, e);
             // Release or DLQ message
-            let _ = in_transaction(|| {
+            in_transaction(|| {
                 if read_ct >= 5 {
                     let _ = Spi::run_with_args(
                         "UPDATE pgqrs_messages SET archived_at = NOW(), consumer_worker_id = NULL WHERE id = $1",
@@ -345,7 +345,7 @@ pub fn process_builtin_queue_once(queue_name: &str) {
                 }
                 Some("maintenance") => {
                     pgrx::log!("Built-in maintenance capability: running sweep");
-                    let _ = crate::bgworker::run_maintenance_sweep(30.0, 3600.0)?;
+                    crate::bgworker::run_maintenance_sweep(30.0, 3600.0)?;
                     let _ = Spi::run_with_args(
                         "UPDATE pgqrs_messages SET archived_at = NOW(), consumer_worker_id = NULL WHERE id = $1",
                         Some(vec![(PgBuiltInOids::INT8OID.oid(), msg_id.into_datum())])
@@ -427,7 +427,7 @@ pub fn process_builtin_queue_once(queue_name: &str) {
                         }
 
                         pgrx::log!("Executing builtin raw SQL job {}: {}", msg_id, statement);
-                        let _ = Spi::connect(|client| -> Result<(), pgrx::spi::Error> {
+                        Spi::connect(|client| -> Result<(), pgrx::spi::Error> {
                             let _table = client.select(statement, None, Some(spi_args))?;
                             Ok(())
                         })?;
@@ -452,7 +452,7 @@ pub fn process_builtin_queue_once(queue_name: &str) {
 
         if let Err(e) = exec_outcome {
             pgrx::log!("Built-in standalone job {} failed: {:?}", msg_id, e);
-            let _ = in_transaction(|| {
+            in_transaction(|| {
                 if read_ct >= 5 {
                     let _ = Spi::run_with_args(
                         "UPDATE pgqrs_messages SET archived_at = NOW(), consumer_worker_id = NULL WHERE id = $1",

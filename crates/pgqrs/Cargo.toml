@@ -60,6 +60,7 @@ async-trait = "0.1"
 futures-util = "0.3"
 rand = "0.8"
 url = "2.5"
+sqlparser = { version = "0.62.0", features = ["visitor"] }
 
 # cargo-release configuration for this crate only
 # This hook runs once per workspace release (when processing this crate)
