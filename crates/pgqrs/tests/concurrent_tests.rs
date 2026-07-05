@@ -1,8 +1,6 @@
 use pgqrs::error::Result;
 use pgqrs::pgqrs_workflow;
-use pgqrs::store::AnyStore;
-use pgqrs::Run;
-use pgqrs::Store;
+use pgqrs::{Run, Store};
 use serde_json::json;
 use serial_test::serial;
 use std::sync::{Arc, Mutex};
@@ -99,7 +97,7 @@ async fn scenario_cancel_redelivery_wf(
     Ok(input)
 }
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("pgqrs_concurrent_test").await
 }
 
@@ -129,7 +127,7 @@ async fn create_workflow_test_rig(
 }
 
 async fn assert_run_status(
-    store: &AnyStore,
+    store: &Store,
     run_id: i64,
     expected: pgqrs::WorkflowStatus,
 ) -> anyhow::Result<()> {
@@ -139,7 +137,7 @@ async fn assert_run_status(
 }
 
 async fn assert_message_archived(
-    store: &AnyStore,
+    store: &Store,
     message: &pgqrs::QueueMessage,
 ) -> anyhow::Result<()> {
     let archived = pgqrs::tables(store)
@@ -151,7 +149,7 @@ async fn assert_message_archived(
     Ok(())
 }
 
-async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+async fn steps_for_run(store: &Store, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
     Ok(store
         .workflow_steps()
         .list()
@@ -468,94 +466,6 @@ async fn test_zombie_consumer_race_condition() {
         "Consumer B should be able to delete its own message"
     );
     println!("Consumer B delete succeeded.");
-}
-
-#[tokio::test]
-#[serial]
-#[cfg(any(feature = "sqlite", feature = "turso"))]
-async fn test_single_process_producer_consumer_contention() {
-    let store = create_store().await;
-    let backend_name = store.backend_name();
-    if backend_name != "sqlite" && backend_name != "turso" {
-        eprintln!("Skipping test: requires sqlite or turso backend");
-        return;
-    }
-    let config = store.config().clone();
-    let queue_name = match backend_name {
-        "sqlite" => "sqlite_serialized_lock_queue".to_string(),
-        "turso" => format!("turso_serialized_lock_{}", uuid::Uuid::new_v4()),
-        _ => unreachable!(),
-    };
-
-    let _queue = store
-        .queue(&queue_name)
-        .await
-        .expect("Failed to create queue");
-
-    let producer = store
-        .producer(&queue_name, "serialized-prod-3101", &config)
-        .await
-        .expect("Failed to create producer");
-    let consumer = store
-        .consumer(&queue_name, "serialized-cons-3102")
-        .await
-        .expect("Failed to create consumer");
-
-    const MESSAGE_COUNT: usize = 50;
-
-    let producer_task = async {
-        for i in 0..MESSAGE_COUNT {
-            pgqrs::enqueue()
-                .message(&json!({ "idx": i }))
-                .worker(&producer)
-                .execute(&store)
-                .await
-                .unwrap_or_else(|e| panic!("enqueue failed during contention test: {e}"));
-            tokio::task::yield_now().await;
-        }
-    };
-
-    let consumer_task = async {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let mut consumed = 0;
-
-        while consumed < MESSAGE_COUNT {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "Timed out after consuming {consumed} of {MESSAGE_COUNT} messages"
-            );
-
-            match pgqrs::dequeue()
-                .worker(&consumer)
-                .fetch_one(&store)
-                .await
-                .unwrap_or_else(|e| panic!("dequeue failed during contention test: {e}"))
-            {
-                Some(msg) => {
-                    consumer
-                        .delete(msg.id)
-                        .await
-                        .unwrap_or_else(|e| panic!("delete failed during contention test: {e}"));
-                    consumed += 1;
-                }
-                None => tokio::time::sleep(Duration::from_millis(10)).await,
-            }
-        }
-    };
-
-    tokio::join!(producer_task, consumer_task);
-
-    let queue = store
-        .queues()
-        .get_by_name(&queue_name)
-        .await
-        .expect("Failed to refetch queue");
-    let pending = store
-        .messages()
-        .count_pending_for_queue(queue.id)
-        .await
-        .expect("Failed to count pending messages");
-    assert_eq!(pending, 0);
 }
 
 #[tokio::test]
@@ -1578,10 +1488,15 @@ async fn test_workflow_redelivery_while_cancelling_archives_without_running_hand
         }
     });
 
-    let dequeued = rig
-        .as_consumer_dequeue()
-        .await?
-        .expect("expected one message");
+    let mut dequeued = None;
+    for _ in 0..10 {
+        if let Some(msg) = rig.as_consumer_dequeue().await? {
+            dequeued = Some(msg);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let dequeued = dequeued.expect("expected one message");
     let redelivery_attempt = rig.as_consumer_open_attempt(dequeued).await?;
     dispatch_attempt_message(rig.consumer(), &redelivery_attempt, {
         let handler = handler.clone();

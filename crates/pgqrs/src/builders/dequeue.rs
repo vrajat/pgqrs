@@ -368,22 +368,19 @@ impl<'a> DequeueBuilder<'a> {
     }
 
     /// Fetch one message (if available).
-    pub async fn fetch_one<S: Store>(self, store: &S) -> Result<Option<QueueMessage>> {
+    pub async fn fetch_one(self, store: &Store) -> Result<Option<QueueMessage>> {
         self.into_poller(store).await?.fetch_one().await
     }
 
     /// Fetch all messages (up to batch size).
-    pub async fn fetch_all<S: Store>(self, store: &S) -> Result<Vec<QueueMessage>> {
+    pub async fn fetch_all(self, store: &Store) -> Result<Vec<QueueMessage>> {
         self.into_poller(store).await?.fetch_all().await
     }
 
     /// Poll until at least one message is available or interrupted.
     ///
     /// When `.until(duration)` is configured, returns an empty vector on timeout.
-    pub async fn poll<S>(self, store: &S) -> Result<Vec<QueueMessage>>
-    where
-        S: Store,
-    {
+    pub async fn poll(self, store: &Store) -> Result<Vec<QueueMessage>> {
         let mut poller = self.into_poller(store).await?;
         poller.enter_polling().await?;
         let messages = poller.poll_messages().await?;
@@ -419,7 +416,7 @@ impl<'a> DequeueBuilder<'a> {
     }
 
     /// Helper to resolve consumer (managed or ephemeral)
-    async fn resolve_consumer<S: Store>(&self, store: &S) -> Result<Consumer> {
+    async fn resolve_consumer(&self, store: &Store) -> Result<Consumer> {
         if let Some(consumer) = self.worker {
             return Ok(consumer.clone());
         }
@@ -435,7 +432,7 @@ impl<'a> DequeueBuilder<'a> {
         store.consumer_ephemeral(queue).await
     }
 
-    async fn into_poller<S: Store>(self, store: &S) -> Result<Poller> {
+    async fn into_poller(self, store: &Store) -> Result<Poller> {
         let consumer = self.resolve_consumer(store).await?;
         Ok(Poller {
             consumer,
@@ -481,7 +478,7 @@ where
     }
 
     /// Execute the dequeue and handle operation.
-    pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
+    pub async fn execute(self, store: &Store) -> Result<()> {
         self.validate_batch_size()?;
         self.base
             .into_poller(store)
@@ -491,10 +488,7 @@ where
     }
 
     /// Poll until a message is available or interrupted, then handle it.
-    pub async fn poll<S>(self, store: &S) -> Result<()>
-    where
-        S: Store,
-    {
+    pub async fn poll(self, store: &Store) -> Result<()> {
         self.validate_batch_size()?;
         self.validate_poll_configuration()?;
         let mut poller = self.base.into_poller(store).await?;
@@ -523,7 +517,7 @@ where
     }
 
     /// Execute the dequeue and batch handle operation.
-    pub async fn execute<S: Store>(self, store: &S) -> Result<()> {
+    pub async fn execute(self, store: &Store) -> Result<()> {
         self.base
             .into_poller(store)
             .await?
@@ -532,10 +526,7 @@ where
     }
 
     /// Poll until at least one message is available or interrupted, then handle them.
-    pub async fn poll<S>(self, store: &S) -> Result<()>
-    where
-        S: Store,
-    {
+    pub async fn poll(self, store: &Store) -> Result<()> {
         self.validate_poll_configuration()?;
         let mut poller = self.base.into_poller(store).await?;
         poller.run_forever_batch(self.handler).await

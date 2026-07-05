@@ -1,7 +1,7 @@
 //! Test-only workflow lifecycle helpers.
 
 use crate::error::Result;
-use crate::store::{AnyStore, Store};
+use crate::store::Store;
 use crate::types::QueueMessage;
 use crate::workers::{Consumer, Run};
 use std::future::Future;
@@ -13,7 +13,7 @@ use std::future::Future;
 /// without relying entirely on timing-based orchestration.
 #[derive(Clone)]
 pub struct WorkflowTestRig {
-    store: AnyStore,
+    store: Store,
     consumer: Consumer,
 }
 
@@ -30,7 +30,7 @@ pub struct WorkflowAttempt {
 
 impl WorkflowTestRig {
     /// Create a test rig from a store and consumer representing the actor roles.
-    pub fn new(store: AnyStore, consumer: Consumer) -> Self {
+    pub fn new(store: Store, consumer: Consumer) -> Self {
         Self { store, consumer }
     }
 
@@ -40,7 +40,7 @@ impl WorkflowTestRig {
     }
 
     /// Access the store backing this rig.
-    pub fn store(&self) -> &AnyStore {
+    pub fn store(&self) -> &Store {
         &self.store
     }
 
@@ -97,4 +97,94 @@ impl WorkflowAttempt {
         let _ = consumer.release_messages(&[self.message.id]).await?;
         Ok(())
     }
+}
+
+pub const TEST_SCHEMAS: &[&str] = &[
+    "pgqrs_admin_scan_interval_test",
+    "pgqrs_admin_scan_cron_test",
+    "pgqrs_cron_constraints_test",
+    "pgqrs_cron_crash_recovery_test",
+    "pgqrs_admin_reclaim_test",
+    "pgqrs_admin_timeout_test",
+    "pgqrs_builder_test",
+    "pgqrs_builder_ergonomics_test",
+    "pgqrs_concurrent_test",
+    "pgqrs_error_test",
+    "pgqrs_lib_test",
+    "pgqrs_zombie_tests",
+    "pgqrs_lib_stat_test",
+    "pgqrs_pgbouncer_test",
+    "pgqrs_cli_test",
+    "pgqrs_worker_test",
+    "pgqrs_workflow_test",
+    "pgqrs_workflow_creation_test",
+    "pgqrs_workflow_retry_test",
+    "macro_test_creation",
+    "macro_test_success",
+    "macro_test_idempotency",
+    "macro_test_step_failure",
+    "macro_test_workflow_failure",
+    "macro_test_run_metadata",
+    "workflow_tests",
+    "workflow_get_tests",
+    "workflow_retrieval_tests",
+    "workflow_polling_tests",
+    "workflow_error_polling_tests",
+    "workflow_fk_tests",
+    "workflow_retry_integration_tests",
+    "guide_tests",
+    "test_sql_job_success",
+    "test_sql_job_select",
+    "test_sql_job_safety",
+    "test_sql_workflow",
+    "test_sql_wf_fail",
+    "test_sql_dml",
+    "test_sql_enqueue",
+];
+
+pub async fn run_postgres_schema_setup(
+    dsn: &str,
+    cleanup_mode: bool,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use sqlx::postgres::PgPoolOptions;
+
+    let pool = PgPoolOptions::new().max_connections(5).connect(dsn).await?;
+
+    if cleanup_mode {
+        println!("Cleaning up test schemas using DSN: {}", dsn);
+
+        for schema in TEST_SCHEMAS {
+            println!("Dropping schema: {}", schema);
+            let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
+            sqlx::query(&drop_sql).execute(&pool).await?;
+        }
+
+        println!("All test schemas cleaned up successfully!");
+    } else {
+        println!("Setting up test databases using DSN: {}", dsn);
+        println!("Connected to database.");
+
+        for schema in TEST_SCHEMAS {
+            println!("Provisioning schema: {}", schema);
+
+            // 1. Drop and Recreate Schema (Clean Slate for Suite)
+            let drop_sql = format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema);
+            sqlx::query(&drop_sql).execute(&pool).await?;
+
+            let create_sql = format!("CREATE SCHEMA \"{}\"", schema);
+            sqlx::query(&create_sql).execute(&pool).await?;
+
+            // 2. Install Migration
+            // We rely on search_path to install tables into the new schema
+            let config = crate::config::Config::from_dsn_with_schema(dsn, *schema)?;
+            let store = crate::connect_with_config(&config).await?;
+
+            crate::admin(&store).install().await?;
+            println!("  -> Installed pgqrs tables.");
+        }
+
+        println!("All test schemas provisioned successfully!");
+    }
+
+    Ok(())
 }

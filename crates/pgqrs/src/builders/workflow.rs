@@ -70,7 +70,7 @@ where
         self
     }
 
-    pub async fn create<S: Store>(self, store: &S) -> crate::error::Result<WorkflowRecord> {
+    pub async fn create(self, store: &Store) -> crate::error::Result<WorkflowRecord> {
         let workflow = self
             .workflow
             .ok_or_else(|| crate::error::Error::ValidationFailed {
@@ -86,7 +86,7 @@ where
         Ok(self)
     }
 
-    pub async fn execute<S: Store>(self, store: &S) -> crate::error::Result<QueueMessage> {
+    pub async fn execute(self, store: &Store) -> crate::error::Result<QueueMessage> {
         let workflow = self
             .workflow
             .ok_or_else(|| crate::error::Error::ValidationFailed {
@@ -115,7 +115,7 @@ where
         store.messages().get(ids[0]).await
     }
 
-    pub async fn poll<S: Store + Clone + 'static>(self, store: &S) -> crate::error::Result<()> {
+    pub async fn poll(self, store: &Store) -> crate::error::Result<()> {
         let workflow = self
             .workflow
             .ok_or_else(|| crate::error::Error::ValidationFailed {

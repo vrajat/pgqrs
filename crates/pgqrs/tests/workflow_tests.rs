@@ -1,4 +1,3 @@
-use pgqrs::store::AnyStore;
 use pgqrs::store::Store;
 use pgqrs::Run;
 use serde::{Deserialize, Serialize};
@@ -60,11 +59,11 @@ struct TestData {
     msg: String,
 }
 
-async fn create_store() -> AnyStore {
+async fn create_store() -> Store {
     common::create_store("workflow_tests").await
 }
 
-async fn steps_for_run(store: &AnyStore, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
+async fn steps_for_run(store: &Store, run_id: i64) -> anyhow::Result<Vec<pgqrs::StepRecord>> {
     Ok(store
         .workflow_steps()
         .list()

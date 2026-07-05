@@ -28,7 +28,7 @@ impl<'a> ConsumerBuilder<'a> {
     }
 
     /// Create the consumer worker
-    pub async fn create<S: Store>(self, store: &S) -> Result<crate::workers::Consumer> {
+    pub async fn create(self, store: &Store) -> Result<crate::workers::Consumer> {
         store.consumer(self.queue, self.name).await
     }
 }

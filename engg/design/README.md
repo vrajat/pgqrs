@@ -13,14 +13,32 @@ Comprehensive technical design documentation for major features and components.
 
 ## Current Documents
 
-- [Database Abstraction Design](database_abstraction_design.md)
+- [Postgres-Only Extension Runtime Implementation Plan](postgres-only-extension-runtime-implementation.md)
+- [Postgres-Only Shared Worker Protocol Design](postgres-only-worker-protocol.md)
+- [SQL API, Workflow Triggering, and Scheduler Design](pgqrs-sql-api-workflow-scheduler.md)
 - [Durable Workflows Engineering Design](durable-workflows-engineering-design.md)
 - [Durable Workflows Product Requirements](durable-workflows-product-requirements.md)
+- [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
+- [pgqrs-admin Coordinator and Scheduler Design](pgqrs-admin-coordinator.md)
+- [pgqrs-sql-worker External SQL Executor Design](pgqrs-sql-worker.md)
+- [pgqrs-extension pgrx Scaffold and Install Path Design](pgqrs-extension-scaffold.md)
+- [pgqrs-extension Background Worker Design](pgqrs-extension-background-worker.md)
+- [pgqrs-extension Built-In Executor Capabilities Design](pgqrs-extension-builtins.md)
+- [pgqrs-extension Rollout and Packaging Design](pgqrs-extension-rollout.md)
+
+
+
+
+
+
+
+## Historical / Deprecated Documents (ADR-0004 Postgres-Only Transition)
+
+- [Database Abstraction Design](database_abstraction_design.md)
 - [Store Access and Serialized DB Design](store_access_and_serialized_db.md)
 - [SQLite Store Implementation](sqlite_store.md)
 - [Turso Store Implementation](turso_store.md)
 - [Store SQL Dialect Constants](store-sql-dialect-constants.md)
-- [Queue and Workflow Benchmarking Strategy](queue-workflow-benchmarking.md)
 
 ## Design Doc Template
 

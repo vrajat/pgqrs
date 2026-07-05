@@ -18,6 +18,7 @@ Use the template in `template.md` when creating a new ADR.
 ### Accepted
 
 - [ADR-0001: Scheduled Retry with retry_at Timestamps](0001-scheduled-retry-timestamps.md) - Non-blocking workflow step retries using database timestamps
+- [ADR-0004: Postgres-Only Durable Coordination with Shared Worker Protocol](0004-postgres-only-extension-runtime.md) - Major product direction: Postgres-only pgqrs, s3q vendoring, background admin worker, and external Rust/Python workers
 
 ### Superseded
 

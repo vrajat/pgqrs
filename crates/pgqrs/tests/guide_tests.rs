@@ -1,18 +1,17 @@
 use pgqrs::error::Result;
 use pgqrs::pgqrs_workflow;
-use pgqrs::store::Store;
 use serde_json::json;
 use serial_test::serial;
 use tokio::time::{sleep, timeout, Duration};
 
 mod common;
 
-async fn create_store() -> pgqrs::store::AnyStore {
+async fn create_store() -> pgqrs::store::Store {
     common::create_store("guide_tests").await
 }
 
 async fn wait_for_message(
-    store: &pgqrs::store::AnyStore,
+    store: &pgqrs::store::Store,
     msg_id: i64,
     max_wait: Duration,
     predicate: impl Fn(&pgqrs::types::QueueMessage) -> bool,
@@ -31,7 +30,7 @@ async fn wait_for_message(
 }
 
 async fn wait_for_archived_count(
-    store: &pgqrs::store::AnyStore,
+    store: &pgqrs::store::Store,
     queue_id: i64,
     expected: usize,
     max_wait: Duration,
@@ -54,7 +53,7 @@ async fn wait_for_archived_count(
 }
 
 async fn wait_for_workflow_complete(
-    store: &pgqrs::store::AnyStore,
+    store: &pgqrs::store::Store,
     message_id: i64,
     max_wait: Duration,
 ) {

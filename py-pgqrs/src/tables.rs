@@ -5,13 +5,12 @@ use crate::{
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
 use pyo3::pyasync::IterANextOutput;
-use rust_pgqrs::store::AnyStore;
+use rust_pgqrs::store::Store;
 use rust_pgqrs::types::{QueueMessage as RustQueueMessage, QueueRecord as RustQueueRecord};
-use rust_pgqrs::Store;
 use std::sync::Arc;
 
 pub(crate) struct IteratorState {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
     pub(crate) queue: String,
     pub(crate) consumer: Option<Arc<rust_pgqrs::workers::Consumer>>,
     pub(crate) poll_interval: tokio::time::Duration,
@@ -23,7 +22,7 @@ pub struct PyConsumerIterator {
 }
 
 impl PyConsumerIterator {
-    pub fn new(store: AnyStore, queue: String, poll_interval_ms: u64) -> Self {
+    pub fn new(store: Store, queue: String, poll_interval_ms: u64) -> Self {
         Self {
             inner: Arc::new(tokio::sync::Mutex::new(IteratorState {
                 store,
@@ -139,25 +138,25 @@ impl PyConsumerIterator {
 #[pyclass(name = "Queues")]
 #[derive(Clone)]
 pub struct PyQueues {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pyclass(name = "Workflows")]
 #[derive(Clone)]
 pub struct PyWorkflows {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pyclass(name = "WorkflowRuns")]
 #[derive(Clone)]
 pub struct PyWorkflowRuns {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pyclass(name = "WorkflowSteps")]
 #[derive(Clone)]
 pub struct PyWorkflowSteps {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pymethods]
@@ -213,7 +212,7 @@ impl PyWorkflowSteps {
 #[pyclass(name = "Messages")]
 #[derive(Clone)]
 pub struct PyMessages {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pymethods]

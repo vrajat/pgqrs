@@ -2,9 +2,8 @@ use crate::tables::PyQueueMessage;
 use crate::{get_runtime, to_py_err, PyAdmin, PyWorkerStatus};
 use ::pgqrs as rust_pgqrs;
 use pyo3::prelude::*;
-use rust_pgqrs::store::AnyStore;
+use rust_pgqrs::store::Store;
 use rust_pgqrs::types::WorkerRecord as RustWorkerInfo;
-use rust_pgqrs::Store;
 
 use std::sync::Arc;
 
@@ -258,7 +257,7 @@ impl PyConsumer {
 #[pyclass(name = "Workers")]
 #[derive(Clone)]
 pub struct PyWorkers {
-    pub(crate) store: AnyStore,
+    pub(crate) store: Store,
 }
 
 #[pymethods]

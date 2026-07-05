@@ -5,7 +5,7 @@ Welcome to the pgqrs User Guide. This guide covers everything you need to know t
 
 ## Overview
 
-pgqrs is a library-only durable execution engine with multiple storage backends. PostgreSQL remains the primary production backend, while SQLite, Turso, and S3-backed queues cover embedded, portable, and object-storage-backed deployments.
+pgqrs is a library-only durable execution engine built for PostgreSQL.
 
 ## Guide Structure
 
@@ -27,7 +27,7 @@ pgqrs is a library-only durable execution engine with multiple storage backends.
     Understand the core architecture and design principles.
 
     - [Architecture](concepts/architecture.md)
-    - [Backend Selection](concepts/backends.md)
+    - [PostgreSQL Runtime](concepts/backends.md)
     - [Producer & Consumer](concepts/producer-consumer.md)
     - [Workers](concepts/workers.md)
     - [Message Lifecycle](concepts/message-lifecycle.md)
@@ -62,7 +62,6 @@ pgqrs is a library-only durable execution engine with multiple storage backends.
     Step-by-step tutorials for common use cases.
 
     - [Basic Workflow](guides/basic-workflow.md)
-    - [S3 Queue Guide](guides/s3-queue.md)
     - [Durable Workflows](guides/durable-workflows.md)
     - [Batch Processing](guides/batch-processing.md)
     - [Delayed Messages](guides/delayed-messages.md)
@@ -74,8 +73,7 @@ pgqrs is a library-only durable execution engine with multiple storage backends.
 
 Before using pgqrs, ensure you have:
 
-- **One supported backend**:
-  PostgreSQL 12+, SQLite, Turso, or an S3 bucket plus AWS-compatible credentials
+- **PostgreSQL 12+**
 - **Rust 1.70+** (for Rust applications) or **Python 3.11+** (for Python applications)
 
 ## Quick Links
@@ -83,9 +81,8 @@ Before using pgqrs, ensure you have:
 | Topic | Description |
 |-------|-------------|
 | [Installation](getting-started/installation.md) | How to install pgqrs for Rust or Python |
-| [Backend Selection](concepts/backends.md) | Choose between PostgreSQL, SQLite, Turso, and S3 |
+| [PostgreSQL Runtime](concepts/backends.md) | Deployment notes for the supported runtime |
 | [Architecture](concepts/architecture.md) | System design and components |
 | [Producer](api/producer.md) | Creating and sending messages |
 | [Consumer](api/consumer.md) | Processing messages |
-| [S3 Queue Guide](guides/s3-queue.md) | Bootstrapping and syncing an S3-backed queue |
 | [Durable Workflows](guides/durable-workflows.md) | Multi-step, crash-resistant workflows |

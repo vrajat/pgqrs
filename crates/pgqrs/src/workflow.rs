@@ -121,8 +121,8 @@ where
 }
 
 /// Build a queue handler that runs a workflow with typed input.
-pub fn workflow_handler<S, F, Fut, T, R>(
-    store: S,
+pub fn workflow_handler<F, Fut, T, R>(
+    store: Store,
     handler: F,
 ) -> impl Fn(QueueMessage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
        + Send
@@ -130,7 +130,6 @@ pub fn workflow_handler<S, F, Fut, T, R>(
        + Clone
        + 'static
 where
-    S: Store + Clone + 'static,
     F: Fn(Run, T) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<R>> + Send,
     T: DeserializeOwned + Send + 'static,
@@ -141,8 +140,8 @@ where
 
 /// Build a workflow handler with a fixed current time (tests only).
 #[cfg(any(test, feature = "test-utils"))]
-pub fn workflow_handler_with_time<S, F, Fut, T, R>(
-    store: S,
+pub fn workflow_handler_with_time<F, Fut, T, R>(
+    store: Store,
     handler: F,
     current_time: chrono::DateTime<chrono::Utc>,
 ) -> impl Fn(QueueMessage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
@@ -151,7 +150,6 @@ pub fn workflow_handler_with_time<S, F, Fut, T, R>(
        + Clone
        + 'static
 where
-    S: Store + Clone + 'static,
     F: Fn(Run, T) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<R>> + Send,
     T: DeserializeOwned + Send + 'static,
@@ -161,8 +159,8 @@ where
 }
 
 /// Internal helper to avoid duplication between workflow_handler and workflow_handler_with_time.
-fn workflow_handler_impl<S, F, Fut, T, R>(
-    store: S,
+fn workflow_handler_impl<F, Fut, T, R>(
+    store: Store,
     handler: F,
     current_time: Option<chrono::DateTime<chrono::Utc>>,
 ) -> impl Fn(QueueMessage) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
@@ -171,7 +169,6 @@ fn workflow_handler_impl<S, F, Fut, T, R>(
        + Clone
        + 'static
 where
-    S: Store + Clone + 'static,
     F: Fn(Run, T) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<R>> + Send,
     T: DeserializeOwned + Send + 'static,

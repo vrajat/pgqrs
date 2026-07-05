@@ -699,16 +699,12 @@ async def test_exceptions(test_dsn, schema):
         pass  # admin.delete_queue might return boolean false instead of error in some impls, but checking exception types here.
 
     # Tests connect with invalid DSN
-    # This test assumes Postgres is enabled. If we are on SQLite-only build,
-    # passing a postgres:// DSN will raise ConfigError, not ConnectionError.
     bad_dsn = "postgres://user:pass@non-existent-host-12345.local:5432/db"
 
     try:
         await pgqrs.connect(bad_dsn)
         pytest.fail("Should have raised an error")
-    except (pgqrs.PgqrsConnectionError, pgqrs.ConfigError):
-        # PgqrsConnectionError: Postgres enabled, but host unreachable
-        # ConfigError: Postgres disabled, scheme not supported
+    except pgqrs.PgqrsConnectionError:
         pass
 
     # Test create_queue on existing queue

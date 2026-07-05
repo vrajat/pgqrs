@@ -1,5 +1,5 @@
 #![cfg(feature = "postgres")]
-use pgqrs::store::{AnyStore, Store};
+use pgqrs::store::Store;
 use serde_json::json;
 
 // Test-specific constants
@@ -8,7 +8,7 @@ const TEST_QUEUE_PGBOUNCER_LIST: &str = "test_pgbouncer_list_path";
 
 mod common;
 
-async fn create_test_setup() -> AnyStore {
+async fn create_test_setup() -> Store {
     // Use PGBOUNCER_TEST_DSN from environment (set by CI or Makefile)
     let database_url = std::env::var("PGBOUNCER_TEST_DSN")
         .expect("PGBOUNCER_TEST_DSN must be set for pgbouncer tests. Run via 'make test-postgres' or set in CI.");
@@ -28,8 +28,6 @@ async fn create_test_setup() -> AnyStore {
 
 #[tokio::test]
 async fn test_pgbouncer_happy_path() {
-    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
-
     let store = create_test_setup().await;
 
     // Verify the installation works through PgBouncer
@@ -145,8 +143,6 @@ async fn test_pgbouncer_happy_path() {
 
 #[tokio::test]
 async fn test_pgbouncer_queue_list() {
-    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
-
     let store = create_test_setup().await;
 
     // Create a test queue

@@ -1,14 +1,14 @@
 <!-- Context: project-intelligence/technical | Priority: critical | Version: 1.1 | Updated: 2026-04-06 -->
 # Technical Domain
 
-**Concept**: pgqrs is a Rust-first durable execution and queue library with Python bindings. PostgreSQL is the primary production backend, with SQLite, Turso, and S3 also supported in the current codebase.
+**Concept**: pgqrs is a Rust-first durable execution and queue library with Python bindings. PostgreSQL is the supported runtime backend.
 
 ## Key Points
 - Primary focus is a library workspace, not a hosted service.
 - Workspace members: `crates/pgqrs`, `crates/pgqrs-macros`, `py-pgqrs`.
 - Rust provides the core queue and workflow engine.
 - Python bindings extend the same engine through PyO3.
-- Backend support currently includes Postgres, SQLite, Turso, and S3.
+- Backend support is PostgreSQL-only in the current codebase.
 - The repo contains some older queue-only and postgres-only wording; verify claims against live code and `README.md`.
 
 ## Example
@@ -23,9 +23,9 @@ store.queue("jobs").await?;
 |-------|-----------|---------|-----------|
 | Language | Rust, Python | Rust (workspace), Python 3.11+ | Core engine plus Python bindings |
 | Framework | Not applicable | N/A | Library project |
-| Persistence | Postgres, SQLite, Turso, S3 | Feature-gated in Cargo | Multi-backend queue and workflow persistence |
+| Persistence | PostgreSQL | `postgres` feature | Queue and workflow persistence |
 | Infrastructure | Not applicable | N/A | Library project |
-| Key Libraries | sqlx, PyO3, turso, aws-sdk-s3, object_store | N/A | Database and binding integrations |
+| Key Libraries | sqlx, PyO3 | N/A | Database and binding integrations |
 
 ## Naming Conventions
 | Type | Convention | Example |
@@ -51,7 +51,6 @@ store.queue("jobs").await?;
 - **Rust public API**: `crates/pgqrs/src/lib.rs`
 - **Runtime backend selection**: `crates/pgqrs/src/store/any.rs`
 - **Workflow support**: `crates/pgqrs/src/workflow.rs`
-- **S3 backend**: `crates/pgqrs/src/store/s3/mod.rs`
 - **Python bindings**: `py-pgqrs/src/lib.rs`
 
 ## Related Files

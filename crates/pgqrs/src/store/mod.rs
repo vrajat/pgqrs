@@ -1,10 +1,28 @@
 //! Core database abstraction for pgqrs.
 //!
-//! This module defines the [`Store`] trait which enables pgqrs to support
-//! multiple database backends (Postgres, SQLite, Turso).
+//! This module defines the [`Store`] and the table CRUD modules.
 
-use crate::Config;
-use async_trait::async_trait;
+use crate::config::Config;
+pub use crate::workers::*;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use std::sync::Arc;
+
+pub mod db_state;
+pub mod pgqrs_messages;
+pub mod pgqrs_queues;
+pub mod pgqrs_workers;
+pub mod pgqrs_workflow_runs;
+pub mod pgqrs_workflow_steps;
+pub mod pgqrs_workflows;
+
+pub use db_state::DbState;
+pub use pgqrs_messages::Messages;
+pub use pgqrs_queues::Queues;
+pub use pgqrs_workers::Workers;
+pub use pgqrs_workflow_runs::RunRecords;
+pub use pgqrs_workflow_steps::StepRecords;
+pub use pgqrs_workflows::Workflows;
 
 /// Concurrency model supported by the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,218 +33,341 @@ pub enum ConcurrencyModel {
     SingleProcess,
 }
 
-pub mod any;
-pub mod dblock;
-pub(crate) mod dialect;
-#[cfg(feature = "postgres")]
-pub mod postgres;
-pub(crate) mod query;
-#[cfg(feature = "s3")]
-pub mod s3;
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
-pub(crate) mod tables;
-#[cfg(feature = "turso")]
-pub mod turso;
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
-pub use crate::tables::*;
-pub use crate::workers::*;
-
-pub use any::AnyStore;
-pub use dblock::{DbLock, DbOpFuture, DbTables, SerializedLock, Tables};
-
-// S3 store uses SQLite locally, so sqlite_utils are needed for `s3` too.
-#[cfg(any(feature = "sqlite", feature = "turso", feature = "s3"))]
-pub(crate) mod sqlite_utils {
-    use crate::error::{Error, Result};
-    use chrono::{DateTime, NaiveDateTime, Utc};
-
-    /// Parse SQLite/Turso TEXT timestamp to DateTime<Utc>
-    pub fn parse_timestamp(s: &str) -> Result<DateTime<Utc>> {
-        const TIMESTAMP_FORMATS: [&str; 2] = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
-
-        TIMESTAMP_FORMATS
-            .iter()
-            .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
-            .map(|dt| dt.and_utc())
-            .ok_or_else(|| Error::Internal {
-                message: format!("Invalid timestamp: {s}"),
-            })
-    }
-
-    /// Format DateTime<Utc> for SQLite/Turso TEXT storage
-    pub fn format_timestamp(dt: &DateTime<Utc>) -> String {
-        dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
-    }
+#[derive(Debug, Clone)]
+pub struct Store {
+    pool: PgPool,
+    config: Config,
+    queues: Arc<Queues>,
+    messages: Arc<Messages>,
+    workers: Arc<Workers>,
+    db_state: Arc<DbState>,
+    workflows: Arc<Workflows>,
+    workflow_runs: Arc<RunRecords>,
+    workflow_steps: Arc<StepRecords>,
 }
 
-/// Main store trait that provides access to entity-specific repositories
-/// and transaction management.
-#[async_trait]
-pub trait Store: Send + Sync + 'static {
-    type Workers: WorkerTable + ?Sized;
+impl Store {
+    pub fn new(pool: PgPool, config: &Config) -> Self {
+        Self {
+            pool: pool.clone(),
+            config: config.clone(),
+            queues: Arc::new(Queues::new(pool.clone())),
+            messages: Arc::new(Messages::new(pool.clone())),
+            workers: Arc::new(Workers::new(pool.clone())),
+            db_state: Arc::new(DbState::new(pool.clone())),
+            workflows: Arc::new(Workflows::new(pool.clone())),
+            workflow_runs: Arc::new(RunRecords::new(pool.clone())),
+            workflow_steps: Arc::new(StepRecords::new(pool)),
+        }
+    }
+
+    /// Connect to a database using a configuration object.
+    pub async fn connect(config: &Config) -> crate::error::Result<Self> {
+        const POSTGRES_PREFIXES: &[&str] = &["postgres://", "postgresql://", "postgres", "pg"];
+
+        if !POSTGRES_PREFIXES.iter().any(|p| config.dsn.starts_with(p)) {
+            return Err(crate::error::Error::InvalidConfig {
+                field: "dsn".to_string(),
+                message: format!("Unsupported DSN format: {}", config.dsn),
+            });
+        }
+
+        let search_path_sql = format!("SET search_path = \"{}\"", config.schema);
+
+        let pool = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .after_connect(move |conn, _meta| {
+                let sql = search_path_sql.clone();
+                Box::pin(async move {
+                    sqlx::query(&sql).execute(&mut *conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&config.dsn)
+            .await
+            .map_err(|e| crate::error::Error::ConnectionFailed {
+                source: Box::new(e),
+                context: "Failed to connect to postgres".into(),
+            })?;
+
+        Ok(Store::new(pool, config))
+    }
+
+    /// Connect to a database using just a DSN string (simple connection).
+    pub async fn connect_with_dsn(dsn: &str) -> crate::error::Result<Self> {
+        let config = Config::from_dsn(dsn);
+        Self::connect(&config).await
+    }
+
+    /// Get access to the underlying PgPool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 
     /// Execute raw SQL without parameters.
-    async fn execute_raw(&self, sql: &str) -> crate::error::Result<()>;
+    pub async fn execute_raw(&self, sql: &str) -> crate::error::Result<()> {
+        sqlx::raw_sql(sql).execute(&self.pool).await?;
+        Ok(())
+    }
 
     /// Execute raw SQL with a single i64 parameter.
-    async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()>;
+    pub async fn execute_raw_with_i64(&self, sql: &str, param: i64) -> crate::error::Result<()> {
+        sqlx::query(sql).bind(param).execute(&self.pool).await?;
+        Ok(())
+    }
 
     /// Execute raw SQL with two i64 parameters.
-    async fn execute_raw_with_two_i64(
+    pub async fn execute_raw_with_two_i64(
         &self,
         sql: &str,
         param1: i64,
         param2: i64,
-    ) -> crate::error::Result<()>;
+    ) -> crate::error::Result<()> {
+        sqlx::query(sql)
+            .bind(param1)
+            .bind(param2)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 
     /// Query a single i64 value using raw SQL.
-    async fn query_int(&self, sql: &str) -> crate::error::Result<i64>;
+    pub async fn query_int(&self, sql: &str) -> crate::error::Result<i64> {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
+    }
 
     /// Query a single string value using raw SQL.
-    async fn query_string(&self, sql: &str) -> crate::error::Result<String>;
+    pub async fn query_string(&self, sql: &str) -> crate::error::Result<String> {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
+    }
 
     /// Query a single boolean value using raw SQL.
-    async fn query_bool(&self, sql: &str) -> crate::error::Result<bool>;
+    pub async fn query_bool(&self, sql: &str) -> crate::error::Result<bool> {
+        use sqlx::Row;
+        let row = sqlx::raw_sql(sql).fetch_one(&self.pool).await?;
+        Ok(row.try_get(0)?)
+    }
 
     /// Get the configuration for this store
-    fn config(&self) -> &Config;
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
 
     /// Get access to the repositories.
-    fn queues(&self) -> &dyn QueueTable;
-    fn messages(&self) -> &dyn MessageTable;
-    fn workers(&self) -> &Self::Workers;
-    fn db_state(&self) -> &dyn DbStateTable;
-    fn workflows(&self) -> &dyn WorkflowTable;
-    fn workflow_runs(&self) -> &dyn RunRecordTable;
-    fn workflow_steps(&self) -> &dyn StepRecordTable;
+    pub fn queues(&self) -> &Queues {
+        self.queues.as_ref()
+    }
+
+    pub fn messages(&self) -> &Messages {
+        self.messages.as_ref()
+    }
+
+    pub fn workers(&self) -> &Workers {
+        self.workers.as_ref()
+    }
+
+    pub fn db_state(&self) -> &DbState {
+        self.db_state.as_ref()
+    }
+
+    pub fn workflows(&self) -> &Workflows {
+        self.workflows.as_ref()
+    }
+
+    pub fn workflow_runs(&self) -> &RunRecords {
+        self.workflow_runs.as_ref()
+    }
+
+    pub fn workflow_steps(&self) -> &StepRecords {
+        self.workflow_steps.as_ref()
+    }
 
     /// Initialize the pgqrs schema in the database.
-    async fn bootstrap(&self) -> crate::error::Result<()>;
+    pub async fn bootstrap(&self) -> crate::error::Result<()> {
+        MIGRATOR.run(&self.pool).await?;
+        Ok(())
+    }
 
     /// Get an admin worker interface.
-    async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin>;
+    pub async fn admin(&self, name: &str) -> crate::error::Result<crate::workers::Admin> {
+        let worker_record = self.workers.register(None, name).await?;
+        Ok(crate::workers::Admin::new(self.clone(), worker_record))
+    }
 
     /// Get an ephemeral admin worker interface.
-    async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin>;
+    pub async fn admin_ephemeral(&self) -> crate::error::Result<crate::workers::Admin> {
+        let worker_record = self.workers.register_ephemeral(None).await?;
+        Ok(crate::workers::Admin::new(self.clone(), worker_record))
+    }
 
     /// Get a producer interface for a specific queue with worker identity.
-    async fn producer(
+    pub async fn producer(
         &self,
         queue: &str,
         name: &str,
         config: &Config,
-    ) -> crate::error::Result<Producer>;
+    ) -> crate::error::Result<crate::workers::Producer> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let worker_record = self.workers.register(Some(queue_info.id), name).await?;
+
+        Ok(crate::workers::Producer::new(
+            self.clone(),
+            queue_info,
+            worker_record,
+            config.validation_config.clone(),
+        ))
+    }
 
     /// Get a consumer interface for a specific queue with worker identity.
-    async fn consumer(&self, queue: &str, name: &str) -> crate::error::Result<Consumer>;
+    pub async fn consumer(
+        &self,
+        queue: &str,
+        name: &str,
+    ) -> crate::error::Result<crate::workers::Consumer> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let worker_record = self.workers.register(Some(queue_info.id), name).await?;
+
+        Ok(crate::workers::Consumer::new(
+            self.clone(),
+            queue_info,
+            worker_record,
+        ))
+    }
 
     /// Create a new queue.
-    async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord>;
+    pub async fn queue(&self, name: &str) -> crate::error::Result<crate::types::QueueRecord> {
+        let queue_exists = self.queues.exists(name).await?;
+        if queue_exists {
+            return Err(crate::error::Error::QueueAlreadyExists {
+                name: name.to_string(),
+            });
+        }
+
+        self.queues
+            .insert(crate::types::NewQueueRecord {
+                queue_name: name.to_string(),
+            })
+            .await
+    }
 
     /// Get a workflow definition handle.
-    async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord>;
+    pub async fn workflow(&self, name: &str) -> crate::error::Result<crate::types::WorkflowRecord> {
+        // Ensure backing queue exists.
+        let queue_exists = self.queues.exists(name).await?;
+        if !queue_exists {
+            let _queue = self
+                .queues
+                .insert(crate::types::NewQueueRecord {
+                    queue_name: name.to_string(),
+                })
+                .await?;
+        }
+
+        let queue = self.queues.get_by_name(name).await?;
+
+        // Create workflow definition (template).
+        let workflow_record = self
+            .workflows
+            .insert(crate::types::NewWorkflowRecord {
+                name: name.to_string(),
+                queue_id: queue.id,
+            })
+            .await
+            .map_err(|e| {
+                if let crate::error::Error::QueryFailed { source, .. } = &e {
+                    if let Some(sqlx::Error::Database(db_err)) =
+                        source.downcast_ref::<sqlx::Error>()
+                    {
+                        if db_err.code().as_deref() == Some("23505") {
+                            return crate::error::Error::WorkflowAlreadyExists {
+                                name: name.to_string(),
+                            };
+                        }
+                    }
+                }
+                e
+            })?;
+
+        Ok(workflow_record)
+    }
 
     /// Create a local run handle from a message.
-    ///
-    /// This should parse the message payload and either create a new RunRecord
-    /// (for new triggers) or fetch an existing one (for resumptions).
-    async fn run(&self, message: crate::types::QueueMessage) -> crate::error::Result<Run>;
+    pub async fn run(
+        &self,
+        message: crate::types::QueueMessage,
+    ) -> crate::error::Result<crate::workers::Run> {
+        // Try to find existing run by message_id
+        match self.workflow_runs.get_by_message_id(message.id).await {
+            Ok(record) => {
+                return Ok(crate::workers::Run::new(self.clone(), record));
+            }
+            Err(crate::error::Error::NotFound { .. }) => {
+                // Not found, continue to create new run
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Otherwise, it's a new trigger. Create run record.
+        let queue = self.queues.get(message.queue_id).await?;
+        let workflow = self.workflows.get_by_name(&queue.queue_name).await?;
+
+        let run_rec = self
+            .workflow_runs
+            .insert(crate::types::NewRunRecord {
+                workflow_id: workflow.id,
+                message_id: message.id,
+                input: Some(message.payload.clone()),
+            })
+            .await?;
+
+        Ok(crate::workers::Run::new(self.clone(), run_rec))
+    }
 
     /// Returns the concurrency model supported by this backend.
-    fn concurrency_model(&self) -> ConcurrencyModel;
+    pub fn concurrency_model(&self) -> ConcurrencyModel {
+        ConcurrencyModel::MultiProcess
+    }
 
-    /// Returns the backend name (e.g., "postgres", "sqlite", "turso")
-    fn backend_name(&self) -> &'static str;
+    /// Returns the backend name.
+    pub fn backend_name(&self) -> &'static str {
+        "postgres"
+    }
 
     /// Create an ephemeral producer (auto-cleanup).
-    async fn producer_ephemeral(
+    pub async fn producer_ephemeral(
         &self,
         queue: &str,
         config: &Config,
-    ) -> crate::error::Result<Producer>;
+    ) -> crate::error::Result<crate::workers::Producer> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
+
+        Ok(crate::workers::Producer::new(
+            self.clone(),
+            queue_info,
+            worker_record,
+            config.validation_config.clone(),
+        ))
+    }
 
     /// Create an ephemeral consumer (auto-cleanup).
-    async fn consumer_ephemeral(&self, queue: &str) -> crate::error::Result<Consumer>;
-}
+    pub async fn consumer_ephemeral(
+        &self,
+        queue: &str,
+    ) -> crate::error::Result<crate::workers::Consumer> {
+        let queue_info = self.queues.get_by_name(queue).await?;
+        let worker_record = self.workers.register_ephemeral(Some(queue_info.id)).await?;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendType {
-    #[cfg(feature = "postgres")]
-    Postgres,
-    #[cfg(feature = "s3")]
-    S3,
-    #[cfg(feature = "sqlite")]
-    Sqlite,
-    #[cfg(feature = "turso")]
-    Turso,
-}
-
-impl BackendType {
-    const POSTGRES_PREFIXES: &'static [&'static str] =
-        &["postgres://", "postgresql://", "postgres", "pg"];
-    const SQLITE_PREFIXES: &'static [&'static str] = &["sqlite://", "sqlite:", "sqlite"];
-    #[cfg(feature = "s3")]
-    const S3_PREFIXES: &'static [&'static str] = &["s3://", "s3:", "s3"];
-    const TURSO_PREFIXES: &'static [&'static str] = &["turso://", "turso:", "turso"];
-
-    pub fn detect(dsn: &str) -> crate::error::Result<Self> {
-        if Self::POSTGRES_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
-            #[cfg(feature = "postgres")]
-            return Ok(Self::Postgres);
-            #[cfg(not(feature = "postgres"))]
-            return Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Postgres backend is not enabled".to_string(),
-            });
-        }
-        #[cfg(feature = "s3")]
-        if Self::S3_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
-            return Ok(Self::S3);
-        }
-        if Self::SQLITE_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
-            #[cfg(feature = "sqlite")]
-            return Ok(Self::Sqlite);
-            #[cfg(not(feature = "sqlite"))]
-            return Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Sqlite backend is not enabled".to_string(),
-            });
-        }
-        if Self::TURSO_PREFIXES.iter().any(|p| dsn.starts_with(p)) {
-            #[cfg(feature = "turso")]
-            return Ok(Self::Turso);
-            #[cfg(not(feature = "turso"))]
-            return Err(crate::error::Error::InvalidConfig {
-                field: "dsn".to_string(),
-                message: "Turso backend is not enabled".to_string(),
-            });
-        }
-        Err(crate::error::Error::InvalidConfig {
-            field: "dsn".to_string(),
-            message: format!("Unsupported DSN format: {}", dsn),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::BackendType;
-
-    #[test]
-    fn detect_rejects_unsupported_dsn() {
-        let err = BackendType::detect("invalid://dsn").unwrap_err();
-        assert!(err.to_string().contains("Unsupported DSN format"));
-    }
-
-    #[cfg(feature = "s3")]
-    #[test]
-    fn detect_s3_dsn_returns_s3_backend() {
-        assert_eq!(
-            BackendType::detect("s3://bucket/queue.sqlite").unwrap(),
-            BackendType::S3
-        );
-        assert_eq!(BackendType::detect("s3:").unwrap(), BackendType::S3);
-        assert_eq!(BackendType::detect("s3").unwrap(), BackendType::S3);
+        Ok(crate::workers::Consumer::new(
+            self.clone(),
+            queue_info,
+            worker_record,
+        ))
     }
 }

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  coordinator:
+    build: .
+    container_name: pgqrs-coordinator
+    command: admin
+    environment:
+      - PGQRS_DSN=${PGQRS_DSN:-postgres://postgres:postgres@host.docker.internal:5433/postgres}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  sql-worker:
+    build: .
+    container_name: pgqrs-sql-worker
+    command: sql-worker --queues invoice_processing,my_workflow
+    environment:
+      - PGQRS_DSN=${PGQRS_DSN:-postgres://postgres:postgres@host.docker.internal:5433/postgres}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

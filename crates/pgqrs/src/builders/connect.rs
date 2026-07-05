@@ -1,11 +1,11 @@
 //! Connection builder for creating store instances.
 
-use crate::store::AnyStore;
+use crate::store::Store;
 use crate::Config;
 
 /// Connect to a database using a DSN string.
 ///
-/// This is a convenience function that wraps `AnyStore::connect_with_dsn()`.
+/// This is a convenience function that wraps `Store::connect_with_dsn()`.
 /// For advanced configuration (custom schema, connection pool size, etc.),
 /// use `pgqrs::connect_with_config(&config)` instead.
 ///
@@ -20,8 +20,8 @@ use crate::Config;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn connect(dsn: &str) -> crate::error::Result<AnyStore> {
-    AnyStore::connect_with_dsn(dsn).await
+pub async fn connect(dsn: &str) -> crate::error::Result<Store> {
+    Store::connect_with_dsn(dsn).await
 }
 
 /// Connect to a database using a configuration object.
@@ -43,6 +43,6 @@ pub async fn connect(dsn: &str) -> crate::error::Result<AnyStore> {
 /// # Ok(())
 /// # }
 /// ```
-pub async fn connect_with_config(config: &Config) -> crate::error::Result<AnyStore> {
-    AnyStore::connect(config).await
+pub async fn connect_with_config(config: &Config) -> crate::error::Result<Store> {
+    Store::connect(config).await
 }

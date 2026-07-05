@@ -59,7 +59,7 @@ nav:
       - Installation: user-guide/getting-started/installation.md
       - Quickstart: user-guide/getting-started/quickstart.md
     - Concepts:
-      - Backend Selection: user-guide/concepts/backends.md
+      - PostgreSQL Runtime: user-guide/concepts/backends.md
       - Architecture: user-guide/concepts/architecture.md
       - Producer & Consumer: user-guide/concepts/producer-consumer.md
       - Workers: user-guide/concepts/workers.md
@@ -76,7 +76,6 @@ nav:
       - user-guide/guides/index.md
       - Basic Queue: user-guide/guides/basic-queue.md
       - Basic Workflow: user-guide/guides/basic-workflow.md
-      - S3 Queue: user-guide/guides/s3-queue.md
       - Durable Workflows: user-guide/guides/durable-workflows.md
       - Batch Processing: user-guide/guides/batch-processing.md
       - Delayed Messages: user-guide/guides/delayed-messages.md

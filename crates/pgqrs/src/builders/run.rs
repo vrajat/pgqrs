@@ -22,19 +22,19 @@ use crate::workers::Run;
 ///     .await?;
 /// # Ok(()) }
 /// ```
-pub fn run() -> RunBuilder<'static, crate::store::AnyStore> {
+pub fn run() -> RunBuilder<'static> {
     RunBuilder::new()
 }
 
 /// Builder for creating local run handles.
 ///
 /// Use `.message()` and `.store()` before calling `.execute()`.
-pub struct RunBuilder<'a, S: Store> {
-    pub(crate) store: Option<&'a S>,
+pub struct RunBuilder<'a> {
+    pub(crate) store: Option<&'a Store>,
     pub(crate) message: Option<QueueMessage>,
 }
 
-impl<'a, S: Store> RunBuilder<'a, S> {
+impl<'a> RunBuilder<'a> {
     pub fn new() -> Self {
         Self {
             store: None,
@@ -43,7 +43,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
     }
 
     /// Set the store.
-    pub fn store<'b, T: Store>(self, store: &'b T) -> RunBuilder<'b, T> {
+    pub fn store<'b>(self, store: &'b Store) -> RunBuilder<'b> {
         RunBuilder {
             store: Some(store),
             message: self.message,
@@ -177,7 +177,7 @@ impl<'a, S: Store> RunBuilder<'a, S> {
     }
 }
 
-impl<'a, S: Store> Default for RunBuilder<'a, S> {
+impl<'a> Default for RunBuilder<'a> {
     fn default() -> Self {
         Self::new()
     }

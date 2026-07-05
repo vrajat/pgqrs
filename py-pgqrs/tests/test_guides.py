@@ -6,8 +6,6 @@ from typing import Any, Callable
 import pytest
 import pgqrs
 
-from .conftest import requires_backend, TestBackend
-
 Predicate = Callable[[Any], bool]
 POLL_INTERVAL = 0.025
 

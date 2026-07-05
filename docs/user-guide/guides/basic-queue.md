@@ -7,7 +7,7 @@ It is intentionally "low level" (queue primitives), and complements the workflow
 ## Prerequisites
 
 - pgqrs installed
-- A database backend selected (examples use SQLite for simplicity)
+- A PostgreSQL database selected
 - Schema installed (`admin.install()`)
 
 

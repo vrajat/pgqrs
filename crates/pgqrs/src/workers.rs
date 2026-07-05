@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use crate::rate_limit::RateLimitStatus;
 use crate::stats::WorkerStats;
-use crate::store::{AnyStore, Store};
+use crate::store::Store;
 pub use crate::types::{
     QueueMessage, QueueRecord, RunRecord, StepRecord, WorkerRecord, WorkerStatus, WorkflowRecord,
 };
@@ -34,12 +34,12 @@ pub trait Worker: Send + Sync {
 /// Administrative worker for queues, workers, and stats.
 #[derive(Clone, Debug)]
 pub struct Admin {
-    store: AnyStore,
+    store: Store,
     worker_record: WorkerRecord,
 }
 
 impl Admin {
-    pub fn new(store: AnyStore, worker_record: WorkerRecord) -> Self {
+    pub fn new(store: Store, worker_record: WorkerRecord) -> Self {
         Self {
             store,
             worker_record,
@@ -246,6 +246,343 @@ impl Admin {
             .release_by_consumer_worker(worker_id)
             .await
     }
+
+    /// Scan and trigger a batch of active cron schedules.
+    pub async fn scan_cron_batch(
+        &self,
+        producers: &mut std::collections::HashMap<String, Producer>,
+        batch_size: usize,
+    ) -> Result<bool> {
+        let mut tx = self
+            .store
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| Error::QueryFailed {
+                query: "BEGIN TRANSACTION".to_string(),
+                source: Box::new(e),
+                context: "Failed to begin transaction for scan_cron_batch".to_string(),
+            })?;
+
+        // 1. SELECT next active crons due for fire or stuck in 'firing' state (ordered deterministically)
+        let rows = sqlx::query_as::<_, CronRow>(
+            r#"
+            SELECT c.id, c.name, c.cron_expression, q.queue_name as workflow_name, c.input
+            FROM pgqrs_cron c
+            JOIN pgqrs_queues q ON c.queue_id = q.id
+            WHERE c.status = 'active'
+              AND (c.next_fire_at <= NOW() OR c.trigger_state = 'firing')
+            ORDER BY c.next_fire_at ASC, c.id ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(batch_size as i64)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| Error::QueryFailed {
+            query: "SELECT FROM pgqrs_cron".to_string(),
+            source: Box::new(e),
+            context: "Failed to select due crons".to_string(),
+        })?;
+
+        if rows.is_empty() {
+            tx.commit().await.map_err(|e| Error::QueryFailed {
+                query: "COMMIT TRANSACTION".to_string(),
+                source: Box::new(e),
+                context: "Failed to commit empty transaction".to_string(),
+            })?;
+            return Ok(false); // No due crons found
+        }
+
+        let mut triggers = Vec::new();
+        for row in rows {
+            // Check current trigger_state
+            let state: crate::types::TriggerState =
+                sqlx::query_scalar("SELECT trigger_state FROM pgqrs_cron WHERE id = $1")
+                    .bind(row.id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| Error::QueryFailed {
+                        query: "SELECT trigger_state FROM pgqrs_cron".to_string(),
+                        source: Box::new(e),
+                        context: "Failed to check trigger_state".to_string(),
+                    })?;
+
+            if state != crate::types::TriggerState::Firing {
+                // Calculate next fire time
+                let next_fire = match self.parse_cron(&row.cron_expression) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!(
+                            "Error parsing cron expression '{}' for cron '{}': {}",
+                            row.cron_expression, row.name, e
+                        );
+                        // Pause the cron to avoid looping indefinitely on an invalid config
+                        sqlx::query(
+                            r#"
+                            UPDATE pgqrs_cron
+                            SET status = 'paused',
+                                updated_at = NOW()
+                            WHERE id = $1
+                            "#,
+                        )
+                        .bind(row.id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| Error::QueryFailed {
+                            query: "UPDATE pgqrs_cron SET status = paused".to_string(),
+                            source: Box::new(e),
+                            context: "Failed to pause invalid cron".to_string(),
+                        })?;
+                        continue;
+                    }
+                };
+
+                // Transition to 'firing' state and advance next_fire_at
+                sqlx::query(
+                    r#"
+                    UPDATE pgqrs_cron
+                    SET next_fire_at = $2,
+                        trigger_state = $3,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(row.id)
+                .bind(next_fire)
+                .bind(crate::types::TriggerState::Firing)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Error::QueryFailed {
+                    query: "UPDATE pgqrs_cron SET trigger_state = firing".to_string(),
+                    source: Box::new(e),
+                    context: "Failed to update cron to firing state".to_string(),
+                })?;
+            }
+
+            triggers.push(row);
+        }
+
+        // Commit scheduling updates in one transaction first
+        tx.commit().await.map_err(|e| Error::QueryFailed {
+            query: "COMMIT TRANSACTION".to_string(),
+            source: Box::new(e),
+            context: "Failed to commit scheduling updates".to_string(),
+        })?;
+
+        // Now, for each trigger (outside transaction), enqueue its message
+        for row in triggers {
+            let producer = if let Some(p) = producers.get(&row.workflow_name) {
+                p
+            } else {
+                let p = crate::producer("cron-coordinator", &row.workflow_name)
+                    .create(&self.store)
+                    .await?;
+                producers.insert(row.workflow_name.clone(), p);
+                producers.get(&row.workflow_name).unwrap()
+            };
+
+            let payload = serde_json::json!({
+                "input": row.input.unwrap_or(serde_json::Value::Null)
+            });
+
+            crate::enqueue()
+                .message(&payload)
+                .worker(producer)
+                .execute(&self.store)
+                .await?;
+
+            // Successfully enqueued! Now update trigger_state back to 'idle'
+            sqlx::query(
+                r#"
+                UPDATE pgqrs_cron
+                SET trigger_state = $2,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(row.id)
+            .bind(crate::types::TriggerState::Idle)
+            .execute(self.store.pool())
+            .await
+            .map_err(|e| Error::QueryFailed {
+                query: "UPDATE pgqrs_cron SET trigger_state = idle".to_string(),
+                source: Box::new(e),
+                context: "Failed to reset trigger_state to idle".to_string(),
+            })?;
+
+            println!(
+                "Triggered cron '{}' (workflow: '{}')",
+                row.name, row.workflow_name
+            );
+        }
+
+        Ok(true)
+    }
+
+    fn parse_cron(&self, expr: &str) -> std::result::Result<chrono::DateTime<chrono::Utc>, String> {
+        let expr = expr.trim();
+        let parts: Vec<&str> = expr.split_whitespace().collect();
+
+        let cron_str = if parts.len() == 5 {
+            format!("0 {}", expr)
+        } else {
+            expr.to_string()
+        };
+
+        use std::str::FromStr;
+        let schedule = cron::Schedule::from_str(&cron_str)
+            .map_err(|e| format!("Invalid cron expression '{}': {}", expr, e))?;
+
+        let next = schedule
+            .upcoming(chrono::Utc)
+            .next()
+            .ok_or_else(|| format!("No upcoming execution time for cron expression '{}'", expr))?;
+
+        Ok(next)
+    }
+
+    /// Execute maintenance tasks (worker health check, visibility timeout reclamation, workflow timeout checks).
+    pub async fn run_maintenance_sweep(
+        &self,
+        heartbeat_timeout_secs: i64,
+        workflow_timeout_secs: i64,
+    ) -> Result<()> {
+        // 1. Worker Health: Mark stale workers as stopped.
+        let stopped_count = sqlx::query(
+            r#"
+            UPDATE pgqrs_workers
+            SET status = 'stopped'::worker_status,
+                shutdown_at = NOW()
+            WHERE status IN ('ready'::worker_status, 'polling'::worker_status, 'suspended'::worker_status, 'interrupted'::worker_status)
+              AND heartbeat_at < NOW() - make_interval(secs => $1::double precision)
+            "#
+        )
+        .bind(heartbeat_timeout_secs as f64)
+        .execute(self.store.pool())
+        .await
+        .map_err(|e| Error::QueryFailed {
+            query: "UPDATE pgqrs_workers SET status = stopped".to_string(),
+            source: Box::new(e),
+            context: "Failed to mark stale workers as stopped".to_string(),
+        })?
+        .rows_affected();
+
+        if stopped_count > 0 {
+            println!("Marked {} stale worker(s) as stopped", stopped_count);
+        }
+
+        // 2. Lease Reclamation: Reset visibility timeouts and worker assignments
+        // for active messages leased to stale or stopped workers.
+        let reclaimed_count = sqlx::query(
+            r#"
+            UPDATE pgqrs_messages
+            SET vt = NOW(),
+                consumer_worker_id = NULL
+            WHERE consumer_worker_id IS NOT NULL
+              AND vt <= NOW()
+              AND archived_at IS NULL
+              AND consumer_worker_id IN (
+                  SELECT id FROM pgqrs_workers
+                  WHERE status = 'stopped'
+                     OR heartbeat_at < NOW() - make_interval(secs => $1::double precision)
+              )
+            "#,
+        )
+        .bind(heartbeat_timeout_secs as f64)
+        .execute(self.store.pool())
+        .await
+        .map_err(|e| Error::QueryFailed {
+            query: "UPDATE pgqrs_messages SET vt = NOW()".to_string(),
+            source: Box::new(e),
+            context: "Failed to reclaim expired visibility leases".to_string(),
+        })?
+        .rows_affected();
+
+        if reclaimed_count > 0 {
+            println!(
+                "Reclaimed {} expired lease(s) from stale/stopped workers",
+                reclaimed_count
+            );
+        }
+
+        // 3. Workflow Timeout: Scan running workflow runs that have exceeded their timeout
+        let timed_out_runs = sqlx::query_as::<_, TimedOutRun>(
+            r#"
+            UPDATE pgqrs_workflow_runs
+            SET status = 'ERROR'::pgqrs_workflow_status,
+                error = '{"message": "Workflow run execution timed out"}'::jsonb,
+                completed_at = NOW(),
+                updated_at = NOW()
+            WHERE status = 'RUNNING'::pgqrs_workflow_status
+              AND started_at < NOW() - make_interval(secs => $1::double precision)
+            RETURNING id
+            "#,
+        )
+        .bind(workflow_timeout_secs as f64)
+        .fetch_all(self.store.pool())
+        .await
+        .map_err(|e| Error::QueryFailed {
+            query: "UPDATE pgqrs_workflow_runs SET status = ERROR".to_string(),
+            source: Box::new(e),
+            context: "Failed to timeout stale workflow runs".to_string(),
+        })?;
+
+        if !timed_out_runs.is_empty() {
+            let timed_out_ids: Vec<i64> = timed_out_runs.iter().map(|r| r.id).collect();
+            println!(
+                "Timed out {} workflow run(s): {:?}",
+                timed_out_ids.len(),
+                timed_out_ids
+            );
+
+            // Abort outstanding steps for these timed-out workflow runs
+            let aborted_steps = sqlx::query(
+                r#"
+                UPDATE pgqrs_workflow_steps
+                SET status = 'ERROR'::pgqrs_workflow_status,
+                    error = '{"message": "Workflow run execution timed out"}'::jsonb,
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE run_id = ANY($1)
+                  AND status IN ('RUNNING'::pgqrs_workflow_status, 'QUEUED'::pgqrs_workflow_status)
+                "#,
+            )
+            .bind(&timed_out_ids)
+            .execute(self.store.pool())
+            .await
+            .map_err(|e| Error::QueryFailed {
+                query: "UPDATE pgqrs_workflow_steps SET status = ERROR".to_string(),
+                source: Box::new(e),
+                context: "Failed to abort timed-out steps".to_string(),
+            })?
+            .rows_affected();
+
+            if aborted_steps > 0 {
+                println!(
+                    "Aborted {} outstanding step(s) for timed-out workflow runs",
+                    aborted_steps
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct CronRow {
+    id: i64,
+    name: String,
+    cron_expression: String,
+    workflow_name: String,
+    input: Option<serde_json::Value>,
+}
+
+#[derive(sqlx::FromRow)]
+struct TimedOutRun {
+    id: i64,
 }
 
 #[async_trait]
@@ -319,7 +656,7 @@ impl crate::store::Worker for Producer {
 /// Producer for enqueueing messages to a queue.
 #[derive(Clone, Debug)]
 pub struct Producer {
-    store: AnyStore,
+    store: Store,
     queue_info: QueueRecord,
     worker_record: WorkerRecord,
     validator: PayloadValidator,
@@ -329,7 +666,7 @@ pub struct Producer {
 impl Producer {
     /// Create a producer bound to a queue and worker record.
     pub fn new(
-        store: AnyStore,
+        store: Store,
         queue_info: QueueRecord,
         worker_record: WorkerRecord,
         validation_config: ValidationConfig,
@@ -529,7 +866,7 @@ impl Producer {
 /// Consumer for dequeueing and managing messages.
 #[derive(Clone, Debug)]
 pub struct Consumer {
-    store: AnyStore,
+    store: Store,
     queue_info: QueueRecord,
     worker_record: WorkerRecord,
     current_time: Option<DateTime<Utc>>,
@@ -537,7 +874,7 @@ pub struct Consumer {
 
 impl Consumer {
     /// Create a consumer bound to a queue and worker record.
-    pub fn new(store: AnyStore, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
+    pub fn new(store: Store, queue_info: QueueRecord, worker_record: WorkerRecord) -> Self {
         Self {
             store,
             queue_info,
@@ -562,7 +899,7 @@ impl Consumer {
         self.worker_record.id
     }
 
-    pub(crate) fn store(&self) -> &AnyStore {
+    pub(crate) fn store(&self) -> &Store {
         &self.store
     }
 
@@ -801,14 +1138,14 @@ impl crate::store::Worker for Consumer {
 /// Use this to acquire steps and complete or pause a workflow run.
 #[derive(Clone, Debug)]
 pub struct Run {
-    store: AnyStore,
+    store: Store,
     record: RunRecord,
     current_time: Option<DateTime<Utc>>,
 }
 
 impl Run {
     /// Create a run handle from a run record.
-    pub fn new(store: AnyStore, record: RunRecord) -> Self {
+    pub fn new(store: Store, record: RunRecord) -> Self {
         Self {
             store,
             record,
@@ -1027,14 +1364,14 @@ impl Run {
 /// Workflow step execution handle.
 #[derive(Clone, Debug)]
 pub struct Step {
-    store: AnyStore,
+    store: Store,
     record: StepRecord,
     current_time: Option<DateTime<Utc>>,
 }
 
 impl Step {
     /// Create a step handle from a step record.
-    pub fn new(store: AnyStore, record: StepRecord) -> Self {
+    pub fn new(store: Store, record: StepRecord) -> Self {
         Self {
             store,
             record,

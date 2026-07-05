@@ -1,17 +1,16 @@
-use pgqrs::store::Store;
 use serde_json::json;
 
 // Test-specific constants
 const TEST_QUEUE_LOGGED: &str = "test_create_logged_queue";
 mod common;
 
-async fn create_store() -> pgqrs::store::AnyStore {
+async fn create_store() -> pgqrs::store::Store {
     common::create_store("pgqrs_lib_test").await
 }
 
 async fn create_store_with_config(
     configure: impl FnOnce(&mut pgqrs::config::Config),
-) -> pgqrs::store::AnyStore {
+) -> pgqrs::store::Store {
     common::create_store_with_config("pgqrs_lib_test", configure).await
 }
 
@@ -26,8 +25,6 @@ async fn verify() {
 #[tokio::test]
 #[cfg(feature = "postgres")]
 async fn test_custom_schema_search_path() {
-    skip_unless_backend!(pgqrs::store::BackendType::Postgres);
-
     // This test verifies that the search_path is correctly set to use the custom schema
     let store = create_store().await;
     let queue_name = "test_search_path_queue".to_string();
@@ -594,16 +591,8 @@ async fn test_referential_integrity_checks() {
 
     // Create an orphaned message by inserting directly with invalid queue_id
     // This simulates what would happen if referential integrity was broken
-    let sql = match common::current_backend() {
-        #[cfg(feature = "postgres")]
-        pgqrs::store::BackendType::Postgres => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)",
-        #[cfg(feature = "s3")]
-        pgqrs::store::BackendType::S3 => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        #[cfg(feature = "sqlite")]
-        pgqrs::store::BackendType::Sqlite => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-        #[cfg(feature = "turso")]
-        pgqrs::store::BackendType::Turso => "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}')",
-    };
+    let sql =
+        "INSERT INTO pgqrs_messages (queue_id, payload) VALUES (99999, '{\"test\": \"orphaned\"}'::jsonb)";
 
     let orphan_result = store.execute_raw(sql).await;
 

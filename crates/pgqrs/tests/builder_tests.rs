@@ -1,19 +1,18 @@
-use pgqrs::Store;
 use serde_json::json;
 use std::time::Duration;
 
 mod common;
 
-async fn create_store() -> pgqrs::store::AnyStore {
+async fn create_store() -> pgqrs::store::Store {
     common::create_store("pgqrs_builder_test").await
 }
 
-async fn create_ergonomics_store() -> pgqrs::store::AnyStore {
+async fn create_ergonomics_store() -> pgqrs::store::Store {
     common::create_store("pgqrs_builder_ergonomics_test").await
 }
 
 async fn wait_for_worker_status(
-    store: &pgqrs::store::AnyStore,
+    store: &pgqrs::store::Store,
     worker_id: i64,
     expected: pgqrs::types::WorkerStatus,
 ) -> pgqrs::types::WorkerRecord {
@@ -28,7 +27,7 @@ async fn wait_for_worker_status(
 }
 
 async fn wait_for_worker_heartbeat_advance(
-    store: &pgqrs::store::AnyStore,
+    store: &pgqrs::store::Store,
     worker_id: i64,
     after: chrono::DateTime<chrono::Utc>,
 ) -> pgqrs::types::WorkerRecord {

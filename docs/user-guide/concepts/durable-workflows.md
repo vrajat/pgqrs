@@ -199,7 +199,13 @@ Workflows can enter a `PAUSED` state when waiting for external events (e.g., hum
 
 ### Triggering a Workflow
 
-Triggers use a noun-verb pattern to submit work.
+Triggers submit workflow runs by enqueuing a payload.
+
+=== "SQL"
+
+    ```sql
+    SELECT pgqrs_enqueue('zip_files', '{"bucket": "my-bucket", "prefix": "reports"}'::jsonb);
+    ```
 
 === "Rust"
 

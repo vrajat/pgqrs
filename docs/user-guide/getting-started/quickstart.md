@@ -1,291 +1,256 @@
 # Quickstart
 
-This guide will walk you through creating your first queue, sending messages, and processing them.
+This guide will walk you through creating, running, and triggering your first **Durable Workflow** in `pgqrs`. We will build a 3-step invoice processing flow that is completely crash-resilient and database-managed.
 
-## Step 0: Add pgqrs
+Before starting, ensure that you have configured and started the `pgqrs` coordinator and workers as described in the [Installation Guide](installation.md).
 
-=== "Rust"
+## Step 0: Create Sample Tables
 
-    ```toml
-    [dependencies]
-    pgqrs = "0.15.3"
-    tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-    serde_json = "1"
+Connect to your PostgreSQL database and set up the sample business tables for our quickstart:
+
+```sql
+CREATE TABLE IF NOT EXISTS invoice_runs (
+    invoice_id INT PRIMARY KEY,
+    amount NUMERIC,
+    status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS payment_log (
+    id SERIAL PRIMARY KEY,
+    invoice_id INT,
+    amount NUMERIC,
+    charged_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insert a sample unpaid invoice
+INSERT INTO invoice_runs (invoice_id, amount, status)
+VALUES (42, 150.00, 'unpaid')
+ON CONFLICT (invoice_id) DO NOTHING;
+```
+
+---
+
+## Step 1: Define Your Workflow
+
+Define the workflow steps using your chosen API language:
+
+=== "SQL API"
+
+    Use the declarative `pgqrs_workflow` SQL helper to register the workflow and its steps. Note the use of `:input` and `:step` placeholders:
+
+    ```sql
+    SELECT pgqrs_workflow(
+        'invoice_processing',
+        ARRAY[
+            -- Step 1: Read the invoice amount
+            pgqrs_step('fetch_invoice', 
+                       'SELECT amount, status FROM invoice_runs WHERE invoice_id = (:input->>''invoice_id'')::int'),
+            
+            -- Step 2: Record a successful payment using the amount from step 1
+            pgqrs_step('charge_user', 
+                       'INSERT INTO payment_log (invoice_id, amount) VALUES ((:input->>''invoice_id'')::int, (:fetch_invoice->0->>''amount'')::numeric) RETURNING id'),
+            
+            -- Step 3: Update the status of the invoice to paid
+            pgqrs_step('update_invoice', 
+                       'UPDATE invoice_runs SET status = ''paid'' WHERE invoice_id = (:input->>''invoice_id'')::int')
+         ]
+    );
     ```
 
-=== "Python"
+=== "Rust API"
 
-    ```bash
-    pip install pgqrs
-    ```
-
-## Prerequisites
-
-- pgqrs installed ([Configuration](../api/configuration.md))
-- A supported backend DSN (examples below use PostgreSQL)
-- pgqrs schema installed with `admin.install()`
-
-## Step 1: Create a Queue
-
-=== "Rust"
-
-    ```rust
-    use pgqrs;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        // Create a queue named "tasks"
-        let queue = store.queue("tasks").await?;
-        println!("Created queue: {} (id: {})", queue.queue_name, queue.id);
-
-        Ok(())
-    }
-    ```
-
-=== "Python"
-
-    ```python
-    import asyncio
-    import pgqrs
-
-    async def main():
-        store = await pgqrs.connect("postgresql://localhost/mydb")
-        admin = pgqrs.admin(store)
-
-        # Create a queue named "tasks"
-        queue = await store.queue("tasks")
-        print(f"Created queue: {queue.queue_name} (id: {queue.id})")
-
-    asyncio.run(main())
-    ```
-
-## Step 2: Send a Message
-
-=== "Rust"
+    Define your workflow using async Rust code and the `#[pgqrs_workflow]` macro:
 
     ```rust
     use pgqrs;
     use serde_json::json;
 
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+    #[pgqrs::pgqrs_workflow(name = "invoice_processing")]
+    async fn invoice_processing(
+        run: &pgqrs::Run,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, pgqrs::Error> {
+        let invoice_id = input["invoice_id"].as_i64().unwrap();
 
-        // Send a message using the high-level API
-        let payload = json!({
-            "task_type": "send_email",
-            "to": "user@example.com",
-            "subject": "Welcome!"
-        });
+        // Step 1: Fetch Invoice
+        let invoice = pgqrs::workflow_step(run, "fetch_invoice", || async {
+            // Your DB query logic here: SELECT amount FROM invoice_runs WHERE invoice_id = ...
+            Ok::<_, pgqrs::Error>(json!({ "amount": 150.00 }))
+        }).await?;
 
-        let ids = pgqrs::enqueue()
-            .message(&payload)
-            .to("tasks")
-            .execute(&store)
-            .await?;
+        // Step 2: Charge User
+        pgqrs::workflow_step(run, "charge_user", || async {
+            // Your DB insert logic here: INSERT INTO payment_log ...
+            Ok::<_, pgqrs::Error>(())
+        }).await?;
 
-        println!("Sent message with ID: {:?}", ids);
+        // Step 3: Update Invoice
+        pgqrs::workflow_step(run, "update_invoice", || async {
+            // Your DB update logic here: UPDATE invoice_runs ...
+            Ok::<_, pgqrs::Error>(())
+        }).await?;
 
-        Ok(())
+        Ok(json!({ "status": "completed" }))
     }
     ```
 
-=== "Python"
+=== "Python API"
+
+    Define your workflow using decorated async Python functions:
+
+    ```python
+    import pgqrs
+    from pgqrs.decorators import step, workflow
+
+    @workflow(name="invoice_processing")
+    async def invoice_processing(ctx, input_data: dict) -> dict:
+        invoice_id = input_data["invoice_id"]
+
+        @step
+        async def fetch_invoice(step_ctx):
+            # Your query logic here
+            return {"amount": 150.00}
+
+        @step
+        async def charge_user(step_ctx, amount):
+            # Your payment logic here
+            return {"charged": True}
+
+        @step
+        async def update_invoice(step_ctx):
+            # Your update logic here
+            return {"status": "paid"}
+
+        invoice = await fetch_invoice(ctx)
+        await charge_user(ctx, invoice["amount"])
+        await update_invoice(ctx)
+        return {"status": "completed"}
+    ```
+
+---
+
+## Step 2: Start the Workers
+
+Start the worker processes to listen for execution jobs (SQL worker is already running as part of the core infrastructure):
+
+=== "Rust API"
+
+    Spawn the polling loop in your Rust application:
+
+    ```rust
+    let store = pgqrs::connect("postgresql://postgres:postgres@localhost:5432/postgres").await?;
+    pgqrs::admin(&store).install().await?;
+    pgqrs::workflow().name(invoice_processing).create().await?;
+
+    let consumer = pgqrs::consumer("rust-worker", invoice_processing.name()).create(&store).await?;
+    pgqrs::workflow()
+        .name(invoice_processing)
+        .consumer(&consumer)
+        .poll(&store)
+        .await?;
+    ```
+
+=== "Python API"
+
+    Run the workflow consumer task in your Python application loop:
 
     ```python
     import asyncio
     import pgqrs
 
     async def main():
-        store = await pgqrs.connect("postgresql://localhost/mydb")
+        store = await pgqrs.connect("postgresql://postgres:postgres@localhost:5432/postgres")
+        await pgqrs.admin(store).install()
+        await pgqrs.workflow().name("invoice_processing").store(store).create()
 
-        # Send a message using the high-level API
-        payload = {
-            "task_type": "send_email",
-            "to": "user@example.com",
-            "subject": "Welcome!"
-        }
-
-        message_id = await pgqrs.produce(store, "tasks", payload)
-        print(f"Sent message with ID: {message_id}")
+        consumer = await store.consumer("invoice_processing")
+        await pgqrs.dequeue().worker(consumer).handle_workflow(invoice_processing).poll(store)
 
     asyncio.run(main())
     ```
 
-## Step 3: Consume Messages
+---
 
-=== "Rust"
+## Step 3: Trigger the Workflow Run
 
-    ```rust
-    use pgqrs;
-    use std::time::Duration;
+Trigger your workflow by enqueuing a payload using your API's trigger/producer methods:
 
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
+=== "SQL API"
 
-        // Process messages with automatic lifecycle management
-        loop {
-            let result = pgqrs::dequeue()
-                .from("tasks")
-                .handle(|msg| async move {
-                    println!("Processing message {}: {:?}", msg.id, msg.payload);
-                    // Your processing logic here
-                    Ok(())
-                })
-                .execute(&store)
-                .await;
+    Execute the SQL `pgqrs_enqueue` function:
 
-            if result.is_err() {
-                println!("No messages, waiting...");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-        }
-    }
+    ```sql
+    -- Triggers the workflow and returns the enqueued message_id (e.g. 1)
+    SELECT pgqrs_enqueue('invoice_processing', '{"invoice_id": 42}'::jsonb);
     ```
 
-=== "Python"
+=== "Rust API"
+
+    Trigger using the `pgqrs::enqueue` builder:
+
+    ```rust
+    let ids = pgqrs::enqueue()
+        .message(&json!({"invoice_id": 42}))
+        .to("invoice_processing")
+        .execute(&store)
+        .await?;
+    ```
+
+=== "Python API"
+
+    Trigger using the PyO3 `produce` binding:
 
     ```python
-    import asyncio
-    import pgqrs
-
-    async def main():
-        store = await pgqrs.connect("postgresql://localhost/mydb")
-
-        # Process messages with automatic lifecycle management
-        async def handler(msg):
-            print(f"Processing message {msg.id}: {msg.payload}")
-            # Your processing logic here
-            return True
-
-        while True:
-            try:
-                await pgqrs.consume(store, "tasks", handler)
-            except:
-                print("No messages, waiting...")
-                await asyncio.sleep(2)
-
-    asyncio.run(main())
+    message_id = await pgqrs.produce(store, "invoice_processing", {"invoice_id": 42})
     ```
 
-## Step 4: Monitor Your Queue
+---
 
-=== "Rust"
+## Step 4: Monitor and Inspect Execution
+
+Inspect the execution state safely using query APIs. Replace `1` with the enqueued `message_id` returned in Step 3:
+
+=== "SQL API"
+
+    Call the monitoring SQL functions to check the status of the run, steps, and message queue. Raw table access is not required:
+
+    ```sql
+    -- 1. View overall run execution status
+    SELECT * FROM pgqrs_get_run(1);
+
+    -- 2. View step results and cached inputs/outputs
+    SELECT * FROM pgqrs_get_steps(1);
+
+    -- 3. View the underlying queue message status (e.g. 'READY', 'PROCESSING', 'COMPLETED', 'DELAYED')
+    SELECT pgqrs_get_message_status(1);
+
+    -- 4. Verify your business tables updated successfully
+    SELECT * FROM invoice_runs;
+    SELECT * FROM payment_log;
+    ```
+
+=== "Rust API"
+
+    Monitor programmatically using Rust bindings:
 
     ```rust
+    // Query metrics using the admin client
     let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
-    for m in metrics {
-        if m.name == "tasks" {
-            println!("Queue: {}", m.name);
-            println!("  Pending: {}", m.pending_messages);
-            println!("  Locked: {}", m.locked_messages);
-            println!("  Archived: {}", m.archived_messages);
-        }
-    }
     ```
 
-## Complete Example
+=== "Python API"
 
-Here's a complete example showing a producer and consumer working together:
-
-=== "Rust"
-
-    ```rust
-    use pgqrs;
-    use serde_json::json;
-
-    #[tokio::main]
-    async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let store = pgqrs::connect("postgresql://localhost/mydb").await?;
-
-        // Setup
-        pgqrs::admin(&store).install().await?;
-        store.queue("demo").await?;
-
-        // Producer - send messages
-        for i in 0..5 {
-            pgqrs::enqueue()
-                .message(&json!({"task": i}))
-                .to("demo")
-                .execute(&store)
-                .await?;
-            println!("Sent task {}", i);
-        }
-
-        // Consumer - process messages
-        loop {
-            let result = pgqrs::dequeue()
-                .from("demo")
-                .handle(|msg| async move {
-                    println!("Processing: {:?}", msg.payload);
-                    Ok(())
-                })
-                .execute(&store)
-                .await;
-
-            if result.is_err() {
-                break;
-            }
-        }
-
-        // Show metrics
-        let metrics = pgqrs::admin(&store).all_queues_metrics().await?;
-        for m in metrics {
-            if m.name == "demo" {
-                println!("Archived: {}", m.archived_messages);
-            }
-        }
-
-        Ok(())
-    }
-    ```
-
-=== "Python"
+    Monitor programmatically using Python bindings:
 
     ```python
-    import asyncio
-    import pgqrs
-
-    async def main():
-        store = await pgqrs.connect("postgresql://localhost/mydb")
-        admin = pgqrs.admin(store)
-
-        # Setup
-        await admin.install()
-        await store.queue("demo")
-
-        # Producer - send messages
-        for i in range(5):
-            await pgqrs.produce(store, "demo", {"task": i})
-            print(f"Sent task {i}")
-
-        # Consumer - process messages
-        processed = 0
-        while processed < 5:
-            try:
-                await pgqrs.consume(store, "demo", lambda msg: print(f"Processing: {msg.payload}") or True)
-                processed += 1
-            except:
-                break
-
-        # Show metrics
-        queues = await admin.get_queues()
-        metrics = await queues.list_metrics()
-        for m in metrics:
-            if m["name"] == "demo":
-                print(f"Archived: {m['archived_messages']}")
-
-    asyncio.run(main())
+    # Query queue metrics
+    admin = pgqrs.admin(store)
+    queues = await admin.get_queues()
+    metrics = await queues.list_metrics()
     ```
 
-## What's Next?
+---
 
-- Want an object-storage-backed queue? See [S3 Queue Guide](../guides/s3-queue.md)
+## Under the Hood: Crash Durability
 
-- [Workflow API](../api/workflows.md): Detailed API reference
-- [Producer API](../api/producer.md) - Learn about batch operations and delayed messages
-- [Consumer API](../api/consumer.md) - Learn about batch processing and visibility timeouts
-- [Worker Management](../guides/worker-management.md) - Scale your workers
+If your worker crashes or the database disconnects halfway through execution (e.g., during Step 2), the coordinator automatically re-delivers the trigger message after the visibility timeout expires. When a new worker picks up the run, it queries the step cache, detects that Step 1 (`fetch_invoice`) completed successfully, and returns its cached output without re-executing it. Execution then resumes smoothly at Step 2, ensuring exactly-once execution semantics and complete database-managed durability.

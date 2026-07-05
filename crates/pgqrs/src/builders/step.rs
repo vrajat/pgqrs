@@ -74,7 +74,7 @@ impl<'a> StepBuilder<'a> {
     }
 
     /// Set the store (no-op for StepBuilder as it uses the Run handle).
-    pub fn store<S: Store>(self, _store: &S) -> Self {
+    pub fn store(self, _store: &Store) -> Self {
         self
     }
 

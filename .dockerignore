@@ -1,0 +1,29 @@
+# Exclude compilation artifacts
+target/
+**/target/
+
+# Exclude benchmarks
+benchmarks/
+
+# Exclude git repository
+.git/
+.gitignore
+
+# Exclude python virtual environment
+.venv/
+__pycache__/
+*.pyc
+py-pgqrs/.venv/
+
+# Exclude documentation build artifacts
+site/
+
+# Exclude other editor/build temp files
+.cargo/
+.config/
+.idea/
+.vscode/
+*.log
+.cache/
+.tmp/
+dist/

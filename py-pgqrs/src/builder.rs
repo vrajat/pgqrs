@@ -1,6 +1,5 @@
 use crate::tables::PyQueueMessage;
 use crate::{to_py_err, PyStore};
-use ::pgqrs::store::Store as _;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use std::sync::Arc;
